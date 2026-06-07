@@ -744,6 +744,7 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange).toHaveBeenCalledWith("agent-simple-1", 1000, "idle", {
         trigger: "timeout",
+        waitingReason: "prompt",
       });
 
       monitor.dispose();
@@ -1078,6 +1079,260 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).toHaveBeenCalledWith("agent-simple-enter", 1000, "busy", {
         trigger: "input",
       });
+
+      monitor.dispose();
+    });
+  });
+
+  describe("Simple-output mode detection layers (#9873)", () => {
+    const CLAUDE_WORKING = "✽ Deliberating… (esc to interrupt · 15s)";
+
+    function driveBusyViaOutputChanges(
+      monitor: ActivityMonitor,
+      setVisible: (text: string) => void
+    ): void {
+      for (let i = 1; i <= 4; i++) {
+        vi.advanceTimersByTime(650);
+        setVisible(`tick ${i}`);
+        vi.advanceTimersByTime(50);
+      }
+      expect(monitor.getState()).toBe("busy");
+    }
+
+    it("detects completion with extracted cost/tokens in simple polling", () => {
+      const onStateChange = vi.fn();
+      let visible = ["waiting 0"];
+      const monitor = new ActivityMonitor("simple-completion", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        completionPatterns: [/Total cost:/],
+      });
+
+      monitor.startPolling();
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      onStateChange.mockClear();
+
+      visible = ["All done.", "Total cost: $1.23"];
+      // Quiet gate: completion must not fire while output is still fresh
+      vi.advanceTimersByTime(1000);
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "completed")).toHaveLength(0);
+
+      vi.advanceTimersByTime(700);
+      expect(onStateChange).toHaveBeenCalledWith("simple-completion", 1000, "completed", {
+        trigger: "pattern",
+        patternConfidence: 0.9,
+        sessionCost: 1.23,
+        sessionTokens: undefined,
+      });
+
+      // Completion hold settles to idle shortly after
+      vi.advanceTimersByTime(600);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("does not treat a cost line as completion while output keeps flowing", () => {
+      const onStateChange = vi.fn();
+      let visible = ["working"];
+      const monitor = new ActivityMonitor("simple-midstream", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        completionPatterns: [/Total cost:/],
+      });
+
+      monitor.startPolling();
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      onStateChange.mockClear();
+
+      // Cost line scrolls past, but output keeps changing every 500ms —
+      // lastActivity stays fresh, so the completion scan never fires.
+      visible = ["Total cost: $0.50", "step output 0"];
+      for (let i = 1; i <= 6; i++) {
+        vi.advanceTimersByTime(500);
+        visible = ["Total cost: $0.50", `step output ${i}`];
+      }
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "completed")).toHaveLength(0);
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("blocks completion while raw bytes stream past a static viewport", () => {
+      const onStateChange = vi.fn();
+      let visible = ["waiting 0"];
+      const monitor = new ActivityMonitor("simple-stream-quiet", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        completionPatterns: [/Total cost:/],
+      });
+
+      monitor.startPolling();
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      onStateChange.mockClear();
+
+      // Viewport settles on a cost line, but raw PTY bytes keep arriving —
+      // lastDataTimestamp stays fresh, so the completion scan must not fire.
+      visible = ["Total cost: $2.00"];
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(500);
+        monitor.onData("streaming bytes that never repaint the viewport");
+      }
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "completed")).toHaveLength(0);
+
+      // Once the stream goes quiet, completion fires.
+      vi.advanceTimersByTime(1600);
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "completed")).toHaveLength(1);
+
+      monitor.dispose();
+    });
+
+    it("exits boot early when a prompt appears in visible history", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("simple-boot-prompt", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["$", "waiting for setup"],
+        getCursorLine: () => "waiting for setup",
+        pollingMaxBootMs: 20000,
+      });
+
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // History scan is locked for the first 3s — boot holds busy
+      vi.advanceTimersByTime(2000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Prompt in history exits boot well before the 20s timeout, so the
+      // idle gate can fire at the normal 8s quiet mark
+      vi.advanceTimersByTime(6300);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "simple-boot-prompt",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: "timeout", waitingReason: "prompt" })
+      );
+
+      monitor.dispose();
+    });
+
+    it("classifies a waiting reason when the idle transition fires", () => {
+      const onStateChange = vi.fn();
+      let visible = ["waiting 0"];
+      const monitor = new ActivityMonitor("simple-waiting", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => visible,
+        getCursorLine: () => visible[visible.length - 1],
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      driveBusyViaOutputChanges(monitor, (text) => {
+        visible = [text];
+      });
+      onStateChange.mockClear();
+
+      visible = ["Should I delete the old branch?"];
+      vi.advanceTimersByTime(8200);
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith("simple-waiting", 1000, "idle", {
+        trigger: "timeout",
+        waitingReason: "question",
+      });
+
+      monitor.dispose();
+    });
+
+    it("stays busy during boot even when output is silent past the idle gate", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("simple-boot-guard", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["connecting to MCP servers..."],
+        getCursorLine: () => "connecting to MCP servers...",
+        pollingMaxBootMs: 20000,
+      });
+
+      monitor.startPolling();
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Well past the 8s idle gate, but still booting — must not go idle
+      vi.advanceTimersByTime(12000);
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "idle")).toHaveLength(0);
+
+      // Boot timeout fires; with a static screen the idle gate may now fire
+      vi.advanceTimersByTime(9000);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("consults compiled working patterns from the simple onData path", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("simple-patterns", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [CLAUDE_WORKING],
+        getCursorLine: () => CLAUDE_WORKING,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      // Sustained pattern signal across the recovery debounce window
+      monitor.onData(CLAUDE_WORKING);
+      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
+      vi.advanceTimersByTime(1600);
+      monitor.onData(CLAUDE_WORKING);
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "simple-patterns",
+        1000,
+        "busy",
+        expect.objectContaining({ trigger: "pattern" })
+      );
+
+      monitor.dispose();
+    });
+
+    it("does not promote idle→busy from patterns during focus suppression", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("simple-focus", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => [CLAUDE_WORKING],
+        getCursorLine: () => CLAUDE_WORKING,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.notifyFocus(2000);
+      monitor.onData(CLAUDE_WORKING);
+      vi.advanceTimersByTime(1600);
+      monitor.onData(CLAUDE_WORKING);
+
+      // Pattern buffer is fed (detection layer live) but no state change
+      type MonitorInternals = { patternBuf: { getText(): string } };
+      const internals = monitor as unknown as MonitorInternals;
+      expect(internals.patternBuf.getText().length).toBeGreaterThan(0);
+      expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
     });
@@ -5662,8 +5917,8 @@ describe("ActivityMonitor", () => {
 
       // One OSC working signal at t=5000, then OSC goes silent.
       monitor.onOscProgressWorking(5000);
-      // Force boot exit so isWorkingSilenceTimeout can fire (it gates on it).
-      monitor.onData("ready");
+      // Force boot exit so the idle gate can fire (it gates on it).
+      monitor.onData("Claude Code v2.0");
       onStateChange.mockClear();
 
       // Advance past the silence cap; the polling cycle's idle path fires
@@ -5769,6 +6024,7 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange).toHaveBeenCalledWith("ext-promo", 100, "idle", {
         trigger: "timeout",
+        waitingReason: "prompt",
       });
 
       monitor.dispose();
@@ -5839,6 +6095,7 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange).toHaveBeenCalledWith("ext-promo-quiet", 100, "idle", {
         trigger: "timeout",
+        waitingReason: "prompt",
       });
 
       monitor.dispose();

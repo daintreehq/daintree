@@ -46,6 +46,11 @@ const PROMPT_HISTORY_FALLBACK_MS = 3000;
 const WORKING_HOLD_MS = 1500;
 const SPINNER_ACTIVE_MS = 1500;
 const COMPLETION_HOLD_MS = 500;
+// Minimum output quiet before the simple-output polling cycle scans for
+// completion patterns — the non-simple path gets the same protection from its
+// working-signal gates (recent output suppresses completion detection), so a
+// cost summary printed mid-stream doesn't read as a finished session (#9873).
+const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
@@ -399,6 +404,59 @@ export class ActivityMonitor {
     return lowerInput.includes("esc to interrupt") || lowerInput.includes("esc to cancel");
   }
 
+  // Raw-stream compiled-pattern tier, shared by the simple and non-simple
+  // `onData` paths (#9873): feeds the rolling pattern buffer, checks
+  // boot-complete patterns across chunk boundaries, and promotes/refreshes
+  // busy on working-pattern matches.
+  private detectPatternsFromData(data: string, now: number): void {
+    this.patternBuf.update(data);
+    const bufferText = stripAnsi(this.patternBuf.getText());
+    const lowerBuffer = bufferText.toLowerCase();
+
+    // Check for boot-complete patterns in the rolling buffer
+    if (!this.bootDetector.hasExitedBootState) {
+      if (this.bootDetector.check(bufferText, false, 0, Infinity)) {
+        // Boot detected via pattern in rolling buffer
+        this.fireBootComplete(now);
+      }
+    }
+
+    // Check for working patterns in the rolling buffer
+    const patternResult = this.patternDetector
+      ? this.patternDetector.detect(bufferText, { alreadyStripped: true })
+      : undefined;
+    if (patternResult) {
+      this.lastPatternResult = patternResult;
+      this.lastPatternResultAt = now;
+    }
+    const isWorking = patternResult
+      ? patternResult.isWorking
+      : this.isEscInterruptFallback(lowerBuffer);
+
+    if (
+      isWorking &&
+      !this.isResizeSuppressed(now) &&
+      !this.isFocusSuppressed(now) &&
+      (this.state === "busy" ||
+        this.inputTracker.pendingInputUntil > 0 ||
+        !this.inputTracker.isRecentUserInput(now))
+    ) {
+      if (this.state === "busy" || this.inputTracker.pendingInputUntil > 0) {
+        this.becomeBusy({
+          trigger: "pattern",
+          patternConfidence: patternResult?.confidence ?? 0.9,
+        });
+      } else {
+        if (this.workingSignalDebouncer.shouldTriggerRecovery(now, true)) {
+          this.becomeBusy({
+            trigger: "pattern",
+            patternConfidence: patternResult?.confidence ?? 0.9,
+          });
+        }
+      }
+    }
+  }
+
   onInput(data: string): void {
     if (this.isDisposed) return;
     const now = Date.now();
@@ -447,6 +505,13 @@ export class ActivityMonitor {
       if (isIndicatorRewrite) {
         this.lastStatusRewriteAt = now;
       }
+      // Compiled-pattern tier (#9873): feed the rolling buffer and act on
+      // working patterns with the same echo/cosmetic guards the non-simple
+      // path uses. Completion and waiting-reason detection run in the
+      // polling cycle's idle paths.
+      if (!this.inputTracker.isLikelyUserEcho(data, now) && !isIndicatorRewrite) {
+        this.detectPatternsFromData(data, now);
+      }
       if (!this.getVisibleLines) {
         this.noteSimpleOutputSnapshot(
           createVisibleContentSnapshot(stripAnsi(data)),
@@ -471,52 +536,7 @@ export class ActivityMonitor {
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
     if (data && this.getVisibleLines && !isLikelyUserEcho && !isCosmeticRedraw) {
-      this.patternBuf.update(data);
-      const bufferText = stripAnsi(this.patternBuf.getText());
-      const lowerBuffer = bufferText.toLowerCase();
-
-      // Check for boot-complete patterns in the rolling buffer
-      if (!this.bootDetector.hasExitedBootState) {
-        if (this.bootDetector.check(bufferText, false, 0, Infinity)) {
-          // Boot detected via pattern in rolling buffer
-          this.fireBootComplete(now);
-        }
-      }
-
-      // Check for working patterns in the rolling buffer
-      const patternResult = this.patternDetector
-        ? this.patternDetector.detect(bufferText, { alreadyStripped: true })
-        : undefined;
-      if (patternResult) {
-        this.lastPatternResult = patternResult;
-        this.lastPatternResultAt = now;
-      }
-      const isWorking = patternResult
-        ? patternResult.isWorking
-        : this.isEscInterruptFallback(lowerBuffer);
-
-      if (
-        isWorking &&
-        !this.isResizeSuppressed(now) &&
-        !this.isFocusSuppressed(now) &&
-        (this.state === "busy" ||
-          this.inputTracker.pendingInputUntil > 0 ||
-          !this.inputTracker.isRecentUserInput(now))
-      ) {
-        if (this.state === "busy" || this.inputTracker.pendingInputUntil > 0) {
-          this.becomeBusy({
-            trigger: "pattern",
-            patternConfidence: patternResult?.confidence ?? 0.9,
-          });
-        } else {
-          if (this.workingSignalDebouncer.shouldTriggerRecovery(now, true)) {
-            this.becomeBusy({
-              trigger: "pattern",
-              patternConfidence: patternResult?.confidence ?? 0.9,
-            });
-          }
-        }
-      }
+      this.detectPatternsFromData(data, now);
     }
 
     if (!data || isLikelyUserEcho) {
@@ -760,10 +780,7 @@ export class ActivityMonitor {
     }
 
     if (this.state === "busy" && result.stateHint === "idle" && now >= this.workingHoldUntil) {
-      this.state = "idle";
-      this.idleSince = now;
-      this.patternBuf.clear();
-      this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+      this.transitionSimpleToIdle(now);
     }
   }
 
@@ -1020,8 +1037,28 @@ export class ActivityMonitor {
         const lines = this.getVisibleLines(50);
         const strippedText = stripAnsi(lines.join(" "));
         const timeSinceBoot = now - this.bootDetector.pollingStartTime;
-        if (this.bootDetector.check(strippedText, false, timeSinceBoot, this.POLLING_MAX_BOOT_MS)) {
+        // A visible prompt exits boot early — parity with the non-simple boot
+        // check, and what lets restart-resumed sessions (boot re-entered with
+        // an already-settled screen) go idle without waiting out the boot
+        // timeout (#9873). History scan unlocks after the same 3s the
+        // non-simple prompt path uses.
+        const promptResult = detectPrompt(
+          lines,
+          this.promptDetectorConfig,
+          this.getCursorLine?.() ?? null,
+          { allowHistoryScan: timeSinceBoot >= PROMPT_HISTORY_FALLBACK_MS }
+        );
+        if (
+          this.bootDetector.check(
+            strippedText,
+            promptResult.isPrompt,
+            timeSinceBoot,
+            this.POLLING_MAX_BOOT_MS
+          )
+        ) {
           this.fireBootComplete(now);
+        } else {
+          return; // Still booting, stay busy — parity with the non-simple guard (#9873)
         }
       }
 
@@ -1036,15 +1073,20 @@ export class ActivityMonitor {
         this.noteSimpleOutputSnapshot(snapshot, now, indicatorActive ? "indicator" : "content");
       }
 
+      // Completion detection runs every cycle while busy — mirrors the
+      // non-simple path so simple-output agents reach `completed` (with
+      // extracted cost/tokens) before any idle path fires (#9873).
+      if (this.trySimpleCompletion(now)) {
+        return;
+      }
+
       if (
         this.state === "busy" &&
+        !this.completionTimer.emitted &&
         now - this.lastActivityTimestamp >= this.IDLE_DEBOUNCE_MS &&
         now >= this.workingHoldUntil
       ) {
-        this.state = "idle";
-        this.idleSince = now;
-        this.patternBuf.clear();
-        this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+        this.transitionSimpleToIdle(now);
       }
       return;
     }
@@ -1389,6 +1431,71 @@ export class ActivityMonitor {
     });
   }
 
+  // Completion-pattern scan for simple-output monitors (#9873). Returns true
+  // when a completion was detected and the completed transition was emitted.
+  // Gated on output quiet so a cost line scrolling past mid-stream doesn't
+  // end the session early.
+  private trySimpleCompletion(now: number): boolean {
+    if (
+      this.state !== "busy" ||
+      this.completionTimer.emitted ||
+      this.completionPatterns.length === 0 ||
+      !this.getVisibleLines ||
+      // Quiet on both clocks: lastActivityTimestamp only moves on visible
+      // snapshot changes, so raw PTY bytes streaming past a static viewport
+      // must also block the scan via lastDataTimestamp.
+      now - Math.max(this.lastActivityTimestamp, this.lastDataTimestamp) <
+        SIMPLE_COMPLETION_MIN_QUIET_MS ||
+      now < this.workingHoldUntil
+    ) {
+      return false;
+    }
+    const completionResult = detectCompletion(
+      this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount),
+      this.completionPatterns,
+      this.completionConfidence,
+      this.promptDetectorConfig.promptScanLineCount
+    );
+    if (!completionResult.isCompletion) {
+      return false;
+    }
+    this.transitionToCompleted(
+      completionResult.confidence,
+      completionResult.extractedCost,
+      completionResult.extractedTokens
+    );
+    return true;
+  }
+
+  // Simple-output busy→idle transition shared by the polling idle gate, the
+  // activity-temperature idle hint, and the debounce-timer backstop (#9873).
+  // Runs completion detection first so agents with completionPatterns reach
+  // `completed` (with extracted cost/tokens) instead of plain idle, and
+  // attaches a waiting reason to the idle emission. While a completion hold
+  // is pending, the idle emission is left to the completion timer.
+  private transitionSimpleToIdle(now: number): void {
+    if (this.completionTimer.emitted) return;
+    if (this.trySimpleCompletion(now)) return;
+    this.state = "idle";
+    this.idleSince = now;
+    this.patternBuf.clear();
+    let waitingReason: WaitingReason | undefined;
+    if (this.getVisibleLines) {
+      const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
+      const promptResult = detectPrompt(
+        lines,
+        this.promptDetectorConfig,
+        this.getCursorLine?.() ?? null,
+        { allowHistoryScan: true }
+      );
+      waitingReason = classifyWaitingReason(lines, promptResult.isPrompt);
+    }
+    this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+      trigger: "timeout",
+      waitingReason,
+    });
+  }
+
   private becomeBusyFromPattern(confidence: number, now: number): void {
     this.becomeBusy({ trigger: "pattern", patternConfidence: confidence }, now);
   }
@@ -1446,16 +1553,22 @@ export class ActivityMonitor {
           return;
         }
 
+        // During the polling boot window, idle is owned by the polling
+        // cycle's boot guard — stay busy and re-arm (#9873). Monitors
+        // without polling have no boot lifecycle and skip this.
+        if (this.pollingInterval && !this.bootDetector.hasExitedBootState) {
+          this.debounceTimer = null;
+          this.resetDebounceTimer();
+          return;
+        }
+
         const now = Date.now();
         if (
           this.state === "busy" &&
           now - this.lastActivityTimestamp >= this.IDLE_DEBOUNCE_MS &&
           now >= this.workingHoldUntil
         ) {
-          this.state = "idle";
-          this.idleSince = now;
-          this.patternBuf.clear();
-          this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+          this.transitionSimpleToIdle(now);
         }
         this.debounceTimer = null;
       }, this.IDLE_DEBOUNCE_MS);
