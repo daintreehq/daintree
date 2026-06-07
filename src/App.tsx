@@ -553,11 +553,9 @@ function AppInner() {
   const shouldMountWorktreePalette = useKeepMounted(worktreePalette.isOpen);
   const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
   const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
-  const shouldMountProjectSwitcherModal = useKeepMounted(isProjectSwitcherModalOpen);
   const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
   const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
   const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
-  const shouldMountWorktreeOverview = useKeepMounted(isWorktreeOverviewOpen);
   const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
   const shouldMountShortcutsDialog = useKeepMounted(isShortcutsOpen);
 
@@ -1104,7 +1102,7 @@ function AppInner() {
               componentName="ProjectSwitcherPalette"
               resetKeys={[Number(isProjectSwitcherModalOpen)]}
             >
-              {shouldMountProjectSwitcherModal && (
+              {isProjectSwitcherModalOpen && (
                 <Suspense fallback={null}>
                   <LazyProjectSwitcherPalette
                     isOpen={isProjectSwitcherModalOpen}
@@ -1245,7 +1243,7 @@ function AppInner() {
               componentName="WorktreeOverviewModal"
               resetKeys={[Number(isWorktreeOverviewOpen)]}
             >
-              {shouldMountWorktreeOverview && (
+              {isWorktreeOverviewOpen && (
                 <Suspense fallback={null}>
                   <LazyWorktreeOverviewModal
                     isOpen={isWorktreeOverviewOpen}

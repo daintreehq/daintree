@@ -211,6 +211,10 @@ export function SearchablePalette<T>({
     const wasFiltering = prevIsFilteringRef.current;
     prevIsFilteringRef.current = isFiltering;
     if (!wasFiltering || isFiltering) return;
+    // Hosts now keep palettes mounted through their exit animation (#9917), so a
+    // late filter pass can resolve after close — don't announce to a closed,
+    // invisible palette.
+    if (!isOpen) return;
     if (!query.trim()) return;
     const count = results.length;
     const timer = window.setTimeout(() => {
@@ -218,7 +222,7 @@ export function SearchablePalette<T>({
       useAnnouncerStore.getState().announce(message, "polite");
     }, UI_DOHERTY_THRESHOLD);
     return () => window.clearTimeout(timer);
-  }, [isFiltering, query, results.length]);
+  }, [isFiltering, query, results.length, isOpen]);
 
   useEscapeStack(isOpen, () => {
     if (query !== "") {
