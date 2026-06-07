@@ -754,6 +754,36 @@ export type WorkspaceHostEvent =
       method: ForgeRpcMethod;
       namespacedId?: string;
       args: unknown[];
+    }
+  // Per-project poll lease acquire (workspace-host → main). Main answers with
+  // `forge:poll-lease-result` keyed by `requestId`. Holding the lease means
+  // this workspace-host is the elected poller for the project this cycle; a
+  // denial means a sibling window already polls and this one should skip.
+  // The lease key is the workspace-host's `projectPath`, known to main from
+  // the `WorkspaceHostProcess` instance — the event carries no path because
+  // main must not trust a workspace-host's self-reported identity (#4670).
+  | {
+      type: "forge:poll-lease-acquire";
+      requestId: string;
+    }
+  // Per-project poll lease release (workspace-host → main, fire-and-forget).
+  // Best-effort cooperative release on `stop()`; the lease also drops on host
+  // dispose and after the TTL, so a missed release never wedges siblings.
+  | {
+      type: "forge:poll-lease-release";
+    }
+  // WSL git opt-in entry is no longer reachable from the live worktree set
+  // (#9926). Fired both on individual worktree removal (via the host's
+  // `removeMonitor` chokepoint) and as a bulk self-heal pass at the end of
+  // `loadProject` for any persisted keys not present in the freshly-listed
+  // worktree set. Fire-and-forget — the persistent store prune is idempotent
+  // (batched read-mutate-set) so a duplicate clear after a missed delivery
+  // is a no-op. The host emits the raw `monitor.id` (no normalization); main
+  // does a case-insensitive lookup on win32 to handle legacy mixed-case
+  // persisted keys.
+  | {
+      type: "clear-wsl-git-opt-in";
+      worktreeId: string;
     };
 
 /** Configuration for WorkspaceClient */

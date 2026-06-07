@@ -840,6 +840,52 @@ function getOrLazyInitInstance(): Store<StoreSchema> {
   return storeInstance ?? initializeStore();
 }
 
+/**
+ * Batched read-mutate-set helpers for `wslGitByWorktree` (#9926). Every
+ * `store.set("wslGitByWorktree", …)` re-serializes the whole electron-store
+ * file, and `set(undefined)` throws on electron-store v11 — so per-key writes
+ * or `delete` is not safe. The host drives both the per-removal and
+ * bulk-load self-heal paths, so the host emits `clear-wsl-git-opt-in` events
+ * and main invokes these helpers from `WorkspaceHostEventRouter`.
+ *
+ * Legacy persisted entries may have been written with mixed-case UNC paths
+ * (Windows is case-insensitive but the in-memory map is keyed by whatever
+ * the renderer sent). The lookup here is case-insensitive on win32 so a host
+ * emit with the canonical lowercase form still finds the legacy key.
+ */
+export function clearWslGitEntry(worktreeId: string): void {
+  if (typeof worktreeId !== "string" || !worktreeId) return;
+  const current = store.get("wslGitByWorktree");
+  if (!current || typeof current !== "object") return;
+  const map = current as Record<string, { enabled: boolean; dismissed: boolean }>;
+
+  // Prefer an exact match; fall back to case-insensitive on win32 for legacy
+  // mixed-case keys. POSIX stays case-sensitive — the in-memory host key is
+  // also case-sensitive there, so a mismatch would be a real bug, not a
+  // legacy artifact.
+  let matchedKey: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(map, worktreeId)) {
+    matchedKey = worktreeId;
+  } else if (process.platform === "win32") {
+    const target = worktreeId.toLowerCase();
+    matchedKey = Object.keys(map).find((k) => k.toLowerCase() === target);
+  }
+  if (!matchedKey) return;
+
+  const next = { ...map };
+  delete next[matchedKey];
+  // Always write the full (possibly empty) object — never `undefined` — so
+  // electron-store v11 doesn't throw and the on-disk shape stays consistent.
+  store.set("wslGitByWorktree", next);
+}
+
+export function writeWslGitMap(
+  map: Record<string, { enabled: boolean; dismissed: boolean }>
+): void {
+  const safe = map && typeof map === "object" ? map : {};
+  store.set("wslGitByWorktree", safe);
+}
+
 export const store = new Proxy({} as Store<StoreSchema>, {
   get(_target, prop) {
     const instance = getOrLazyInitInstance();
