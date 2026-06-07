@@ -5,6 +5,7 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { isClientAppError } from "@/utils/clientAppError";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface ResolvedFilePath {
   absolutePath: string;
@@ -57,7 +58,7 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
       body = "Path is not a valid file";
       break;
     default:
-      body = userMessage ?? (error instanceof Error ? error.message : "Couldn't open this file");
+      body = userMessage ?? formatErrorMessage(error, "Couldn't open this file");
   }
 
   const name = basename(absolutePath) || absolutePath || "file";
@@ -67,6 +68,7 @@ export function reportFileLinkFailure(reason: string, error: unknown, absolutePa
     title: "Couldn't open file link",
     message: singleMessage,
     priority: "high",
+    context: { eventKind: "uiFeedback" },
     coalesce: {
       key: FILE_LINK_ACTIVATION_COALESCE_KEY,
       windowMs: 1500,
