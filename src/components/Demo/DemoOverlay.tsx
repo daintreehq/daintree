@@ -92,6 +92,118 @@ function getDemoApi() {
   return window.electron.demo!;
 }
 
+/** Minimal text-measuring surface shared by Canvas/OffscreenCanvas 2D contexts. */
+type TextMeasurer = Pick<CanvasRenderingContext2D, "font" | "measureText">;
+
+// Canvas measureText under-reports `system-ui` width versus the layout engine —
+// Chromium 148 resolves system-ui to different SF Pro optical variants in canvas
+// vs LayoutNG (~15% on macOS). Bias measurements upward so the line/width
+// estimate errs toward MORE lines and a WIDER box (conservative clamp), never a
+// caption that bleeds past the safe area.
+const MEASURE_FUDGE = 1.15;
+
+// Off-DOM 2D context for text measurement. Lazily created and cached; `null`
+// once we know no context is obtainable (so we fall back to a coarse estimate).
+let measureCtx: TextMeasurer | null | undefined;
+function getMeasureContext(): TextMeasurer | null {
+  if (measureCtx !== undefined) return measureCtx;
+  try {
+    if (typeof OffscreenCanvas !== "undefined") {
+      measureCtx = new OffscreenCanvas(1, 1).getContext("2d");
+    } else {
+      measureCtx = document.createElement("canvas").getContext("2d");
+    }
+  } catch {
+    measureCtx = null;
+  }
+  return measureCtx;
+}
+
+// Word-granularity segmenter for wrap-point detection. Unlike split(/\s+/) it
+// finds break opportunities in CJK (no spaces) and treats ZWJ emoji as single
+// graphemes — both cases the old char-count estimate got wrong.
+const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+
+/**
+ * Greedy line-wrap estimate for `text` rendered into a box of `contentWidth` CSS
+ * px (max-width minus horizontal padding). Honors explicit `\n` paragraph breaks
+ * and approximates the CSS `overflow-wrap: break-word` behavior for unbreakable
+ * tokens wider than the box. Returns the line count and the widest line so the
+ * caller can size the box. Widths are biased by MEASURE_FUDGE.
+ */
+function estimateWrappedLines(
+  text: string,
+  contentWidth: number,
+  ctx: TextMeasurer
+): { lines: number; maxLineWidth: number } {
+  const limit = Math.max(1, contentWidth);
+  let lines = 0;
+  let maxLineWidth = 0;
+  for (const paragraph of text.split("\n")) {
+    let lineWidth = 0;
+    for (const { segment } of wordSegmenter.segment(paragraph)) {
+      const w = ctx.measureText(segment).width * MEASURE_FUDGE;
+      if (lineWidth > 0 && lineWidth + w > limit) {
+        if (lineWidth > maxLineWidth) maxLineWidth = lineWidth;
+        lines++;
+        lineWidth = 0;
+      }
+      if (w > limit) {
+        // Unbreakable token wider than the box: CSS breaks it across
+        // ceil(w/limit) lines; the remainder stays on the current line.
+        const span = Math.ceil(w / limit);
+        lines += span - 1;
+        lineWidth = w - (span - 1) * limit;
+        maxLineWidth = limit;
+      } else {
+        lineWidth += w;
+      }
+    }
+    if (lineWidth > maxLineWidth) maxLineWidth = lineWidth;
+    lines++; // the line currently being built (each paragraph has >= 1 line)
+  }
+  return { lines: Math.max(1, lines), maxLineWidth };
+}
+
+/**
+ * Estimate the rendered caption box (CSS px) for safe-area clamping. Measures
+ * the actual glyph advance via canvas (accurate for CJK/emoji/wide glyphs) and
+ * the real wrapped line count, instead of a fixed char-advance + 2-line cap.
+ * Exported for unit tests so the containment invariant can be checked against
+ * the same box the clamp uses. Falls back to a coarse estimate if no canvas
+ * context is available.
+ */
+export function estimateCaptionBox(
+  text: string,
+  size: DemoAnnotationSize,
+  screenWide: boolean,
+  fw: number,
+  fh: number
+): { estW: number; estH: number; lines: number } {
+  const fontPx = Math.round(fh * SIZE_FRACTION[size]);
+  const padX = Math.round(fontPx * 0.85);
+  const padY = Math.round(fontPx * 0.42);
+  const maxBoxW = (screenWide ? 0.7 : 0.34) * fw;
+  const contentWidth = Math.max(1, maxBoxW - padX * 2);
+
+  const ctx = getMeasureContext();
+  let lines: number;
+  let maxLineWidth: number;
+  if (ctx) {
+    ctx.font = `600 ${fontPx}px system-ui, sans-serif`;
+    ({ lines, maxLineWidth } = estimateWrappedLines(text, contentWidth, ctx));
+  } else {
+    // No canvas: coarse char-advance fallback (matches legacy behavior, biased).
+    const approxW = text.length * fontPx * 0.55 * MEASURE_FUDGE;
+    maxLineWidth = Math.min(contentWidth, approxW);
+    lines = Math.max(1, Math.ceil(approxW / contentWidth));
+  }
+
+  const estW = Math.min(maxBoxW, maxLineWidth + padX * 2);
+  const estH = fontPx * 1.3 * lines + padY * 2;
+  return { estW, estH, lines };
+}
+
 /**
  * Resolve a placement string + optional target into absolute box coordinates.
  * Element placements need `selector`; cursor placements read the live demo
@@ -99,7 +211,7 @@ function getDemoApi() {
  * safe area. Returns an error string instead of throwing so the caller can
  * report it back over the demo command channel.
  */
-function resolveAnnotationPlacement(
+export function resolveAnnotationPlacement(
   payload: DemoAnnotatePayload
 ): AnnotationPlacement | { error: string } {
   const fw = window.innerWidth;
@@ -219,16 +331,10 @@ function resolveAnnotationPlacement(
 
   // Edge-aware clamp: keep the whole box inside the safe area. The simple
   // anchor clamp isn't enough — a centered caption (translate -50%) near a frame
-  // edge still bleeds half its width off-screen. Estimate the box size from the
-  // size tier + text length, derive its span from the translate anchors, and
-  // shift it back inside the margins.
-  const fontPx = Math.round(fh * SIZE_FRACTION[payload.size ?? "md"]);
-  const padX = Math.round(fontPx * 0.85);
-  const padY = Math.round(fontPx * 0.42);
-  const maxBoxW = (screenWide ? 0.7 : 0.34) * fw;
-  const estW = Math.min(maxBoxW, payload.text.length * fontPx * 0.55 + padX * 2);
-  const lines = estW >= maxBoxW ? 2 : 1;
-  const estH = fontPx * 1.3 * lines + padY * 2;
+  // edge still bleeds half its width off-screen. Estimate the rendered box size
+  // (real glyph advance + wrapped line count), derive its span from the
+  // translate anchors, and shift it back inside the margins.
+  const { estW, estH } = estimateCaptionBox(payload.text, payload.size ?? "md", screenWide, fw, fh);
 
   const spanLeft = tx === "-50%" ? left - estW / 2 : tx === "-100%" ? left - estW : left;
   const spanTop = ty === "-50%" ? top - estH / 2 : ty === "-100%" ? top - estH : top;
@@ -497,6 +603,10 @@ export function DemoOverlay() {
           textAlign: ann.textAlign,
           maxWidth: ann.screenWide ? "70vw" : "34vw",
           whiteSpace: "normal",
+          // Break unbreakable tokens (file paths, URLs) so they wrap inside the
+          // box instead of overflowing past max-width and the safe area. Keep
+          // word-break: normal so ordinary prose still wraps on spaces only.
+          overflowWrap: "break-word",
           textShadow: "0 2px 8px rgba(0,0,0,0.55)",
           boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
           // Fade each caption in on appear and out on dismiss (fill-mode `both`
