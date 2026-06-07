@@ -29,8 +29,17 @@ import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
 import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
+import { isPtyPanel } from "@shared/types/panel";
 
-const debouncedPersistMruList = debounce(persistMruList, 150);
+// Thunk form: read the live mruList at fire time, not at schedule time. A
+// snapshot captured at schedule time could be stale by the time the debounce
+// fires and would clobber a fresher immediate persistMruList() from a
+// deliberate worktree selection (#9922). persistMruList already version-
+// sequences and dedupes, so the last writer with the live list wins.
+const debouncedPersistMruList = debounce(
+  () => persistMruList(usePanelStore.getState().mruList),
+  150
+);
 
 let cleanupFn: (() => void) | null = null;
 
@@ -130,7 +139,10 @@ export function initStoreOrchestrator(): () => void {
   );
 
   // 1c. Terminal MRU recording: append the newly focused terminal to the
-  //     global MRU list and persist it (debounced) unless suppressed.
+  //     MRU list and persist it (debounced) unless suppressed. Only PTY
+  //     panels (kind "terminal") become quick-switcher items, so non-PTY
+  //     panels (browser, dev-preview, review) must not pollute the capped
+  //     MRU list with entries the switcher will never show (#9922).
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
@@ -138,8 +150,15 @@ export function initStoreOrchestrator(): () => void {
         (focusedId) => {
           if (!focusedId) return;
           if (isMruRecordingSuppressed()) return;
+          const panel = usePanelStore.getState().panelsById[focusedId];
+          // Only record panels the quick switcher can actually show — mirror
+          // its item filter (PTY kind, persisted, has a live PTY). Help/overlay
+          // terminals carry excludeFromPersistence and must not eat the cap.
+          if (!panel || !isPtyPanel(panel)) return;
+          if (panel.excludeFromPersistence === true) return;
+          if (panel.hasPty === false) return;
           usePanelStore.getState().recordMru(`terminal:${focusedId}`);
-          debouncedPersistMruList(usePanelStore.getState().mruList);
+          debouncedPersistMruList();
         }
       )
     )

@@ -246,6 +246,9 @@ export class ProjectStateManager {
           !Array.isArray(parsed.draftInputs)
             ? parsed.draftInputs
             : undefined,
+        mruList: Array.isArray(parsed.mruList)
+          ? parsed.mruList.filter((id: unknown): id is string => typeof id === "string")
+          : undefined,
       };
 
       this.setProjectStateCache(projectId, state);

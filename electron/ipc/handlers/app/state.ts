@@ -100,12 +100,19 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let focusPanelStateToUse = globalAppState.focusPanelState;
     // Active worktree state to include in response
     let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
+    // Quick-switcher MRU: prefer per-project, fall back to the legacy global
+    // list so existing users keep their MRU on first open after upgrade.
+    let mruListToUse = globalAppState.mruList;
     let projectStateQuarantinedPath: string | undefined;
 
     if (projectId) {
       const { state: projectState, quarantinedPath } =
         await projectStore.getProjectStateWithRecovery(projectId);
       projectStateQuarantinedPath = quarantinedPath;
+      // undefined means "not migrated yet" — fall through to the global list.
+      if (projectState?.mruList !== undefined) {
+        mruListToUse = projectState.mruList;
+      }
       // Per-project state exists (even if empty) - use it as authoritative
       if (!hasCrashRestoreTerminals && projectState?.terminals !== undefined) {
         // Use per-project terminals, excluding trashed and normalizing location
@@ -348,6 +355,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       activeWorktreeId: activeWorktreeIdToUse,
       focusMode: focusModeToUse,
       focusPanelState: focusPanelStateToUse,
+      mruList: mruListToUse,
     };
 
     console.log(
@@ -425,6 +433,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   handlers.push(typedHandle(CHANNELS.APP_GET_STATE, handleAppGetState));
 
   const handleAppSetState = async (
+    ctx: IpcContext,
     incoming: Partial<import("../../../../shared/types/ipc/app.js").AppState>
   ) => {
     try {
@@ -577,7 +586,17 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             sanitized.push(id);
           }
         }
-        updates.mruList = sanitized;
+        // Persist per-project so opening another project's view can't gut this
+        // list via the quick-switcher prune pass (#9922). Fall back to the
+        // legacy global write only when there's no resolvable project.
+        const mruProject = resolveProjectForHydration(ctx);
+        if (mruProject?.id) {
+          await projectStore.enqueueProjectStateUpdate(mruProject.id, (existing) =>
+            existing ? { ...existing, mruList: sanitized } : null
+          );
+        } else {
+          updates.mruList = sanitized;
+        }
       }
 
       if ("actionMruList" in partialState && Array.isArray(partialState.actionMruList)) {
@@ -707,7 +726,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       console.error("Failed to set app state:", error);
     }
   };
-  handlers.push(typedHandle(CHANNELS.APP_SET_STATE, handleAppSetState));
+  handlers.push(typedHandleWithContext(CHANNELS.APP_SET_STATE, handleAppSetState));
 
   const handleAppGetVersion = async () => {
     return app.getVersion();

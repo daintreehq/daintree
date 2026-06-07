@@ -1009,6 +1009,103 @@ describe("rendererStoreOrchestrator", () => {
     }
   });
 
+  it("does not record or persist MRU when a non-PTY panel is focused (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "br-1": {
+            id: "br-1",
+            title: "Browser",
+            kind: "browser" as const,
+            location: "grid",
+          } as PanelInstance,
+        },
+        panelIds: ["br-1"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "br-1" });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).not.toHaveBeenCalled();
+      expect(usePanelStore.getState().mruList).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not record MRU for excludeFromPersistence terminals (help/overlay) (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "help-1": {
+            id: "help-1",
+            title: "Help",
+            kind: "terminal" as const,
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            excludeFromPersistence: true,
+          },
+        },
+        panelIds: ["help-1"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "help-1" });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).not.toHaveBeenCalled();
+      expect(usePanelStore.getState().mruList).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("debounced persist reads the live mruList at fire time, not schedule time (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "t-1": {
+            id: "t-1",
+            title: "T1",
+            kind: "terminal" as const,
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+        },
+        panelIds: ["t-1"],
+      });
+
+      // Focusing schedules the debounced persist and records terminal:t-1.
+      usePanelStore.setState({ focusedId: "t-1" });
+
+      // Simulate a deliberate worktree selection updating the live MRU list
+      // before the debounce fires. The stale-args bug would persist the list
+      // captured at schedule time and clobber this promotion.
+      usePanelStore.setState({ mruList: ["worktree:wt-9", "terminal:t-1"] });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).toHaveBeenCalledTimes(1);
+      expect(persistMruList).toHaveBeenLastCalledWith(["worktree:wt-9", "terminal:t-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels pending persistMruList on destroy", async () => {
     vi.useFakeTimers();
     try {
