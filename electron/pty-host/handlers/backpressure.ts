@@ -228,11 +228,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       }
       backpressureManager.clearPendingVisual(msg.id);
 
-      // Calculate pause duration if we have a start time
-      const pauseStart = backpressureManager.getPauseStartTime(msg.id);
-      const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-      backpressureManager.deletePauseStartTime(msg.id);
-
       // Clear suspended flag to allow output to flow again
       backpressureManager.clearSuspended(msg.id);
 
@@ -247,24 +242,33 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         conn.portQueueManager.clearQueue(msg.id);
       }
 
-      // Emit resume status (uses current visualBuffers via ctx getter)
+      // Compute resume status with the actual held duration from the visual
+      // buffer (SAB path) when available. The wire `pause-end` metric gets
+      // its `durationMs` from the canonical funnel's closure map (the
+      // multi-source-of-truth path) — see `emitReliabilityMetricWithTracking`.
+      // We intentionally do NOT read from `backpressureManager.getPauseStartTime()`
+      // (SAB-only, dead in production) for the metric; the funnel does that
+      // work and clears all sources for this terminal atomically.
       const buffers = ctx.visualBuffers;
       const utilization =
         buffers.length > 0
           ? buffers[selectShard(msg.id, buffers.length)].getUtilization()
           : undefined;
-      backpressureManager.emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
+      backpressureManager.emitTerminalStatus(msg.id, "running", utilization);
 
-      // Emit metrics for pause-end (user force-resume path)
-      if (pauseDuration !== undefined) {
-        backpressureManager.emitReliabilityMetric({
-          terminalId: msg.id,
-          metricType: "pause-end",
-          timestamp: Date.now(),
-          durationMs: pauseDuration,
-          bufferUtilization: utilization,
-        });
-      }
+      // Emit the user force-resume's `pause-end` via the canonical funnel
+      // (null source). The funnel populates `durationMs` from the closure
+      // `pausedTerminals` map (or skips it when the terminal had no recorded
+      // pause) and clears the map. This routes the wire event through the
+      // load-bearing split so it always reaches the renderer in production
+      // (issue #9898: the previous `backpressureManager.emitReliabilityMetric`
+      // path was gated by `metricsEnabled()` and never fired).
+      backpressureManager.emitReliabilityMetric({
+        terminalId: msg.id,
+        metricType: "pause-end",
+        timestamp: Date.now(),
+        bufferUtilization: utilization,
+      });
     },
 
     "pause-all": () => {

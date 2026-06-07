@@ -915,7 +915,13 @@ describe("ResourceGovernor", () => {
       governor.dispose();
     });
 
-    it("does not emit gauge when metrics are disabled", () => {
+    it("emits the gauge unconditionally — pause-duration is a load-bearing recovery signal (#9898)", () => {
+      // The pause-duration gauge feeds the renderer-side Tier-1 paused-flow
+      // pill's held-duration tooltip. It must reach the wire in production
+      // even when `DAINTREE_TERMINAL_METRICS=0` (the renderer needs the
+      // tooltip to surface recovery context). Other ResourceGovernor gauges
+      // (pending-bytes-gauge, throughput-rate, queue-depth-gauge,
+      // data-loss-count) stay gated as diagnostic-only telemetry.
       vi.mocked(metricsEnabled).mockReturnValue(false);
 
       const deps = createMockDeps({
@@ -935,7 +941,16 @@ describe("ResourceGovernor", () => {
           ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
             "pause-duration-gauge"
       );
-      expect(gaugeCalls).toHaveLength(0);
+      expect(gaugeCalls).toHaveLength(1);
+      expect(gaugeCalls[0]).toMatchObject([
+        {
+          type: "terminal-reliability-metric",
+          payload: {
+            metricType: "pause-duration-gauge",
+            perTerminalHeld: [{ terminalId: "t1", heldDurationMs: 4000 }],
+          },
+        },
+      ]);
 
       governor.dispose();
     });
