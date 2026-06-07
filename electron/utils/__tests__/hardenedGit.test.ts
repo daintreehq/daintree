@@ -21,6 +21,7 @@ import {
   createBackgroundFetchGit,
   createWslHardenedGit,
   getGitLocaleEnv,
+  buildHardenedGitEnv,
   HARDENED_GIT_CONFIG,
   AUTHENTICATED_GIT_CONFIG,
 } from "../hardenedGit.js";
@@ -916,5 +917,38 @@ describe("config constants", () => {
       expect(HARDENED_GIT_CONFIG).toContain(entry);
       expect(AUTHENTICATED_GIT_CONFIG).toContain(entry);
     }
+  });
+});
+
+describe("buildHardenedGitEnv", () => {
+  it("returns the same env shape that createHardenedGit applies via .env()", () => {
+    const env = buildHardenedGitEnv("linux");
+    expect(env).toEqual(
+      expect.objectContaining({
+        LC_ALL: "",
+        LC_MESSAGES: "C",
+        LANGUAGE: "",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "true",
+        GCM_INTERACTIVE: "Never",
+        LC_CTYPE: expect.stringMatching(/UTF-8$/),
+      })
+    );
+  });
+
+  it("does not set GIT_ASKPASS on win32", () => {
+    const env = buildHardenedGitEnv("win32");
+    expect(env.GIT_ASKPASS).toBeUndefined();
+  });
+
+  it("sets GIT_ASKPASS=true on darwin", () => {
+    const env = buildHardenedGitEnv("darwin");
+    expect(env.GIT_ASKPASS).toBe("true");
+  });
+
+  it("uses the platform arg instead of process.platform when supplied", () => {
+    const env = buildHardenedGitEnv("darwin");
+    expect(env.LC_CTYPE).toBe("en_US.UTF-8");
   });
 });

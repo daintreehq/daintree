@@ -1,8 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { FileTreeService } from "../FileTreeService.js";
+
+// The temp dirs created below are NOT git repos — `git check-ignore` would
+// reject and the service would fail-closed (hide every entry). Stub the
+// helper so the integration tests only exercise fs/realpath/path logic.
+vi.mock("../../utils/gitCheckIgnore.js", () => ({
+  checkIgnoredPaths: vi.fn(async () => new Set<string>()),
+}));
 
 describe("FileTreeService", () => {
   let tempDir: string;
