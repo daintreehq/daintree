@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
-import { useFleetFailureStore } from "../fleetFailureStore";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { useFleetFailureStore, subscribeFleetFailureAutoClear } from "../fleetFailureStore";
 import { useFleetArmingStore } from "../fleetArmingStore";
 import { usePanelStore } from "../panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -35,8 +35,20 @@ function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelD
 }
 
 describe("useFleetFailureStore", () => {
+  let unsubscribe: (() => void) | null = null;
+
   beforeEach(() => {
     resetStores();
+    // Subscribe AFTER resetting so the factory's `prevArmed` closure captures
+    // the empty baseline. This mirrors the `subscribeFleetArmingPanelPruning`
+    // direct-call pattern in `fleetArmingStore.test.ts` — the subscription
+    // only fires on subsequent state changes (#9923).
+    unsubscribe = subscribeFleetFailureAutoClear();
+  });
+
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
   });
 
   it("starts empty", () => {
@@ -114,6 +126,25 @@ describe("useFleetFailureStore", () => {
     useFleetFailureStore.getState().recordFailure("p", ["a", "b"]);
     useFleetArmingStore.getState().disarmId("a");
     expect(useFleetFailureStore.getState().failedIds).toEqual(new Set(["b"]));
+    expect(useFleetFailureStore.getState().payload).toBe("p");
+  });
+
+  it("halts auto-clear once the returned unsubscribe is invoked", () => {
+    usePanelStore.setState({
+      panelsById: { a: makeAgent("a"), b: makeAgent("b") },
+      panelIds: ["a", "b"],
+    });
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    useFleetFailureStore.getState().recordFailure("p", ["a", "b"]);
+
+    // Tear down the subscription explicitly. The factory is the only thing
+    // wiring `useFleetArmingStore` → `useFleetFailureStore`, so once it's
+    // gone the failure set is frozen until the caller mutates it directly.
+    unsubscribe?.();
+    unsubscribe = null;
+
+    useFleetArmingStore.getState().clear();
+    expect(useFleetFailureStore.getState().failedIds).toEqual(new Set(["a", "b"]));
     expect(useFleetFailureStore.getState().payload).toBe("p");
   });
 });
