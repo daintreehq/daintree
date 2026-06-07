@@ -897,6 +897,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         defaultValue: string;
       }) => void
     ): () => void;
+    /** Subscribe to dialog-dismiss events — guest navigated away or its renderer crashed */
+    onDialogDismiss(callback: (payload: { panelId: string }) => void): () => void;
     /** Subscribe to find-in-page shortcuts forwarded from focused webview guests */
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void

@@ -780,6 +780,19 @@ export function setupWebviewCSP(): void {
         }
       });
 
+      // Resolve and cache the guest's parent window. On the `destroyed` event the
+      // guest's hostWebContents is no longer reachable, so dismiss-on-destroy falls
+      // back to the reference captured while the guest was alive — populated when a
+      // dialog is first intercepted below (a dialog can only be pending if this ran).
+      let cachedParentWindow: Electron.BrowserWindow | null = null;
+      const resolveParentWindow = (): Electron.BrowserWindow | null => {
+        if (!contents.isDestroyed()) {
+          const live = getWindowForWebContents(contents.hostWebContents ?? contents);
+          if (live) cachedParentWindow = live;
+        }
+        return cachedParentWindow && !cachedParentWindow.isDestroyed() ? cachedParentWindow : null;
+      };
+
       // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests.
       // Electron 40+ emits "js-dialog" but its TS types omit it from the overload union.
       (contents as { on: (event: string, listener: (...args: unknown[]) => void) => void }).on(
@@ -807,8 +820,8 @@ export function setupWebviewCSP(): void {
             return;
           }
 
-          const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-          if (parentWindow && !parentWindow.isDestroyed()) {
+          const parentWindow = resolveParentWindow();
+          if (parentWindow) {
             getAppWebContents(parentWindow).send("webview:dialog-request", {
               dialogId,
               panelId,
@@ -846,6 +859,29 @@ export function setupWebviewCSP(): void {
 
       contents.on("unresponsive", notifyUnresponsive);
       contents.on("responsive", notifyResponsive);
+
+      // Dismiss any pending JS dialogs when the guest navigates to a new document,
+      // its renderer crashes, or it is destroyed (e.g. the <webview> is remounted on
+      // a partition change). Chromium discards the native dialog state in all three
+      // cases, so the stored callback would otherwise leak and the renderer overlay
+      // would survive a page that no longer exists. did-navigate fires only for
+      // cross-document main-frame navigations (same-document hash/pushState changes
+      // emit did-navigate-in-page and are correctly ignored). The destroyed path
+      // relies on the cached parent window since hostWebContents is gone by then.
+      const dismissPendingDialogs = () => {
+        const dialogService = getWebviewDialogService();
+        const panelId = dialogService.getPanelId(contents.id);
+        dialogService.cancelPendingForGuest(contents.id);
+        if (!panelId) return;
+        const parentWindow = resolveParentWindow();
+        if (parentWindow) {
+          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
+        }
+      };
+
+      contents.on("did-navigate", dismissPendingDialogs);
+      contents.on("render-process-gone", dismissPendingDialogs);
+      contents.once("destroyed", dismissPendingDialogs);
 
       // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) and reload
       // (Cmd/Ctrl+R) shortcuts from webview guests. When the guest has focus
