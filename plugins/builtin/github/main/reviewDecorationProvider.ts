@@ -46,6 +46,17 @@ export function createReviewDecorationProvider(
       // to `undefined` (forge.ts:463-466). The renderer mirrors this guard
       // so unloaded providers don't throw at click time.
       const buildFileUrl = provider.buildPRFileUrl;
+      // Guard the deep-link on the data it requires. Legacy snapshots
+      // synthesized by `toPluginWorktreeSnapshot` can carry a `prNumber`
+      // without populating the canonical `owner`/`repo` — building a URL
+      // from empty strings would produce `https://github.com///pull/N/...`
+      // which the host can't recover from. Omit `url` so the badge stays
+      // as an indicator but the click target is disabled.
+      const hasRepoRef =
+        typeof prRef.owner === "string" &&
+        prRef.owner.length > 0 &&
+        typeof prRef.repo === "string" &&
+        prRef.repo.length > 0;
       const out: Record<string, FileDecoration> = {};
       for (const [path, count] of Object.entries(pathCounts)) {
         if (count > 0 && wanted.has(path)) {
@@ -55,7 +66,7 @@ export function createReviewDecorationProvider(
             tooltip: isClamped ? `${base} (partial count)` : base,
             color: "text-status-warning",
           };
-          if (buildFileUrl) {
+          if (buildFileUrl && hasRepoRef) {
             decoration.url = buildFileUrl(
               { host: "github.com", owner: prRef.owner, repo: prRef.repo, rawData: prRef.rawData },
               prNumber,

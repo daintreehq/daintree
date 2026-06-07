@@ -1307,7 +1307,9 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = screen.getByRole("button", { name: /3 unresolved review comments/i });
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
       fireEvent.click(badge);
 
       expect(openExternalMock).toHaveBeenCalledWith(deepLinkA);
@@ -1328,7 +1330,9 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = screen.getByRole("button", { name: /3 unresolved review comments/i });
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
       fireEvent.click(badge);
 
       const calledWith = openExternalMock.mock.calls[0]?.[0] as string | undefined;
@@ -1358,7 +1362,9 @@ describe("ReviewHub", () => {
 
       // The exact provider text is the accessible label.
       expect(
-        screen.getByRole("button", { name: "3 unresolved review comments (partial count)" })
+        await screen.findByRole("button", {
+          name: "3 unresolved review comments (partial count)",
+        })
       ).toBeDefined();
       // The count re-derivation label must NOT appear.
       expect(
@@ -1380,7 +1386,9 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = screen.getByRole("button", { name: /3 unresolved review comments/i });
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
       // Visible text equals the provider's badge value, not a re-parsed count
       expect(badge.textContent).toBe("3");
     });
@@ -1401,7 +1409,9 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = screen.getByRole("button", { name: /3 unresolved review comments/i });
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
       expect(badge.hasAttribute("disabled")).toBe(true);
 
       fireEvent.click(badge);
@@ -1425,7 +1435,13 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = screen.getByRole("button", { name: /Unresolved review comments on/i });
+      // `findByRole` polls until the badge appears (the decoration
+      // resolves through an async IPC round-trip, so a single
+      // `getByRole` after `switchToBaseBranchWithPR` can race the
+      // state update under load).
+      const badge = await screen.findByRole("button", {
+        name: /Unresolved review comments on/i,
+      });
       expect(badge.textContent).toBe("3");
       // Click still routes through the deep-link.
       fireEvent.click(badge);

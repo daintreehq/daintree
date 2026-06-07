@@ -644,16 +644,30 @@ async function handleFileDecorationsGet(
         const color = presentString(decoration.color);
         if (color !== undefined) target.color = color;
       }
+      if (target.url === undefined) {
+        // Issue #9953: the renderer uses `decoration.url` as the click
+        // target for the review-thread badge. The IPC boundary must
+        // forward the provider-authored URL — anything string-shaped is
+        // accepted here; `systemClient.openExternal` (lesson #9316)
+        // applies the protocol allowlist downstream so a malicious
+        // provider can't reach `file://`/`javascript:`.
+        const url = presentString(decoration.url);
+        if (url !== undefined) target.url = url;
+      }
     }
   }
 
   // Drop paths that ended up with no fields (a provider returned an entry but
   // every field was empty) so the renderer's "decorated?" check stays cheap.
+  // `url` participates: a URL-only decoration (a future provider ships
+  // just a deep-link without badge/tooltip/color) must still survive the
+  // cleanup so the renderer's click target is wired.
   for (const [path, decoration] of Object.entries(merged)) {
     if (
       decoration.badge === undefined &&
       decoration.tooltip === undefined &&
-      decoration.color === undefined
+      decoration.color === undefined &&
+      decoration.url === undefined
     ) {
       delete merged[path];
     }

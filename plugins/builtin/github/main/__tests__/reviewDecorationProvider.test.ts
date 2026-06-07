@@ -223,4 +223,53 @@ describe("createReviewDecorationProvider", () => {
     expect(result["src/a.ts"]!.url).toBeUndefined();
     expect(mockBuildPRFileUrl).not.toHaveBeenCalled();
   });
+
+  // Legacy-snapshot guard: a `PluginWorktreeSnapshot` synthesized by the
+  // host's snapshot adapter can carry a `linked.pr.ref.number` without
+  // populating `owner` / `repo` (e.g. a worktree linked before the
+  // canonical ResourceRef projection landed). Building a URL from empty
+  // strings would produce `https://github.com///pull/N/files#diff-…` —
+  // unsalvageable. The plugin must omit `url` so the badge stays as an
+  // indicator but the click target is disabled.
+  it("omits url when the snapshot has prNumber but no owner/repo", async () => {
+    const host = makeHost([
+      {
+        path: "/some/path",
+        linked: { pr: { ref: { number: 42 } } },
+      } as unknown as PluginWorktreeSnapshot,
+    ]);
+    provider = createReviewDecorationProvider(host, forgeProvider);
+    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 1 });
+
+    const result = await provider.provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);
+
+    expect(result["src/a.ts"]).toBeDefined();
+    expect(result["src/a.ts"]!.badge).toBe("1");
+    // Builder MUST NOT be called with empty owner/repo — it would emit a
+    // broken URL the host can't recover from.
+    expect(mockBuildPRFileUrl).not.toHaveBeenCalled();
+    expect(result["src/a.ts"]!.url).toBeUndefined();
+  });
+
+  // Real-anchor sanity check: a provider instance with a real
+  // `buildPRFileUrl` produces a URL whose path/hash match the github.com
+  // formula, not a placeholder. Bridges the delegation-only tests above
+  // to a concrete anchor (the issue is that the renderer used to wire
+  // `${prUrl}/files?file=...` instead of letting the provider author it).
+  it("emits a github.com-shaped anchor via the real provider", async () => {
+    const { githubForgeProvider } = await import("../forgeProvider.js");
+    const host = makeHost([makeWorktree("/some/path", 42, "owner", "repo")]);
+    provider = createReviewDecorationProvider(host, githubForgeProvider);
+    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/has space.ts": 1 });
+
+    const result = await provider.provideDecorations("worktree-diff:/some/path", [
+      "src/has space.ts",
+    ]);
+
+    const { createHash } = await import("node:crypto");
+    const expected = createHash("sha256").update("src/has space.ts", "utf8").digest("hex");
+    expect(result["src/has space.ts"]!.url).toBe(
+      `https://github.com/owner/repo/pull/42/files#diff-${expected}`
+    );
+  });
 });
