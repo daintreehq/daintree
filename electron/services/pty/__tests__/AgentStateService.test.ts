@@ -1017,4 +1017,96 @@ describe("AgentStateService", () => {
       expect(payloads).toHaveLength(0);
     });
   });
+
+  describe("dispose trigger suppression (#9867)", () => {
+    it("does not publish agent:state-changed for a dispose observation from a working terminal", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const stateChanges: unknown[] = [];
+      const dropped: Array<{ outcome: string; reason?: string; currentState: string }> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push(payload);
+      });
+      events.on("agent:state-transition-dropped", (payload) => {
+        dropped.push({
+          outcome: payload.outcome,
+          reason: payload.reason,
+          currentState: payload.currentState,
+        });
+      });
+
+      service.handleActivityState(terminal, "idle", { trigger: "dispose" });
+
+      expect(terminal.agentState).toBe("working");
+      expect(stateChanges).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]?.outcome).toBe("no-op");
+      expect(dropped[0]?.currentState).toBe("working");
+      expect(dropped[0]?.reason).toBe("dispose observation suppressed at teardown");
+    });
+
+    it("does not publish a false working → waiting transition on a dispose observation", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const stateChanges: Array<{ state: string; previousState: string; trigger: string }> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({
+          state: payload.state,
+          previousState: payload.previousState,
+          trigger: payload.trigger,
+        });
+      });
+
+      service.handleActivityState(terminal, "idle", { trigger: "dispose" });
+
+      expect(stateChanges).toHaveLength(0);
+    });
+
+    it("is a no-op for a dispose observation from an idle terminal", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "idle" });
+      const stateChanges: unknown[] = [];
+      const dropped: unknown[] = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push(payload);
+      });
+      events.on("agent:state-transition-dropped", (payload) => {
+        dropped.push(payload);
+      });
+
+      service.handleActivityState(terminal, "idle", { trigger: "dispose" });
+
+      expect(terminal.agentState).toBe("idle");
+      expect(stateChanges).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("does not race the authoritative exit/kill transition — that path is unaffected", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const stateChanges: Array<{ state: string; previousState: string; trigger: string }> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({
+          state: payload.state,
+          previousState: payload.previousState,
+          trigger: payload.trigger,
+        });
+      });
+
+      // First: dispose observation (would have been the false positive).
+      service.handleActivityState(terminal, "idle", { trigger: "dispose" });
+      // Then: the authoritative exit that follows teardown.
+      service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+      expect(terminal.agentState).toBe("exited");
+      expect(stateChanges).toHaveLength(1);
+      expect(stateChanges[0]?.state).toBe("exited");
+      expect(stateChanges[0]?.previousState).toBe("working");
+      expect(stateChanges[0]?.trigger).toBe("exit");
+    });
+  });
 });

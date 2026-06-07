@@ -227,6 +227,28 @@ class AgentNotificationService {
       this.clearWaitingEscalation(terminalId);
     }
 
+    // Purge any waiting-burst entry for this terminal once the terminal
+    // enters a terminal state. Defense-in-depth (#9867): if a synthetic
+    // `working → waiting` transition were ever to slip through the
+    // `handleActivityState` `dispose` suppression, the buffered entry
+    // must not outlive the terminal — otherwise the BURST_WINDOW_MS
+    // timer would fire `showWatchNotification` against a dead terminal
+    // ~200ms after the kill/exit. Per-terminal splice keeps entries for
+    // other terminals intact.
+    if ((state === "completed" || state === "exited") && terminalId) {
+      const before = this.waitingBurstBuffer.length;
+      this.waitingBurstBuffer = this.waitingBurstBuffer.filter(
+        (entry) => entry.terminalId !== terminalId
+      );
+      if (this.waitingBurstBuffer.length === 0 && this.waitingBurstTimer !== null) {
+        clearTimeout(this.waitingBurstTimer);
+        this.waitingBurstTimer = null;
+      } else if (this.waitingBurstBuffer.length !== before) {
+        // Buffer still has items for other terminals — let the existing
+        // timer continue to fire. Only the spliced entry was dropped.
+      }
+    }
+
     // Cancel working pulse when agent leaves "working"
     if (previousState === "working" && state !== "working" && terminalId) {
       this.clearWorkingPulse(terminalId);

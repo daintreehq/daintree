@@ -468,6 +468,28 @@ export class AgentStateService {
       temperature?: AgentActivityObservationResult;
     }
   ): void {
+    // The ActivityMonitor emits a synthetic `idle` observation with
+    // `trigger: "dispose"` during teardown when it was still in the busy
+    // state. Without this branch the observation falls through to the
+    // generic `activity` path below, which publishes a high-confidence
+    // `working → waiting` transition on `agent:state-changed` — a false
+    // positive that fires an "Agent waiting for input" OS notification
+    // (#9867) and burns the one-shot `useAgentWaitingNudge`. Suppress the
+    // publication and emit a diagnostic drop so the event-log inspector
+    // keeps the trace without the bad transition crossing the bus. The
+    // `ActivityMonitor.dispose()` emit itself is preserved so terminals
+    // that lose their ActivityMonitor without an authoritative exit/kill
+    // event are not stranded in `working` — the renderer's direct idle
+    // observation covers that path.
+    if (metadata?.trigger === "dispose") {
+      this.emitTransitionDropped(terminal, {
+        outcome: "no-op",
+        currentState: terminal.agentState || "idle",
+        reason: "dispose observation suppressed at teardown",
+      });
+      return;
+    }
+
     const event: AgentEvent =
       activity === "busy"
         ? metadata?.trigger === "input"
