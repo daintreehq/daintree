@@ -21,6 +21,11 @@ interface RunHistoryState {
 
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
+// True once an `run-history:update` push has populated the store. The pull-on-
+// mount `getRecords()` resolves asynchronously and can land AFTER a fresher
+// push during init (or during another window's concurrent append) — when a
+// push has already arrived, the stale snapshot must not overwrite it.
+let receivedPush = false;
 
 export const useRunHistoryStore = create<RunHistoryState>((set) => ({
   records: [],
@@ -30,15 +35,18 @@ export const useRunHistoryStore = create<RunHistoryState>((set) => ({
     initialized = true;
 
     // Live updates: the main process pushes the full newest-first snapshot on
-    // every append/clear, and replays it to freshly-loaded views.
+    // every append/clear, and replays it to freshly-loaded views. This is the
+    // authoritative data path.
     unsubscribe = window.electron.events.on("run-history:update", (records) => {
+      receivedPush = true;
       set({ records, loading: false });
     });
 
-    // Pull-on-mount so we have data even before the first push arrives.
+    // Pull-on-mount so we have data even before the first push arrives. Skip
+    // applying the snapshot if a push already won the race — only clear loading.
     window.electron.runHistory
       .getRecords()
-      .then((records) => set({ records, loading: false }))
+      .then((records) => set(receivedPush ? { loading: false } : { records, loading: false }))
       .catch((err) => {
         logError("Failed to load run history", err);
         set({ loading: false });
@@ -46,8 +54,11 @@ export const useRunHistoryStore = create<RunHistoryState>((set) => ({
   },
   clear: async () => {
     try {
+      // No optimistic `set({ records: [] })`: the clear IPC handler calls
+      // `broadcastRunHistory()` synchronously before it resolves, so the empty
+      // snapshot arrives via the push path. An optimistic clear here could
+      // instead clobber a concurrent append broadcast from another window.
       await window.electron.runHistory.clear();
-      set({ records: [] });
     } catch (err) {
       logError("Failed to clear run history", err);
     }
@@ -59,5 +70,6 @@ export function _resetRunHistoryStoreForTest(): void {
   unsubscribe?.();
   unsubscribe = null;
   initialized = false;
+  receivedPush = false;
   useRunHistoryStore.setState({ records: [], loading: true });
 }

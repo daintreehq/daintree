@@ -26,6 +26,8 @@ function CountPill({ tone, label }: { tone: "success" | "danger" | "muted"; labe
 }
 
 function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "recipe" }> }) {
+  const spawned = record.spawned ?? [];
+  const failed = record.failed ?? [];
   return (
     <>
       <div className="flex items-start gap-2.5">
@@ -40,9 +42,9 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
             ) : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <CountPill tone="success" label={`${record.spawned.length} spawned`} />
-            {record.failed.length > 0 ? (
-              <CountPill tone="danger" label={`${record.failed.length} failed`} />
+            <CountPill tone="success" label={`${spawned.length} spawned`} />
+            {failed.length > 0 ? (
+              <CountPill tone="danger" label={`${failed.length} failed`} />
             ) : null}
             <CountPill tone="muted" label={`${record.totalTerminals} defined`} />
           </div>
@@ -51,9 +53,9 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
           {formatRelativeTime(record.timestamp)}
         </time>
       </div>
-      {record.failed.length > 0 ? (
+      {failed.length > 0 ? (
         <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-red-400/90">
-          {record.failed.map((f) => (
+          {failed.map((f) => (
             <li key={f.index} className="truncate">
               #{f.index}: {f.error}
             </li>
@@ -65,7 +67,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
 }
 
 function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fleet" }> }) {
-  const rejected = record.perTarget.filter((t) => t.status === "rejected");
+  const rejected = (record.perTarget ?? []).filter((t) => t.status === "rejected");
   return (
     <>
       <div className="flex items-start gap-2.5">

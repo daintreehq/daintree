@@ -28,6 +28,28 @@ function clampString(value: unknown, max: number): string | undefined {
   return value.length > max ? value.slice(0, max) : value;
 }
 
+/**
+ * Defensively normalize a persisted record's array fields. Records written by
+ * {@link RunHistoryLog.append} always have these; this guards against corrupted
+ * or hand-edited on-disk JSON so consumers can dereference them unconditionally.
+ */
+function backfillRecord(record: RunHistoryRecord): RunHistoryRecord {
+  if (record.kind === "recipe") {
+    return {
+      ...record,
+      spawned: Array.isArray(record.spawned) ? record.spawned : [],
+      failed: Array.isArray(record.failed) ? record.failed : [],
+    };
+  }
+  if (record.kind === "fleet") {
+    return {
+      ...record,
+      perTarget: Array.isArray(record.perTarget) ? record.perTarget : [],
+    };
+  }
+  return record;
+}
+
 function sanitizeTarget(raw: RunHistoryTargetOutcome): RunHistoryTargetOutcome {
   const out: RunHistoryTargetOutcome = {
     terminalId: String(raw.terminalId),
@@ -62,10 +84,16 @@ export class RunHistoryLog {
     if (this.hydrated) return;
     const persisted = this.readRecords();
     const safe = Array.isArray(persisted)
-      ? persisted.filter(
-          (r: unknown): r is RunHistoryRecord =>
-            r !== null && typeof r === "object" && "kind" in (r as object)
-        )
+      ? persisted
+          .filter(
+            (r: unknown): r is RunHistoryRecord =>
+              r !== null && typeof r === "object" && "kind" in (r as object)
+          )
+          // Backfill the array fields so a corrupted / hand-edited store can't
+          // crash a consumer that dereferences `spawned`/`failed`/`perTarget`
+          // (e.g. the Settings viewer). The append() path always writes these,
+          // but on-disk JSON is not trusted (mirrors the MCP audit backfill).
+          .map(backfillRecord)
       : [];
     this.records =
       safe.length > this.maxRecords ? safe.slice(safe.length - this.maxRecords) : safe;

@@ -118,6 +118,24 @@ describe("RunHistoryLog", () => {
     expect(log.getRecords()).toEqual([]);
   });
 
+  it("backfills missing array fields on hydrate so consumers can't crash", () => {
+    // A corrupted / hand-edited record with `kind` but no `spawned`/`failed`.
+    const corrupt = [{ id: "c", schemaVersion: 1, timestamp: 0, kind: "recipe" }];
+    const saveRecords = vi.fn();
+    const log = new RunHistoryLog(saveRecords, () => corrupt as unknown);
+    const [record] = log.getRecords();
+    expect(record!.kind).toBe("recipe");
+    expect((record as { spawned: unknown[] }).spawned).toEqual([]);
+    expect((record as { failed: unknown[] }).failed).toEqual([]);
+  });
+
+  it("backfills a corrupt fleet record's perTarget array", () => {
+    const corrupt = [{ id: "f", schemaVersion: 1, timestamp: 0, kind: "fleet" }];
+    const log = new RunHistoryLog(vi.fn(), () => corrupt as unknown);
+    const [record] = log.getRecords();
+    expect((record as { perTarget: unknown[] }).perTarget).toEqual([]);
+  });
+
   it("caps fleet reason and draft preview lengths", () => {
     const { log } = makeFixture();
     const longReason = "x".repeat(RUN_HISTORY_REASON_MAX_LENGTH + 50);
