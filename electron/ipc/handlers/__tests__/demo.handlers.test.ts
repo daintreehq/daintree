@@ -395,4 +395,105 @@ describe("registerDemoHandlers", () => {
     const result = await handler({}, { selector: ".my-el", text: "Hello", position: "top" });
     expect(result).toEqual({ id: "test-request-id" });
   });
+
+  describe("command watchdog timeout (#10142)", () => {
+    // Auto-acks every command after a short real delay so handlers resolve without
+    // wall-clock waits, while the setTimeout spy records the watchdog delay arg.
+    function autoAck() {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+    }
+
+    // The watchdog setTimeout is the only one armed with a delay other than the
+    // 5ms auto-ack scheduler; return that delay so tests assert the derived budget.
+    function watchdogDelay(spy: ReturnType<typeof vi.spyOn>): number | undefined {
+      const call = spy.mock.calls.find(([, delay]) => delay !== 5);
+      return call?.[1] as number | undefined;
+    }
+
+    async function runAndCaptureDelay(
+      channel: string,
+      payload?: unknown
+    ): Promise<number | undefined> {
+      const spy = vi.spyOn(global, "setTimeout");
+      autoAck();
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      try {
+        await getHandler(channel)({}, payload);
+        return watchdogDelay(spy);
+      } finally {
+        cleanup();
+        spy.mockRestore();
+      }
+    }
+
+    it("sleep derives the watchdog from durationMs (above the old 30s cap)", async () => {
+      // 45000 * 1.2 + 5000 = 59000 — would have been capped at 30000 before the fix.
+      expect(await runAndCaptureDelay("demo:sleep", { durationMs: 45_000 })).toBe(59_000);
+    });
+
+    it("waitForSelector derives the watchdog from the supplied timeoutMs", async () => {
+      // 40000 * 1.2 + 5000 = 53000
+      expect(
+        await runAndCaptureDelay("demo:wait-for-selector", { selector: ".x", timeoutMs: 40_000 })
+      ).toBe(53_000);
+    });
+
+    it("waitForSelector falls back to the 10s default when timeoutMs is omitted", async () => {
+      // 10000 * 1.2 + 5000 = 17000
+      expect(await runAndCaptureDelay("demo:wait-for-selector", { selector: ".x" })).toBe(17_000);
+    });
+
+    it("waitForIdle derives the watchdog from timeoutMs, ignoring settleMs", async () => {
+      // 60000 * 1.2 + 5000 = 77000 — settleMs is a polling cadence, not additive.
+      expect(
+        await runAndCaptureDelay("demo:wait-for-idle", { timeoutMs: 60_000, settleMs: 800 })
+      ).toBe(77_000);
+    });
+
+    it("type scales the watchdog with text length and can exceed 30s", async () => {
+      // 100 chars at 12 cps: ceil(100/12*1000*8 + 5000) = 71667
+      const text = "a".repeat(100);
+      expect(await runAndCaptureDelay("demo:type", { selector: ".x", text })).toBe(71_667);
+    });
+
+    it("type honors a slower cps, lengthening the watchdog", async () => {
+      // 20 chars at 5 cps: ceil(20/5*1000*8 + 5000) = 37000
+      const text = "a".repeat(20);
+      expect(await runAndCaptureDelay("demo:type", { selector: ".x", text, cps: 5 })).toBe(37_000);
+    });
+
+    it("typeInTerminal uses the same text-derived watchdog", async () => {
+      const text = "a".repeat(100);
+      expect(await runAndCaptureDelay("demo:type-in-terminal", { selector: ".x", text })).toBe(
+        71_667
+      );
+    });
+
+    it("drag derives the watchdog from durationMs", async () => {
+      // 8000 * 1.2 + 5000 = 14600
+      expect(
+        await runAndCaptureDelay("demo:drag", {
+          fromSelector: ".a",
+          toSelector: ".b",
+          durationMs: 8_000,
+        })
+      ).toBe(14_600);
+    });
+
+    it("moveTo falls back to the 3s default when durationMs is omitted", async () => {
+      // 3000 * 1.2 + 5000 = 8600
+      expect(await runAndCaptureDelay("demo:move-to", { x: 1, y: 2 })).toBe(8_600);
+    });
+
+    it("unbounded commands keep the 30s default watchdog", async () => {
+      // click carries no duration/timeout payload, so the watchdog is unchanged.
+      expect(await runAndCaptureDelay("demo:click")).toBe(30_000);
+    });
+  });
 });
