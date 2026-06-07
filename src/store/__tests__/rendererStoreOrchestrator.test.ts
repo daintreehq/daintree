@@ -1448,21 +1448,18 @@ describe("rendererStoreOrchestrator", () => {
   });
 
   describe("fleet failure auto-clear (issue #9923)", () => {
-    it("halts auto-clear after destroy and resumes after re-init", async () => {
+    type FleetStores = {
+      useFleetArmingStore: typeof import("../fleetArmingStore").useFleetArmingStore;
+      useFleetFailureStore: typeof import("../fleetFailureStore").useFleetFailureStore;
+    };
+
+    async function loadStores(): Promise<FleetStores> {
       const { useFleetArmingStore } = await import("../fleetArmingStore");
       const { useFleetFailureStore } = await import("../fleetFailureStore");
+      return { useFleetArmingStore, useFleetFailureStore };
+    }
 
-      useFleetArmingStore.setState({
-        armedIds: new Set<string>(),
-        armOrder: [],
-        armOrderById: {},
-        lastArmedId: null,
-        broadcastSignal: 0,
-        previewArmedIds: new Set<string>(),
-      });
-      useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
-
-      // Seed panels + arm the fleet + record a broadcast failure.
+    function seedFleetPanels(): void {
       usePanelStore.setState({
         panelsById: {
           "agent-a": {
@@ -1490,23 +1487,92 @@ describe("rendererStoreOrchestrator", () => {
         },
         panelIds: ["agent-a", "agent-b"],
       });
-      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
-      useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+    }
 
-      // Orchestrator already init'd by the top-level beforeEach. Tear it
-      // down and verify auto-clear no longer fires on a fleet drain.
+    function resetFleetStores(stores: FleetStores): void {
+      stores.useFleetArmingStore.setState({
+        armedIds: new Set<string>(),
+        armOrder: [],
+        armOrderById: {},
+        lastArmedId: null,
+        broadcastSignal: 0,
+        previewArmedIds: new Set<string>(),
+      });
+      stores.useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
+    }
+
+    it("halts auto-clear after destroy — fleet drain during torn-down does not clear", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Subscription torn down; the next armed-set change has no listener.
       destroyStoreOrchestrator();
-      useFleetArmingStore.getState().clear();
-      expect(useFleetFailureStore.getState().failedIds).toEqual(new Set(["agent-a", "agent-b"]));
-      expect(useFleetFailureStore.getState().payload).toBe("p");
+      stores.useFleetArmingStore.getState().clear();
 
-      // Re-init — the subscription is back, and the next drain must clear.
+      // The drain happened, but failures persist because the subscription
+      // is gone. Initial reconciliation runs on the NEXT re-init.
+      expect(stores.useFleetFailureStore.getState().failedIds).toEqual(
+        new Set(["agent-a", "agent-b"])
+      );
+      expect(stores.useFleetFailureStore.getState().payload).toBe("p");
+    });
+
+    it("reconciles drained fleet on re-init (initial pass picks up the missed clear)", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Tear down, drain the fleet while the subscription is gone, confirm
+      // the failures are still present (no auto-clear fired).
+      destroyStoreOrchestrator();
+      stores.useFleetArmingStore.getState().clear();
+      expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(2);
+
+      // Re-init: the initial reconciliation pass sees the drained armed
+      // set and clears the stale failures without needing a fresh event.
       initStoreOrchestrator();
-      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
-      useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
-      useFleetArmingStore.getState().clear();
-      expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
-      expect(useFleetFailureStore.getState().payload).toBeNull();
+      expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(stores.useFleetFailureStore.getState().payload).toBeNull();
+    });
+
+    it("reconciles partial disarm on re-init (initial pass dismisses stale per-pane)", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Tear down, disarm one pane while the subscription is gone.
+      destroyStoreOrchestrator();
+      stores.useFleetArmingStore.getState().disarmId("agent-a");
+
+      // Re-init: the initial pass sees `failedIds = {a, b}` but
+      // `armedIds = {b}`, and dismisses just the stale `a`.
+      initStoreOrchestrator();
+      expect(stores.useFleetFailureStore.getState().failedIds).toEqual(new Set(["agent-b"]));
+      expect(stores.useFleetFailureStore.getState().payload).toBe("p");
+    });
+
+    it("listener continues to fire for post-re-init armed-set changes", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+
+      destroyStoreOrchestrator();
+      // Re-init with a non-empty armed set already in place.
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      initStoreOrchestrator();
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Listener should still fire on a drain that happens AFTER re-init.
+      stores.useFleetArmingStore.getState().clear();
+      expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(stores.useFleetFailureStore.getState().payload).toBeNull();
     });
   });
 });

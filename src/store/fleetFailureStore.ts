@@ -70,32 +70,44 @@ export const useFleetFailureStore = create<FleetFailureState>((set) => ({
  * HMR teardown — moving the subscription under the orchestrator's idempotent
  * `init`/`destroy` cycle is the canonical pattern (#9923).
  */
+
+/** Drop failure records for panes that are no longer in the armed set. */
+function reconcileFleetFailures(currentArmed: Set<string>): void {
+  const failed = useFleetFailureStore.getState().failedIds;
+  if (failed.size === 0) return;
+  // Whole fleet drained — clear everything in one shot to avoid the
+  // per-id loop below thrashing the store on every removed pane.
+  if (currentArmed.size === 0) {
+    useFleetFailureStore.getState().clear();
+    return;
+  }
+  // Per-pane removal — drop the failure record for any pane that's
+  // no longer armed. Disarming a pane (manual or via auto-prune of
+  // trashed/exited terminals) means the user has moved on; a stale
+  // red dot would just create cleanup work.
+  for (const id of failed) {
+    if (!currentArmed.has(id)) {
+      useFleetFailureStore.getState().dismissId(id);
+    }
+  }
+}
+
 export function subscribeFleetFailureAutoClear(): () => void {
-  let prevArmed = useFleetArmingStore.getState().armedIds;
+  // Initial reconciliation pass: catch up on any armed-set change that
+  // happened while the subscription was torn down (orchestrator destroy →
+  // mutate → re-init, or HMR). The original module-scope subscription never
+  // tore down, so it caught every change; the orchestrator-scoped version
+  // can miss a drain or partial disarm during the torn-down window. This
+  // pass recovers that invariant on re-registration — mirrors the initial
+  // pass in `subscribeFleetArmingPanelPruning` (#9923).
+  const initialArmed = useFleetArmingStore.getState().armedIds;
+  reconcileFleetFailures(initialArmed);
+
+  let prevArmed = initialArmed;
   return useFleetArmingStore.subscribe((state) => {
     const nextArmed = state.armedIds;
     if (prevArmed === nextArmed) return;
-
-    // Whole fleet drained — clear everything in one shot to avoid the
-    // per-id loop below thrashing the store on every removed pane.
-    if (nextArmed.size === 0 && prevArmed.size > 0) {
-      useFleetFailureStore.getState().clear();
-      prevArmed = nextArmed;
-      return;
-    }
-
-    // Per-pane removal — drop the failure record for any pane that's
-    // no longer armed. Disarming a pane (manual or via auto-prune of
-    // trashed/exited terminals) means the user has moved on; a stale
-    // red dot would just create cleanup work.
-    const failed = useFleetFailureStore.getState().failedIds;
-    if (failed.size > 0) {
-      for (const id of failed) {
-        if (!nextArmed.has(id)) {
-          useFleetFailureStore.getState().dismissId(id);
-        }
-      }
-    }
+    reconcileFleetFailures(nextArmed);
     prevArmed = nextArmed;
   });
 }
