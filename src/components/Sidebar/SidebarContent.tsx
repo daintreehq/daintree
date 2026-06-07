@@ -1354,7 +1354,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         actions={[
           {
             id: "restart-workspace-service",
-            label: "Restart Service",
+            label: "Restart service",
             variant: "primary",
             onClick: () => setIsRestartConfirmOpen(true),
           },
