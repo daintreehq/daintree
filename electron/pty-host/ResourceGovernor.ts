@@ -619,6 +619,8 @@ export class ResourceGovernor {
     this.sampleCount = 0;
     this.lastDisengageAt = 0;
     this.trimAttemptedForCurrentPressure = false;
+    this.hasThroughputBaseline = false;
+    this.prevPauseCount = 0;
     console.log("[ResourceGovernor] Disposed");
   }
 }
