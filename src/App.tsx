@@ -325,6 +325,13 @@ import {
 import { usePerfMetricsStore } from "./store/perfMetricsStore";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useRecipeConflictStore } from "./store/recipeConflictStore";
+import { useGitPushConfirmStore } from "./store/gitPushConfirmStore";
+import { useGitPullRebaseConfirmStore } from "./store/gitPullRebaseConfirmStore";
+import { usePanelLimitStore } from "./store/panelLimitStore";
+import { useMcpConfirmStore } from "./store/mcpConfirmStore";
+import { usePluginConfirmStore } from "./store/pluginConfirmStore";
+import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
+import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
 // Eager side-effect import: registers the GitHub plugin's builtin view slots
 // (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
 // render. Must stay static — a deferred/idle import races the user, so
@@ -564,6 +571,38 @@ function AppInner() {
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
+
+  // ErrorBoundary reset signals for the always-mounted dialog hosts (#9918).
+  // A static `[Number(isStateLoaded)]` collapses to `[1]` after hydration and
+  // never changes, so a host that crashes once stays dead for the session (and
+  // its deferred promise leaks). Each host instead resets on its own
+  // pending-request signal, so a fresh request remounts the crashed boundary:
+  //   - request-counter stores bump `requestSeq` on every request (covers the
+  //     back-to-back supersede case where `pendingConfirm` never returns to null)
+  //   - FIFO-queue stores key off the live `current.requestId` UUID
+  //   - the diagnostics host toggles on its own `isOpen`
+  //   - the event-driven hosts (terminal-info, file-viewer) hold no store state,
+  //     so a local counter increments on each open event below.
+  const gitPushResetKey = useGitPushConfirmStore((s) => s.requestSeq);
+  const gitPullRebaseResetKey = useGitPullRebaseConfirmStore((s) => s.requestSeq);
+  const panelLimitResetKey = usePanelLimitStore((s) => s.requestSeq);
+  const recipeConflictResetKey = useRecipeConflictStore((s) => s.requestSeq);
+  const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
+  const pluginConfirmResetKey = usePluginConfirmStore((s) => s.current?.requestId ?? "");
+  const pluginMcpConfirmResetKey = usePluginMcpConfirmStore((s) => s.current?.requestId ?? "");
+  const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => Number(s.isOpen));
+  const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
+  const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
+  useEffect(() => {
+    const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
+    const onViewFile = () => setFileViewerResetKey((k) => k + 1);
+    window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
+    window.addEventListener("daintree:view-file", onViewFile);
+    return () => {
+      window.removeEventListener("daintree:open-terminal-info", onTerminalInfo);
+      window.removeEventListener("daintree:view-file", onViewFile);
+    };
+  }, []);
   // Cross-project focus intent receiver. Subscribes unconditionally so the
   // listener is registered before `notifyViewPainted` fires, then defers the
   // local `agent.focusNextWaiting` dispatch until hydration completes (the
@@ -1310,7 +1349,7 @@ function AppInner() {
             <ErrorBoundary
               variant="component"
               componentName="TerminalInfoDialogHost"
-              resetKeys={[Number(isStateLoaded)]}
+              resetKeys={[terminalInfoResetKey]}
             >
               <TerminalInfoDialogHost />
             </ErrorBoundary>
@@ -1318,7 +1357,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="McpConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[mcpConfirmResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyMcpConfirmDialog />
@@ -1329,7 +1368,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="PluginConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[pluginConfirmResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyPluginConfirmDialog />
@@ -1340,7 +1379,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="PluginMcpConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[pluginMcpConfirmResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyPluginMcpConfirmDialog />
@@ -1351,7 +1390,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="FileViewerModalHost"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[fileViewerResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyFileViewerModalHost />
@@ -1412,7 +1451,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="PanelLimitConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[panelLimitResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyPanelLimitConfirmDialog />
@@ -1424,7 +1463,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="DiagnosticsReviewDialogHost"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[diagnosticsReviewResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyDiagnosticsReviewDialogHost />
@@ -1436,7 +1475,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="GitPushConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[gitPushResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyGitPushConfirmDialog />
@@ -1448,7 +1487,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="GitPullRebaseConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[gitPullRebaseResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyGitPullRebaseConfirmDialog />
@@ -1460,7 +1499,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="RecipeConflictDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[recipeConflictResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyRecipeConflictDialog />

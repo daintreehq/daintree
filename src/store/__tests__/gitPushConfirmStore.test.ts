@@ -41,4 +41,28 @@ describe("gitPushConfirmStore", () => {
     expect(() => useGitPushConfirmStore.getState().resolveConfirmation(true)).not.toThrow();
     expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
   });
+
+  describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {
+    it("strictly increases on each request, including back-to-back supersede", () => {
+      const before = useGitPushConfirmStore.getState().requestSeq;
+
+      useGitPushConfirmStore.getState().requestConfirmation("/repo-a");
+      const afterFirst = useGitPushConfirmStore.getState().requestSeq;
+      expect(afterFirst).toBeGreaterThan(before);
+
+      // Supersede without resolving in between — `pendingConfirm` never returns
+      // to null, so a boolean toggle would miss this; the counter must still move.
+      useGitPushConfirmStore.getState().requestConfirmation("/repo-b");
+      const afterSecond = useGitPushConfirmStore.getState().requestSeq;
+      expect(afterSecond).toBeGreaterThan(afterFirst);
+    });
+
+    it("does not change when a pending request is resolved", () => {
+      useGitPushConfirmStore.getState().requestConfirmation("/repo");
+      const afterRequest = useGitPushConfirmStore.getState().requestSeq;
+
+      useGitPushConfirmStore.getState().resolveConfirmation(true);
+      expect(useGitPushConfirmStore.getState().requestSeq).toBe(afterRequest);
+    });
+  });
 });
