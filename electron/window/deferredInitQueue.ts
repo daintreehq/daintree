@@ -25,8 +25,18 @@ const drainedSenderIds = new Set<number>();
 // cycle's state. Without this, a stale `drainNext` could fire against an
 // empty `tasks[]` and mark the fresh queue as "drained" before any work runs.
 let generation = 0;
+// Set once by `haltDeferredQueue()` when shutdown begins (`before-quit`).
+// Process-lifetime: never cleared by `resetDeferredQueue()`, because on quit
+// the last-window-close reset fires before `before-quit` and must not be able
+// to undo the halt. Once halted, no deferred task may start — the services
+// they would initialize are being torn down.
+let halted = false;
 
 export function registerDeferredTask(task: DeferredTask): void {
+  if (halted) {
+    console.warn(`[DeferredInit] Task "${task.name}" dropped — queue halted for shutdown`);
+    return;
+  }
   if (drainState !== "idle") {
     console.warn(
       `[DeferredInit] Task "${task.name}" registered after drain started — running immediately`
@@ -45,6 +55,7 @@ export function registerDeferredTask(task: DeferredTask): void {
 }
 
 export function finalizeDeferredRegistration(fallbackMs: number = DEFAULT_FALLBACK_MS): void {
+  if (halted) return;
   if (registrationComplete) return;
   registrationComplete = true;
 
@@ -67,6 +78,7 @@ export function finalizeDeferredRegistration(fallbackMs: number = DEFAULT_FALLBA
 }
 
 export function signalFirstInteractive(webContentsId: number | null): void {
+  if (halted) return;
   if (webContentsId !== null) {
     if (drainedSenderIds.has(webContentsId)) return;
     drainedSenderIds.add(webContentsId);
@@ -142,7 +154,28 @@ function reportDeferredTaskFailure(taskName: string, err: unknown): void {
   }
 }
 
+/**
+ * Permanently stop the queue for shutdown. Called synchronously at the start
+ * of `before-quit`, before the first await, so pending `setImmediate` drain
+ * callbacks observe the halt instead of re-initializing services the cleanup
+ * chain is tearing down. Idempotent; never undone by `resetDeferredQueue()`.
+ */
+export function haltDeferredQueue(): void {
+  halted = true;
+  if (fallbackTimer) {
+    clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  }
+}
+
+/** Test-only: full reset including the process-lifetime `halted` latch. */
+export function __resetDeferredQueueForTests(): void {
+  resetDeferredQueue();
+  halted = false;
+}
+
 function doDrain(): void {
+  if (halted) return;
   if (drainState !== "idle") return;
   drainState = "draining";
 
@@ -158,7 +191,7 @@ function doDrain(): void {
 }
 
 function drainNext(index: number, startedAt: number, drainGen: number): void {
-  if (drainGen !== generation) return; // queue was reset — abandon this chain
+  if (drainGen !== generation || halted) return; // queue was reset or halted — abandon this chain
   if (index >= tasks.length) {
     drainState = "drained";
     const elapsed = Date.now() - startedAt;

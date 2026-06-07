@@ -223,6 +223,12 @@ const serviceRefsMock = vi.hoisted(() => {
 
 vi.mock("../../window/serviceRefs.js", () => serviceRefsMock);
 
+const deferredInitQueueMock = vi.hoisted(() => ({
+  haltDeferredQueue: vi.fn(),
+}));
+
+vi.mock("../../window/deferredInitQueue.js", () => deferredInitQueueMock);
+
 import type { ShutdownDeps } from "../shutdown.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
@@ -359,6 +365,59 @@ describe("registerShutdownHandler", () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).toHaveBeenCalled();
     expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+    expect(appMock.exit).not.toHaveBeenCalled();
+  });
+
+  it("halts the deferred init queue before the cleanup chain starts", async () => {
+    const { drainRateLimitQueues } = await import("../../ipc/utils.js");
+    const { beforeQuitCb } = await setup();
+    const event = makeEvent();
+    await beforeQuitCb(event);
+
+    expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledTimes(1);
+    const haltOrder = deferredInitQueueMock.haltDeferredQueue.mock.invocationCallOrder[0];
+    const drainOrder = vi.mocked(drainRateLimitQueues).mock.invocationCallOrder[0];
+    expect(haltOrder).toBeLessThan(drainOrder);
+
+    await vi.waitFor(() => {
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("halts the deferred init queue after the user confirms quit", async () => {
+    quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+    quitWarningMock.showQuitWarning.mockResolvedValue(true);
+
+    const mainWindow = {} as Electron.BrowserWindow;
+    const { beforeQuitCb } = await setup({
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
+    });
+    const event = makeEvent();
+    await beforeQuitCb(event);
+
+    expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("does not halt the deferred init queue when the user cancels quit", async () => {
+    quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+
+    const mainWindow = {} as Electron.BrowserWindow;
+    const { beforeQuitCb } = await setup({
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
+    });
+    const event = makeEvent();
+    await beforeQuitCb(event);
+
+    expect(deferredInitQueueMock.haltDeferredQueue).not.toHaveBeenCalled();
     expect(appMock.exit).not.toHaveBeenCalled();
   });
 

@@ -46,6 +46,7 @@ import {
   getWindowsStoreNotifierServiceRef,
   setWindowsStoreNotifierServiceRef,
 } from "../window/serviceRefs.js";
+import { haltDeferredQueue } from "../window/deferredInitQueue.js";
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -118,6 +119,15 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     }
 
     isQuitting = true;
+
+    // Halt the deferred init queue before anything yields to the event loop —
+    // a pending setImmediate drain step could otherwise re-initialize services
+    // the cleanup chain below is about to tear down (issue #9881). Placed
+    // after the quit-confirmation dialog deliberately: halting is permanent,
+    // so a cancelled quit must never reach it (an abandoned drain chain cannot
+    // be resumed). Tasks that start during the dialog run against a fully live
+    // app and are torn down by the cleanup chain like any other service.
+    haltDeferredQueue();
 
     // Eager snapshot at quit-intent so the next launch has a post-quit-intent
     // backup regardless of which branch of the cleanup race wins. Without this,
