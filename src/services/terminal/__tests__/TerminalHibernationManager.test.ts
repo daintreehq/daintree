@@ -253,6 +253,24 @@ describe("TerminalHibernationManager", () => {
       expect(managed.isHibernated).toBeFalsy();
     });
 
+    it("should no-op for a non-agent terminal with writes in flight (#9912)", () => {
+      // No runtimeAgentId — previously the non-agent early-return skipped
+      // the pendingWrites guard entirely, letting dispose() fire mid-write.
+      managed.runtimeAgentId = undefined;
+      managed.pendingWrites = 2;
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should no-op for a resting-state agent with writes in flight (#9912)", () => {
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "completed";
+      managed.pendingWrites = 1;
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
     it("should hibernate a working agent that has been silent past AGENT_IDLE_SILENCE_MS", () => {
       managed.launchAgentId = "claude";
       managed.runtimeAgentId = "claude";
@@ -490,6 +508,15 @@ describe("TerminalHibernationManager", () => {
       managed.lastReflowAt = 99999;
       manager.unhibernate("t1");
       expect(managed.lastReflowAt).toBe(0);
+    });
+
+    it("should reset stranded pendingWrites so hibernation stays reachable (#9912)", () => {
+      // A mid-write dispose drops the old terminal's write callbacks, so the
+      // counter can be stuck > 0 entering the wake path. The fresh Terminal
+      // has no queued writes — the wake must zero it.
+      managed.pendingWrites = 5;
+      manager.unhibernate("t1");
+      expect(managed.pendingWrites).toBe(0);
     });
 
     it("notifies onHibernationChanged after the flag is cleared", () => {

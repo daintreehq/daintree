@@ -209,6 +209,10 @@ export class TerminalHibernationManager {
     // Clear the reflow throttle so post-wake writes trigger an immediate
     // IO re-evaluation.
     managed.lastReflowAt = 0;
+    // Clear any counter stranded by a mid-write dispose — the old terminal's
+    // write callbacks will never fire, and the fresh Terminal has no queued
+    // writes, so a non-zero value here would block hibernation forever (#9912).
+    managed.pendingWrites = 0;
 
     // Re-bind the fresh Terminal to its DOM host. Without this, the
     // terminal exists in memory with a working buffer but no rendered
@@ -247,16 +251,20 @@ export class TerminalHibernationManager {
    * eligibility predicate composes this with a BACKGROUND tier check.
    *
    * Rules:
-   * - Non-agent terminals: always safe.
+   * - In-flight writes: never safe, for ANY terminal. Disposing xterm while
+   *   its WriteBuffer holds queued chunks drops the write callbacks, which
+   *   strands `pendingWrites` above zero forever (#9912). This guard is
+   *   checked first so no other rule can bypass it.
+   * - Non-agent terminals: otherwise always safe.
    * - Agents in resting states (`idle`/`completed`/`exited`, or undefined
    *   state for legacy paths that never assigned canonicalAgentState):
-   *   always safe. `idle` is not in ACTIVE_AGENT_STATES — it represents
-   *   the agent itself reporting it has nothing to do.
+   *   otherwise always safe. `idle` is not in ACTIVE_AGENT_STATES — it
+   *   represents the agent itself reporting it has nothing to do.
    * - Agents in active states (`working`/`waiting`/`directing`): safe
-   *   only if no writes are in flight AND the last rendered output is
-   *   either non-existent or at least AGENT_IDLE_SILENCE_MS old. The
-   *   "never wrote" case is treated as safe because silence is by
-   *   definition infinite if no write has ever been recorded.
+   *   only if the last rendered output is either non-existent or at least
+   *   AGENT_IDLE_SILENCE_MS old. The "never wrote" case is treated as safe
+   *   because silence is by definition infinite if no write has ever been
+   *   recorded.
    * - User-backgrounded panels: the silence window is bypassed — the user
    *   explicitly hid the panel, so an active agent is no objection to
    *   reclaiming its memory under pressure. The `pendingWrites === 0` burst
@@ -269,10 +277,10 @@ export class TerminalHibernationManager {
     id: string,
     now: number = Date.now()
   ): boolean {
+    if ((managed.pendingWrites ?? 0) > 0) return false;
     if (!managed.runtimeAgentId) return true;
     const state = managed.canonicalAgentState;
     if (state === undefined || !ACTIVE_AGENT_STATES.has(state)) return true;
-    if ((managed.pendingWrites ?? 0) > 0) return false;
     if (this.deps.getIsBackgrounded(id)) return true;
     if (managed.lastWriteAt === undefined) return true;
     return now - managed.lastWriteAt >= AGENT_IDLE_SILENCE_MS;
