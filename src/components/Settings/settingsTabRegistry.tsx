@@ -1871,6 +1871,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,
+  "run-history": <History className="w-5 h-5 text-text-secondary" />,
   environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
   privacy: <Shield className="w-5 h-5 text-text-secondary" />,
   troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,
