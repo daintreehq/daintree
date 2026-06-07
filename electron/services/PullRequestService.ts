@@ -136,6 +136,14 @@ class PullRequestService {
   private nextRetryAt: number = 0;
   private detectionStateTripped: boolean = false;
   private boostExpiresAt: number | null = null;
+  // Drop the GraphQL CI-status enrichment when the instance is unattended:
+  // worker-role instances (which never have a focused window) start disabled,
+  // and attended instances toggle it off on window blur. When disabled, the
+  // cheap REST probe (probeOpenPRList) still tracks PR existence/state, but the
+  // ~2-point-per-PR getCIStatuses fan-out is skipped — absent CI reads as
+  // "unknown" (undefined), never SUCCESS (#6240). Initialized at field-
+  // declaration time so it's correct before the singleton's first checkForPRs.
+  private ciEnrichmentEnabled: boolean = process.env.DAINTREE_INSTANCE_ROLE !== "worker";
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
@@ -818,6 +826,101 @@ class PullRequestService {
       .finally(() => this.scheduleNextPoll());
   }
 
+  /**
+   * Toggle the GraphQL CI-status enrichment. Driven by window focus (blur →
+   * disable, focus → enable) for attended instances; worker-role instances stay
+   * disabled. The probe loop is untouched — only the per-PR getCIStatuses
+   * fan-out is gated.
+   *
+   * On disable we must sweep any in-flight CI state so the adaptive boost
+   * collapses: a PENDING/EXPECTED entry left in `detectedPRs` keeps
+   * `updateBoostFromDetectedPRs` re-arming the 30s boost every revalidation
+   * tick with no fetch behind it (#6149). Clearing those entries to `undefined`
+   * — not SUCCESS — also keeps "no CI fetched" from reading as passing (#6240),
+   * and re-emits so the renderer drops any preserved dot rather than holding it
+   * stale forever (no phase-2 emit is coming while disabled).
+   */
+  public setCIEnrichmentEnabled(enabled: boolean): void {
+    // Worker instances must stay disabled regardless of any focus signal that
+    // reaches them — the env role is the authoritative invariant, not the
+    // transient IPC cadence flag.
+    if (enabled && process.env.DAINTREE_INSTANCE_ROLE === "worker") {
+      return;
+    }
+    if (this.ciEnrichmentEnabled === enabled) {
+      return;
+    }
+
+    if (!enabled) {
+      this.sweepStaleCiStatus();
+    }
+
+    this.ciEnrichmentEnabled = enabled;
+
+    if (!enabled) {
+      // The boost just collapsed (boostExpiresAt = null), but an already-armed
+      // boosted revalidationTimer would still fire early. Reschedule now so the
+      // next tick lands at the 90s baseline instead of the stale 30s.
+      this.scheduleRevalidation();
+    }
+  }
+
+  // Clear in-flight CI state and re-emit the affected PRs without a CI status so
+  // the boost decays and the renderer stops showing a stale spinner/dot. Only
+  // PENDING/EXPECTED entries are touched — terminal states (SUCCESS/FAILURE) and
+  // already-unknown PRs are correct as-is, so re-emitting them would be noise.
+  private sweepStaleCiStatus(): void {
+    const repo = this.repoRef;
+    // Track the exact worktrees we sweep, not the PR numbers: sibling worktrees
+    // on the same branch share one InternalLinkedPR object (so clearing it once
+    // covers them all), while two worktrees that coincidentally resolve the same
+    // PR number through different objects must not cross-clear — re-emitting a
+    // SUCCESS worktree without its CI field would wrongly blank its dot.
+    const sweptWorktrees: string[] = [];
+    const sweptObjects = new Set<InternalLinkedPR>();
+
+    for (const [worktreeId, pr] of this.detectedPRs) {
+      if (pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED") {
+        sweptWorktrees.push(worktreeId);
+        sweptObjects.add(pr);
+      }
+    }
+    for (const pr of sweptObjects) {
+      pr.ciStatus = undefined;
+      pr._ciStatus = undefined;
+      pr.stagnantPollCount = 0;
+    }
+
+    // updateBoostFromDetectedPRs runs unconditionally — with no PENDING entries
+    // left it collapses boostExpiresAt to null so the next scheduleRevalidation
+    // picks the 90s baseline instead of the boosted 30s.
+    this.updateBoostFromDetectedPRs();
+
+    if (!repo || sweptWorktrees.length === 0) {
+      return;
+    }
+
+    for (const worktreeId of sweptWorktrees) {
+      const detected = this.detectedPRs.get(worktreeId);
+      if (!detected) continue;
+      events.emit("sys:pr:detected", {
+        worktreeId,
+        prNumber: detected.number,
+        prUrl: detected.url,
+        prState: detected.state,
+        // No prCiStatus / ciStatus / isCiStatusLoading: an absent CI field means
+        // "unknown", which the renderer must not treat as passing or loading.
+        prTitle: detected.title,
+        issueNumber: this.candidates.get(worktreeId)?.issueNumber,
+        branchName: this.candidates.get(worktreeId)?.branchName,
+        providerId: detected.providerId,
+        owner: repo.owner,
+        repo: repo.repo,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
   private updatePollInterval(ms: number): void {
     if (this.pollIntervalMs === ms) {
       return;
@@ -1273,7 +1376,7 @@ class PullRequestService {
           // worktrees on the same branch share the same detectedPR object
           // reference — deduplicating avoids double-counting stagnant polls
           // and redundant API calls.
-          if (!enrichedPRNumbers.has(prNumber)) {
+          if (this.ciEnrichmentEnabled && !enrichedPRNumbers.has(prNumber)) {
             enrichedPRNumbers.add(prNumber);
             this.enrichPRWithCIStatus(detectedPR, repo);
           }
@@ -1284,11 +1387,17 @@ class PullRequestService {
       // not bump updated_at, so the probe reports those PRs unchanged. Keep
       // polling CI for any in-flight PR not already enriched above, so green/red
       // transitions still surface promptly even on an otherwise-quiet tick.
-      for (const detectedPR of this.detectedPRs.values()) {
-        if (enrichedPRNumbers.has(detectedPR.number)) continue;
-        if (detectedPR.ciStatus === "PENDING" || detectedPR.ciStatus === "EXPECTED") {
-          enrichedPRNumbers.add(detectedPR.number);
-          this.enrichPRWithCIStatus(detectedPR, repo);
+      // Skipped entirely when enrichment is disabled (unattended instance): the
+      // sweep on disable already cleared PENDING/EXPECTED, so this loop would be
+      // a no-op anyway, but the guard keeps it from re-fetching after a
+      // re-detection re-seeds a PENDING state mid-blur.
+      if (this.ciEnrichmentEnabled) {
+        for (const detectedPR of this.detectedPRs.values()) {
+          if (enrichedPRNumbers.has(detectedPR.number)) continue;
+          if (detectedPR.ciStatus === "PENDING" || detectedPR.ciStatus === "EXPECTED") {
+            enrichedPRNumbers.add(detectedPR.number);
+            this.enrichPRWithCIStatus(detectedPR, repo);
+          }
         }
       }
 
@@ -1610,8 +1719,11 @@ class PullRequestService {
             prState: internalPR.state,
             // CI status is omitted here and resolved by the fire-and-forget
             // enrichment below; flag it so the renderer keeps its prior dot
-            // instead of blinking to "no checks" between the two emits.
-            isCiStatusLoading: true,
+            // instead of blinking to "no checks" between the two emits. When
+            // enrichment is disabled there is no phase-2 emit coming, so omit
+            // the flag entirely (`|| undefined` → absent, not false) — a held
+            // "loading" with no resolution would spin forever (#6240).
+            isCiStatusLoading: this.ciEnrichmentEnabled || undefined,
             prTitle: pr.title,
             issueNumber,
             branchName: lookupBranch,
@@ -1623,8 +1735,12 @@ class PullRequestService {
           });
         }
 
-        // Fire-and-forget CI status enrichment
-        this.enrichPRWithCIStatus(internalPR, repo);
+        // Fire-and-forget CI status enrichment (skipped on unattended
+        // instances; enrichPRWithCIStatus also self-guards, but skipping here
+        // avoids the needless call).
+        if (this.ciEnrichmentEnabled) {
+          this.enrichPRWithCIStatus(internalPR, repo);
+        }
       }
 
       this.updateBoostFromDetectedPRs();
@@ -1706,6 +1822,7 @@ class PullRequestService {
    * with the enriched CI status so the renderer can update the badge.
    */
   private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef): void {
+    if (!this.ciEnrichmentEnabled) return;
     const loader = this.ciStatusLoader;
     if (!loader) return;
     // Synchronous `load()` here: enrichPRWithCIStatus is called fire-and-forget
@@ -1715,6 +1832,10 @@ class PullRequestService {
     loader
       .load(pr.number)
       .then((ciStatus) => {
+        // Enrichment may have been disabled (window blur) while this batch was
+        // in flight — discard the result rather than write a CI status back and
+        // re-arm the boost the sweep just collapsed.
+        if (!this.ciEnrichmentEnabled) return;
         const prevCiStatus = pr.ciStatus;
         // A resolved value is authoritative: the batch contract surfaces a
         // transient miss as a rejection (→ .catch below), so a `null` here is a
