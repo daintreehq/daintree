@@ -76,6 +76,7 @@ import type {
   TerminalSpawnOptions,
   CopyTreeOptions,
   CopyTreeProgress,
+  CopyTreeTestConfigOptions,
   AppState,
   LogEntry,
   LogFilterOptions,
@@ -1116,7 +1117,7 @@ const api: ElectronAPI = {
     getFileTree: (worktreeId: string, dirPath?: string) =>
       _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
 
-    testConfig: (worktreeId: string, options?: CopyTreeOptions) =>
+    testConfig: (worktreeId: string, options?: CopyTreeTestConfigOptions) =>
       _unwrappingInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),
 
     onProgress: (callback: (progress: CopyTreeProgress) => void) =>

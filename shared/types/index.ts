@@ -123,6 +123,7 @@ export type {
   CopyTreeInjectPayload,
   CopyTreeCancelPayload,
   CopyTreeGetFileTreePayload,
+  CopyTreeTestConfigOptions,
   CopyTreeTestConfigPayload,
   CopyTreeTestConfigResult,
   CopyTreeResult,
