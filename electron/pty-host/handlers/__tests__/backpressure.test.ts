@@ -107,7 +107,7 @@ describe("wake-terminal handler", () => {
       getPauseCoordinator: vi.fn(() => coord as never),
     });
     vi.mocked(ctx.backpressureManager.getPausedInterval).mockReturnValue(
-      setTimeout(() => {}, 60_000) as never,
+      setTimeout(() => {}, 60_000) as never
     );
 
     const handlers = createBackpressureHandlers(ctx);
@@ -125,7 +125,7 @@ describe("wake-terminal handler", () => {
       getPauseCoordinator: vi.fn(() => coord as never),
     });
     vi.mocked(ctx.backpressureManager.getPausedInterval).mockReturnValue(
-      setTimeout(() => {}, 60_000) as never,
+      setTimeout(() => {}, 60_000) as never
     );
 
     const handlers = createBackpressureHandlers(ctx);
@@ -133,7 +133,7 @@ describe("wake-terminal handler", () => {
 
     expect(coord.resume).toHaveBeenCalledExactlyOnceWith("backpressure");
     expect(ctx.sendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "wake-result", id: "term-1", state: "fallback" }),
+      expect.objectContaining({ type: "wake-result", id: "term-1", state: "fallback" })
     );
   });
 
@@ -148,7 +148,7 @@ describe("wake-terminal handler", () => {
       getPauseCoordinator: vi.fn(() => coord as never),
     });
     vi.mocked(ctx.backpressureManager.getPausedInterval).mockReturnValue(
-      setTimeout(() => {}, 60_000) as never,
+      setTimeout(() => {}, 60_000) as never
     );
 
     const handlers = createBackpressureHandlers(ctx);
@@ -157,7 +157,7 @@ describe("wake-terminal handler", () => {
     expect(coord.resume).toHaveBeenCalledExactlyOnceWith("backpressure");
     expect(ctx.ptyManager.getSerializedState).not.toHaveBeenCalled();
     expect(ctx.sendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "wake-result", id: "term-1", state: null }),
+      expect.objectContaining({ type: "wake-result", id: "term-1", state: null })
     );
   });
 
@@ -173,7 +173,7 @@ describe("wake-terminal handler", () => {
 
     expect(coord.resume).not.toHaveBeenCalled();
     expect(ctx.sendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "wake-result", id: "term-1", state: "snapshot" }),
+      expect.objectContaining({ type: "wake-result", id: "term-1", state: "snapshot" })
     );
   });
 });
