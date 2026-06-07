@@ -113,9 +113,10 @@ export function McpServerSettingsTab() {
   const [activeBearers, setActiveBearers] = useState<ActiveBearerRecord[]>([]);
   const [bearersExpanded, setBearersExpanded] = useState(false);
   const [disconnectingHash, setDisconnectingHash] = useState<string | null>(null);
-  // Read-only inventory of the Daintree Assistant's own internal MCP
-  // connections (#10036) — surfaced so the External clients row no longer hides
-  // them, but with no disconnect control (the assistant manages its session).
+  // Read-only inventory of Daintree's own internal MCP connections — the
+  // help-chat assistant and in-panel agents (#10036) — surfaced so the External
+  // clients row no longer hides them, but with no disconnect control (these are
+  // Daintree's own consumers, severed via their owning surface, not here).
   const [helpSessionBearers, setHelpSessionBearers] = useState<HelpSessionBearerRecord[]>([]);
   const [helpBearersExpanded, setHelpBearersExpanded] = useState(false);
   // Drives the neutral attribution pill on the top card: when the Daintree
@@ -675,7 +676,7 @@ export function McpServerSettingsTab() {
                         )}
                       />
                       <Sparkles className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
-                      Daintree Assistant connections ({helpSessionBearers.length})
+                      Internal connections ({helpSessionBearers.length})
                     </button>
 
                     {helpBearersExpanded && (

@@ -863,6 +863,20 @@ describe("HttpLifecycle", () => {
       expect(lc.listHelpSessionBearers()).toHaveLength(0);
     });
 
+    it("listHelpSessionBearers covers every non-external tier, not just the help chat (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      // In-panel agent (pane) tokens are non-external too — they belong in the
+      // Internal connections row alongside the help-chat assistant.
+      handle.touchBearer(authA, "Help/1", "sess-help", "action");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+
+      const help = lc.listHelpSessionBearers();
+      expect(help).toHaveLength(2);
+      expect(help.map((h) => h.userAgent).sort()).toEqual(["Help/1", "Pane/1"]);
+    });
+
     it("pushes a runtime-state change on help-session connect and disconnect (#10036)", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);

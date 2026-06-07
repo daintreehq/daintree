@@ -592,15 +592,16 @@ export interface ActiveBearerRecord {
 }
 
 /**
- * Read-only inventory of one renderer-pinned help-session bearer (the Daintree
- * Assistant's own internal MCP connection), surfaced as a separate "Daintree
- * Assistant connections" section on the MCP Server settings tab (#10036). These
- * bearers are deliberately excluded from {@link ActiveBearerRecord}/the External
- * clients row (#9151) — this type gives the user passive visibility into them
- * without offering a disconnect control (the assistant manages its own session).
+ * Read-only inventory of one renderer-pinned internal bearer — Daintree's own
+ * MCP consumers (the help-chat assistant and in-panel agents, i.e. any
+ * non-`external` tier) — surfaced as a separate "Internal connections" section
+ * on the MCP Server settings tab (#10036). These bearers are deliberately
+ * excluded from {@link ActiveBearerRecord}/the External clients row (#9151) —
+ * this type gives the user passive visibility into them without offering a
+ * disconnect control (they are severed via their owning surface, not here).
  *
  * Carries display fields only: no `tokenHash` (there is no disconnect action to
- * target) and no `token4LastChars` (the help token suffix identifies an internal
+ * target) and no `token4LastChars` (the bearer suffix identifies an internal
  * credential and stays main-side, per #9318). `sessionCount` is the number of
  * live MCP transport sessions this bearer currently owns.
  */
