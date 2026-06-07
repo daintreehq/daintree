@@ -604,6 +604,48 @@ export class SessionStore {
     return this.sessionTierMap.get(sessionId) ?? "workbench";
   }
 
+  /**
+   * Snapshot the live tier and per-tool grants for a help session, addressed
+   * by its *public* help-session id (the one persisted in the renderer's
+   * `helpPanelStore`, NOT the per-connection MCP transport sessionId that keys
+   * these maps). Resolves the transport sessionId through {@link sessionHelpIdMap}
+   * before reading the tier/grant state.
+   *
+   * Caller-pinned: returns `null` unless `callerWebContentsId` matches the
+   * WebContents the session was pinned to at handshake — mirrors the
+   * cross-window forgery defence on `setSessionTier`/`issueGrant`, so a renderer
+   * can only ever read its own session's live status. Also returns `null` when
+   * no live transport exists for the help id (session never connected, idled
+   * out, or was revoked) so the caller renders a "no live session" state rather
+   * than a stale snapshot.
+   */
+  getLiveStatusForHelpSession(
+    helpSessionId: string,
+    callerWebContentsId: number
+  ): {
+    tier: McpTier;
+    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
+  } | null {
+    if (!helpSessionId) return null;
+    for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
+      if (mappedHelpId !== helpSessionId) continue;
+      // Caller-pin: only the renderer the session was pinned to may read it.
+      if (this.sessionWebContentsMap.get(transportSessionId) !== callerWebContentsId) {
+        return null;
+      }
+      // The tier map can briefly outlive the transport during teardown; require
+      // a live transport so a decaying session never reports as connected.
+      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
+        return null;
+      }
+      const activeGrants = this.grantCache
+        .getActiveGrants(transportSessionId)
+        .map((g) => ({ toolId: g.toolId, expiresAt: g.expiresAt, ttlMs: g.ttlMs }));
+      return { tier: this.getTier(transportSessionId), activeGrants };
+    }
+    return null;
+  }
+
   revokeSession(sessionId: string): boolean {
     const sseSession = this.sessions.get(sessionId);
     const httpSession = this.httpSessions.get(sessionId);

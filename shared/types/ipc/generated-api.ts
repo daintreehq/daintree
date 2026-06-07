@@ -198,6 +198,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
   };
   helpAssistant: {
+    getLiveSessionStatus(
+      ...args: IpcInvokeMap["help-assistant:get-live-session-status"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:get-live-session-status"]["result"]>;
     getSettings(
       ...args: IpcInvokeMap["help-assistant:get-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:get-settings"]["result"]>;

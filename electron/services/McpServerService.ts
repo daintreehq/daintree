@@ -505,6 +505,25 @@ export class McpServerService {
   }
 
   /**
+   * Live tier + per-tool grants for the help session a renderer owns, keyed
+   * by its public help-session id (the one in `helpPanelStore`). Caller-pinned
+   * against the WebContents the session was pinned to at handshake. Returns
+   * `null` when there is no live session for that renderer — the IPC handler
+   * maps that to a safe "not connected" snapshot. Delegates to
+   * {@link SessionStore.getLiveStatusForHelpSession} for the transport-id
+   * reverse-lookup the maps require.
+   */
+  getHelpSessionLiveStatus(
+    helpSessionId: string,
+    callerWcId: number
+  ): {
+    tier: McpTier;
+    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
+  } | null {
+    return this.sessionStore.getLiveStatusForHelpSession(helpSessionId, callerWcId);
+  }
+
+  /**
    * Snapshot of the bearers currently connected to the local MCP server for
    * the settings tab. Raw tokens are never returned — only the display suffix
    * and the hash used to target {@link disconnectBearer}.

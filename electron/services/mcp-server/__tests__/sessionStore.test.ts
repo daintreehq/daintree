@@ -1058,3 +1058,88 @@ describe("SessionStore.nextFigureNumber (#9828)", () => {
     expect(store.figureCounters.size).toBe(0);
   });
 });
+
+describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  const WC = 4242;
+  const TRANSPORT = "transport-x";
+  const HELP_ID = "help-public-1";
+
+  function wireLiveHelpSession(opts?: { tier?: "workbench" | "action" | "system" }): void {
+    store.httpSessions.set(TRANSPORT, fakeHttpSession());
+    store.sessionWebContentsMap.set(TRANSPORT, WC);
+    store.sessionHelpIdMap.set(TRANSPORT, HELP_ID);
+    if (opts?.tier) store.sessionTierMap.set(TRANSPORT, opts.tier);
+  }
+
+  it("resolves the transport session from the public help id and returns its live tier", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    const result = store.getLiveStatusForHelpSession(HELP_ID, WC);
+
+    expect(result).not.toBeNull();
+    expect(result?.tier).toBe("system");
+    expect(result?.activeGrants).toEqual([]);
+  });
+
+  it("defaults the tier to workbench when the tier map has no entry", () => {
+    wireLiveHelpSession();
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("workbench");
+  });
+
+  it("maps active grants to {toolId, expiresAt, ttlMs} for the resolved transport id", () => {
+    wireLiveHelpSession({ tier: "action" });
+    store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
+    store.grantCache.issueGrant(TRANSPORT, "git.push");
+    // A grant on an unrelated session must not leak into this snapshot.
+    store.grantCache.issueGrant("other-transport", "worktree.delete");
+
+    const grants = store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants ?? [];
+
+    expect(grants.map((g) => g.toolId).sort()).toEqual(["git.push", "terminal.kill"]);
+    for (const grant of grants) {
+      expect(grant.expiresAt).toBeGreaterThan(Date.now());
+      expect(grant.ttlMs).toBeGreaterThan(0);
+    }
+  });
+
+  it("returns null when the caller is not the pinned WebContents (forgery defence)", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC + 1)).toBeNull();
+  });
+
+  it("returns null when the help id maps to no transport session", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession("unknown-help", WC)).toBeNull();
+  });
+
+  it("returns null when the tier map outlives a closed transport (decaying session)", () => {
+    // Tier + pin still present, but the transport was already removed — the
+    // session is no longer live and must not report as connected.
+    store.sessionWebContentsMap.set(TRANSPORT, WC);
+    store.sessionHelpIdMap.set(TRANSPORT, HELP_ID);
+    store.sessionTierMap.set(TRANSPORT, "system");
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)).toBeNull();
+  });
+
+  it("returns null for an empty help id", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession("", WC)).toBeNull();
+  });
+});

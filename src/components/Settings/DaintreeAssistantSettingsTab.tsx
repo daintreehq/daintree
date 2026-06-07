@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { useDeferredLoading } from "@/hooks";
+import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
@@ -76,6 +76,30 @@ const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
   system:
     "Adds operations that touch disk or external services: delete worktrees, commit/push git, write the system clipboard, open GitHub issues/PRs. Reserve for trusted automation.",
 };
+
+const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
+  workbench: "Workbench",
+  action: "Action",
+  system: "System",
+};
+
+const TIER_RANK: Record<HelpAssistantTier, number> = {
+  workbench: 0,
+  action: 1,
+  system: 2,
+};
+
+// Format a whole-seconds grant countdown as "Xm Ys" / "Xm" / "Ys". Exported
+// for unit coverage of the boundary cases (sub-minute, exact minute, mixed).
+export function formatGrantRemaining(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  if (safe >= 60) {
+    const minutes = Math.floor(safe / 60);
+    const seconds = safe % 60;
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  return `${safe}s`;
+}
 
 function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[]]> {
   const groups = new Map<string, string[]>();
@@ -615,6 +639,8 @@ export function DaintreeAssistantSettingsTab() {
           onToggle={() => setShowBlastRadius((v) => !v)}
         />
 
+        <SessionLiveStatusCard configuredTier={settings.tier} />
+
         <SettingsSwitchCard
           variant="compact"
           icon={ShieldAlert}
@@ -904,6 +930,102 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Per-tool grant expiry countdown. Re-renders once a second — a semantic
+// countdown (the decay IS the signal), so it sits outside the motion tiers.
+// The push event (`grant.expired`) is authoritative for removal; this is only
+// the display, so reaching zero shows "expiring" until the row is pulled out.
+function GrantCountdown({ expiresAt }: { expiresAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const remainingMs = expiresAt - now;
+  return (
+    <span className="font-mono text-daintree-text/50 tabular-nums shrink-0">
+      {remainingMs <= 0 ? "expiring" : `expires in ${formatGrantRemaining(remainingMs / 1000)}`}
+    </span>
+  );
+}
+
+interface SessionLiveStatusCardProps {
+  configuredTier: HelpAssistantTier;
+}
+
+// Live status of the *currently pinned* help session — distinct from the
+// configured-default tier select above. Renders from safe `connected: false`
+// defaults immediately (no spinner, per the settings-tab loading rule) and
+// populates when the live-status bridge call resolves. Live-tier *change*
+// events while this is open aren't pushed (the grant-lifecycle push carries no
+// tier field — covered by #10027); the snapshot refreshes on mount and on any
+// grant-lifecycle event for this session.
+function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
+  const sessionId = useHelpPanelStore((s) => s.sessionId);
+  const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
+  const elevated = connected && TIER_RANK[tier] > TIER_RANK[configuredTier];
+
+  return (
+    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40 px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-2">
+          <span
+            className={cn(
+              "w-1.5 h-1.5 rounded-full shrink-0",
+              connected ? "bg-status-success" : "bg-daintree-text/30"
+            )}
+            aria-hidden="true"
+          />
+          <span className="text-xs text-daintree-text/80">
+            {connected ? "Live session" : "No live session"}
+          </span>
+        </span>
+        {connected && (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-daintree-bg border border-daintree-border text-daintree-text/70">
+            {TIER_SHORT_LABEL[tier]}
+          </span>
+        )}
+      </div>
+
+      {connected ? (
+        <>
+          <div className="text-xs text-daintree-text/70 leading-relaxed">
+            Running at{" "}
+            <span className="text-daintree-text">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
+            {elevated
+              ? ` — elevated above the configured ${TIER_SHORT_LABEL[configuredTier].toLowerCase()} default`
+              : " — matches the configured default"}
+          </div>
+          {activeGrants.length > 0 ? (
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+                Active grants ({activeGrants.length})
+              </div>
+              <div className="space-y-1">
+                {activeGrants.map((grant) => (
+                  <div
+                    key={grant.toolId}
+                    className="flex items-center justify-between gap-2 text-[11px]"
+                  >
+                    <span className="font-mono text-daintree-text/70 truncate">{grant.toolId}</span>
+                    <GrantCountdown expiresAt={grant.expiresAt} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-[11px] text-daintree-text/50">No per-tool grants active</div>
+          )}
+        </>
+      ) : (
+        <div className="text-xs text-daintree-text/60 leading-relaxed">
+          Open the assistant to start a session — its live tier and any active per-tool grants show
+          here
         </div>
       )}
     </div>

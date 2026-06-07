@@ -146,7 +146,10 @@ vi.mock("@/config/agents", () => ({
   },
 }));
 
-import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
+import {
+  DaintreeAssistantSettingsTab,
+  formatGrantRemaining,
+} from "../DaintreeAssistantSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
@@ -838,5 +841,28 @@ describe("DaintreeAssistantSettingsTab", () => {
         customArgs: "",
       });
     });
+  });
+});
+
+describe("formatGrantRemaining", () => {
+  it("renders sub-minute durations as bare seconds", () => {
+    expect(formatGrantRemaining(0)).toBe("0s");
+    expect(formatGrantRemaining(1)).toBe("1s");
+    expect(formatGrantRemaining(59)).toBe("59s");
+  });
+
+  it("renders an exact minute without a trailing seconds component", () => {
+    expect(formatGrantRemaining(60)).toBe("1m");
+    expect(formatGrantRemaining(120)).toBe("2m");
+  });
+
+  it("renders mixed minute+second durations", () => {
+    expect(formatGrantRemaining(61)).toBe("1m 1s");
+    expect(formatGrantRemaining(125)).toBe("2m 5s");
+  });
+
+  it("floors fractional seconds and clamps negatives to zero", () => {
+    expect(formatGrantRemaining(61.9)).toBe("1m 1s");
+    expect(formatGrantRemaining(-5)).toBe("0s");
   });
 });
