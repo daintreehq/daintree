@@ -968,7 +968,17 @@ interface SessionLiveStatusCardProps {
 function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
   const sessionId = useHelpPanelStore((s) => s.sessionId);
   const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
-  const elevated = connected && TIER_RANK[tier] > TIER_RANK[configuredTier];
+  // Three-way relation to the configured default: a renderer-approved elevation
+  // raises the live tier above it, but a session can also sit *below* it (e.g.
+  // a per-session choice or a decayed elevation) — both must read truthfully,
+  // not collapse to "matches".
+  const tierDelta = TIER_RANK[tier] - TIER_RANK[configuredTier];
+  const tierComparisonCopy =
+    tierDelta > 0
+      ? ` — elevated above the configured ${TIER_SHORT_LABEL[configuredTier].toLowerCase()} default`
+      : tierDelta < 0
+        ? ` — below the configured ${TIER_SHORT_LABEL[configuredTier].toLowerCase()} default`
+        : " — matches the configured default";
 
   return (
     <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40 px-3 py-2.5 space-y-2">
@@ -997,9 +1007,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
           <div className="text-xs text-daintree-text/70 leading-relaxed">
             Running at{" "}
             <span className="text-daintree-text">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
-            {elevated
-              ? ` — elevated above the configured ${TIER_SHORT_LABEL[configuredTier].toLowerCase()} default`
-              : " — matches the configured default"}
+            {tierComparisonCopy}
           </div>
           {activeGrants.length > 0 ? (
             <div className="space-y-1">

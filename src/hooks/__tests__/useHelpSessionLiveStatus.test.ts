@@ -5,6 +5,7 @@ import type { HelpSessionLiveStatus } from "@shared/types";
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
+import { logError } from "@/utils/logger";
 import { useHelpSessionLiveStatus } from "../useHelpSessionLiveStatus";
 
 interface Deferred<T> {
@@ -105,6 +106,40 @@ describe("useHelpSessionLiveStatus", () => {
     });
 
     expect(getLiveSessionStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates the fresh snapshot from a re-pull into state", async () => {
+    const { result } = renderHook(() => useHelpSessionLiveStatus("help-1"));
+    await act(async () => {
+      pulls[0]!.resolve(CONNECTED);
+    });
+
+    act(() => {
+      grantCallback?.();
+    });
+    const withGrant: HelpSessionLiveStatus = {
+      connected: true,
+      tier: "action",
+      activeGrants: [{ toolId: "git.push", expiresAt: 1_700_000_000_000, ttlMs: 900_000 }],
+    };
+    await act(async () => {
+      pulls[1]!.resolve(withGrant);
+    });
+
+    // Not just that a second pull fired — the hook must surface its result.
+    await waitFor(() => expect(result.current.activeGrants).toHaveLength(1));
+    expect(result.current.activeGrants[0]?.toolId).toBe("git.push");
+  });
+
+  it("falls back to disconnected defaults and logs when the pull rejects", async () => {
+    const { result } = renderHook(() => useHelpSessionLiveStatus("help-1"));
+
+    await act(async () => {
+      pulls[0]!.reject(new Error("bridge down"));
+    });
+
+    await waitFor(() => expect(result.current).toEqual(DISCONNECTED));
+    expect(vi.mocked(logError)).toHaveBeenCalled();
   });
 
   it("coalesces a burst of events during an in-flight pull into one trailing re-pull", async () => {

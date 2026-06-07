@@ -1142,4 +1142,33 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
 
     expect(store.getLiveStatusForHelpSession("", WC)).toBeNull();
   });
+
+  it("omits grants past their expiry that the sweep hasn't yet evicted", () => {
+    wireLiveHelpSession({ tier: "action" });
+    // Issue one grant, advance the wall clock past its expiry WITHOUT firing
+    // the sweep interval (setSystemTime doesn't run timers), then issue a
+    // second one still in its window. The first lingers in the cache (lazy
+    // eviction) but must not surface as active.
+    const expired = store.grantCache.issueGrant(TRANSPORT, "git.push");
+    vi.setSystemTime(expired.expiresAt + 1);
+    store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
+
+    const grants = store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants ?? [];
+
+    expect(grants.map((g) => g.toolId)).toEqual(["terminal.kill"]);
+  });
+
+  it("finds the caller's live transport even when a stale same-help-id mapping is iterated first", () => {
+    // A reconnect left an older transport for the same help id pinned to a
+    // different WebContents; it must not short-circuit the lookup before the
+    // caller's own live transport is reached.
+    store.httpSessions.set("stale-transport", fakeHttpSession());
+    store.sessionWebContentsMap.set("stale-transport", WC + 99);
+    store.sessionHelpIdMap.set("stale-transport", HELP_ID);
+    store.sessionTierMap.set("stale-transport", "workbench");
+
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("system");
+  });
 });

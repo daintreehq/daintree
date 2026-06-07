@@ -630,16 +630,25 @@ export class SessionStore {
     for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
       if (mappedHelpId !== helpSessionId) continue;
       // Caller-pin: only the renderer the session was pinned to may read it.
+      // `continue` (not `return null`) so a stale reconnect mapping pinned to a
+      // different WebContents iterated first can't mask the caller's own live
+      // transport — keep scanning, and only fail closed once nothing matches.
       if (this.sessionWebContentsMap.get(transportSessionId) !== callerWebContentsId) {
-        return null;
+        continue;
       }
       // The tier map can briefly outlive the transport during teardown; require
       // a live transport so a decaying session never reports as connected.
       if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
-        return null;
+        continue;
       }
+      // getActiveGrants is lazy-eviction only — a grant past expiresAt can
+      // linger until the periodic sweep (~5min). Filter those out so the
+      // snapshot never reports a logically-expired grant as active; the next
+      // sweep's `grant.expired` push will reconcile the renderer anyway.
+      const now = Date.now();
       const activeGrants = this.grantCache
         .getActiveGrants(transportSessionId)
+        .filter((g) => g.expiresAt > now)
         .map((g) => ({ toolId: g.toolId, expiresAt: g.expiresAt, ttlMs: g.ttlMs }));
       return { tier: this.getTier(transportSessionId), activeGrants };
     }
