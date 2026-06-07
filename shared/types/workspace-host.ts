@@ -754,6 +754,19 @@ export type WorkspaceHostEvent =
       method: ForgeRpcMethod;
       namespacedId?: string;
       args: unknown[];
+    }
+  // WSL git opt-in entry is no longer reachable from the live worktree set
+  // (#9926). Fired both on individual worktree removal (via the host's
+  // `removeMonitor` chokepoint) and as a bulk self-heal pass at the end of
+  // `loadProject` for any persisted keys not present in the freshly-listed
+  // worktree set. Fire-and-forget — the persistent store prune is idempotent
+  // (batched read-mutate-set) so a duplicate clear after a missed delivery
+  // is a no-op. The host emits the raw `monitor.id` (no normalization); main
+  // does a case-insensitive lookup on win32 to handle legacy mixed-case
+  // persisted keys.
+  | {
+      type: "clear-wsl-git-opt-in";
+      worktreeId: string;
     };
 
 /** Configuration for WorkspaceClient */

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
 import { stat, readFile, access, mkdir } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
+import { resolve as pathResolve, isAbsolute, dirname, basename, sep as pathSep } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
@@ -535,6 +535,20 @@ export class WorkspaceService {
         this.startPeriodicSafetyTimer();
       }
 
+      // Bulk self-heal of `wslGitByWorktree` (#9926, review #1). Main ships
+      // the *full global* persisted map on `load-project` and the host
+      // merges it into its in-memory mirror at the top of this method —
+      // by this point, the live worktree set is authoritative (set by
+      // `syncMonitors` above). The persisted map is single-instance
+      // (electron-store has no per-project key), so without project-scoping
+      // this self-heal would erase valid opt-ins for every other project on
+      // every load/prewarm/host-restart. The helper restricts the walk to
+      // keys whose path is rooted at this project's parent directory;
+      // foreign keys stay in the in-memory mirror for the duration of this
+      // load and are sent through to main untouched. The next load of the
+      // owning project picks them up.
+      this.pruneStaleWslGitEntries(worktrees);
+
       this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
@@ -608,32 +622,11 @@ export class WorkspaceService {
 
     const currentIds = new Set(worktrees.map((wt) => wt.id));
 
-    // Remove stale monitors
-    for (const [id, monitor] of this.monitors) {
+    // Remove stale monitors. Routed through the `removeMonitor` chokepoint
+    // so the persisted WSL git opt-in entry is pruned in lockstep (#9926).
+    for (const id of this.monitors.keys()) {
       if (!currentIds.has(id)) {
-        if (monitor.isMainWorktree) {
-          console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
-          continue;
-        }
-
-        if (this.activeWorktreeId === id) {
-          this.activeWorktreeId = null;
-        }
-
-        this.resourceActionExecutor.cleanupResourceActionState(id);
-        monitor.stop();
-        this.monitors.delete(id);
-        this.lruRemove(id);
-        this.recoverWatcherIfNoMonitorsRemain();
-        clearGitDirCache(monitor.path);
-        invalidateGitStatusCache(monitor.path);
-        this.sendEvent({
-          type: "worktree-removed",
-          worktreeId: id,
-          epoch: this.epoch,
-          seq: this.nextSeq(),
-        });
-        events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
+        this.removeMonitor(id);
       }
     }
 
@@ -883,6 +876,94 @@ export class WorkspaceService {
     const monitor = this.monitors.get(worktreeId);
     if (monitor) {
       monitor.setWslOptIn(enabled, dismissed);
+    }
+  }
+
+  /**
+   * Single chokepoint for monitor removal (#9926). Drops the monitor from the
+   * in-memory map, the LRU, the active-worktree pointer, and the
+   * WSL-git opt-in cache; tells main to drop the matching persistent entry;
+   * emits `worktree-removed`. Replaces the three inline removal sites in
+   * `syncMonitors`, the external-removal handler, and `deleteWorktree` so the
+   * persisted map can never leak stale opt-in flags through a path-reuse
+   * (`git worktree remove` + recreate at the same UNC path).
+   *
+   * Caller is responsible for any monitor-specific cleanup (cache
+   * invalidation, `applyWatcherBudget`, `topologyClearPending`) that runs
+   * before/after this — see the three call sites for the exact ordering they
+   * preserve.
+   */
+  private removeMonitor(id: string): void {
+    const monitor = this.monitors.get(id);
+    if (!monitor) return;
+    if (monitor.isMainWorktree) {
+      console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
+      return;
+    }
+
+    if (this.activeWorktreeId === id) {
+      this.activeWorktreeId = null;
+    }
+
+    this.resourceActionExecutor.cleanupResourceActionState(id);
+    monitor.stop();
+    this.monitors.delete(id);
+    this.lruRemove(id);
+    this.recoverWatcherIfNoMonitorsRemain();
+
+    clearGitDirCache(monitor.path);
+    invalidateGitStatusCache(monitor.path);
+
+    // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
+    // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to
+    // drop the persistent one. Idempotent on the main side: `clearWslGitEntry`
+    // is a no-op if the key is missing, and does a case-insensitive lookup
+    // on win32 to handle legacy mixed-case persisted keys.
+    if (Object.prototype.hasOwnProperty.call(this.wslGitByWorktree, monitor.id)) {
+      delete this.wslGitByWorktree[monitor.id];
+      this.sendEvent({
+        type: "clear-wsl-git-opt-in",
+        worktreeId: monitor.id,
+      });
+    }
+
+    this.sendEvent({
+      type: "worktree-removed",
+      worktreeId: monitor.id,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
+    });
+    events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
+  }
+
+  /**
+   * Bulk self-heal of `wslGitByWorktree` after `loadProject` lands the live
+   * worktree set (#9926, review #1). Walks the in-memory mirror and emits
+   * one `clear-wsl-git-opt-in` per key that (a) is not in the live set AND
+   * (b) is rooted under this project's parent directory. Foreign-project
+   * keys are left in the in-memory mirror for the duration of this load
+   * and never reach main — otherwise loading project A would silently
+   * erase project B's valid opt-ins from the global persisted map on every
+   * load/prewarm/host-restart. The next load of the owning project picks
+   * the foreign keys up and prunes them on that cycle.
+   */
+  private pruneStaleWslGitEntries(worktrees: Worktree[]): void {
+    const projectParent = this.projectRootPath ? pathResolve(this.projectRootPath, "..") : null;
+    const liveIds = new Set(worktrees.map((wt) => wt.id));
+    for (const key of Object.keys(this.wslGitByWorktree)) {
+      if (liveIds.has(key)) continue;
+      if (
+        projectParent &&
+        key !== this.projectRootPath &&
+        !key.startsWith(projectParent + pathSep)
+      ) {
+        continue;
+      }
+      delete this.wslGitByWorktree[key];
+      this.sendEvent({
+        type: "clear-wsl-git-opt-in",
+        worktreeId: key,
+      });
     }
   }
 
@@ -1656,37 +1737,19 @@ export class WorkspaceService {
       return;
     }
 
-    if (this.activeWorktreeId === worktreeId) {
-      this.activeWorktreeId = null;
-    }
-
-    this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
-    monitor.stop();
-    this.monitors.delete(worktreeId);
-    this.lruRemove(worktreeId);
-    this.recoverWatcherIfNoMonitorsRemain();
+    this.removeMonitor(worktreeId);
     // A freed slot lets the next most-recently-focused evicted worktree
-    // reclaim a watcher.
+    // reclaim a watcher. Called after `removeMonitor` (which only re-arms the
+    // watcher if no monitors remain) so a sibling worktree can immediately
+    // pick up the slot.
     this.applyWatcherBudget();
 
-    clearGitDirCache(monitor.path);
-    invalidateGitStatusCache(monitor.path);
     const cacheKey = this.listService.getCacheKey();
     if (cacheKey) {
       this.listService.invalidateCache(cacheKey);
     }
 
-    this.sendEvent({
-      type: "worktree-removed",
-      worktreeId,
-      epoch: this.epoch,
-      seq: this.nextSeq(),
-    });
-    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
-
-    console.log(
-      `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
-    );
+    console.log(`[WorkspaceHost] Worktree deleted externally, removed monitor: ${worktreeId}`);
   }
 
   getAllStates(requestId: string): void {
@@ -2528,27 +2591,20 @@ export class WorkspaceService {
 
       // Clean up the monitor immediately after worktree removal succeeds,
       // before attempting branch deletion — so the monitor doesn't linger
-      // if branch deletion fails.
-      this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
-      monitor.stop();
-      this.monitors.delete(worktreeId);
-      this.lruRemove(worktreeId);
-      this.recoverWatcherIfNoMonitorsRemain();
+      // if branch deletion fails. Routed through the `removeMonitor`
+      // chokepoint so the persisted WSL git opt-in entry is pruned in
+      // lockstep (#9926).
+      this.removeMonitor(worktreeId);
       // A freed slot lets the next most-recently-focused evicted worktree
-      // reclaim a watcher.
+      // reclaim a watcher. Called after `removeMonitor` (which only re-arms
+      // the watcher if no monitors remain) so a sibling worktree can
+      // immediately pick up the slot.
       this.applyWatcherBudget();
 
       // Monitor is cleaned up. Drop the pending entry now (cancelling its
       // safety valve): any still-buffered delete event for this name is
       // matched by the next drain.
       this.topologyClearPending(pendingDeleteKey);
-
-      this.sendEvent({
-        type: "worktree-removed",
-        worktreeId,
-        epoch: this.epoch,
-        seq: this.nextSeq(),
-      });
 
       if (branchToDelete && this.git) {
         try {
