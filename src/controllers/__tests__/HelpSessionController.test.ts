@@ -8,6 +8,7 @@ const {
   mockMcpOnDisplayImage,
   mockMcpOnSessionRevoked,
   mockMcpOnGrantLifecycle,
+  mockMcpOnTurnOutcomeAlert,
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockMcpResetDenialCounts,
@@ -21,6 +22,7 @@ const {
   displayImageListeners,
   sessionRevokedListeners,
   grantLifecycleListeners,
+  outcomeAlertListeners,
   helpPanelState,
   panelStoreState,
   projectStoreState,
@@ -31,6 +33,7 @@ const {
   mockMcpOnDisplayImage: vi.fn(),
   mockMcpOnSessionRevoked: vi.fn(),
   mockMcpOnGrantLifecycle: vi.fn(),
+  mockMcpOnTurnOutcomeAlert: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
   mockMcpIssueGrant: vi.fn().mockResolvedValue({
     sessionId: "",
@@ -52,6 +55,7 @@ const {
   displayImageListeners: [] as Array<(payload: unknown) => void>,
   sessionRevokedListeners: [] as Array<(payload: unknown) => void>,
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
+  outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
     isOpen: false,
     terminalId: null as string | null,
@@ -149,6 +153,7 @@ beforeEach(() => {
   displayImageListeners.length = 0;
   sessionRevokedListeners.length = 0;
   grantLifecycleListeners.length = 0;
+  outcomeAlertListeners.length = 0;
 
   mockMcpOnTierNotPermitted.mockReset();
   mockMcpOnTierNotPermitted.mockImplementation((cb: (payload: unknown) => void) => {
@@ -198,6 +203,14 @@ beforeEach(() => {
     return () => {
       const idx = grantLifecycleListeners.indexOf(cb);
       if (idx >= 0) grantLifecycleListeners.splice(idx, 1);
+    };
+  });
+  mockMcpOnTurnOutcomeAlert.mockReset();
+  mockMcpOnTurnOutcomeAlert.mockImplementation((cb: (payload: unknown) => void) => {
+    outcomeAlertListeners.push(cb);
+    return () => {
+      const idx = outcomeAlertListeners.indexOf(cb);
+      if (idx >= 0) outcomeAlertListeners.splice(idx, 1);
     };
   });
   mockMcpSetSessionTier.mockReset();
@@ -257,6 +270,7 @@ beforeEach(() => {
           onDisplayImage: mockMcpOnDisplayImage,
           onSessionRevoked: mockMcpOnSessionRevoked,
           onGrantLifecycle: mockMcpOnGrantLifecycle,
+          onTurnOutcomeAlert: mockMcpOnTurnOutcomeAlert,
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
           resetDenialCounts: mockMcpResetDenialCounts,
@@ -384,6 +398,82 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     ctrl["_patch"]({ showResumeBanner: true });
     expect(a).not.toHaveBeenCalled();
     expect(b).toHaveBeenCalled();
+  });
+});
+
+describe("HelpSessionController — turn-outcome alert pip", () => {
+  function fireOutcome(payload: { helpSessionId: string; outcome: string; turnId?: string }) {
+    outcomeAlertListeners[0]!(payload);
+  }
+  function fireToolStart(payload: { turnId?: string }) {
+    toolStartedListeners[0]!({
+      sessionId: "s1",
+      toolId: "agent.getState",
+      argsSummary: "{}",
+      startedAt: Date.now(),
+      danger: false,
+      ...payload,
+    });
+  }
+
+  it("surfaces agent-stuck as outcomeAlert and notifies listeners", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    const listener = vi.fn();
+    ctrl.subscribe(listener);
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+
+    fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
+    expect(listener).toHaveBeenCalled();
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("agent-stuck");
+    ctrl.stop();
+  });
+
+  it("surfaces reasoning-loop and clears on user dismiss", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+
+    ctrl.dismissOutcomeAlert();
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+    ctrl.stop();
+  });
+
+  it("auto-clears the pip when a tool call from a different turn starts", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+
+    // Same-turn residual call must NOT clear the pip.
+    fireToolStart({ turnId: "turn-1" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+
+    // A fresh turn means the agent resumed — clear.
+    fireToolStart({ turnId: "turn-2" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+    ctrl.stop();
+  });
+
+  it("auto-clears an agent-stuck pip (no turn id) on the next turn-stamped call", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("agent-stuck");
+
+    fireToolStart({ turnId: "turn-9" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+    ctrl.stop();
+  });
+
+  it("does not clear the pip for a call with no turn id", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
+    fireToolStart({});
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+    ctrl.stop();
   });
 });
 

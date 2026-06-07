@@ -25,6 +25,7 @@ import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
 import { McpAnomalyFooterLink } from "./McpAnomalyFooterLink";
+import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
@@ -599,6 +600,7 @@ export function HelpPanel({
   const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
   const dismissLaunchError = useCallback(() => controller.dismissLaunchError(), [controller]);
   const dismissSessionRevoked = useCallback(() => controller.dismissSessionRevoked(), [controller]);
+  const dismissOutcomeAlert = useCallback(() => controller.dismissOutcomeAlert(), [controller]);
   const retryLaunch = useCallback(() => {
     const agentId = session.launchError?.agentId;
     if (agentId) controller.launch({ agentId });
@@ -877,6 +879,7 @@ export function HelpPanel({
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
             <McpAnomalyFooterLink />
+            <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
           </span>
           <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
             {pinnedContext &&
