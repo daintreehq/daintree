@@ -73,6 +73,13 @@ const DIRECT_RENDERER_EVENTS = new Set([
   "inotify-limit-reached",
   "emfile-limit-reached",
   "watcher-recovered",
+  // Topology-watcher dark/recovery (#9908) — same direct-delivery rationale as
+  // the watcher degradation events above: each per-view store drives the
+  // shared Tier-1 indicator and arms the 30s escalation timer from the live
+  // event. Without this a dark event fired after a view mounts never reaches
+  // the renderer (the get-all-states handshake only covers mount-time state).
+  "topology-watcher-dark",
+  "topology-watcher-recovered",
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {
@@ -96,6 +103,7 @@ async function handleWorktreePortRequest(
           epoch,
           seq,
           watcherDegraded: workspaceService.isWatcherDegraded(),
+          topologyWatcherDark: workspaceService.isTopologyWatcherDark(),
           lastAcknowledgedMutationIds: workspaceService.getAcknowledgedMutationIds(),
         };
         break;
@@ -157,6 +165,12 @@ async function handleWorktreePortRequest(
       case "refresh-prs": {
         const { pullRequestService } = await import("./services/PullRequestService.js");
         await pullRequestService.refresh();
+        result = { ok: true };
+        break;
+      }
+
+      case "reconcile-topology": {
+        workspaceService.scheduleTopologyReconcile();
         result = { ok: true };
         break;
       }

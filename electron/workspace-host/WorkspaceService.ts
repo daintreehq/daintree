@@ -165,6 +165,13 @@ export class WorkspaceService {
   private topologyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private topologyWatcherEnabled = true;
   private topologyWatcherGeneration = 0;
+  // One-shot guard for the topology-watcher-dark signal (#9908). Set when the
+  // subscribe() rejects at cold start or a 5s pending-event safety valve
+  // expires — both mean the watcher is silently unreliable and the worktree
+  // list may drift. Cleared only by a *successful* `runTopologyReconcile()`
+  // (not by the watcher re-arming), because subscription success doesn't prove
+  // the topology was re-verified (#8516/#8558).
+  private topologyWatcherDarkNotified = false;
   // Watcher-independent safety net (#8510): the topology watcher can go
   // permanently silent (macOS FSEvents root deletion) or never start (metadata
   // dir absent), so a periodic reconcile bounds phantom-row staleness. Calls
@@ -1205,6 +1212,40 @@ export class WorkspaceService {
   }
 
   /**
+   * The topology watcher went dark: its subscribe() failed at cold start, or a
+   * pending-event safety valve expired without the matching watcher event
+   * arriving. Either way the worktree list may silently drift out of date.
+   * One-shot — a second dark trigger while already dark is a no-op so the
+   * renderer indicator isn't re-asserted on every stale tick.
+   */
+  private handleTopologyWatcherDark(): void {
+    if (this.topologyWatcherDarkNotified) return;
+    this.topologyWatcherDarkNotified = true;
+    this.sendEvent({ type: "topology-watcher-dark" });
+  }
+
+  /**
+   * A topology reconcile completed successfully after a dark period, so the
+   * worktree list is current again. Clears the one-shot guard and emits
+   * `topology-watcher-recovered` so the renderer hides the indicator. No-op
+   * when not dark, so calling it after every reconcile is harmless.
+   */
+  private handleTopologyWatcherRecovered(): void {
+    if (!this.topologyWatcherDarkNotified) return;
+    this.topologyWatcherDarkNotified = false;
+    this.sendEvent({ type: "topology-watcher-recovered" });
+  }
+
+  /**
+   * Whether the topology watcher is currently dark. Bundled into the
+   * `get-all-states` handshake so a late-mounting view hydrates the indicator
+   * without waiting for a live event (mirrors `isWatcherDegraded`).
+   */
+  isTopologyWatcherDark(): boolean {
+    return this.topologyWatcherDarkNotified;
+  }
+
+  /**
    * Called after a monitor is removed. If the last monitor is gone while the
    * degradation guards are still set, the degraded watcher was torn down
    * before it could recover — there is no longer anything degraded, so treat
@@ -1250,7 +1291,15 @@ export class WorkspaceService {
     const drain = () => this.drainTopologyEventBuffer();
 
     parcelWatcher
-      .subscribe(metadataDir, (_err, events) => {
+      .subscribe(metadataDir, (err, events) => {
+        if (err) {
+          // A runtime error on an established subscription means the watcher is
+          // no longer reliably reporting changes — same consequence as a
+          // subscribe-reject. Go dark; the periodic safety net reconciles.
+          if (generation === this.topologyWatcherGeneration) {
+            this.handleTopologyWatcherDark();
+          }
+        }
         if (Array.isArray(events)) {
           for (const ev of events) {
             const e = ev as { path?: unknown; type?: unknown } | null;
@@ -1282,13 +1331,27 @@ export class WorkspaceService {
         };
       })
       .catch((err) => {
+        if (generation !== this.topologyWatcherGeneration) {
+          // A stop/restart superseded this attempt — the failure is moot.
+          return;
+        }
         console.warn(
           `[WorkspaceHost] topology watcher subscribe failed for ${metadataDir}: ${(err as Error).message}`
         );
+        // No watcher events will ever arrive for this dir. Surface the dark
+        // state so the renderer can offer a manual reconcile; the periodic
+        // safety net (#8510) is the automatic recovery path.
+        this.handleTopologyWatcherDark();
       });
   }
 
   private stopTopologyWatcher(): void {
+    // Tearing the watcher down clears the dark state — there's no longer a
+    // watcher whose silence matters. Emit recovery (only if dark) so a
+    // pause/resume or project switch after a dark event doesn't pin the
+    // renderer indicator on with nothing left to clear it (mirrors
+    // recoverWatcherIfNoMonitorsRemain for the recursive watcher).
+    this.handleTopologyWatcherRecovered();
     this.topologyWatcherGeneration++;
     this.topologyWatcherSubscription.value = undefined;
     if (this.topologyDebounceTimer) {
@@ -1333,6 +1396,10 @@ export class WorkspaceService {
       this.topologyPendingCreate.delete(key);
       this.topologyPendingDelete.delete(key);
       this.topologyPendingSafetyTimers.delete(key);
+      // The watcher never delivered the event our own op produced — it's
+      // missing events, so it can't be trusted to catch external changes
+      // either. Surface the dark state; the periodic safety net reconciles.
+      this.handleTopologyWatcherDark();
     }, 5000);
     timer.unref?.();
     this.topologyPendingSafetyTimers.set(key, timer);
@@ -1382,7 +1449,14 @@ export class WorkspaceService {
     }
   }
 
-  private scheduleTopologyReconcile(): void {
+  /**
+   * Schedules a serialized topology reconcile (full worktree re-discovery).
+   * Public so the `reconcile-topology` port action (the "Reconcile now"
+   * recovery for the dark state, #9908) can drive it. Internal guards
+   * (`topologyWatcherEnabled`, `pollingEnabled`, cooldown, in-flight) make it
+   * safe to call from anywhere — concurrent requests coalesce.
+   */
+  scheduleTopologyReconcile(): void {
     if (!this.topologyWatcherEnabled) return;
     if (!this.pollingEnabled) return;
     if (Date.now() < this.topologyWatchCooldownUntil) {
@@ -1415,6 +1489,11 @@ export class WorkspaceService {
   private async runTopologyReconcile(): Promise<void> {
     const previousActiveId = this.activeWorktreeId;
     await this.discoverAndSyncWorktrees();
+
+    // A successful reconcile re-verifies the worktree list, so any prior dark
+    // state is resolved — recover here rather than on watcher re-arm, since
+    // re-subscribing doesn't prove the topology is current (#8516/#8558).
+    this.handleTopologyWatcherRecovered();
 
     // Auto-switch to main if the previously-active worktree was removed.
     // syncMonitors nulls activeWorktreeId when pruning the active monitor,

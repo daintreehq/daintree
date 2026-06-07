@@ -16,6 +16,14 @@ import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
 import { mutateCacheEntries } from "@/lib/githubResourceCache";
+import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
+
+// How long the topology watcher may stay dark before we escalate from the
+// Tier-1 ambient pip to a Tier-3 low-priority inbox notification (#9908). The
+// 90s host safety net usually reconciles first; this only fires when recovery
+// genuinely stalls, per the CLAUDE.md runtime-signals promote-trigger.
+const TOPOLOGY_DARK_ESCALATION_MS = 30_000;
 
 export const WorktreeStoreContext = createContext<WorktreeViewStoreApi | null>(null);
 
@@ -114,6 +122,47 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     const cleanups: Array<() => void> = [];
     let generation = 0;
 
+    // Topology-watcher-dark escalation (#9908): the store flag (set on the live
+    // event or hydration) drives the Tier-1 pip immediately; if the dark state
+    // persists past TOPOLOGY_DARK_ESCALATION_MS without a reconcile clearing it,
+    // escalate to a Tier-3 low-priority inbox notification with "Reconcile now".
+    // Armed from both the live `topology-watcher-dark` event and the
+    // get-all-states hydration (a view that mounts while already dark).
+    let topologyEscalationTimer: ReturnType<typeof setTimeout> | null = null;
+    function clearTopologyEscalation() {
+      if (topologyEscalationTimer !== null) {
+        clearTimeout(topologyEscalationTimer);
+        topologyEscalationTimer = null;
+      }
+    }
+    function armTopologyEscalation() {
+      if (topologyEscalationTimer !== null) return;
+      topologyEscalationTimer = setTimeout(() => {
+        topologyEscalationTimer = null;
+        // Re-check: a reconcile may have cleared the dark state in the window.
+        if (!store.getState().topologyWatcherDark) return;
+        const projectId = useProjectStore.getState().currentProject?.id;
+        notify({
+          type: "warning",
+          priority: "low",
+          title: "Worktree list may be stale",
+          message:
+            "The worktree watcher stopped reporting changes, so new or removed worktrees might be missing. Reconcile to refresh the list.",
+          action: {
+            label: "Reconcile now",
+            actionId: "worktree.reconcileTopology",
+            onClick: () => {
+              void actionService.dispatch("worktree.reconcileTopology", undefined, {
+                source: "user",
+              });
+            },
+          },
+          supersedeKey: projectId ? `topology-watcher-dark:${projectId}` : "topology-watcher-dark",
+          context: { projectId, eventKind: "host" },
+        });
+      }, TOPOLOGY_DARK_ESCALATION_MS);
+    }
+
     function fetchInitialState() {
       const thisGen = ++generation;
       // Only show loading spinner on cold start (no cached data).
@@ -145,6 +194,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             epoch: string;
             seq: number;
             watcherDegraded: boolean;
+            topologyWatcherDark: boolean;
             // Set of mutation IDs the host has already acknowledged this epoch
             // (#8405). Empty on a fresh host run — the renderer's outbox
             // entries from a prior epoch will have their targets reconciled
@@ -159,6 +209,18 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // so a degradation/recovery event delivered during that await wins
             // over this now-stale snapshot value.
             store.getState().setWatcherDegraded(response.watcherDegraded ?? false);
+            // Hydrate the parallel topology-watcher-dark indicator the same way
+            // (#9908), before the await, for the same race reason. A view that
+            // mounts while the host is already dark must also arm the 30s
+            // escalation — the live event that would otherwise arm it already
+            // fired before this view existed.
+            const hydratedDark = response.topologyWatcherDark ?? false;
+            store.getState().setTopologyWatcherDark(hydratedDark);
+            if (hydratedDark) {
+              armTopologyEscalation();
+            } else {
+              clearTopologyEscalation();
+            }
 
             // Hydrate manual issue associations from electron store.
             // Auto-detected issues (from branch names) arrive in the snapshots,
@@ -540,6 +602,23 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         store.getState().setWatcherDegraded(false);
       })
     );
+
+    // Topology-watcher-dark/recovered — the worktree list may have silently
+    // drifted. The store flag drives the Tier-1 pip; arming/clearing the 30s
+    // Tier-3 escalation is shared with the hydration path (#9908).
+    cleanups.push(
+      worktreePort.onEvent("topology-watcher-dark", () => {
+        store.getState().setTopologyWatcherDark(true);
+        armTopologyEscalation();
+      })
+    );
+    cleanups.push(
+      worktreePort.onEvent("topology-watcher-recovered", () => {
+        store.getState().setTopologyWatcherDark(false);
+        clearTopologyEscalation();
+      })
+    );
+    cleanups.push(clearTopologyEscalation);
 
     // Fetch on initial ready and on every port re-attach (host restart / re-broker)
     if (worktreePort.isReady()) {
