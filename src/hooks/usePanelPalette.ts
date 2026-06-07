@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getPanelKindDefinition } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -69,12 +73,21 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   const [keybindingVersion, setKeybindingVersion] = useState(0);
   const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  // Re-render when a plugin loads/unloads mid-session so agent icon/name/color
+  // refresh from the updated registry (#9879).
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot
+  );
 
   useEffect(() => {
     return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
   }, []);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
+    // Referenced so this memo re-derives when plugins load/unload mid-session;
+    // getEffectiveAgentIds/Config below read the merged (incl. plugin) registry (#9879).
+    void pluginAgentRegistry;
     const panelKinds = getPanelKindIds()
       .filter((kindId) => {
         if (kindId === "agent") return false;
@@ -175,7 +188,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       ...toolDedup.values(),
       ...resumeOptions,
     ];
-  }, [userRegistry, keybindingVersion, resumeSessions, availability, isAvailabilityInitialized]);
+  }, [
+    userRegistry,
+    keybindingVersion,
+    resumeSessions,
+    availability,
+    isAvailabilityInitialized,
+    pluginAgentRegistry,
+  ]);
 
   const { results, selectedIndex, close, isOpen, matchesById, ...paletteRest } =
     useSearchablePalette<PanelKindOption>({

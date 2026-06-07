@@ -23,6 +23,48 @@ const byPlugin = new Map<string, Map<string, AgentConfig>>();
 
 let snapshot: Record<string, AgentConfig> = {};
 
+/**
+ * Render-path subscribers for `useSyncExternalStore`. The renderer's plugin
+ * agents are mirrored into {@link snapshot} by {@link setPluginAgentRegistry},
+ * but nothing re-renders consumers that read the snapshot during render unless
+ * they're notified — so icon/name/color stayed stale mid-session until an
+ * unrelated re-render (#9879). Mirrors the panel-kind listener set in
+ * `src/panels/registry.tsx`. Pure `Set`, no DOM/React imports, so it stays
+ * safe to import from the main process (which never subscribes).
+ */
+const registryListeners = new Set<() => void>();
+
+function notifyRegistryListeners(): void {
+  for (const listener of [...registryListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("[pluginAgentRegistry] registry listener threw", err);
+    }
+  }
+}
+
+/**
+ * Subscribe to plugin-agent registry changes. Stable module-scope reference so
+ * `useSyncExternalStore` doesn't re-subscribe on every render.
+ */
+export function subscribeToPluginAgentRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => {
+    registryListeners.delete(listener);
+  };
+}
+
+/**
+ * Snapshot for `useSyncExternalStore`. Returns the live {@link snapshot}
+ * reference as-is — stable until a mutation replaces it. Never clone or spread
+ * here: a fresh object on each call breaks React 19's identity check and forces
+ * synchronous/infinite re-renders.
+ */
+export function getPluginAgentRegistrySnapshot(): Record<string, AgentConfig> {
+  return snapshot;
+}
+
 function contributionToAgentConfig(contribution: PluginAgentContribution): AgentConfig {
   // Minimal tier: surface only the launch-relevant fields. `detection` is
   // validated at the manifest gate but deliberately not mapped here — the
@@ -61,6 +103,7 @@ function rebuildSnapshot(): void {
     }
   }
   snapshot = next;
+  notifyRegistryListeners();
 }
 
 /**
@@ -106,11 +149,17 @@ export function getPluginAgentRegistry(): Record<string, AgentConfig> {
  * its own. No-op-safe with an empty record.
  */
 export function setPluginAgentRegistry(record: Record<string, AgentConfig>): void {
-  snapshot = record ?? {};
+  const next = record ?? {};
+  // Reference-identity guard: a no-op replace must not churn snapshot identity
+  // or wake subscribers.
+  if (next === snapshot) return;
+  snapshot = next;
+  notifyRegistryListeners();
 }
 
-/** Test-isolation helper: clear both the per-plugin map and the snapshot. */
+/** Test-isolation helper: clear the per-plugin map, snapshot, and subscribers. */
 export function clearPluginAgentRegistryForTests(): void {
   byPlugin.clear();
   snapshot = {};
+  registryListeners.clear();
 }
