@@ -60,8 +60,30 @@ export const config: AgentConfig = {
     ignoredInputSequences: ["\x1b\r"],
   },
   detection: {
-    primaryPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^\\n]{2,80}"],
-    fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
+    // kimi-cli renders Rich's "moon" spinner (8 moon-phase frames) with empty
+    // text during long model-latency stretches; this is the dominant working
+    // indicator before any tool or content block renders. See
+    // src/kimi_cli/ui/shell/visualize/_live_view.py upstream. The
+    // end-of-line alternative handles renderers that drop the trailing space
+    // when no text follows the spinner.
+    primaryPatterns: ["[🌑🌒🌓🌔🌕🌖🌗🌘](?:\\s|$)"],
+    fallbackPatterns: [
+      // Rich "dots" braille spinner, used with descriptive text
+      // ("Compacting...", "Connecting to MCP servers...", "Thinking...") in
+      // _blocks.py. Identical Unicode to the cliclack spinner goose uses —
+      // copy-pasting the glyph set between agents is a known footgun (#3941),
+      // so this stays fallback-only at 0.75, never primary.
+      "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^\\n]{2,80}",
+      "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w",
+    ],
+    // _print_welcome_info (src/kimi_cli/ui/shell/__init__.py) prints this
+    // banner line in a Rich Panel before the first spinner frame, so it
+    // always precedes the moon spinner. Literal substring — unique in the
+    // rendered output and resilient to the ASCII art and version-notice
+    // lines that follow. Without this slot, BootDetector falls back to the
+    // hardcoded Claude/Codex/Gemini banners and Kimi terminals wait the
+    // full POLLING_MAX_BOOT_MS (15s) timeout on every launch.
+    bootCompletePatterns: ["Welcome to Kimi Code CLI!"],
     promptPatterns: ["^\\s*(?:✨|💫|📋|\\$)\\s+"],
     promptHintPatterns: ["^\\s*(?:✨|💫|📋|\\$)\\s*$"],
     scanLineCount: 10,

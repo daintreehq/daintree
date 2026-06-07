@@ -590,14 +590,45 @@ describe("kimi detection patterns", () => {
     expect(patterns.some((p) => p.test(`${glyph} `))).toBe(true);
   });
 
-  it("matches braille spinner with task description (primary)", () => {
-    const patterns = compilePatterns("primaryPatterns");
-    expect(patterns.some((p) => p.test("⠋ Thinking about the request"))).toBe(true);
+  it.each(["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"])(
+    "matches moon-phase spinner frame %s as primary",
+    (glyph) => {
+      const patterns = compilePatterns("primaryPatterns");
+      // Trailing space — Rich's documented frame format.
+      expect(patterns.some((p) => p.test(`${glyph} `))).toBe(true);
+      // No trailing space — renderers that drop the trailing whitespace when
+      // the spinner is the only content on a line.
+      expect(patterns.some((p) => p.test(glyph))).toBe(true);
+    }
+  );
+
+  it("matches the kimi-cli welcome banner as boot-complete", () => {
+    const patterns = compilePatterns("bootCompletePatterns");
+    // Bare banner line (Rich Console.print output before Panel wrapping)
+    expect(patterns.some((p) => p.test("Welcome to Kimi Code CLI!"))).toBe(true);
+    // Banner wrapped in the Rich Panel box-drawing characters rendered in
+    // the live terminal — a literal substring match must still fire here.
+    expect(patterns.some((p) => p.test("╭─ Welcome to Kimi Code CLI! ─╮"))).toBe(true);
   });
 
-  it("matches braille spinner with single word (fallback)", () => {
+  it("matches braille dots spinner with task description in fallback", () => {
+    const patterns = compilePatterns("fallbackPatterns");
+    expect(patterns.some((p) => p.test("⠋ Compacting..."))).toBe(true);
+    expect(patterns.some((p) => p.test("⠹ Connecting to MCP servers..."))).toBe(true);
+  });
+
+  it("matches braille dots spinner with single word in fallback", () => {
     const patterns = compilePatterns("fallbackPatterns");
     expect(patterns.some((p) => p.test("⠹ Working"))).toBe(true);
+  });
+
+  it("does not match braille dots in primary (no #3941 footgun)", () => {
+    const patterns = compilePatterns("primaryPatterns");
+    // kimi-cli's content/tool blocks render braille-with-text, but a copy-paste
+    // of that glyph class into primary would mis-classify goose's identical
+    // cliclack spinner. The moon class is the only thing that earns primary.
+    expect(patterns.some((p) => p.test("⠋ Thinking about the request"))).toBe(false);
+    expect(patterns.some((p) => p.test("⠹ Working"))).toBe(false);
   });
 });
 
