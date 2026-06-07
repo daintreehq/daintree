@@ -83,6 +83,14 @@ export interface HttpLifecycleDeps {
     options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
+  // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
+  // the pinned `getCachedManifest` closure return the session's own window's
+  // cached manifest instead of always re-fetching on every CallTool dispatch.
+  // Optional for backward-compat with test fixtures that don't wire help
+  // routing (mirrors `requestManifestForWebContents`).
+  getCachedManifestForWebContents?: (
+    id: number
+  ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   clearCachedManifest: () => void;
   cleanupListeners: Array<() => void>;
   pendingManifests: Map<
@@ -1197,10 +1205,19 @@ export class HttpLifecycle {
 
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =
       () => {
-        // Pinned sessions never read the shared manifest cache — see
-        // `requestManifestForWebContents` doc in rendererBridge.ts.
-        if (this.deps.sessionStore.sessionWebContentsMap.has(sessionId)) {
-          return null;
+        // Pinned sessions never read the shared manifest cache (it could serve
+        // another window's tool surface). Instead they read a per-WebContents
+        // cache keyed by the pinned id (#9887), so the per-call
+        // `lookupManifestEntry` hot path hits a warm cache rather than
+        // re-fetching the full manifest on every dispatch — while still never
+        // crossing windows. Falls back to `null` (fail-closed) when no
+        // per-WebContents cache is wired or the id isn't cached yet, exactly as
+        // before. The map read happens synchronously here (no await between the
+        // pin lookup and the cache read), so a session torn down mid-call can't
+        // flip from pinned to unpinned and leak the shared cache.
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+        if (id !== undefined) {
+          return this.deps.getCachedManifestForWebContents?.(id) ?? null;
         }
         return this.deps.getCachedManifest();
       };

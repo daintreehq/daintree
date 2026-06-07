@@ -250,6 +250,169 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
   });
 });
 
+describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+    bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Wires `wc.send` to reply with a fixed manifest after a microtask, capturing
+   * each requestId so a test can choose to reply manually instead. Returns the
+   * list of captured requestIds (in send order).
+   */
+  function autoReplyManifest(
+    wc: FakeWebContents,
+    manifest: ActionManifestEntry[],
+    options?: { manual?: boolean }
+  ): string[] {
+    const requestIds: string[] = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST) return;
+      requestIds.push(payload.requestId);
+      if (options?.manual) return;
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+          { sender: { id: wc.id } },
+          { requestId: payload.requestId, manifest }
+        );
+      });
+    });
+    return requestIds;
+  }
+
+  it("coalesces concurrent requestManifestForWebContents calls onto one IPC send", async () => {
+    const wc = makeWebContents(111);
+    mockWebContentsRegistry.set(111, wc);
+    autoReplyManifest(wc, [{ id: "a" }] as ActionManifestEntry[]);
+
+    const [m1, m2] = await Promise.all([
+      bridge.requestManifestForWebContents(111),
+      bridge.requestManifestForWebContents(111),
+    ]);
+
+    expect(m1).toEqual([{ id: "a" }]);
+    expect(m2).toEqual([{ id: "a" }]);
+    // Singleflight: the second concurrent caller rode the first fetch.
+    expect(wc.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("populates the per-WebContents cache and isolates it per id — never crossing windows", async () => {
+    const wcA = makeWebContents(121);
+    const wcB = makeWebContents(122);
+    mockWebContentsRegistry.set(121, wcA);
+    mockWebContentsRegistry.set(122, wcB);
+    autoReplyManifest(wcA, [{ id: "from-A" }] as ActionManifestEntry[]);
+    autoReplyManifest(wcB, [{ id: "from-B" }] as ActionManifestEntry[]);
+
+    expect(bridge.getCachedManifestForWebContents(121)).toBeNull();
+
+    await bridge.requestManifestForWebContents(121);
+    await bridge.requestManifestForWebContents(122);
+
+    // Each id reads only its own window's manifest.
+    expect(bridge.getCachedManifestForWebContents(121)).toEqual([{ id: "from-A" }]);
+    expect(bridge.getCachedManifestForWebContents(122)).toEqual([{ id: "from-B" }]);
+    // The shared cache is never written by the pinned path.
+    expect(bridge.getCachedManifest()).toBeNull();
+  });
+
+  it("always fetches fresh — a warm cache never short-circuits a new request (tools/list freshness)", async () => {
+    const wc = makeWebContents(131);
+    mockWebContentsRegistry.set(131, wc);
+    let serial = 0;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST) return;
+      const value = `v${++serial}`;
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+          { sender: { id: 131 } },
+          { requestId: payload.requestId, manifest: [{ id: value }] }
+        );
+      });
+    });
+
+    const first = await bridge.requestManifestForWebContents(131);
+    const second = await bridge.requestManifestForWebContents(131);
+
+    // A resolved cache must NOT be returned — each sequential call re-fetches,
+    // so runtime action-set changes (plugin enable/disable) stay reflected.
+    expect(first).toEqual([{ id: "v1" }]);
+    expect(second).toEqual([{ id: "v2" }]);
+    expect(wc.send).toHaveBeenCalledTimes(2);
+    // The cache reflects the latest fetch for the lookup hot path.
+    expect(bridge.getCachedManifestForWebContents(131)).toEqual([{ id: "v2" }]);
+  });
+
+  it("evicts the cached manifest when the pinned WebContents is destroyed", async () => {
+    const wc = makeWebContents(141);
+    mockWebContentsRegistry.set(141, wc);
+    autoReplyManifest(wc, [{ id: "live" }] as ActionManifestEntry[]);
+
+    await bridge.requestManifestForWebContents(141);
+    expect(bridge.getCachedManifestForWebContents(141)).toEqual([{ id: "live" }]);
+
+    wc.triggerDestroyed();
+
+    expect(bridge.getCachedManifestForWebContents(141)).toBeNull();
+  });
+
+  it("clearCache drops all per-WebContents manifests", async () => {
+    const wc = makeWebContents(151);
+    mockWebContentsRegistry.set(151, wc);
+    autoReplyManifest(wc, [{ id: "cached" }] as ActionManifestEntry[]);
+
+    await bridge.requestManifestForWebContents(151);
+    expect(bridge.getCachedManifestForWebContents(151)).toEqual([{ id: "cached" }]);
+
+    bridge.clearCache();
+
+    expect(bridge.getCachedManifestForWebContents(151)).toBeNull();
+  });
+
+  it("resurrection guard: a fetch that resolves after clearCache does not repopulate the cache", async () => {
+    const wc = makeWebContents(161);
+    mockWebContentsRegistry.set(161, wc);
+    // Manual mode: capture the requestId, reply only when we choose.
+    const requestIds = autoReplyManifest(wc, [{ id: "stale" }] as ActionManifestEntry[], {
+      manual: true,
+    });
+
+    // Kick off a fetch that stays in flight.
+    const inflight = bridge.requestManifestForWebContents(161);
+    await Promise.resolve();
+    expect(requestIds).toHaveLength(1);
+
+    // The server clears all caches (stop/restart) while the fetch is pending.
+    bridge.clearCache();
+
+    // The original fetch now resolves late.
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 161 } },
+      { requestId: requestIds[0], manifest: [{ id: "stale" }] }
+    );
+    await inflight;
+
+    // The late resolve must NOT repopulate the cleared cache.
+    expect(bridge.getCachedManifestForWebContents(161)).toBeNull();
+  });
+});
+
 describe("rendererBridge — requesting-bearer identity passthrough (#9157)", () => {
   let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
   let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
