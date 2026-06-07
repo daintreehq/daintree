@@ -602,7 +602,8 @@ export interface TerminalReliabilityMetricPayload {
     | "tier-transition"
     | "pause-duration-gauge"
     | "queue-depth-gauge"
-    | "data-loss-count";
+    | "data-loss-count"
+    | "ipc-cap-drop";
   timestamp: number;
   durationMs?: number;
   bufferUtilization?: number;
