@@ -223,6 +223,20 @@ function getPausedDurationsSnapshot(): Array<{ terminalId: string; heldDurationM
   return out;
 }
 
+/**
+ * Reliabilty-metric types whose wire emission is required for UI correctness
+ * (recovery affordances, Tier-3 escalations) and therefore MUST bypass the
+ * `DAINTREE_TERMINAL_METRICS` opt-in flag. The flag is preserved for the
+ * high-volume, per-tick gauges (throughput-rate, queue-depth-gauge,
+ * pending-bytes-gauge, data-loss-count) that exist purely for diagnostic
+ * telemetry — splitting the two keeps the user-facing recovery surfaces
+ * live in production while leaving diagnostic noise opt-in.
+ *
+ * Add new metric types here only when the renderer needs them to surface
+ * a recovery affordance. Diagnostic-only metrics stay gated.
+ */
+import { isLoadBearingReliabilityMetric } from "./pty-host/loadBearingMetrics.js";
+
 // Data-loss counter: closure-scoped accumulator of dropped-bytes and
 // drop-event counts since the last snapshot. The counter is incremented
 // unconditionally at the drop site so regression detection is observable
@@ -268,6 +282,24 @@ function emitReliabilityMetricWithTracking(
     payload.metricType === "pause-end" ||
     payload.metricType === "suspend"
   ) {
+    // For `null`-source `pause-end`/`suspend`, populate `durationMs` from the
+    // oldest recorded pause-start across sources — matches the gauge
+    // semantics at `getPausedDurationsSnapshot` (the user-meaningful
+    // "how long has this been paused?" answer). The `force-resume` handler
+    // previously read from `backpressureManager.getPauseStartTime()`, a
+    // SAB-only map that production pauses never populate. Computing the
+    // duration here from the closure map is the multi-source-of-truth path
+    // and makes the wire event correct in production (issue #9898).
+    if (payload.durationMs === undefined) {
+      const sources = pausedTerminals.get(payload.terminalId);
+      if (sources && sources.size > 0) {
+        let oldestStart = Number.POSITIVE_INFINITY;
+        for (const { startTime } of sources.values()) {
+          if (startTime < oldestStart) oldestStart = startTime;
+        }
+        payload.durationMs = Math.max(0, Date.now() - oldestStart);
+      }
+    }
     clearAllPauseSources(payload.terminalId);
   }
   // This funnel TERMINATES the chain: emit the wire event directly. We must
@@ -275,9 +307,15 @@ function emitReliabilityMetricWithTracking(
   // the manager is constructed with its `emitReliabilityMetric` dep wired
   // back to this funnel (see construction below), so re-entering it would
   // route straight back here and recurse until the stack overflows. The gate
-  // (`metricsEnabled()`, bypassed by `forceEmit` for the data-loss pulse)
-  // mirrors the manager's legacy default branch.
-  if (!forceEmit && !metricsEnabled()) return;
+  // splits: load-bearing recovery signals (pause-start/pause-end/suspend/
+  // pause-duration-gauge) emit unconditionally so UI recovery affordances
+  // work in production; `forceEmit` still bypasses the gate for the
+  // data-loss pulse; the rest of the metrics (throughput-rate,
+  // queue-depth-gauge, pending-bytes-gauge, data-loss-count) stay gated on
+  // `DAINTREE_TERMINAL_METRICS=1` to keep diagnostic noise opt-in.
+  if (!forceEmit && !isLoadBearingReliabilityMetric(payload.metricType) && !metricsEnabled()) {
+    return;
+  }
   sendEvent({
     type: "terminal-reliability-metric",
     payload,

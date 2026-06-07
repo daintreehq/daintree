@@ -1335,7 +1335,7 @@ function TerminalPaneComponent({
         />
       </BannerSlot>
 
-      <BannerSlot visible={showForceResumeStall}>
+      <BannerSlot visible={!suppressBackendDependent && showForceResumeStall}>
         <InlineStatusBanner
           icon={OctagonAlert}
           severity="error"

@@ -6,6 +6,8 @@ import {
   FUTURE_SAB_MAX_PENDING_BYTES_PER_TERMINAL,
   FUTURE_SAB_MAX_TOTAL_PENDING_BYTES,
 } from "../backpressure.js";
+import { isLoadBearingReliabilityMetric } from "../loadBearingMetrics.js";
+import type { TerminalReliabilityMetricPayload } from "../../../shared/types/pty-host.js";
 
 type CoordinatorLike = Pick<PtyPauseCoordinator, "pause" | "resume" | "isPaused">;
 
@@ -511,6 +513,206 @@ describe("BackpressureManager adversarial", () => {
           payload: expect.objectContaining({ metricType: "pause-start", terminalId: "term-1" }),
         })
       );
+    });
+
+    describe("load-bearing metrics bypass the DAINTREE_TERMINAL_METRICS gate (#9898)", () => {
+      // Pins the contract at the production funnel. The split at the funnel
+      // is what unblocks the Tier-3 stall-escalation banner
+      // (`useForceResumeCycleWatchdog`) and the held-duration tooltip — they
+      // were dead in production because every reliability-metric wire
+      // emission was filtered out by `metricsEnabled()`. The test imports
+      // the real `isLoadBearingReliabilityMetric` predicate from
+      // `pty-host/loadBearingMetrics.js` so a misconfigured set would fail
+      // this suite (rather than a copy of the set that would silently drift).
+      function makeFunnel(opts: { metricsEnabled: () => boolean }) {
+        return (payload: TerminalReliabilityMetricPayload, forceEmit = false) => {
+          if (
+            !forceEmit &&
+            !isLoadBearingReliabilityMetric(payload.metricType) &&
+            !opts.metricsEnabled()
+          ) {
+            return;
+          }
+          sendEvent({ type: "terminal-reliability-metric", payload });
+        };
+      }
+
+      it("emits pause-start when metrics are disabled (load-bearing)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "pause-start",
+          timestamp: 1000,
+        });
+
+        expect(sendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "terminal-reliability-metric",
+            payload: expect.objectContaining({ metricType: "pause-start" }),
+          })
+        );
+      });
+
+      it("emits pause-end when metrics are disabled (load-bearing)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "pause-end",
+          timestamp: 1000,
+          durationMs: 9950,
+        });
+
+        expect(sendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ metricType: "pause-end", durationMs: 9950 }),
+          })
+        );
+      });
+
+      it("emits suspend when metrics are disabled (load-bearing)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "suspend",
+          timestamp: 1000,
+        });
+
+        expect(sendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ metricType: "suspend" }),
+          })
+        );
+      });
+
+      it("gates throughput-rate when metrics are disabled (diagnostic only)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "throughput-rate",
+          timestamp: 1000,
+        });
+
+        expect(sendEvent).not.toHaveBeenCalled();
+      });
+
+      it("gates queue-depth-gauge when metrics are disabled (diagnostic only)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "queue-depth-gauge",
+          timestamp: 1000,
+        });
+
+        expect(sendEvent).not.toHaveBeenCalled();
+      });
+
+      it("gates data-loss-count when metrics are disabled (diagnostic only)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "term-1",
+          metricType: "data-loss-count",
+          timestamp: 1000,
+        });
+
+        expect(sendEvent).not.toHaveBeenCalled();
+      });
+
+      it("forceEmit bypasses the gate for non-load-bearing metrics (data-loss pulse)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        // data-loss-count is non-load-bearing but forceEmit: true must still
+        // reach the wire (the data-loss pulse has to surface in production
+        // even when the diagnostic flag is off — lesson #7590).
+        manager.emitReliabilityMetric(
+          { terminalId: "term-1", metricType: "data-loss-count", timestamp: 1000 },
+          true
+        );
+
+        expect(sendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ metricType: "data-loss-count" }),
+          })
+        );
+      });
+
+      it("emits pause-duration-gauge when metrics are disabled (load-bearing)", () => {
+        sendEvent.mockReset();
+        const manager = new BackpressureManager({
+          getTerminal: vi.fn(),
+          getPauseCoordinator: vi.fn(),
+          sendEvent,
+          metricsEnabled: () => false,
+          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
+        });
+
+        manager.emitReliabilityMetric({
+          terminalId: "resource-governor",
+          metricType: "pause-duration-gauge",
+          timestamp: 1000,
+          perTerminalHeld: [{ terminalId: "term-1", heldDurationMs: 5000 }],
+        });
+
+        expect(sendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ metricType: "pause-duration-gauge" }),
+          })
+        );
+      });
     });
   });
 });

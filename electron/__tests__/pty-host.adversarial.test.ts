@@ -962,7 +962,27 @@ describe("pty-host adversarial", () => {
     expect(backpressure.hasPendingSegments("t1")).toBe(false);
     expect(backpressure.isSuspended("t1")).toBe(false);
     expect(runningPayloads).toHaveLength(1);
-    expect(runningPayloads[0].pauseDuration).toBe(750);
+    // The held duration now rides on the wire `pause-end` reliability metric
+    // (issue #9898: the source-of-truth for held duration moved from the
+    // SAB-only `backpressureManager.getPauseStartTime()` map to the
+    // multi-source closure `pausedTerminals` map maintained by
+    // `emitReliabilityMetricWithTracking`). The running status no longer
+    // carries `pauseDuration` — the renderer reads the metric, not the status.
+    expect(runningPayloads[0].pauseDuration).toBeUndefined();
+    // The held duration now rides on the wire `pause-end` reliability metric
+    // (issue #9898: the source-of-truth moved from the SAB-only
+    // `backpressureManager.getPauseStartTime()` map to the multi-source
+    // closure `pausedTerminals` map maintained by
+    // `emitReliabilityMetricWithTracking`). The manager's `emitReliabilityMetric`
+    // is the funnel entry point in production — assert it was called with a
+    // `pause-end` metric (the dep then populates `durationMs` and emits to the
+    // wire, which is tested in isolation at the funnel boundary).
+    expect(backpressure.emitReliabilityMetric).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalId: "t1",
+        metricType: "pause-end",
+      })
+    );
   });
 
   it("PORT_REPLACE_DROPS_STALE_ACKS", async () => {
