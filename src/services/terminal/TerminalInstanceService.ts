@@ -197,6 +197,7 @@ class TerminalInstanceService {
       restoreFromSerializedIncremental: (id, state) =>
         this.restoreController.restoreFromSerializedIncremental(id, state),
       isBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
+      onDeclined: (id) => this.injectDataLossMarker(id, 0),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({

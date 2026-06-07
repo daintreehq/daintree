@@ -1,5 +1,6 @@
 import { terminalClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
+import { TerminalRefreshTier } from "@/types";
 import { logWarn } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
@@ -7,6 +8,16 @@ import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 const WAKE_RATE_LIMIT_MS = 1000;
 const WAKE_RETRY_DELAY_MS = 100;
 const WAKE_MAX_RETRIES = 10;
+
+// When a wake declines the snapshot (active selection or missing serialized
+// state) the host has already discarded the suspended terminal's buffered
+// output, so leaving the decline unretried strands the pane on stale content
+// while every status indicator reports it live (#9894). Re-attempt the wake a
+// few times so the resync lands once the blocking condition clears (the
+// selection is released, the snapshot becomes available). Bounded because a
+// genuinely null snapshot is an unrecoverable gap, not a transient one.
+const WAKE_DECLINE_RETRY_DELAY_MS = 300;
+const WAKE_DECLINE_MAX_RETRIES = 3;
 
 export interface WakeManagerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
@@ -17,12 +28,21 @@ export interface WakeManagerDeps {
   // scheduled wake must not fire its stale `wake-terminal` IPC. Absent (in
   // tests), the guard is a no-op and wakes proceed as before.
   isBackgrounded?: (id: string) => boolean;
+  /**
+   * Invoked once per decline sequence when a wake cannot apply the snapshot and
+   * the gap is user-visible (missing serialized state). Used to draw the
+   * data-loss marker. Not called for the selection-guard decline: injecting a
+   * marker would write into the terminal the guard is deliberately leaving
+   * untouched while the user drags a selection.
+   */
+  onDeclined?: (id: string) => void;
 }
 
 export class TerminalWakeManager {
   private lastWakeTime = new Map<string, number>();
   private pendingWakes = new Map<string, { retries: number; timeoutId: NodeJS.Timeout }>();
   private pendingRateLimitedWakes = new Map<string, NodeJS.Timeout>();
+  private declineRetries = new Map<string, { attempt: number; timeoutId: NodeJS.Timeout }>();
   private inFlightWakes = new Map<string, Promise<boolean>>();
   private deps: WakeManagerDeps;
 
@@ -57,8 +77,11 @@ export class TerminalWakeManager {
 
         // xterm v6 clears selection when terminal.reset() is called during
         // restoreFromSerialized. Skip the restore if the user has an active
-        // text selection to avoid destroying their drag-selection.
+        // text selection to avoid destroying their drag-selection. Schedule a
+        // retry (no marker — the marker would write into the terminal the guard
+        // is protecting) so the resync lands once the selection is released.
         if (managed.terminal.hasSelection()) {
+          this.noteDecline(id, false);
           return false;
         }
 
@@ -66,15 +89,18 @@ export class TerminalWakeManager {
 
         // Re-check after async: selection may have started while we were awaiting.
         if (managed.terminal.hasSelection()) {
+          this.noteDecline(id, false);
           return false;
         }
 
-        // Alternate-screen TUIs repaint from live PTY data; serialized snapshots are optional.
-        if (managed.isAltBuffer) {
-          return true;
-        }
-
+        // No serialized snapshot to replay. The host discarded the buffered
+        // output on suspend, so the pane is now stale — surface the gap and
+        // retry in case the snapshot becomes available. Alternate-screen TUIs
+        // fall through here too: addon-serialize includes the alt-buffer frame
+        // (\x1b[?1049h + content), so a present snapshot correctly repaints the
+        // TUI rather than being silently treated as a no-op resync.
         if (!state) {
+          this.noteDecline(id, true);
           return false;
         }
 
@@ -129,10 +155,73 @@ export class TerminalWakeManager {
     void this.wakeAndRestore(id).then((success) => {
       if (success) {
         this.lastWakeTime.set(id, startedAt);
+        // A successful wake resynced the pane; cancel any decline retry left
+        // over from an earlier failed attempt for this terminal.
+        this.clearDeclineRetry(id);
       } else {
         this.lastWakeTime.delete(id);
       }
     });
+  }
+
+  /**
+   * Begin (or no-op into an in-progress) decline-retry sequence for a wake that
+   * could not apply the snapshot. The data-loss marker, if requested, is drawn
+   * once at the start of the sequence — not on every retry — so a prolonged
+   * stale window doesn't stack marker lines.
+   */
+  private noteDecline(id: string, injectMarker: boolean): void {
+    if (this.declineRetries.has(id)) {
+      // A sequence is already running for this id: the retry loop owns
+      // rescheduling and the marker (if any) was already drawn.
+      return;
+    }
+    if (injectMarker) {
+      this.deps.onDeclined?.(id);
+    }
+    this.scheduleDeclineRetry(id, 1);
+  }
+
+  private scheduleDeclineRetry(id: string, attempt: number): void {
+    if (attempt > WAKE_DECLINE_MAX_RETRIES) {
+      this.declineRetries.delete(id);
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      void this.runDeclineRetry(id, attempt);
+    }, WAKE_DECLINE_RETRY_DELAY_MS);
+    this.declineRetries.set(id, { attempt, timeoutId });
+  }
+
+  private async runDeclineRetry(id: string, attempt: number): Promise<void> {
+    const managed = this.deps.getInstance(id);
+    // Bail if the terminal went away or was re-backgrounded: a background
+    // terminal re-wakes through the tier-transition path (needsWake stays
+    // armed), so retrying here would refresh into a hidden pane. The entry is
+    // kept until now so a concurrent decline from wakeAndRestore no-ops in
+    // noteDecline rather than starting a duplicate sequence.
+    if (!managed || managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+      this.declineRetries.delete(id);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const success = await this.wakeAndRestore(id);
+    if (success) {
+      this.lastWakeTime.set(id, startedAt);
+      this.declineRetries.delete(id);
+      return;
+    }
+    this.lastWakeTime.delete(id);
+    this.scheduleDeclineRetry(id, attempt + 1);
+  }
+
+  private clearDeclineRetry(id: string): void {
+    const pending = this.declineRetries.get(id);
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      this.declineRetries.delete(id);
+    }
   }
 
   wake(id: string): void {
@@ -252,6 +341,8 @@ export class TerminalWakeManager {
       clearTimeout(rateLimited);
       this.pendingRateLimitedWakes.delete(id);
     }
+
+    this.clearDeclineRetry(id);
   }
 
   dispose(): void {
@@ -268,5 +359,10 @@ export class TerminalWakeManager {
       clearTimeout(timeoutId);
     }
     this.pendingRateLimitedWakes.clear();
+
+    for (const [, pending] of this.declineRetries) {
+      clearTimeout(pending.timeoutId);
+    }
+    this.declineRetries.clear();
   }
 }
