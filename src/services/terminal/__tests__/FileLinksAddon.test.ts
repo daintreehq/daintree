@@ -32,8 +32,18 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0]!.text).toBe("/home/user/project/src/App.tsx:45:12");
-          expect(links![0]!.range.start.y).toBe(1);
+          const link = links![0]! as unknown as {
+            text: string;
+            range: { start: { y: number } };
+            _absolutePath: string;
+            _line?: number;
+            _col?: number;
+          };
+          expect(link.text).toBe("/home/user/project/src/App.tsx:45:12");
+          expect(link.range.start.y).toBe(1);
+          expect(link._absolutePath).toBe("/home/user/project/src/App.tsx");
+          expect(link._line).toBe(45);
+          expect(link._col).toBe(12);
           resolve();
         });
       });
@@ -69,7 +79,16 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0]!.text).toBe("C:\\Users\\user\\project\\src\\App.tsx:45:12");
+          const link = links![0]! as unknown as {
+            text: string;
+            _absolutePath: string;
+            _line?: number;
+            _col?: number;
+          };
+          expect(link.text).toBe("C:\\Users\\user\\project\\src\\App.tsx:45:12");
+          expect(link._absolutePath).toBe("C:\\Users\\user\\project\\src\\App.tsx");
+          expect(link._line).toBe(45);
+          expect(link._col).toBe(12);
           resolve();
         });
       });
@@ -109,6 +128,122 @@ describe("FileLinksAddon", () => {
         });
       });
     });
+  });
+
+  describe("WSL UNC paths", () => {
+    type ResolvedLink = {
+      text: string;
+      _absolutePath: string;
+      _line?: number;
+      _col?: number;
+    };
+
+    const matchSingle = (lineText: string) =>
+      new Promise<ResolvedLink | null>((resolve) => {
+        const terminal = createMockTerminal();
+        const addon = new FileLinksAddon(terminal, () => "/home/user/project");
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(createMockLine(lineText));
+        addon.provideLinks(1, (links) => {
+          if (!links || links.length === 0) {
+            resolve(null);
+            return;
+          }
+          expect(links.length).toBe(1);
+          resolve(links[0]! as unknown as ResolvedLink);
+        });
+      });
+
+    it("matches \\\\wsl$ paths with line and column", async () => {
+      const link = await matchSingle(
+        "Error at \\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx:45:12"
+      );
+      expect(link).not.toBeNull();
+      expect(link!.text).toBe("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx:45:12");
+      expect(link!._absolutePath).toBe("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx");
+      expect(link!._line).toBe(45);
+      expect(link!._col).toBe(12);
+    });
+
+    it("matches \\\\wsl$ paths without line numbers", async () => {
+      const link = await matchSingle("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx");
+      expect(link).not.toBeNull();
+      expect(link!.text).toBe("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx");
+      expect(link!._absolutePath).toBe("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx");
+      expect(link!._line).toBeUndefined();
+      expect(link!._col).toBeUndefined();
+    });
+
+    it("matches \\\\wsl.localhost paths with a dotted distro name", async () => {
+      const link = await matchSingle("\\\\wsl.localhost\\Ubuntu-22.04\\home\\user\\App.tsx:10");
+      expect(link).not.toBeNull();
+      expect(link!.text).toBe("\\\\wsl.localhost\\Ubuntu-22.04\\home\\user\\App.tsx:10");
+      expect(link!._absolutePath).toBe("\\\\wsl.localhost\\Ubuntu-22.04\\home\\user\\App.tsx");
+      expect(link!._line).toBe(10);
+      expect(link!._col).toBeUndefined();
+    });
+
+    it("matches WSL paths containing a hidden directory segment", async () => {
+      const link = await matchSingle("\\\\wsl$\\Ubuntu\\home\\user\\.config\\settings.json:3");
+      expect(link).not.toBeNull();
+      expect(link!._absolutePath).toBe("\\\\wsl$\\Ubuntu\\home\\user\\.config\\settings.json");
+      expect(link!._line).toBe(3);
+    });
+
+    it("does not match WSL paths missing the leading double backslash", async () => {
+      const link = await matchSingle("wsl$\\Ubuntu\\home\\user\\App.tsx");
+      expect(link).toBeNull();
+    });
+
+    it("does not match a UNC root with no file segment", async () => {
+      const link = await matchSingle("\\\\wsl$\\Ubuntu");
+      expect(link).toBeNull();
+    });
+
+    it("does not match non-WSL UNC hosts", async () => {
+      const link = await matchSingle("\\\\notwsl\\Ubuntu\\home\\user\\App.tsx");
+      expect(link).toBeNull();
+    });
+
+    it("reports the buffer column where the WSL path begins", () =>
+      new Promise<void>((resolve) => {
+        const terminal = createMockTerminal();
+        const addon = new FileLinksAddon(terminal, () => "/home/user/project");
+        const line = createMockLine("Error at \\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12");
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeDefined();
+          expect(links).toHaveLength(1);
+          // "Error at " is 9 chars; the leading backslash sits at 0-based index 9,
+          // so the 1-based buffer column is 10.
+          expect(links![0]!.range.start.x).toBe(10);
+          expect(links![0]!.range.end.x).toBe(
+            9 + "\\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12".length
+          );
+          resolve();
+        });
+      }));
+
+    it("matches two WSL paths on the same line independently", () =>
+      new Promise<void>((resolve) => {
+        const terminal = createMockTerminal();
+        const addon = new FileLinksAddon(terminal, () => "/home/user/project");
+        const line = createMockLine(
+          "Compare \\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12 and \\\\wsl.localhost\\Debian\\srv\\util.ts:9"
+        );
+        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
+
+        addon.provideLinks(1, (links) => {
+          expect(links).toBeDefined();
+          expect(links).toHaveLength(2);
+          const resolved = links! as unknown as Array<{ text: string; _absolutePath: string }>;
+          expect(resolved[0]!.text).toBe("\\\\wsl$\\Ubuntu\\home\\user\\App.tsx:45:12");
+          expect(resolved[0]!._absolutePath).toBe("\\\\wsl$\\Ubuntu\\home\\user\\App.tsx");
+          expect(resolved[1]!.text).toBe("\\\\wsl.localhost\\Debian\\srv\\util.ts:9");
+          expect(resolved[1]!._absolutePath).toBe("\\\\wsl.localhost\\Debian\\srv\\util.ts");
+          resolve();
+        });
+      }));
   });
 
   describe("exclusions", () => {

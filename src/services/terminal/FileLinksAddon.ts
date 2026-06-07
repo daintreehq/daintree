@@ -11,7 +11,7 @@ interface ResolvedFilePath {
 }
 
 const FILE_PATH_REGEX =
-  /(?:^|[\s(])((?:\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
+  /(?:^|[\s(])((?:\\\\wsl(?:\$|\.localhost)\\[^\\]+(?:\\[\w.-]+)+|\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
@@ -90,7 +90,7 @@ export class FileLinksAddon implements ILinkProvider {
   }
 
   private _resolveFilePath(text: string): ResolvedFilePath | null {
-    const match = /^(.*)(?::(\d+)(?::(\d+))?)?$/.exec(text);
+    const match = /^(.*\.[^\s:]+?)(?::(\d+)(?::(\d+))?)?$/.exec(text);
     if (!match) return null;
     const pathPart = match[1];
     if (pathPart === undefined) return null;
