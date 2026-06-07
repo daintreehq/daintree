@@ -40,27 +40,6 @@ describe("tallyScrollbackRestoreStates", () => {
     expect(result.totalCount - result.pendingCount - result.inProgressCount).toBe(1);
   });
 
-  it("excludes 'lazy-pending' from every count (deferred restores never pin the indicator)", () => {
-    const states: ScrollbackRestoreState[] = ["lazy-pending", "lazy-pending"];
-    expect(tallyScrollbackRestoreStates(states)).toEqual({
-      pendingCount: 0,
-      inProgressCount: 0,
-      totalCount: 0,
-    });
-  });
-
-  it("counts an eager batch alongside ignored lazy-pending terminals", () => {
-    const states: ScrollbackRestoreState[] = [
-      "pending",
-      "in-progress",
-      "done",
-      "lazy-pending",
-      "lazy-pending",
-    ];
-    const result = tallyScrollbackRestoreStates(states);
-    expect(result).toEqual({ pendingCount: 1, inProgressCount: 1, totalCount: 3 });
-  });
-
   it("is order-independent", () => {
     const a = tallyScrollbackRestoreStates(["pending", "done", "in-progress"]);
     const b = tallyScrollbackRestoreStates(["done", "in-progress", "pending"]);

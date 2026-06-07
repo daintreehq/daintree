@@ -2,11 +2,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { usePanelStore } from "@/store";
 import { logWarn } from "@/utils/logger";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
-import {
-  type TerminalRestoreTask,
-  registerLazyScrollRestore,
-  scheduleBackgroundFetchAndRestore,
-} from "./batchScheduler";
+import { type TerminalRestoreTask, scheduleBackgroundFetchAndRestore } from "./batchScheduler";
 
 function classifySchedulerError(error: unknown): TerminalScrollbackRestoreError {
   const timestamp = Date.now();
@@ -19,10 +15,8 @@ function classifySchedulerError(error: unknown): TerminalScrollbackRestoreError 
 // Tasks captured at schedule time, keyed by terminalId, so "Retry batch" can
 // re-queue a failed restore using its original location/worktree without
 // re-reading the (possibly stale) panel store at click time (lesson #9514).
-// Merged across the critical + deferred calls of a single hydration run; the
-// `isCurrent` guard ensures only one logical batch is ever live, so a flat map
-// is safe. Entries for already-restored terminals are harmless — the scheduler
-// gate (`scrollbackRestoreState !== "none"`) skips them on re-submit.
+// Entries for already-restored terminals are harmless — the scheduler gate
+// (`scrollbackRestoreState !== "none"`) skips them on re-submit.
 const lastBatchTaskMap = new Map<string, TerminalRestoreTask>();
 
 function notifyRestoreListeners(): void {
@@ -31,39 +25,28 @@ function notifyRestoreListeners(): void {
 
 export function scheduleScrollbackRestore(
   tasks: TerminalRestoreTask[],
-  isCurrent: () => boolean,
-  mode: "background" | "lazy"
+  isCurrent: () => boolean
 ): void {
   let scheduledAny = false;
   for (const task of tasks) {
     const managed = terminalInstanceService.get(task.terminalId);
     if (!managed || managed.scrollbackRestoreState !== "none") continue;
 
-    // Lazy restores wait for a scroll event and may never fire; they get a
-    // distinct "lazy-pending" state so the batch progress aggregate ignores
-    // them (a never-scrolled panel must not pin the indicator open).
-    const willLazyRegister = mode === "lazy" && !!managed.hostElement;
     lastBatchTaskMap.set(task.terminalId, task);
-    managed.scrollbackRestoreState = willLazyRegister ? "lazy-pending" : "pending";
+    managed.scrollbackRestoreState = "pending";
     scheduledAny = true;
 
     const doRestore = async () => {
       // On bail paths where state is still queued (we never started), reset to
-      // "none" so a subsequent scheduleScrollbackRestore call — e.g. after the
-      // user navigates back into a project view — picks the terminal up again.
-      // Without this reset, a project switch mid-flight permanently strands the
-      // terminal as queued and scrollback is never restored. The post-start
-      // bail below is left alone: there, external code (destroy/done) already
-      // set a deliberate state.
+      // "none" so a subsequent scheduleScrollbackRestore call — e.g. a retry —
+      // picks the terminal up again. The post-start bail below is left alone:
+      // there, external code (destroy/done) already set a deliberate state.
       const resetIfStillQueued = () => {
-        if (
-          managed.scrollbackRestoreState === "pending" ||
-          managed.scrollbackRestoreState === "lazy-pending"
-        ) {
+        if (managed.scrollbackRestoreState === "pending") {
           managed.scrollbackRestoreState = "none";
-          // Bailed before starting (project switch mid-flight). The restore
-          // outcome is no longer relevant to this terminal in the new context,
-          // so unblock any fully-settle waiters that gated on it.
+          // Bailed before starting. The restore outcome is no longer relevant
+          // to this terminal, so unblock any fully-settle waiters that gated
+          // on it.
           terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
           notifyRestoreListeners();
         }
@@ -78,10 +61,7 @@ export function scheduleScrollbackRestore(
         resetIfStillQueued();
         return;
       }
-      if (
-        managed.scrollbackRestoreState !== "pending" &&
-        managed.scrollbackRestoreState !== "lazy-pending"
-      ) {
+      if (managed.scrollbackRestoreState !== "pending") {
         return;
       }
 
@@ -125,13 +105,7 @@ export function scheduleScrollbackRestore(
       }
     };
 
-    if (willLazyRegister) {
-      const disposable = registerLazyScrollRestore(managed, doRestore);
-      managed.scrollbackRestoreDisposable = disposable;
-      managed.listeners.push(() => disposable.dispose());
-    } else {
-      scheduleBackgroundFetchAndRestore(doRestore);
-    }
+    scheduleBackgroundFetchAndRestore(doRestore);
   }
 
   // One notify for the whole batch of initial transitions above — the
@@ -159,7 +133,7 @@ export function retryFailedScrollbackRestoreBatch(failedTerminalIds: string[]): 
     retryTasks.push(task);
   }
   if (retryTasks.length === 0) return;
-  scheduleScrollbackRestore(retryTasks, () => true, "background");
+  scheduleScrollbackRestore(retryTasks, () => true);
 }
 
 /** Clear the captured retry tasks. Exported for test isolation and teardown. */

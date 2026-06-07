@@ -107,29 +107,25 @@ export function useAppHydration(
 
     const restoreState = async () => {
       try {
-        await hydrateAppState(
-          {
-            addPanel: ((opts: Record<string, unknown>) =>
-              addPanel({ ...opts, bypassLimits: true } as Parameters<
-                typeof addPanel
-              >[0])) as HydrationOptions["addPanel"],
-            setActiveWorktree,
-            loadRecipes,
-            openDiagnosticsDock,
-            setFocusMode,
-            setReconnectError,
-            hydrateTabGroups,
-            restoreTerminalOrder,
-            hydrateMru,
-            hydrateActionMru,
-            hydrateActionPrefs,
-            beginHydrationBatch,
-            flushHydrationBatch,
-          },
-          undefined,
-          undefined,
-          prefetchedHydrateResult ?? undefined
-        );
+        await hydrateAppState({
+          addPanel: ((opts: Record<string, unknown>) =>
+            addPanel({ ...opts, bypassLimits: true } as Parameters<
+              typeof addPanel
+            >[0])) as HydrationOptions["addPanel"],
+          setActiveWorktree,
+          loadRecipes,
+          openDiagnosticsDock,
+          setFocusMode,
+          setReconnectError,
+          hydrateTabGroups,
+          restoreTerminalOrder,
+          hydrateMru,
+          hydrateActionMru,
+          hydrateActionPrefs,
+          beginHydrationBatch,
+          flushHydrationBatch,
+          prefetchedHydrateResult: prefetchedHydrateResult ?? undefined,
+        });
 
         // Pick an initial focused panel now that hydration is done. The legacy
         // path set focus opportunistically inside `panelStore.addPanel` on every

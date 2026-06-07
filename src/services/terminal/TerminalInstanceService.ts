@@ -2840,10 +2840,6 @@ class TerminalInstanceService {
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
 
-    if (managed.scrollbackRestoreDisposable) {
-      managed.scrollbackRestoreDisposable.dispose();
-      managed.scrollbackRestoreDisposable = undefined;
-    }
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);

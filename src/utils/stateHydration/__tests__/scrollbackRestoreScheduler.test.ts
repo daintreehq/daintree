@@ -33,7 +33,6 @@ vi.mock("@/store", () => ({
 }));
 
 const scheduleBackgroundFetchAndRestoreMock = vi.fn();
-const registerLazyScrollRestoreMock = vi.fn();
 
 vi.mock("../batchScheduler", async () => {
   const actual = await vi.importActual<typeof import("../batchScheduler")>("../batchScheduler");
@@ -41,8 +40,6 @@ vi.mock("../batchScheduler", async () => {
     ...actual,
     scheduleBackgroundFetchAndRestore: (fn: () => Promise<void>) =>
       scheduleBackgroundFetchAndRestoreMock(fn),
-    registerLazyScrollRestore: (managed: unknown, fn: () => Promise<void>) =>
-      registerLazyScrollRestoreMock(managed, fn),
   };
 });
 
@@ -61,7 +58,6 @@ interface FakeManaged {
   scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
   hostElement?: HTMLElement | null;
   listeners: Array<() => void>;
-  scrollbackRestoreDisposable?: { dispose: () => void };
   lastScrollbackRestoreError?: TerminalScrollbackRestoreError;
 }
 
@@ -76,7 +72,6 @@ beforeEach(() => {
   fetchAndRestoreMock.mockReset();
   getMock.mockReset();
   scheduleBackgroundFetchAndRestoreMock.mockReset();
-  registerLazyScrollRestoreMock.mockReset();
   setScrollbackRestoreErrorMock.mockReset();
   notifyRestoreSettledWaitersMock.mockReset();
   clearScrollbackRestoreErrorMock.mockReset();
@@ -93,31 +88,21 @@ describe("scheduleScrollbackRestore — gating", () => {
     getMock.mockReturnValue(undefined);
     scheduleScrollbackRestore(
       [{ terminalId: "missing", label: "x", location: "grid" }],
-      () => true,
-      "background"
+      () => true
     );
     expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
-    expect(registerLazyScrollRestoreMock).not.toHaveBeenCalled();
   });
 
   it("skips terminals whose scrollbackRestoreState is not 'none'", () => {
     getMock.mockReturnValue(fakeManaged("pending"));
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
   });
 
   it("transitions state from 'none' to 'pending' before scheduling", () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     expect(managed.scrollbackRestoreState).toBe("pending");
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
   });
@@ -129,11 +114,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockResolvedValue(undefined);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
 
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
     await getScheduledDoRestore()();
@@ -147,11 +128,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => false,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => false);
 
     await getScheduledDoRestore()();
 
@@ -166,11 +143,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     const original = fakeManaged("none");
     getMock.mockReturnValueOnce(original); // initial schedule call
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
 
     // Now simulate swap: get() returns a different object inside doRestore
     const replacement = fakeManaged("none");
@@ -187,22 +160,14 @@ describe("scheduleScrollbackRestore — background mode", () => {
     getMock.mockReturnValue(managed);
 
     // First call: isCurrent → false. doRestore bails and resets state.
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => false,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => false);
     await getScheduledDoRestore(0)();
     expect(managed.scrollbackRestoreState).toBe("none");
 
     // Second call (user navigated back): isCurrent → true. The entry guard
     // now passes because state was reset. fetchAndRestore should run.
     fetchAndRestoreMock.mockResolvedValue(undefined);
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(2);
     await getScheduledDoRestore(1)();
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
@@ -213,11 +178,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
 
     // External code re-set state away from pending before doRestore fires
     managed.scrollbackRestoreState = "done";
@@ -232,11 +193,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockRejectedValue(new Error("nope"));
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
 
     await getScheduledDoRestore()();
 
@@ -262,11 +219,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
       return false;
     });
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
 
     await getScheduledDoRestore()();
 
@@ -295,8 +248,7 @@ describe("scheduleScrollbackRestore — background mode", () => {
 
     scheduleScrollbackRestore(
       [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => currentFlag,
-      "background"
+      () => currentFlag
     );
 
     await getScheduledDoRestore()();
@@ -313,11 +265,7 @@ describe("scheduleScrollbackRestore — fully-settled notification", () => {
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockResolvedValue(undefined);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     await getScheduledDoRestore()();
 
     expect(managed.scrollbackRestoreState).toBe("done");
@@ -332,11 +280,7 @@ describe("scheduleScrollbackRestore — fully-settled notification", () => {
       return false;
     });
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     await getScheduledDoRestore()();
 
     expect(managed.scrollbackRestoreState).toBe("none");
@@ -348,11 +292,7 @@ describe("scheduleScrollbackRestore — fully-settled notification", () => {
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockRejectedValue(new Error("nope"));
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => true);
     await getScheduledDoRestore()();
 
     expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
@@ -362,132 +302,11 @@ describe("scheduleScrollbackRestore — fully-settled notification", () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => false,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "x", location: "grid" }], () => false);
     await getScheduledDoRestore()();
 
     expect(managed.scrollbackRestoreState).toBe("none");
     expect(notifyRestoreSettledWaitersMock).toHaveBeenCalledWith("t1");
-  });
-});
-
-describe("scheduleScrollbackRestore — lazy mode", () => {
-  it("registers lazy scroll restore when hostElement is present", () => {
-    const dispose = vi.fn();
-    registerLazyScrollRestoreMock.mockReturnValue({ dispose });
-
-    const managed = fakeManaged("none");
-    managed.hostElement = document.createElement("div");
-    getMock.mockReturnValue(managed);
-
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "lazy"
-    );
-
-    expect(registerLazyScrollRestoreMock).toHaveBeenCalledTimes(1);
-    expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
-    expect(managed.scrollbackRestoreDisposable).toEqual({ dispose });
-    expect(managed.listeners).toHaveLength(1);
-  });
-
-  it("falls back to background scheduling when hostElement is missing in lazy mode", () => {
-    const managed = fakeManaged("none");
-    managed.hostElement = null;
-    getMock.mockReturnValue(managed);
-
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "lazy"
-    );
-
-    expect(scheduleBackgroundFetchAndRestoreMock).toHaveBeenCalledTimes(1);
-    expect(registerLazyScrollRestoreMock).not.toHaveBeenCalled();
-  });
-
-  it("marks a lazy-registered terminal as 'lazy-pending' (excluded from the progress aggregate)", () => {
-    registerLazyScrollRestoreMock.mockReturnValue({ dispose: vi.fn() });
-    const managed = fakeManaged("none");
-    managed.hostElement = document.createElement("div");
-    getMock.mockReturnValue(managed);
-
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "lazy"
-    );
-
-    expect(managed.scrollbackRestoreState).toBe("lazy-pending");
-  });
-
-  it("a lazy doRestore transitions lazy-pending → in-progress → done when its trigger fires", async () => {
-    let lazyDoRestore: () => Promise<void> = async () => {};
-    registerLazyScrollRestoreMock.mockImplementation((_managed, fn: () => Promise<void>) => {
-      lazyDoRestore = fn;
-      return { dispose: vi.fn() };
-    });
-    const managed = fakeManaged("none");
-    managed.hostElement = document.createElement("div");
-    getMock.mockReturnValue(managed);
-    fetchAndRestoreMock.mockResolvedValue(undefined);
-
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "lazy"
-    );
-    expect(managed.scrollbackRestoreState).toBe("lazy-pending");
-
-    await lazyDoRestore();
-    expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1");
-    expect(managed.scrollbackRestoreState).toBe("done");
-  });
-
-  it("a lazy-pending terminal that bails (stale) resets to 'none'", async () => {
-    let lazyDoRestore: () => Promise<void> = async () => {};
-    registerLazyScrollRestoreMock.mockImplementation((_managed, fn: () => Promise<void>) => {
-      lazyDoRestore = fn;
-      return { dispose: vi.fn() };
-    });
-    const managed = fakeManaged("none");
-    managed.hostElement = document.createElement("div");
-    getMock.mockReturnValue(managed);
-
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => false, // stale: project switched before the user scrolled
-      "lazy"
-    );
-    expect(managed.scrollbackRestoreState).toBe("lazy-pending");
-
-    await lazyDoRestore();
-    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
-    expect(managed.scrollbackRestoreState).toBe("none");
-  });
-
-  it("registered listener cleanup invokes the disposable.dispose()", () => {
-    const dispose = vi.fn();
-    registerLazyScrollRestoreMock.mockReturnValue({ dispose });
-
-    const managed = fakeManaged("none");
-    managed.hostElement = document.createElement("div");
-    getMock.mockReturnValue(managed);
-
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "x", location: "grid" }],
-      () => true,
-      "lazy"
-    );
-
-    // Invoke the cleanup the scheduler pushed onto listeners[]
-    const cleanup = managed.listeners[0]!;
-    cleanup();
-    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -499,8 +318,7 @@ describe("scheduleScrollbackRestore — listener notifications", () => {
         { terminalId: "t1", label: "a", location: "grid" },
         { terminalId: "t2", label: "b", location: "grid" },
       ],
-      () => true,
-      "background"
+      () => true
     );
     // A single batch notify for the two pending transitions, not one per task.
     expect(notifyScrollbackRestoreListenersMock).toHaveBeenCalledTimes(1);
@@ -508,11 +326,7 @@ describe("scheduleScrollbackRestore — listener notifications", () => {
 
   it("does not notify when no task passes the schedule gate", () => {
     getMock.mockReturnValue(fakeManaged("done"));
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "a", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "a", location: "grid" }], () => true);
     expect(notifyScrollbackRestoreListenersMock).not.toHaveBeenCalled();
   });
 
@@ -521,11 +335,7 @@ describe("scheduleScrollbackRestore — listener notifications", () => {
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockResolvedValue(undefined);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "a", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "a", location: "grid" }], () => true);
     notifyScrollbackRestoreListenersMock.mockClear(); // drop the pending-batch notify
 
     await getScheduledDoRestore()();
@@ -543,11 +353,7 @@ describe("scheduleScrollbackRestore — listener notifications", () => {
       return false;
     });
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "a", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "a", location: "grid" }], () => true);
     notifyScrollbackRestoreListenersMock.mockClear();
 
     await getScheduledDoRestore()();
@@ -570,8 +376,7 @@ describe("retryFailedScrollbackRestoreBatch", () => {
     // Original schedule captures the task, then fails (state resets to "none").
     scheduleScrollbackRestore(
       [{ terminalId: "t1", label: "first", location: "grid", worktreeId: "wt-1" }],
-      () => true,
-      "background"
+      () => true
     );
     await getScheduledDoRestore(0)();
     expect(managed.scrollbackRestoreState).toBe("none");
@@ -606,11 +411,7 @@ describe("retryFailedScrollbackRestoreBatch", () => {
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockResolvedValue(undefined);
 
-    scheduleScrollbackRestore(
-      [{ terminalId: "t1", label: "a", location: "grid" }],
-      () => true,
-      "background"
-    );
+    scheduleScrollbackRestore([{ terminalId: "t1", label: "a", location: "grid" }], () => true);
     // Task captured but terminal is now "done" — a spurious retry must no-op.
     await getScheduledDoRestore(0)();
     expect(managed.scrollbackRestoreState).toBe("done");
