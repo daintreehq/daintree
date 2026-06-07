@@ -162,6 +162,60 @@ describe("WorkspaceService WSL eligibility refresh (#9924)", () => {
     expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
   });
 
+  it("discards an in-flight reprobe when the poller is stopped (project switch) (#9924)", async () => {
+    const { ubuntu, debian } = seedMonitors();
+    let resolveProbe!: (v: string | null) => void;
+    getDefaultWslDistroMock.mockReturnValue(
+      new Promise<string | null>((r) => {
+        resolveProbe = r;
+      })
+    );
+
+    const pending = service.reprobeWslForWorktree("ubuntu-wt");
+    // Target shows the pending state synchronously, before the probe resolves.
+    expect(ubuntu.setWslEligible).toHaveBeenCalledWith("unprobed");
+    ubuntu.setWslEligible.mockClear();
+    debian.setWslEligible.mockClear();
+
+    // A project switch (or dispose) bumps the probe sequence, invalidating the
+    // in-flight probe so its late resolution can't touch the monitor map.
+    (service as unknown as { stopWslDistroPoller(): void }).stopWslDistroPoller();
+
+    resolveProbe("Debian");
+    await pending;
+
+    expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
+    expect(debian.setWslEligible).not.toHaveBeenCalled();
+  });
+
+  it("a superseded probe never overwrites a newer probe's result (#9924)", async () => {
+    const { ubuntu } = seedMonitors();
+    service["wslLastKnownDefaultDistro"] = "Debian";
+
+    // First probe (a slow poll tick) is held open and will return a stale value.
+    let resolveSlow!: (v: string | null) => void;
+    getDefaultWslDistroMock.mockReturnValueOnce(
+      new Promise<string | null>((r) => {
+        resolveSlow = r;
+      })
+    );
+    const slowPoll = (
+      service as unknown as { pollWslDefaultDistro(): Promise<void> }
+    ).pollWslDefaultDistro();
+
+    // A reprobe initiated afterwards resolves first with the fresh value.
+    getDefaultWslDistroMock.mockResolvedValueOnce("Debian");
+    await service.reprobeWslForWorktree("ubuntu-wt");
+    expect(ubuntu.setWslEligible).toHaveBeenLastCalledWith("ineligible");
+
+    ubuntu.setWslEligible.mockClear();
+    // The older poll finally resolves with a stale distro — it must be ignored.
+    resolveSlow("Ubuntu");
+    await slowPoll;
+    expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
+    expect(service["wslLastKnownDefaultDistro"]).toBe("Debian");
+  });
+
   it("the background poll refreshes monitors only when the default distro changes", async () => {
     const { ubuntu, debian } = seedMonitors();
     service["wslLastKnownDefaultDistro"] = "Ubuntu";

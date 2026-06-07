@@ -17,6 +17,12 @@ const BANNER_SHELL = cn(
   "flex items-start gap-3 text-sm"
 );
 
+// If the probe hasn't resolved this long, treat the skeleton as stuck (WSL
+// unavailable / probe failed upstream) and surface a manual Re-check so the
+// user isn't stranded staring at a perpetual skeleton. Mirrors the ">5s →
+// persistent skeleton + recovery" tier of the loading-indicator rules.
+const WSL_PROBE_STUCK_MS = 5000;
+
 /**
  * Inline banner shown on WSL-mounted worktrees suggesting the user route git
  * through `wsl git` to avoid the 9P boundary slowdown. Three states driven by
@@ -45,10 +51,9 @@ export const WslGitBanner = React.memo(function WslGitBanner({
 
   // Treat a missing value as "unprobed" — older snapshots predate the field.
   const eligibility: WslGitEligibility = wslGitEligible ?? "unprobed";
-  const showProbeSkeleton = useDeferredLoading(
-    eligibility === "unprobed" && !reprobeFailed,
-    UI_DOHERTY_THRESHOLD
-  );
+  const probePending = eligibility === "unprobed" && !reprobeFailed;
+  const showProbeSkeleton = useDeferredLoading(probePending, UI_DOHERTY_THRESHOLD);
+  const probeStuck = useDeferredLoading(probePending, WSL_PROBE_STUCK_MS);
 
   const handleEnable = useCallback(async () => {
     if (busy) return;
@@ -130,9 +135,10 @@ export const WslGitBanner = React.memo(function WslGitBanner({
   }
 
   if (eligibility === "unprobed") {
-    // Probe hasn't resolved. Stay silent under the Doherty gate unless the
-    // probe genuinely failed, in which case offer a re-check.
-    if (reprobeFailed) {
+    // Probe hasn't resolved. A user-initiated re-check that errored, or a probe
+    // stuck past the threshold (WSL unavailable), both surface a recovery
+    // affordance so the user is never stranded on a perpetual skeleton.
+    if (reprobeFailed || probeStuck) {
       return (
         <div role="status" className={BANNER_SHELL}>
           <div className="flex-1">
@@ -152,7 +158,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
               "disabled:cursor-not-allowed disabled:opacity-60"
             )}
           >
-            Retry
+            {reprobing ? "Re-checking…" : "Re-check"}
           </button>
         </div>
       );

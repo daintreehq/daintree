@@ -150,6 +150,12 @@ export class WorkspaceService {
   private wslLastKnownDefaultDistro: string | null | undefined = undefined;
   /** Background poll handle that watches for WSL default-distro changes. */
   private wslDistroPoller: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Monotonic guard so a slow probe (poll or reprobe) that resolves after a
+   * newer probe — or after a project switch — discards its stale result instead
+   * of overwriting fresher state or refreshing the next project's monitors.
+   */
+  private wslProbeSeq = 0;
   /** How often to re-check the WSL default distro (Windows only). */
   private static readonly WSL_DISTRO_POLL_INTERVAL_MS = 60_000;
 
@@ -797,10 +803,34 @@ export class WorkspaceService {
 
   /** Stop the WSL distro watcher (project switch / dispose). */
   private stopWslDistroPoller(): void {
+    // Bump the sequence so any in-flight probe (poll or reprobe) sees itself
+    // superseded and bails before mutating state — otherwise a probe awaiting
+    // across a project switch could refresh the next project's monitors with
+    // this project's distro.
+    this.wslProbeSeq++;
     if (this.wslDistroPoller) {
       clearInterval(this.wslDistroPoller);
       this.wslDistroPoller = null;
     }
+  }
+
+  /**
+   * Probe the default distro under a sequence guard. Returns whether this probe
+   * is still the most recent one — a later probe (concurrent reprobe, or a
+   * project switch via `stopWslDistroPoller`) supersedes an earlier one so the
+   * stale result is discarded rather than overwriting fresher state.
+   */
+  private async probeDefaultDistro(): Promise<{ distro: string | null; current: boolean }> {
+    const seq = ++this.wslProbeSeq;
+    const distro = await getDefaultWslDistro().catch(() => null);
+    return { distro, current: seq === this.wslProbeSeq };
+  }
+
+  /** Commit a fresh probe result to the cache and fan it out to all monitors. */
+  private applyDefaultDistro(distro: string | null): void {
+    this.wslLastKnownDefaultDistro = distro;
+    this.wslDefaultDistroPromise = Promise.resolve(distro);
+    this.refreshWslEligibilityForAllMonitors(distro);
   }
 
   /**
@@ -809,11 +839,10 @@ export class WorkspaceService {
    * stop using a stale decision.
    */
   private async pollWslDefaultDistro(): Promise<void> {
-    const current = await getDefaultWslDistro().catch(() => null);
-    if (current === this.wslLastKnownDefaultDistro) return;
-    this.wslLastKnownDefaultDistro = current;
-    this.wslDefaultDistroPromise = Promise.resolve(current);
-    this.refreshWslEligibilityForAllMonitors(current);
+    const { distro, current } = await this.probeDefaultDistro();
+    if (!current) return;
+    if (distro === this.wslLastKnownDefaultDistro) return;
+    this.applyDefaultDistro(distro);
   }
 
   /**
@@ -838,10 +867,9 @@ export class WorkspaceService {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor || !monitor.isWslPath) return;
     monitor.setWslEligible("unprobed");
-    const current = await getDefaultWslDistro().catch(() => null);
-    this.wslLastKnownDefaultDistro = current;
-    this.wslDefaultDistroPromise = Promise.resolve(current);
-    this.refreshWslEligibilityForAllMonitors(current);
+    const { distro, current } = await this.probeDefaultDistro();
+    if (!current) return;
+    this.applyDefaultDistro(distro);
   }
 
   /**
