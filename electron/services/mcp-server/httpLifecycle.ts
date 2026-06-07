@@ -1539,6 +1539,26 @@ export class HttpLifecycle {
   }
 
   /**
+   * Drop the per-`(sessionId, toolId)` denial counters for a session without
+   * touching its grants. Called when the user dismisses the tier-mismatch
+   * banner (Cancel) so the next out-of-tier call re-shows the banner instead
+   * of being silently suppressed by the abuse policy after the denial
+   * threshold. Caller-pin checked identically to {@link revokeSessionGrants};
+   * a drained session is an idempotent no-op so the renderer's dismissal
+   * cleanup always succeeds.
+   */
+  resetDenialCounts(sessionId: string, callerWcId?: number): void {
+    if (!sessionId || typeof sessionId !== "string") {
+      throw new Error("Invalid sessionId");
+    }
+    const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+    if (pinnedWcId !== undefined && callerWcId !== undefined && callerWcId !== pinnedWcId) {
+      throw new Error("Caller is not the pinned renderer for this session");
+    }
+    this.deps.sessionStore.grantCache.clearDenialCounts(sessionId);
+  }
+
+  /**
    * Snapshot the externally-connected clients for the disable-confirmation
    * dialog (#8779). Empty when the server isn't listening.
    */

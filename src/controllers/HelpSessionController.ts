@@ -101,6 +101,19 @@ export interface LaunchErrorState {
 }
 
 /**
+ * A help-session the abuse policy revoked after the denial threshold was
+ * exceeded (#10017). Surfaced as an inline error banner so the user learns
+ * why the session stopped responding and can start a fresh one — without this
+ * the session dies silently. `denialKind` records what tripped the policy
+ * (`"auth401"`, `"tierMismatch"`, …) for diagnostics; the banner copy stays
+ * jargon-free.
+ */
+export interface SessionRevokedState {
+  sessionId: string;
+  denialKind: string;
+}
+
+/**
  * Live MCP tool-call activity for the Assistant panel's ambient activity strip
  * (#9759). One row at a time: an in-flight call (tool id + args + elapsed) that
  * settles to a dimmed glyph + duration. Bursts within the same turn coalesce to
@@ -154,6 +167,8 @@ export interface HelpSessionSnapshot {
   launchError: LaunchErrorState | null;
   /** Live MCP tool-call activity for the ambient strip (#9759); null when idle. */
   mcpActivity: McpToolActivityState | null;
+  /** Set when the abuse policy revoked the active session (#10017); null otherwise. */
+  sessionRevoked: SessionRevokedState | null;
 }
 
 export interface HelpProjectRef {
@@ -461,6 +476,7 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   isCheckingVersion: false,
   launchError: null,
   mcpActivity: null,
+  sessionRevoked: null,
 });
 
 /**
@@ -557,6 +573,21 @@ export class HelpSessionController {
       });
     });
     this._disposers.push(disposeTier);
+
+    const disposeRevoked = window.electron.mcpServer.onSessionRevoked((payload) => {
+      // Only surface a revoke that matches the session this panel currently
+      // holds. A live session always has its id committed to the store before
+      // any tool call (and thus before any denial/revoke), so a null or
+      // mismatched `sessionId` here means the revoke is for a torn-down or
+      // mid-relaunch session — painting its banner would stomp the fresh
+      // launch the user just started to escape it (#10017).
+      const currentSessionId = useHelpPanelStore.getState().sessionId;
+      if (currentSessionId === null || payload.sessionId !== currentSessionId) return;
+      this._patch({
+        sessionRevoked: { sessionId: payload.sessionId, denialKind: payload.denialKind },
+      });
+    });
+    this._disposers.push(disposeRevoked);
 
     const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
       this._onToolCallStarted(payload);
@@ -791,6 +822,10 @@ export class HelpSessionController {
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
 
+    // A launch supersedes any revoked-session banner — the user is starting a
+    // fresh session, so the prior session's revocation no longer applies (#10017).
+    if (this._snapshot.sessionRevoked) this._patch({ sessionRevoked: null });
+
     // Snapshot the focused worktree/terminal synchronously before any await
     // so the session is pinned to what the user had focused at launch — the
     // HelpPanel footer chip surfaces this binding (#8772), and pinned tool
@@ -859,11 +894,29 @@ export class HelpSessionController {
   }
 
   dismissTierMismatch(): void {
+    // Capture the session before clearing the banner — `_patch` runs
+    // synchronously, so reading after would see a null `tierMismatch`.
+    const sessionId = this._snapshot.tierMismatch?.sessionId ?? null;
     this._patch({ tierMismatch: null });
+    if (!sessionId) return;
+    // Dismissing the banner without approving must re-arm it: reset the
+    // denial counters so the next out-of-tier call shows the banner again
+    // instead of being silently suppressed once the abuse policy threshold is
+    // crossed (#10017). This clears the counters for ALL tools in the session,
+    // not just the dismissed one — Cancel means "show me again for anything in
+    // this session"; the threshold re-accrues from zero per tool. Grants
+    // (the per-tool approval lifecycle) are left untouched.
+    safeFireAndForget(window.electron.mcpServer.resetDenialCounts({ sessionId }), {
+      context: "Help: reset denial counts on tier-mismatch dismiss",
+    });
   }
 
   dismissLaunchError(): void {
     this._patch({ launchError: null });
+  }
+
+  dismissSessionRevoked(): void {
+    this._patch({ sessionRevoked: null });
   }
 
   approveTierOnce(): void {
@@ -1167,7 +1220,8 @@ export class HelpSessionController {
       next.isApprovingTier === this._snapshot.isApprovingTier &&
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
       next.launchError === this._snapshot.launchError &&
-      next.mcpActivity === this._snapshot.mcpActivity
+      next.mcpActivity === this._snapshot.mcpActivity &&
+      next.sessionRevoked === this._snapshot.sessionRevoked
     ) {
       return;
     }

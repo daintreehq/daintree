@@ -258,6 +258,23 @@ export const mcpServerNamespace = defineIpcNamespace({
       },
       { withContext: true }
     ),
+    resetDenialCounts: op(
+      MCP_SERVER_METHOD_CHANNELS.resetDenialCounts,
+      async (ctx, payload: { sessionId: string }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { sessionId } = payload;
+        if (typeof sessionId !== "string" || !sessionId) {
+          throw new Error("Invalid sessionId");
+        }
+        const svc = await getMcpServerService();
+        // Same caller-pin invariant as `revokeSessionGrants` — only the
+        // renderer that minted the session can reset its denial counters.
+        svc.resetDenialCounts(sessionId, ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
     listActiveBearers: op(
       MCP_SERVER_METHOD_CHANNELS.listActiveBearers,
       async (): Promise<ActiveBearerRecord[]> => {

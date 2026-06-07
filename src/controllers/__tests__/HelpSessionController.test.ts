@@ -6,8 +6,10 @@ const {
   mockMcpOnToolCallStarted,
   mockMcpOnToolCallSettled,
   mockMcpOnDisplayImage,
+  mockMcpOnSessionRevoked,
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
+  mockMcpResetDenialCounts,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -15,6 +17,7 @@ const {
   toolStartedListeners,
   toolSettledListeners,
   displayImageListeners,
+  sessionRevokedListeners,
   helpPanelState,
   panelStoreState,
   projectStoreState,
@@ -23,6 +26,7 @@ const {
   mockMcpOnToolCallStarted: vi.fn(),
   mockMcpOnToolCallSettled: vi.fn(),
   mockMcpOnDisplayImage: vi.fn(),
+  mockMcpOnSessionRevoked: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
   mockMcpIssueGrant: vi.fn().mockResolvedValue({
     sessionId: "",
@@ -30,6 +34,7 @@ const {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   }),
+  mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -40,6 +45,7 @@ const {
   toolStartedListeners: [] as Array<(payload: unknown) => void>,
   toolSettledListeners: [] as Array<(payload: unknown) => void>,
   displayImageListeners: [] as Array<(payload: unknown) => void>,
+  sessionRevokedListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
     isOpen: false,
     terminalId: null as string | null,
@@ -135,6 +141,7 @@ beforeEach(() => {
   toolStartedListeners.length = 0;
   toolSettledListeners.length = 0;
   displayImageListeners.length = 0;
+  sessionRevokedListeners.length = 0;
 
   mockMcpOnTierNotPermitted.mockReset();
   mockMcpOnTierNotPermitted.mockImplementation((cb: (payload: unknown) => void) => {
@@ -168,6 +175,16 @@ beforeEach(() => {
       if (idx >= 0) displayImageListeners.splice(idx, 1);
     };
   });
+  mockMcpOnSessionRevoked.mockReset();
+  mockMcpOnSessionRevoked.mockImplementation((cb: (payload: unknown) => void) => {
+    sessionRevokedListeners.push(cb);
+    return () => {
+      const idx = sessionRevokedListeners.indexOf(cb);
+      if (idx >= 0) sessionRevokedListeners.splice(idx, 1);
+    };
+  });
+  mockMcpResetDenialCounts.mockReset();
+  mockMcpResetDenialCounts.mockResolvedValue(undefined);
   mockMcpSetSessionTier.mockReset();
   mockMcpSetSessionTier.mockResolvedValue(undefined);
   mockMcpIssueGrant.mockReset();
@@ -221,8 +238,10 @@ beforeEach(() => {
           onToolCallStarted: mockMcpOnToolCallStarted,
           onToolCallSettled: mockMcpOnToolCallSettled,
           onDisplayImage: mockMcpOnDisplayImage,
+          onSessionRevoked: mockMcpOnSessionRevoked,
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
+          resetDenialCounts: mockMcpResetDenialCounts,
         },
         git: { snapshotGet: vi.fn().mockResolvedValue(null) },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
@@ -264,6 +283,7 @@ describe("HelpSessionController — lifecycle", () => {
     expect(toolStartedListeners).toHaveLength(1);
     expect(toolSettledListeners).toHaveLength(1);
     expect(displayImageListeners).toHaveLength(1);
+    expect(sessionRevokedListeners).toHaveLength(1);
     expect(systemSleepListeners.suspend).toHaveLength(1);
     expect(systemSleepListeners.wake).toHaveLength(1);
     ctrl.stop();
@@ -271,6 +291,7 @@ describe("HelpSessionController — lifecycle", () => {
     expect(toolStartedListeners).toHaveLength(0);
     expect(toolSettledListeners).toHaveLength(0);
     expect(displayImageListeners).toHaveLength(0);
+    expect(sessionRevokedListeners).toHaveLength(0);
     expect(systemSleepListeners.suspend).toHaveLength(0);
     expect(systemSleepListeners.wake).toHaveLength(0);
   });
@@ -294,6 +315,7 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     expect(snap.isCheckingVersion).toBe(false);
     expect(snap.launchError).toBeNull();
     expect(snap.mcpActivity).toBeNull();
+    expect(snap.sessionRevoked).toBeNull();
   });
 
   it("returns the same snapshot reference when no state changes (Object.is stable)", () => {
@@ -598,6 +620,118 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
     ctrl.dismissTierMismatch();
     expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    ctrl.stop();
+  });
+
+  it("dismissTierMismatch() resets the denial counter for the dismissed session (#10017)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    tierListeners[0]?.({
+      sessionId: "sess-9",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+    ctrl.dismissTierMismatch();
+    // Cancel must re-arm the banner by clearing the per-session denial
+    // counters in main — without this the next denial is silently suppressed.
+    expect(mockMcpResetDenialCounts).toHaveBeenCalledWith({ sessionId: "sess-9" });
+    ctrl.stop();
+  });
+
+  it("dismissTierMismatch() does not reset denial counts when no banner is showing", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl.dismissTierMismatch();
+    expect(mockMcpResetDenialCounts).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("dismissTierMismatch() clears the banner even if the denial-reset IPC rejects", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // Fire-and-forget: a rejected reset (e.g. caller-pin mismatch after a view
+    // rebind) must not throw or leave the banner stuck open.
+    mockMcpResetDenialCounts.mockRejectedValueOnce(new Error("not the pinned renderer"));
+    tierListeners[0]?.({
+      sessionId: "sess-r",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+    expect(() => ctrl.dismissTierMismatch()).not.toThrow();
+    expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    expect(mockMcpResetDenialCounts).toHaveBeenCalledWith({ sessionId: "sess-r" });
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — session revoked (#10017)", () => {
+  it("start() arms the session-revoked subscription", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    expect(mockMcpOnSessionRevoked).toHaveBeenCalledTimes(1);
+    ctrl.stop();
+  });
+
+  it("a session-revoked push surfaces the recovery banner", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.sessionId = "sess-live";
+    sessionRevokedListeners[0]?.({ sessionId: "sess-live", denialKind: "tierMismatch" });
+    expect(ctrl.getSnapshot().sessionRevoked).toEqual({
+      sessionId: "sess-live",
+      denialKind: "tierMismatch",
+    });
+    ctrl.stop();
+  });
+
+  it("ignores a revoke for a session the panel has already replaced", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.sessionId = "sess-current";
+    sessionRevokedListeners[0]?.({ sessionId: "sess-stale", denialKind: "auth401" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+    ctrl.stop();
+  });
+
+  it("ignores a revoke while no session is pinned (torn-down or mid-relaunch window)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // A null store sessionId means there is no live session to end — a revoke
+    // arriving now is for a session being torn down or replaced, and must not
+    // paint a banner over the fresh launch the user just started (#10017).
+    helpPanelState.sessionId = null;
+    sessionRevokedListeners[0]?.({ sessionId: "sess-old", denialKind: "tierMismatch" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+    ctrl.stop();
+  });
+
+  it("dismissSessionRevoked clears the banner", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-1", denialKind: "tierMismatch" } });
+    expect(ctrl.getSnapshot().sessionRevoked).not.toBeNull();
+    ctrl.dismissSessionRevoked();
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+  });
+
+  it("a launch supersedes any standing revoked-session banner", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_lastInputs"] = {
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "p1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    };
+    ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-old", denialKind: "tierMismatch" } });
+    expect(ctrl.getSnapshot().sessionRevoked).not.toBeNull();
+
+    ctrl.launch({ agentId: "claude" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
     ctrl.stop();
   });
 });

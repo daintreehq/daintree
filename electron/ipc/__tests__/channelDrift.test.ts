@@ -93,11 +93,6 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "telemetry:preview-subscribe",
   "telemetry:preview-unsubscribe",
 
-  // fire-and-forget — main→renderer push handled outside the typed event
-  // bus (httpLifecycle.ts uses `webContents.send`); the renderer surface is
-  // currently main-internal only.
-  "mcp-server:session-revoked",
-
   // fire-and-forget — renderer→main `ipcRenderer.send` for notification
   // bookkeeping (acknowledge/mute/sync paths in the notification store).
   "notification:session-mute-set",

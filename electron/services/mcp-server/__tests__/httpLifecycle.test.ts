@@ -76,6 +76,11 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       revokeSession: vi.fn(() => false),
       registerClientMetadata: vi.fn(),
       listExternalActiveClients: vi.fn(() => []),
+      grantCache: {
+        clearDenialCounts: vi.fn(),
+        revokeSession: vi.fn(() => 0),
+        issueGrant: vi.fn(),
+      },
     },
     auditService: {
       hydrate: vi.fn(),
@@ -435,6 +440,62 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.setSessionTier("", "system")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("resetDenialCounts (#10017)", () => {
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (
+        deps.sessionStore as unknown as {
+          grantCache: { clearDenialCounts: ReturnType<typeof vi.fn> };
+        }
+      ).grantCache;
+    }
+
+    it("clears the session's denial counters without revoking its grants", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.resetDenialCounts("sess-1");
+
+      expect(grantCacheOf(deps).clearDenialCounts).toHaveBeenCalledWith("sess-1");
+      // Resetting denials must NOT touch per-tool grants — those have their
+      // own approval lifecycle (#8442).
+      expect(deps.sessionStore.grantCache.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it("throws when the caller WebContents id doesn't match the pinned id", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-pin", 42);
+      const lc = new HttpLifecycle(deps);
+
+      expect(() => lc.resetDenialCounts("sess-pin", 99)).toThrow(/not the pinned renderer/);
+      expect(grantCacheOf(deps).clearDenialCounts).not.toHaveBeenCalled();
+    });
+
+    it("accepts the caller WebContents id when it matches the pinned id", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-ok", 42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.resetDenialCounts("sess-ok", 42);
+      expect(grantCacheOf(deps).clearDenialCounts).toHaveBeenCalledWith("sess-ok");
+    });
+
+    it("is an idempotent no-op for a drained session (no pin) so banner dismissal always succeeds", () => {
+      const deps = fakeDeps();
+      // No sessionWebContentsMap entry — session already drained.
+      const lc = new HttpLifecycle(deps);
+
+      expect(() => lc.resetDenialCounts("sess-gone", 99)).not.toThrow();
+      expect(grantCacheOf(deps).clearDenialCounts).toHaveBeenCalledWith("sess-gone");
+    });
+
+    it("throws for blank session ids", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
     });
   });
 

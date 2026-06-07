@@ -494,6 +494,15 @@ export class McpServerService {
   }
 
   /**
+   * Reset a session's denial counters without dropping its grants. Backs the
+   * tier-mismatch banner's Cancel path so a dismissed banner re-arms on the
+   * next out-of-tier call. Caller-pin checked.
+   */
+  resetDenialCounts(sessionId: string, callerWcId?: number): void {
+    this.httpLifecycle.resetDenialCounts(sessionId, callerWcId);
+  }
+
+  /**
    * Snapshot of the bearers currently connected to the local MCP server for
    * the settings tab. Raw tokens are never returned — only the display suffix
    * and the hash used to target {@link disconnectBearer}.

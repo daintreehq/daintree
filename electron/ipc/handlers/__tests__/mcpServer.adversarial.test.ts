@@ -33,11 +33,15 @@ const serviceMock = vi.hoisted(() => ({
   onRuntimeStateChange: vi.fn(() => () => {}),
   listActiveBearers: vi.fn(() => []),
   disconnectBearer: vi.fn((tokenHash: string) => ({ tokenHash, disconnected: true })),
+  resetDenialCounts: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   app: { getVersion: () => "0.0.0-test" },
+  // withContext handlers resolve the sender window via BrowserWindow —
+  // stub it so the context-bearing ops (resetDenialCounts) don't blow up.
+  BrowserWindow: { fromWebContents: () => null },
 }));
 vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: serviceMock }));
 
@@ -273,8 +277,38 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.disconnectBearer).toHaveBeenCalledWith(valid);
   });
 
-  it("cleanup removes all twenty-two registered handlers", () => {
-    expect(ipcHandlers.size).toBe(22);
+  const RESET_DENIAL_COUNTS_CHANNEL = "mcp-server:reset-denial-counts";
+
+  it("resetDenialCounts rejects a non-object payload", async () => {
+    for (const bad of [null, undefined, "s1", 42]) {
+      await expect(getHandler(RESET_DENIAL_COUNTS_CHANNEL)(fakeEvent(), bad)).rejects.toThrow(
+        /Invalid payload/
+      );
+    }
+    expect(serviceMock.resetDenialCounts).not.toHaveBeenCalled();
+  });
+
+  it("resetDenialCounts rejects an empty or non-string sessionId", async () => {
+    for (const sessionId of ["", 42, null, undefined]) {
+      await expect(
+        getHandler(RESET_DENIAL_COUNTS_CHANNEL)(fakeEvent(), { sessionId })
+      ).rejects.toThrow(/Invalid sessionId/);
+    }
+    expect(serviceMock.resetDenialCounts).not.toHaveBeenCalled();
+  });
+
+  it("resetDenialCounts forwards a valid sessionId to the service with the caller's webContents id", async () => {
+    const event = {
+      sender: { id: 77 } as Electron.WebContents,
+    } as Electron.IpcMainInvokeEvent;
+    await getHandler(RESET_DENIAL_COUNTS_CHANNEL)(event, { sessionId: "sess-7" });
+    // The caller-pin id must ride along so the service can reject a renderer
+    // that doesn't own the session.
+    expect(serviceMock.resetDenialCounts).toHaveBeenCalledWith("sess-7", 77);
+  });
+
+  it("cleanup removes all twenty-three registered handlers", () => {
+    expect(ipcHandlers.size).toBe(23);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });
