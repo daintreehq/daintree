@@ -1018,6 +1018,10 @@ export function DemoCursor() {
             const start = performance.now();
             let timer: ReturnType<typeof setTimeout>;
             let cleaned = false;
+            // The settle confirmation runs across a double-rAF gap. Any activity
+            // arriving inside that gap calls resetTimer(), which flips this flag
+            // so the in-flight rAF chain aborts instead of falsely resolving.
+            let rafCancelled = false;
             const demoOverlay = document.querySelector("[data-demo-overlay]");
 
             // Terminal output channel: subscribe to onWriteParsed on every live
@@ -1059,6 +1063,9 @@ export function DemoCursor() {
             function onVideoInactive(e: Event) {
               if (e.target instanceof HTMLVideoElement) {
                 activeVideos.delete(e.target);
+                // A video stopping is a state change — restart the settle window
+                // so idle requires settleMs of quiet *after* playback ceases.
+                resetTimer();
               }
             }
             document.addEventListener("playing", onVideoPlaying, true);
@@ -1071,7 +1078,13 @@ export function DemoCursor() {
               cleaned = true;
               clearTimeout(timer);
               observer.disconnect();
-              for (const d of terminalDisposables) d.dispose();
+              for (const d of terminalDisposables) {
+                try {
+                  d.dispose();
+                } catch {
+                  // A throwing dispose must not strand the remaining teardown.
+                }
+              }
               document.removeEventListener("playing", onVideoPlaying, true);
               document.removeEventListener("pause", onVideoInactive, true);
               document.removeEventListener("ended", onVideoInactive, true);
@@ -1102,15 +1115,25 @@ export function DemoCursor() {
                 return;
               }
 
+              // Drop videos that were removed from the DOM while playing without
+              // firing pause/ended (e.g. a React conditional unmount) — they
+              // would otherwise block idle until the timeout.
+              for (const v of activeVideos) {
+                if (!v.isConnected) activeVideos.delete(v);
+              }
+
               // A video still playing means the page is not idle yet.
               if (activeVideos.size > 0) {
                 resetTimer();
                 return;
               }
 
-              // Double rAF to ensure paint is complete
+              // Double rAF to ensure paint is complete. resetTimer() flips
+              // rafCancelled if activity arrives before the chain completes.
+              rafCancelled = false;
               requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
+                  if (rafCancelled) return;
                   cleanup();
                   resolve();
                 });
@@ -1118,6 +1141,7 @@ export function DemoCursor() {
             }
 
             function resetTimer() {
+              rafCancelled = true;
               if (performance.now() - start > timeoutMs) {
                 cleanup();
                 reject(new Error("waitForIdle timed out"));

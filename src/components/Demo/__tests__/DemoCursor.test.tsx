@@ -1464,6 +1464,54 @@ describe("DemoCursor", () => {
       }
     });
 
+    it("does not falsely resolve if a terminal writes during the double-rAF gap", async () => {
+      const term = makeTerminal();
+      registerTerminals({ "panel-1": term });
+
+      // Intercept rAF so activity can be injected between the two frames; hand
+      // control back to the real loop afterwards so the next cycle completes.
+      const rafQueue: FrameRequestCallback[] = [];
+      const realRaf = globalThis.requestAnimationFrame.bind(globalThis);
+      let intercept = true;
+      const rafSpy = vi
+        .spyOn(globalThis, "requestAnimationFrame")
+        .mockImplementation((cb: FrameRequestCallback) => {
+          if (!intercept) return realRaf(cb);
+          rafQueue.push(cb);
+          return rafQueue.length;
+        });
+      try {
+        render(<DemoCursor />);
+        emit("demo:exec-wait-for-idle", {
+          requestId: "req-raf-race",
+          settleMs: 20,
+          timeoutMs: 3000,
+        });
+
+        // Let the settle timer fire check() → it schedules the first rAF.
+        await new Promise((r) => setTimeout(r, 40));
+        expect(rafQueue.length).toBe(1);
+
+        // Run the first frame → schedules the inner frame.
+        rafQueue.shift()!(0);
+        expect(rafQueue.length).toBe(1);
+
+        // Activity lands inside the gap (the exact class of bug being fixed).
+        term.fireWrite();
+
+        // Run the inner frame → must abort instead of resolving.
+        rafQueue.shift()!(0);
+        expect(demoMock.sendCommandDone).not.toHaveBeenCalledWith("req-raf-race", undefined);
+
+        // Hand control back to the real loop; the next quiet cycle resolves.
+        intercept = false;
+        await new Promise((r) => setTimeout(r, 150));
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-raf-race", undefined);
+      } finally {
+        rafSpy.mockRestore();
+      }
+    });
+
     it("tears down terminal and video listeners on timeout", async () => {
       const term = makeTerminal();
       registerTerminals({ "panel-1": term });
