@@ -2265,7 +2265,7 @@ describe("ResourceGovernor", () => {
       // calls trimTerminalScrollback per id, swallowing per-terminal failures so a
       // stale id (terminal disposed mid-episode) can't break the reclaim for peers.
       const live = new Set(["t1"]); // t2 already gone by trim time
-      const trimTerminalScrollback = vi.fn((id: string) => live.has(id));
+      const trimTerminalScrollback = vi.fn((id: string, _targetLines: number) => live.has(id));
       const trimBuffersTargeted = vi.fn((targets: Map<string, number>) => {
         for (const [id, targetLines] of targets) {
           try {
