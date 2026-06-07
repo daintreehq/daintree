@@ -309,4 +309,71 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
       expect((clearCall![0] as { worktreeId: string }).worktreeId).toBe(TEST_WORKTREE_PATH);
     });
   });
+
+  describe("pruneStaleWslGitEntries bulk self-heal (review #1)", () => {
+    // The persisted `wslGitByWorktree` is a single global electron-store
+    // record. Loading project A would otherwise prune project B's valid
+    // opt-ins on every load/prewarm/restart. The bulk self-heal restricts
+    // the walk to keys whose path is rooted at this project's parent dir.
+    // Test the helper directly — going through full `loadProject` is too
+    // tied to mocked git/topology side effects.
+
+    it("does not emit clear-wsl-git-opt-in for keys belonging to other projects", () => {
+      // Current project is /test/root. The persisted map carries one live
+      // in-project entry and one foreign-project entry that would be
+      // silently erased by an un-scoped self-heal.
+      service["projectRootPath"] = "/test/root";
+      service["wslGitByWorktree"] = {
+        [TEST_WORKTREE_PATH]: { enabled: true, dismissed: false },
+        "/other-projects/repo/wt": { enabled: true, dismissed: false },
+      };
+
+      const liveWorktree = createTestWorktree({ id: TEST_WORKTREE_PATH });
+      service["pruneStaleWslGitEntries"]([liveWorktree]);
+
+      // Foreign key is left untouched in the in-memory mirror (and therefore
+      // no clear event is sent for it).
+      expect(service["wslGitByWorktree"]["/other-projects/repo/wt"]).toEqual({
+        enabled: true,
+        dismissed: false,
+      });
+      const clearCalls = mockSendEvent.mock.calls.filter(
+        ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
+      );
+      const clearWorktreeIds = clearCalls.map(
+        ([arg]) => (arg as { worktreeId: string }).worktreeId
+      );
+      expect(clearWorktreeIds).not.toContain("/other-projects/repo/wt");
+    });
+
+    it("does emit clear-wsl-git-opt-in for stale keys inside the current project", () => {
+      // The current project's parent dir is /test (parent of /test/root). A
+      // stale key under /test/root/.worktrees (a former worktree) must
+      // still be pruned.
+      const staleProjectKey = "/test/root/.worktrees/old-feature";
+      service["projectRootPath"] = "/test/root";
+      service["wslGitByWorktree"] = {
+        [TEST_WORKTREE_PATH]: { enabled: true, dismissed: false },
+        [staleProjectKey]: { enabled: true, dismissed: false },
+      };
+
+      const liveWorktree = createTestWorktree({ id: TEST_WORKTREE_PATH });
+      service["pruneStaleWslGitEntries"]([liveWorktree]);
+
+      // The stale in-project key is pruned; the live key stays.
+      expect(service["wslGitByWorktree"][staleProjectKey]).toBeUndefined();
+      expect(service["wslGitByWorktree"][TEST_WORKTREE_PATH]).toEqual({
+        enabled: true,
+        dismissed: false,
+      });
+
+      const clearCalls = mockSendEvent.mock.calls.filter(
+        ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
+      );
+      const clearWorktreeIds = clearCalls.map(
+        ([arg]) => (arg as { worktreeId: string }).worktreeId
+      );
+      expect(clearWorktreeIds).toContain(staleProjectKey);
+    });
+  });
 });

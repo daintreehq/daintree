@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
 import { stat, readFile, access, mkdir } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
+import { resolve as pathResolve, isAbsolute, dirname, basename, sep as pathSep } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
@@ -535,31 +535,21 @@ export class WorkspaceService {
         this.startPeriodicSafetyTimer();
       }
 
-      // Bulk self-heal of `wslGitByWorktree` (#9926). Main ships the full
-      // persisted map on `load-project` and the host merges it into its
-      // in-memory mirror at the top of this method — by this point, the live
-      // worktree set is authoritative (set by `syncMonitors` above). Any
-      // persisted key not present in the live set is from a worktree that
-      // no longer exists; emit one `clear-wsl-git-opt-in` per stale key so
-      // main drops the persistent entry. Fire-and-forget — the main-side
-      // prune is idempotent.
-      //
-      // Keys are compared raw (matching the `enrichWorktreeWithWsl` lookup
-      // shape). Legacy mixed-case persisted keys from before normalization
-      // are still pruned because main's `clearWslGitEntry` does a
-      // case-insensitive lookup on win32; any key not matched there becomes
-      // a future bulk-self-heal candidate once a live worktree with the
-      // canonical case lands.
-      const liveIds = new Set(worktrees.map((wt) => wt.id));
-      for (const key of Object.keys(this.wslGitByWorktree)) {
-        if (!liveIds.has(key)) {
-          delete this.wslGitByWorktree[key];
-          this.sendEvent({
-            type: "clear-wsl-git-opt-in",
-            worktreeId: key,
-          });
-        }
-      }
+      // Bulk self-heal of `wslGitByWorktree` (#9926, review #1). Main ships
+      // the *full global* persisted map on `load-project` and the host
+      // merges it into its in-memory mirror at the top of this method —
+      // by this point, the live worktree set is authoritative (set by
+      // `syncMonitors` above). The persisted map is single-instance
+      // (electron-store has no per-project key), so without project-scoping
+      // this self-heal would erase valid opt-ins for every other project on
+      // every load/prewarm/host-restart. The helper restricts the walk to
+      // keys whose path is rooted at this project's parent directory;
+      // foreign keys stay in the in-memory mirror for the duration of this
+      // load and are sent through to main untouched. The next load of the
+      // owning project picks them up.
+      this.pruneStaleWslGitEntries(worktrees);
+
+      this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
       this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
@@ -946,6 +936,37 @@ export class WorkspaceService {
       seq: this.nextSeq(),
     });
     events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
+  }
+
+  /**
+   * Bulk self-heal of `wslGitByWorktree` after `loadProject` lands the live
+   * worktree set (#9926, review #1). Walks the in-memory mirror and emits
+   * one `clear-wsl-git-opt-in` per key that (a) is not in the live set AND
+   * (b) is rooted under this project's parent directory. Foreign-project
+   * keys are left in the in-memory mirror for the duration of this load
+   * and never reach main — otherwise loading project A would silently
+   * erase project B's valid opt-ins from the global persisted map on every
+   * load/prewarm/host-restart. The next load of the owning project picks
+   * the foreign keys up and prunes them on that cycle.
+   */
+  private pruneStaleWslGitEntries(worktrees: Worktree[]): void {
+    const projectParent = this.projectRootPath ? pathResolve(this.projectRootPath, "..") : null;
+    const liveIds = new Set(worktrees.map((wt) => wt.id));
+    for (const key of Object.keys(this.wslGitByWorktree)) {
+      if (liveIds.has(key)) continue;
+      if (
+        projectParent &&
+        key !== this.projectRootPath &&
+        !key.startsWith(projectParent + pathSep)
+      ) {
+        continue;
+      }
+      delete this.wslGitByWorktree[key];
+      this.sendEvent({
+        type: "clear-wsl-git-opt-in",
+        worktreeId: key,
+      });
+    }
   }
 
   // --- Background git-watcher budget (LRU) ---
