@@ -105,11 +105,11 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       }
       backpressureManager.deletePauseStartTime(msg.id);
 
-      // Release backpressure hold via coordinator (respects other holds)
+      // Hold the backpressure pause until after serialization — resuming the
+      // PTY first lets bytes emitted in the gap land in both the snapshot and
+      // the live stream, duplicating them on replay (#9897). The resume
+      // happens in the finally below.
       const wakeCoordinator = getPauseCoordinator(msg.id);
-      if (wasPaused) {
-        wakeCoordinator?.resume("backpressure");
-      }
 
       // Apply active tier polling (50ms) when waking
       const terminal = ptyManager.getTerminal(msg.id);
@@ -117,7 +117,24 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         ptyManager.setActivityMonitorTier(msg.id, 50);
       }
 
-      // Best-effort warning: cwd missing
+      let state: string | null;
+      try {
+        state = await ptyManager.getSerializedStateAsync(msg.id);
+      } catch {
+        state = ptyManager.getSerializedState(msg.id);
+      } finally {
+        // Resume even when serialization throws so wake always unblocks the
+        // terminal (#9896). Reuses the coordinator captured above — the
+        // terminal may have been torn down during the await.
+        if (wasPaused) {
+          wakeCoordinator?.resume("backpressure");
+        }
+      }
+
+      const wakeLatencyMs = Date.now() - wakeStartTime;
+
+      // Best-effort warning: cwd missing. Runs after the resume so a slow
+      // stat (stale network mount) can't extend the pause window.
       const warnings: string[] = [];
       try {
         const t = ptyManager.getTerminal(msg.id);
@@ -130,15 +147,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       } catch {
         // ignore
       }
-
-      let state: string | null = null;
-      try {
-        state = await ptyManager.getSerializedStateAsync(msg.id);
-      } catch {
-        state = ptyManager.getSerializedState(msg.id);
-      }
-
-      const wakeLatencyMs = Date.now() - wakeStartTime;
 
       if (!wakeCoordinator?.isPaused) {
         backpressureManager.emitTerminalStatus(msg.id, "running");
