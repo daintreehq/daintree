@@ -859,6 +859,68 @@ describe("HelpSessionController — launch error routing", () => {
     ctrl.stop();
   });
 
+  it("surfaces the folder-unavailable banner when help folder path is null", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError?.kind).toBe("folder-unavailable");
+    });
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("surfaces a folder-unavailable toast with the installer-page action when panel is closed", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, false);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Assistant files missing",
+          action: expect.objectContaining({
+            label: "Open installer page",
+            actionId: "system.openExternal",
+            actionArgs: { url: "https://daintree.org/download" },
+          }),
+        })
+      );
+    });
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    // Toast body must not promise a Retry the click can't deliver, and must
+    // keep the same jargon-free contract the banner enforces.
+    const call = (notify as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) =>
+        typeof c[0] === "object" &&
+        c[0] !== null &&
+        (c[0] as { title?: string }).title === "Assistant files missing"
+    );
+    const payload = call?.[0] as { message: string; action: { onClick: () => void } };
+    expect(payload.message).not.toMatch(/Try again/i);
+    expect(payload.message).not.toMatch(/\bMCP\b/i);
+    expect(payload.message).not.toMatch(/\btoken\b/i);
+    expect(payload.message).not.toMatch(/\bbearer\b/i);
+    // Clicking the toast action must fire the same action the banner's
+    // Open installer page button does — locked to the same URL and source.
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockClear();
+    payload.action.onClick();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://daintree.org/download" },
+      { source: "user" }
+    );
+    ctrl.stop();
+  });
+
   it("dismissLaunchError clears the banner", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

@@ -424,6 +424,33 @@ function notifyAssistantServicesUnavailable(
   });
 }
 
+// Mirrors the `folder-unavailable` banner's primary recovery affordance on
+// the closed-panel toast. Single action keeps parity with the established
+// `notifyAssistantServicesUnavailable` shape; the secondary "Open logs" CTA
+// on the banner is reachable by reopening the panel.
+function notifyInstallCorrupted(agentId: string): void {
+  const cfg = getAgentConfig(agentId);
+  const name = cfg?.name ?? agentId;
+  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
+  notify({
+    type: "error",
+    title: "Assistant files missing",
+    message: `Couldn't start ${name}. Daintree's bundled assistant files are missing — reinstall or check the logs.`,
+    action: {
+      label: "Open installer page",
+      actionId: "system.openExternal",
+      actionArgs: { url: "https://daintree.org/download" },
+      onClick: () => {
+        void actionService.dispatch(
+          "system.openExternal",
+          { url: "https://daintree.org/download" },
+          { source: "user" }
+        );
+      },
+    },
+  });
+}
+
 const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   phase: "idle",
   showResumeBanner: false,
@@ -1031,7 +1058,7 @@ export class HelpSessionController {
     if (kind === "mcp-server-not-started" || kind === "mcp-probe-failed") {
       notifyAssistantServicesUnavailable(kind);
     } else if (kind === "folder-unavailable") {
-      notifyLaunchFailed(agentId, "Help folder is not available.");
+      notifyInstallCorrupted(agentId);
     } else {
       notifyLaunchFailed(agentId, "The agent didn't start. Try again.");
     }

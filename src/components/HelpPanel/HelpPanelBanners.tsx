@@ -14,7 +14,38 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
     "Daintree's assistant services didn't start. Check assistant settings, then try again.",
   "mcp-probe-failed": "Daintree's assistant services didn't respond in time. Try again.",
   "spawn-failed": "The agent didn't start. Try again.",
-  "folder-unavailable": "The assistant's files aren't available. Try again.",
+  "folder-unavailable":
+    "Daintree's bundled assistant files are missing. Reinstall Daintree or check the logs.",
+};
+
+// Per-kind recovery surface. `folder-unavailable` is non-retryable: the
+// resolver's module-scope cache returns the same null on retry, so the only
+// honest affordances are the installer page and the error log. `Retry` is
+// kept for the transient kinds (spawn/probe/server). The CTA handler is
+// resolved in the component from this discriminator — no callbacks in the
+// data, so the data stays serializable and easy to assert against.
+type LaunchErrorCtaHandler = "retry" | "settings" | "logs" | "installer";
+
+interface LaunchErrorCta {
+  label: string;
+  handler: LaunchErrorCtaHandler;
+  variant: "primary" | "secondary";
+}
+
+const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
+  "mcp-server-not-started": [
+    { label: "Retry", handler: "retry", variant: "primary" },
+    { label: "Open settings", handler: "settings", variant: "secondary" },
+  ],
+  "mcp-probe-failed": [
+    { label: "Retry", handler: "retry", variant: "primary" },
+    { label: "Open settings", handler: "settings", variant: "secondary" },
+  ],
+  "spawn-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
+  "folder-unavailable": [
+    { label: "Open logs", handler: "logs", variant: "secondary" },
+    { label: "Open installer page", handler: "installer", variant: "primary" },
+  ],
 };
 
 interface HelpPanelBannersProps {
@@ -31,6 +62,8 @@ interface HelpPanelBannersProps {
   onRetryLaunch: () => void;
   onDismissLaunchError: () => void;
   onOpenAssistantSettings: () => void;
+  onOpenLogs: () => void;
+  onOpenInstallerPage: () => void;
 }
 
 export function HelpPanelBanners({
@@ -47,6 +80,8 @@ export function HelpPanelBanners({
   onRetryLaunch,
   onDismissLaunchError,
   onOpenAssistantSettings,
+  onOpenLogs,
+  onOpenInstallerPage,
 }: HelpPanelBannersProps) {
   return (
     <>
@@ -208,32 +243,33 @@ export function HelpPanelBanners({
             </button>
           </div>
           <div className="flex items-center gap-2 flex-wrap pl-5">
-            <button
-              type="button"
-              onClick={onRetryLaunch}
-              className={cn(
-                "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                "bg-daintree-text/10 hover:bg-daintree-text/15 text-daintree-text",
-                "transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-              )}
-            >
-              Retry
-            </button>
-            {launchError.kind === "mcp-server-not-started" && (
-              <button
-                type="button"
-                onClick={onOpenAssistantSettings}
-                className={cn(
-                  "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                  "text-daintree-text/65 hover:text-daintree-text",
-                  "transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                )}
-              >
-                Open settings
-              </button>
-            )}
+            {LAUNCH_ERROR_CTAS[launchError.kind].map((cta) => {
+              const onClick =
+                cta.handler === "retry"
+                  ? onRetryLaunch
+                  : cta.handler === "settings"
+                    ? onOpenAssistantSettings
+                    : cta.handler === "logs"
+                      ? onOpenLogs
+                      : onOpenInstallerPage;
+              return (
+                <button
+                  key={cta.label}
+                  type="button"
+                  onClick={onClick}
+                  className={cn(
+                    "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
+                    cta.variant === "primary"
+                      ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-daintree-text"
+                      : "text-daintree-text/65 hover:text-daintree-text",
+                    "transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  )}
+                >
+                  {cta.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
