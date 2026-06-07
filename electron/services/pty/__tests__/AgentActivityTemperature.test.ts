@@ -59,6 +59,31 @@ describe("AgentActivityTemperature", () => {
     expect(result.temperature).toBeGreaterThanOrEqual(70);
   });
 
+  it("requires exactly two indicator samples once dwell is satisfied", () => {
+    // workingDwellMs: 0 isolates the sample-count gate from the dwell gate.
+    const model = new AgentActivityTemperature({ workingDwellMs: 0 });
+
+    const first = model.observeDelta(1000, { changedChars: 500, signalKind: "indicator" });
+    expect(first.stateHint).toBeUndefined();
+
+    const second = model.observeDelta(2000, { changedChars: 500, signalKind: "indicator" });
+    expect(second.stateHint).toBe("busy");
+  });
+
+  it("keeps accumulating at exactly the indicator gap but resets just beyond it", () => {
+    const atBoundary = new AgentActivityTemperature({ workingDwellMs: 0 });
+    atBoundary.observeDelta(1000, { changedChars: 500, signalKind: "indicator" });
+    // Gap of exactly 2000ms does not reset — second sample hints busy.
+    const kept = atBoundary.observeDelta(3000, { changedChars: 500, signalKind: "indicator" });
+    expect(kept.stateHint).toBe("busy");
+
+    const pastBoundary = new AgentActivityTemperature({ workingDwellMs: 0 });
+    pastBoundary.observeDelta(1000, { changedChars: 500, signalKind: "indicator" });
+    // Gap of 2001ms resets the evidence window — still only one sample.
+    const reset = pastBoundary.observeDelta(3001, { changedChars: 500, signalKind: "indicator" });
+    expect(reset.stateHint).toBeUndefined();
+  });
+
   it("does not recover for indicator changes spaced beyond the indicator gap", () => {
     const model = new AgentActivityTemperature();
 
