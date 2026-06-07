@@ -88,6 +88,27 @@ describe("AgentStateMachine replay harness", () => {
     expect(states[states.length - 1], formatRecorded(recorded)).toBe("waiting");
   });
 
+  it("injectRespawnOnExit:false keeps the FSM in `exited` after a cast `x` event", async () => {
+    // Symmetric coverage for the `injectRespawnOnExit` opt: the default
+    // (true) drives a synthetic exit → respawn pair so the post-exit
+    // output re-enters `working` via the natural busy path. With
+    // `injectRespawnOnExit: false` the FSM stays in `exited` and the
+    // post-exit output (the second Claude Code banner at 4.0s) cannot
+    // advance it. Guards against regressions in the exit/respawn
+    // injection logic — a future change that always respawns would
+    // silently break the "exited is terminal" contract.
+    const { cast } = fixture("claude-respawn");
+    const recorded = await replayCastFsm(cast, {
+      agentId: "claude",
+      settleMs: 6000,
+      injectRespawnOnExit: false,
+    });
+    const states = recorded.map((r) => r.state);
+    expect(states, formatRecorded(recorded)).toContain("exited");
+    expect(states, formatRecorded(recorded)).not.toContain("idle");
+    expect(states[states.length - 1], formatRecorded(recorded)).toBe("exited");
+  });
+
   describe.each([
     { name: "claude-watchdog-timeout", agentId: "claude", seed: 1 },
     { name: "claude-watchdog-timeout", agentId: "claude", seed: 2 },

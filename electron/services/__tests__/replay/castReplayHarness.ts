@@ -479,65 +479,89 @@ export async function replayCast(
   const rng = opts.fragmentation ? mulberry32(opts.fragmentation.seed) : null;
   const maxSplits = opts.fragmentation?.maxSplits ?? DEFAULT_FRAGMENT_MAX_SPLITS;
 
-  let currentMs = 0;
-  for (const event of cast.events) {
-    const delta = Math.max(0, event.absoluteMs - currentMs);
-    if (delta > 0) {
-      // Polling ordering: timers advance to the event timestamp BEFORE the event
-      // is written/dispatched. A polling tick scheduled exactly at `currentMs+N`
-      // therefore observes pre-event state — the new bytes land immediately
-      // afterward and the next tick sees them. Deterministic and matches how
-      // production polling is interleaved with PTY data callbacks.
-      vi.advanceTimersByTime(delta);
-      currentMs = event.absoluteMs;
-    }
-
-    if (event.kind === "o") {
-      const bytes = Buffer.from(event.data, "utf8");
-      const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
-      for (const fragment of fragments) {
-        if (fragment.length === 0) continue;
-        writeBytesToTerminal(term, fragment);
+  try {
+    let currentMs = 0;
+    for (const event of cast.events) {
+      const delta = Math.max(0, event.absoluteMs - currentMs);
+      if (delta > 0) {
+        // Polling ordering: timers advance to the event timestamp BEFORE the event
+        // is written/dispatched. A polling tick scheduled exactly at `currentMs+N`
+        // therefore observes pre-event state — the new bytes land immediately
+        // afterward and the next tick sees them. Deterministic and matches how
+        // production polling is interleaved with PTY data callbacks.
+        vi.advanceTimersByTime(delta);
+        currentMs = event.absoluteMs;
       }
-      // OSC 9;4 tap must run on the FULL reconstructed string so split
-      // introducers (chunked bytes) and BEL/ST terminators across chunk
-      // boundaries resolve correctly. The parser keeps its own carry buffer;
-      // passing the per-event string is equivalent to passing each fragment
-      // because the parser's matching logic is byte-stream oriented.
-      osc94Parser.feed(event.data, Date.now());
-      // Production calls `monitor.onData(chunk)` with the fully-decoded string
-      // from node-pty (which buffers partial UTF-8). Replay mirrors that
-      // contract: the monitor sees the whole event as one string, not the
-      // fragmented byte chunks. Fragmentation stresses xterm's parser only.
-      monitor.onData(event.data);
-    } else if (event.kind === "i") {
-      monitor.onInput(event.data);
-    } else if (event.kind === "r") {
-      const match = /^(\d+)x(\d+)$/.exec(event.data);
-      if (match) {
-        const newCols = Number(match[1]);
-        const newRows = Number(match[2]);
-        try {
-          term.resize(Math.max(1, newCols), Math.max(1, newRows));
-        } catch {
-          // Some xterm builds throw if dims unchanged — ignore.
+
+      if (event.kind === "o") {
+        const bytes = Buffer.from(event.data, "utf8");
+        const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
+        for (const fragment of fragments) {
+          if (fragment.length === 0) continue;
+          writeBytesToTerminal(term, fragment);
+          // Feed the OSC 9;4 parser per fragment when fragmenting so the
+          // parser's carry buffer exercises split-introducer and
+          // split-terminator handling across chunk boundaries — the
+          // production path is whole-event (node-pty delivers complete
+          // events), but the fragmented path must still match because
+          // xterm sees the byte chunks. The non-fragmented path passes
+          // the full event string below as a final feed; per-fragment
+          // feeds there would double-count. The double-feed is harmless
+          // (carry re-resolves the same payload) but redundant.
+          if (rng) {
+            osc94Parser.feed(fragment.toString("utf8"), Date.now());
+          }
         }
-        monitor.notifyResize();
+        // Production calls `monitor.onData(chunk)` with the fully-decoded string
+        // from node-pty (which buffers partial UTF-8). Replay mirrors that
+        // contract: the monitor sees the whole event as one string, not the
+        // fragmented byte chunks. Fragmentation stresses xterm's parser only.
+        monitor.onData(event.data);
+        // Final feed in the non-fragmented path — the per-fragment feed
+        // above is gated on `rng` to avoid double-counting in the whole-
+        // event case. Equivalent to TerminalProcess.handlePtyData's
+        // `osc94Parser.feed(data, now)` (line 1601) when `rng` is null.
+        if (!rng) {
+          osc94Parser.feed(event.data, Date.now());
+        }
+      } else if (event.kind === "i") {
+        monitor.onInput(event.data);
+      } else if (event.kind === "r") {
+        const match = /^(\d+)x(\d+)$/.exec(event.data);
+        if (match) {
+          const newCols = Number(match[1]);
+          const newRows = Number(match[2]);
+          try {
+            term.resize(Math.max(1, newCols), Math.max(1, newRows));
+          } catch {
+            // Some xterm builds throw if dims unchanged — ignore.
+          }
+          monitor.notifyResize();
+        }
       }
+      // Ignore "m" (markers) — they don't drive state. "x" (exit) is consumed by
+      // the FSM replay path (replayCastFsm) which drives synthetic exit/respawn
+      // events into AgentStateService — production wires these from PTY onExit.
     }
-    // Ignore "m" (markers) — they don't drive state. "x" (exit) is consumed by
-    // the FSM replay path (replayCastFsm) which drives synthetic exit/respawn
-    // events into AgentStateService — production wires these from PTY onExit.
-  }
 
-  const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
-  if (settleMs > 0) {
-    vi.advanceTimersByTime(settleMs);
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
+    if (settleMs > 0) {
+      vi.advanceTimersByTime(settleMs);
+    }
+  } finally {
+    // try/finally mirrors replayCastFsm (lines 874-879). Without it, a throw
+    // inside writeBytesToTerminal (xterm internals drift) or monitor.onData
+    // leaks: the OSC 9;4 parser's carry state, the headless terminal's
+    // internal parser, and ActivityMonitor's 5s setInterval (unref'd but
+    // still alive in the test worker's timer queue). In vitest --watch or
+    // repeated test runs, leaked intervals stack and corrupt subsequent
+    // fixtures' timing — claude-watchdog-timeout's 12s settle would collide
+    // with a prior fixture's leaked 5s watchdog tick, firing the watchdog
+    // early/late nondeterministically. Always release.
+    osc94Parser.reset();
+    monitor.dispose();
+    term.dispose();
   }
-
-  osc94Parser.reset();
-  monitor.dispose();
-  term.dispose();
   return recorded;
 }
 
@@ -653,7 +677,10 @@ export interface ExpectedFsmTransition {
   /** Optional invariant on the source state of the transition. */
   previousState?: AgentState;
   trigger?: AgentStateChangeTrigger;
-  /** Allowed delta when matched: |actual - expected| ≤ 0.01. */
+  /** Exact equality is asserted when matched. FSM confidences are hardcoded
+   *  semantic tiers at the call sites (`0.6` for watchdog-timeout, `1.0` for
+   *  exit/respawn, `0.85` for completion); a drift like `0.60 → 0.61`
+   *  should fail the test, not silently pass. */
   confidence?: number;
 }
 
@@ -931,8 +958,7 @@ export function matchFsmTransitions(
       if (got.state !== want.state) continue;
       if (want.previousState !== undefined && got.previousState !== want.previousState) continue;
       if (want.trigger !== undefined && got.trigger !== want.trigger) continue;
-      if (want.confidence !== undefined && Math.abs(got.confidence - want.confidence) > 0.01)
-        continue;
+      if (want.confidence !== undefined && got.confidence !== want.confidence) continue;
       foundIndex = j;
       break;
     }
