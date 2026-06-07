@@ -199,6 +199,30 @@ function clearAllPauseSources(terminalId: string): void {
   pausedTerminals.delete(terminalId);
 }
 
+/**
+ * Per-paused-terminal held duration, aggregated across SAB, IPC, and per-window
+ * MessagePort pause sources via the `pausedTerminals` map. A terminal is
+ * included as long as ANY source is still holding; the held duration uses the
+ * OLDEST start time across sources (the user-meaningful "how long has this been
+ * paused?" answer). Shared by the streaming `pause-duration-gauge` and the
+ * on-demand flow-control snapshot so both see the same authoritative durations —
+ * the live IPC/port paths keep their own start times outside
+ * `backpressureManager.pauseStartTimes` (which only the dead SAB path writes).
+ */
+function getPausedDurationsSnapshot(): Array<{ terminalId: string; heldDurationMs: number }> {
+  if (pausedTerminals.size === 0) return [];
+  const now = Date.now();
+  const out: Array<{ terminalId: string; heldDurationMs: number }> = [];
+  for (const [terminalId, sources] of pausedTerminals) {
+    let oldestStart = Number.POSITIVE_INFINITY;
+    for (const { startTime } of sources.values()) {
+      if (startTime < oldestStart) oldestStart = startTime;
+    }
+    out.push({ terminalId, heldDurationMs: Math.max(0, now - oldestStart) });
+  }
+  return out;
+}
+
 // Data-loss counter: closure-scoped accumulator of dropped-bytes and
 // drop-event counts since the last snapshot. The counter is incremented
 // unconditionally at the drop site so regression detection is observable
@@ -481,27 +505,7 @@ const resourceGovernor = new ResourceGovernor({
       pauseCount: backpressureManager.stats.pauseCount,
     };
   },
-  getPausedDurationsSnapshot: () => {
-    // Read from the closure-scoped `pausedTerminals` map. The map is
-    // maintained by `emitReliabilityMetricWithTracking` so every pause
-    // source (SAB, IPC, per-window port) contributes. A terminal is
-    // included as long as ANY source is still holding — multi-source
-    // attribution via the per-source `Set` means a `pause-end` from
-    // one path only clears that path's hold. The held duration uses
-    // the OLDEST start time across all sources, so the renderer sees
-    // the user-meaningful "how long has this been paused?" answer.
-    if (pausedTerminals.size === 0) return [];
-    const now = Date.now();
-    const out: Array<{ terminalId: string; heldDurationMs: number }> = [];
-    for (const [terminalId, sources] of pausedTerminals) {
-      let oldestStart = Number.POSITIVE_INFINITY;
-      for (const { startTime } of sources.values()) {
-        if (startTime < oldestStart) oldestStart = startTime;
-      }
-      out.push({ terminalId, heldDurationMs: Math.max(0, now - oldestStart) });
-    }
-    return out;
-  },
+  getPausedDurationsSnapshot,
   getQueueDepthSnapshot: () => {
     // Live IPC + per-window MessagePort paths only. The FUTURE_SAB path is
     // dead in production (SharedArrayBuffer is not supported in
@@ -1236,6 +1240,7 @@ const hostContext: HostContext = {
   tryReplayAndResume,
   resumePausedTerminal,
   createPortQueueManager,
+  getPausedDurationsSnapshot,
 };
 
 const dispatchMessage = createPtyHostMessageDispatcher(hostContext);

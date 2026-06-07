@@ -106,6 +106,24 @@ describe("BackpressureManager adversarial", () => {
     );
   });
 
+  it("counts every suspendVisualStream call in suspendCount even when the status transition dedupes", () => {
+    const coordinator = createCoordinator();
+    coordinators.set("term-1", coordinator);
+    const backpressure = manager();
+
+    backpressure.suspendVisualStream("term-1", "stalled", 90, 100);
+    backpressure.suspendVisualStream("term-1", "stalled again", 91, 200);
+
+    // suspendCount tracks calls, not state transitions...
+    expect(backpressure.stats.suspendCount).toBe(2);
+    // ...but the dedupe in emitTerminalStatus fires the "suspended" wire event
+    // only once (the terminal was already suspended on the second call).
+    const suspendedStatusEvents = sendEvent.mock.calls.filter(
+      (c) => c[0]?.type === "terminal-status" && c[0]?.status === "suspended"
+    );
+    expect(suspendedStatusEvents).toHaveLength(1);
+  });
+
   it("suppresses duplicate terminal-status events during concurrent pause and resume churn", () => {
     const backpressure = manager();
 

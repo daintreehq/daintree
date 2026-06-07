@@ -65,6 +65,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     tryReplayAndResume: vi.fn(),
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
+    getPausedDurationsSnapshot: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -83,17 +84,18 @@ function runSnapshot(ctx: HostContext): FlowControlSnapshot {
 }
 
 describe("get-flow-control-snapshot handler", () => {
-  it("unions terminal ids across status, suspended, pause-start, and coordinator maps", () => {
+  it("unions terminal ids across status, suspended, held-duration, and coordinator maps", () => {
     const ctx = makeCtx({
       backpressureManager: {
         terminalStatusesMap: new Map([["a", "running"]]),
         suspendedSet: new Set(["b"]),
-        pauseStartTimesMap: new Map([["c", 100]]),
-        getPauseStartTime: vi.fn((id: string) => (id === "c" ? 100 : undefined)),
         isSuspended: vi.fn((id: string) => id === "b"),
         getActivityTier: vi.fn(() => "active"),
         stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
       } as unknown as HostContext["backpressureManager"],
+      // "c" is known only to the cross-source held-duration map (live IPC/port
+      // pause path) — it must still surface in the union.
+      getPausedDurationsSnapshot: vi.fn(() => [{ terminalId: "c", heldDurationMs: 42 }]),
       pauseCoordinators: new Map([["d", {} as never]]),
     });
 
@@ -103,25 +105,68 @@ describe("get-flow-control-snapshot handler", () => {
     expect(ids).toEqual(["a", "b", "c", "d"]); // unioned and sorted
     expect(snapshot.terminals.find((t) => t.terminalId === "b")?.isSuspended).toBe(true);
     expect(snapshot.terminals.find((t) => t.terminalId === "a")?.flowStatus).toBe("running");
+    expect(snapshot.terminals.find((t) => t.terminalId === "c")?.pausedDurationMs).toBe(42);
   });
 
-  it("computes pausedDurationMs from the pause-start time and null when not paused", () => {
-    const now = Date.now();
+  it("reads pausedDurationMs from the cross-source held-duration snapshot, null otherwise", () => {
     const ctx = makeCtx({
       backpressureManager: {
-        terminalStatusesMap: new Map([["paused", "paused-backpressure"]]),
+        // "paused" holds an ipc-queue token but has NO entry in the SAB-only
+        // pauseStartTimes map; "running" is just streaming. Only the
+        // cross-source snapshot can supply the duration.
+        terminalStatusesMap: new Map([
+          ["paused", "paused-backpressure"],
+          ["running", "running"],
+        ]),
         suspendedSet: new Set(),
-        pauseStartTimesMap: new Map([["paused", now - 500]]),
-        getPauseStartTime: vi.fn((id: string) => (id === "paused" ? now - 500 : undefined)),
         isSuspended: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active"),
         stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
       } as unknown as HostContext["backpressureManager"],
+      getPausedDurationsSnapshot: vi.fn(() => [{ terminalId: "paused", heldDurationMs: 500 }]),
     });
 
     const snapshot = runSnapshot(ctx);
-    const paused = snapshot.terminals.find((t) => t.terminalId === "paused");
-    expect(paused?.pausedDurationMs).toBeGreaterThanOrEqual(500);
+    expect(snapshot.terminals.find((t) => t.terminalId === "paused")?.pausedDurationMs).toBe(500);
+    expect(snapshot.terminals.find((t) => t.terminalId === "running")?.pausedDurationMs).toBeNull();
+  });
+
+  it("isolates a throwing port queue manager so the snapshot still ships partial data", () => {
+    const goodConn = makePortConnection({
+      totalPendingBytes: 30,
+      perTerminal: [{ terminalId: "t1", pendingBytes: 30 }],
+    });
+    const badConn: RendererConnection = {
+      port: {} as RendererConnection["port"],
+      handler: vi.fn(),
+      portQueueManager: {
+        getQueueSnapshot: vi.fn(() => {
+          throw new Error("disposed connection");
+        }),
+      } as unknown as RendererConnection["portQueueManager"],
+      batcher: {} as RendererConnection["batcher"],
+    };
+    const ctx = makeCtx({
+      ipcQueueManager: {
+        getQueueSnapshot: vi.fn(() => ({
+          totalPendingBytes: 20,
+          perTerminal: [{ terminalId: "t0", pendingBytes: 20 }],
+        })),
+      } as unknown as HostContext["ipcQueueManager"],
+      rendererConnections: new Map([
+        [1, badConn],
+        [2, goodConn],
+      ]),
+    });
+
+    const snapshot = runSnapshot(ctx);
+
+    // The bad connection contributes nothing; IPC + the good connection stand.
+    expect(snapshot.totalPendingBytes).toBe(50);
+    expect(snapshot.queueDepth).toEqual([
+      { terminalId: "t0", layer: "ipc", pendingBytes: 20 },
+      { terminalId: "t1", layer: "port", pendingBytes: 30 },
+    ]);
   });
 
   it("includes sorted held tokens from the pause coordinator", () => {

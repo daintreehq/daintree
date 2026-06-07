@@ -56,6 +56,7 @@ function makeCtx(stateRef: {
     tryReplayAndResume: vi.fn(),
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
+    getPausedDurationsSnapshot: vi.fn(() => []),
   };
 }
 

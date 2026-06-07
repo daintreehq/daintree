@@ -19,6 +19,7 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
     pauseCoordinators,
     rendererConnections,
     getPauseCoordinator,
+    getPausedDurationsSnapshot,
     sendEvent,
   } = ctx;
 
@@ -26,24 +27,32 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
     "get-flow-control-snapshot": (msg) => {
       const now = Date.now();
 
+      // Authoritative held durations across SAB + live IPC/port pause sources.
+      // `backpressureManager.pauseStartTimes` only tracks the dead SAB path, so
+      // we read the cross-source snapshot instead — otherwise an IPC/port-paused
+      // terminal would report null even after being wedged for minutes.
+      const heldDurationById = new Map<string, number>();
+      for (const { terminalId, heldDurationMs } of getPausedDurationsSnapshot()) {
+        heldDurationById.set(terminalId, heldDurationMs);
+      }
+
       // Union every terminal id known to any flow-control map so a terminal
       // that is paused/suspended/held but has no recorded status still appears.
       const ids = new Set<string>();
       for (const id of backpressureManager.terminalStatusesMap.keys()) ids.add(id);
       for (const id of backpressureManager.suspendedSet) ids.add(id);
-      for (const id of backpressureManager.pauseStartTimesMap.keys()) ids.add(id);
+      for (const id of heldDurationById.keys()) ids.add(id);
       for (const id of pauseCoordinators.keys()) ids.add(id);
 
       const terminals: FlowControlTerminalSnapshot[] = [];
       for (const id of ids) {
-        const pauseStart = backpressureManager.getPauseStartTime(id);
         terminals.push({
           terminalId: id,
           flowStatus: backpressureManager.terminalStatusesMap.get(id) ?? null,
           heldTokens: Array.from(getPauseCoordinator(id)?.heldTokens ?? []).sort(),
           isSuspended: backpressureManager.isSuspended(id),
           activityTier: backpressureManager.getActivityTier(id),
-          pausedDurationMs: pauseStart !== undefined ? Math.max(0, now - pauseStart) : null,
+          pausedDurationMs: heldDurationById.get(id) ?? null,
         });
       }
       terminals.sort((a, b) => a.terminalId.localeCompare(b.terminalId));
@@ -60,10 +69,18 @@ export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
         if (pendingBytes > 0) queueDepth.push({ terminalId, layer: "ipc", pendingBytes });
       }
       for (const conn of rendererConnections.values()) {
-        const port = conn.portQueueManager.getQueueSnapshot();
-        totalPendingBytes += port.totalPendingBytes;
-        for (const { terminalId, pendingBytes } of port.perTerminal) {
-          if (pendingBytes > 0) queueDepth.push({ terminalId, layer: "port", pendingBytes });
+        // Isolate per-connection failures: a disposed/racing port queue manager
+        // must not abort the whole snapshot, which would surface to the main
+        // side as a 5s broker timeout returning an empty (no-pressure-looking)
+        // fallback rather than the partial data we did gather.
+        try {
+          const port = conn.portQueueManager.getQueueSnapshot();
+          totalPendingBytes += port.totalPendingBytes;
+          for (const { terminalId, pendingBytes } of port.perTerminal) {
+            if (pendingBytes > 0) queueDepth.push({ terminalId, layer: "port", pendingBytes });
+          }
+        } catch {
+          // Skip this connection's contribution; the rest of the snapshot stands.
         }
       }
 
