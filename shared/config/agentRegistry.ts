@@ -67,17 +67,19 @@ export interface AgentDetectionConfig {
   promptScanLineCount?: number;
 
   /**
-   * Activity debounce period in ms (default: 4000).
-   * Time to wait after last activity before transitioning to idle.
+   * Activity debounce period in ms — time to wait after last activity before
+   * transitioning to idle. `buildActivityMonitorOptions` floors this to
+   * AGENT_WAITING_QUIET_MS (8000) to prevent working↔waiting jitter during
+   * silent inter-tool-call gaps (#3606); sub-floor values are not honored.
+   * Omit to accept the 8000ms default.
    */
   debounceMs?: number;
 
   /**
-   * Minimum quiet-output ms before the prompt fast-path can fire (default: 3000).
-   * Lower values make the busy→idle transition snappier when a prompt is detected.
-   * Agents with deterministic completion markers (e.g. Cursor) can use shorter
-   * values; agents with silent inter-tool-call gaps (Claude/Codex) need the
-   * default to avoid working↔waiting jitter (Issue #3606).
+   * Minimum quiet-output ms before the prompt fast-path can fire.
+   * `buildActivityMonitorOptions` floors this to the effective idle debounce
+   * (>= AGENT_WAITING_QUIET_MS, 8000) for the same #3606 jitter guard —
+   * sub-floor values are not honored. Omit to accept the default.
    */
   promptFastPathMinQuietMs?: number;
 

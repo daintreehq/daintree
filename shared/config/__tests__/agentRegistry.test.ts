@@ -478,10 +478,10 @@ describe("mistral configuration", () => {
     }
   });
 
-  it("relies on prompt fast-path with the shared 6s waiting debounce", () => {
+  it("relies on prompt fast-path without a per-agent quiet override", () => {
     const detection = getAgentConfig("mistral")?.detection;
     expect(detection?.completionPatterns).toBeUndefined();
-    expect(detection?.promptFastPathMinQuietMs).toBe(6000);
+    expect(detection?.promptFastPathMinQuietMs).toBeUndefined();
   });
 
   it("ships the local-llamacpp preset as a labeled placeholder", () => {

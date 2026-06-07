@@ -90,7 +90,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
-    debounceMs: 6000,
   },
   resume: {
     kind: "rolling-history",

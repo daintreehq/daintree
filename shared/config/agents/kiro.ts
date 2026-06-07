@@ -79,7 +79,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
-    debounceMs: 6000,
   },
   // Kiro uses directory-based sessions: no session ID is emitted on quit
   // and `--resume` takes no argument. `project-scoped` skips the PTY host's
