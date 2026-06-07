@@ -19,6 +19,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, existsSync, statSync } from "fs";
+import { execFileSync } from "child_process";
+import ffmpegPath from "ffmpeg-static";
 import path from "path";
 import { launchApp, closeApp, mockOpenDialog, refreshActiveWindow } from "../helpers/launch";
 import { dismissTelemetryConsent } from "../helpers/project";
@@ -28,6 +30,28 @@ import { createBrushCmsRepo, type DemoRepo } from "../helpers/screenshotFixtures
 
 const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "demo");
 mkdirSync(OUTPUT_DIR, { recursive: true });
+
+/**
+ * Read a WebM's video-stream pixel dimensions by parsing ffmpeg's input-probe
+ * stderr. ffmpeg-static ships `ffmpeg` but not `ffprobe`; `ffmpeg -i <file>`
+ * with no output target exits non-zero yet prints the `Stream … Video: … WxH`
+ * line to stderr. Returns null if ffmpeg is unavailable or the line is absent
+ * (so the caller can skip rather than fail the whole reel build).
+ */
+function readVideoDimensions(filePath: string): { width: number; height: number } | null {
+  if (!ffmpegPath) return null;
+  let stderr = "";
+  try {
+    execFileSync(ffmpegPath, ["-hide_banner", "-i", filePath], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  } catch (err) {
+    stderr = String((err as { stderr?: Buffer | string }).stderr ?? "");
+  }
+  const match = stderr.match(/Video:.*?\b(\d+)x(\d+)\b/);
+  if (!match) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
 
 // Output resolution, UI zoom, and quality are env-configurable. Defaults to a
 // 4K master at NO zoom (1.0×) — the true desktop density, rendered crisp at 4K.
@@ -275,6 +299,36 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       console.log(`[demo-reel] wrote ${outputPath} (${(bytes / 1_000_000).toFixed(1)} MB)`);
       expect(result.stop.chunkCount).toBeGreaterThan(3);
       expect(bytes).toBeGreaterThan(10_000);
+
+      // Regression guard for #10152: the recorded frame must be pinned to the
+      // exact output preset, not the surface's native backing-store size.
+      // CAPTURE_W/H come from the resolution preset while the asserted values
+      // are parsed from the actual encoded file, so removing the applyConstraints
+      // pin (which would record at NATIVE_W/H = SCALE×LOGICAL) breaks this when
+      // native ≠ target. The pin is only load-bearing when those differ (e.g.
+      // 1440p: native 3840×2160 vs target 2560×1440); presets where native ==
+      // target (default 4k, 1080p) still assert correctness but can't catch a
+      // missing pin — log which case this run exercised so coverage is visible.
+      const NATIVE_W = LOGICAL_W * SCALE;
+      const NATIVE_H = LOGICAL_H * SCALE;
+      const pinLoadBearing = NATIVE_W !== CAPTURE_W || NATIVE_H !== CAPTURE_H;
+      console.log(
+        `[demo-reel] native ${NATIVE_W}×${NATIVE_H} → target ${CAPTURE_W}×${CAPTURE_H} ` +
+          `(pin ${pinLoadBearing ? "load-bearing — true regression guard" : "no-op for this preset"})`
+      );
+      const dims = readVideoDimensions(outputPath);
+      // When ffmpeg is available the check is mandatory — a parse failure must
+      // not silently skip the guard. Only skip when ffmpeg-static is absent.
+      if (ffmpegPath) {
+        expect(dims, "ffmpeg present but recorded dimensions could not be read").not.toBeNull();
+      }
+      if (dims) {
+        console.log(`[demo-reel] recorded dimensions ${dims.width}×${dims.height}`);
+        expect(dims.width).toBe(CAPTURE_W);
+        expect(dims.height).toBe(CAPTURE_H);
+      } else {
+        console.warn("[demo-reel] ffmpeg unavailable — skipped dimension assertion");
+      }
     } finally {
       if (app) await closeApp(app).catch(() => {});
       repo.cleanup();

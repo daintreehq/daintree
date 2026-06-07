@@ -41,9 +41,19 @@ export interface DemoStartCapturePayload {
    * handler when omitted. Set explicitly for embeddable/master-quality output.
    */
   videoBitsPerSecond?: number;
-  /** Force the captured frame width in device pixels (getDisplayMedia ideal). */
+  /**
+   * Pin the captured frame width in device pixels. Enforced via applyConstraints
+   * after getDisplayMedia (getDisplayMedia ignores width/height for display
+   * capture); the recording fails if Chromium can't deliver this exact size.
+   * Omit to record at the surface's native resolution.
+   */
   width?: number;
-  /** Force the captured frame height in device pixels (getDisplayMedia ideal). */
+  /**
+   * Pin the captured frame height in device pixels. Enforced via applyConstraints
+   * after getDisplayMedia (getDisplayMedia ignores width/height for display
+   * capture); the recording fails if Chromium can't deliver this exact size.
+   * Omit to record at the surface's native resolution.
+   */
   height?: number;
 }
 
