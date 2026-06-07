@@ -24,6 +24,7 @@ import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
+import { McpAnomalyFooterLink } from "./McpAnomalyFooterLink";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
@@ -866,8 +867,9 @@ export function HelpPanel({
           the popover / hover titles / header docs button now. */}
       {showTerminal && agentConfig && !isMissingCli && (
         <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
-          <span className="flex items-center min-w-0">
+          <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
+            <McpAnomalyFooterLink />
           </span>
           <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
             {pinnedContext &&

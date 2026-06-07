@@ -460,7 +460,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").McpAuditRecord[];
   };
   "mcp-server:get-audit-stats": {
-    args: [];
+    args: [markSeen?: boolean | undefined];
     result: import("./mcpServer.js").McpAuditStats;
   };
   "mcp-server:get-config-snippet": {

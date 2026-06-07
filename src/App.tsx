@@ -36,6 +36,7 @@ import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
@@ -455,6 +456,7 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
+  useMcpAnomalyStats();
   usePluginBridge();
   const { homeDir } = useHomeDir();
 

@@ -424,8 +424,8 @@ export class McpServerService {
     return this.auditService.getAuditConfig();
   }
 
-  getAuditStats(): McpAuditStats {
-    return this.auditService.getAuditStats();
+  getAuditStats(markSeen = true): McpAuditStats {
+    return this.auditService.getAuditStats(markSeen);
   }
 
   clearAuditLog(): void {
