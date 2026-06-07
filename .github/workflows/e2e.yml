@@ -597,21 +597,24 @@ jobs:
       # consumers share a single artifact.
       - name: Extract failure signatures
         if: failure() && inputs.json_report
+        continue-on-error: true
         shell: bash
         run: |
+          mkdir -p test-results
           if [ -f test-results/report.json ]; then
-            node scripts/ci/extract-failures.mjs test-results/report.json /tmp/failure-report.json
+            node scripts/ci/extract-failures.mjs test-results/report.json test-results/failure-report.json
           else
             echo "[extract] No test-results/report.json found — skipping"
-            echo '[]' > /tmp/failure-report.json
+            echo '[]' > test-results/failure-report.json
           fi
 
       - name: Upload failure report
         if: failure() && inputs.json_report
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: failure-report-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
-          path: /tmp/failure-report.json
+          name: failure-report-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-attempt-${{ github.run_attempt }}
+          path: test-results/failure-report.json
           retention-days: 7
           if-no-files-found: ignore
 

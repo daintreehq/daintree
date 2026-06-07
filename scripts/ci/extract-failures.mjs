@@ -15,18 +15,23 @@ function walkSuites(suites, parentPath = [], results = [], parentFile = null) {
     for (const spec of suite.specs ?? []) {
       const specPath = [...currentPath, spec.title];
       for (const test of spec.tests ?? []) {
-        for (const result of test.results ?? []) {
-          if (result.status === "passed" || result.status === "skipped") continue;
-          const primaryError = result.errors?.[0];
-          results.push({
-            file,
-            titlePath: specPath,
-            projectName: test.projectName,
-            status: result.status,
-            errorMessage: primaryError?.message ?? "Unknown error",
-            errorStack: primaryError?.stack ?? null,
-          });
-        }
+        // Gate on the test-level outcome so recovered flakes ("flaky" =
+        // failed then passed on retry) are not reported. When `status` is
+        // absent (partial schema), infer from the final attempt instead.
+        const lastResult = test.results?.at(-1);
+        const failed = test.status
+          ? test.status === "unexpected"
+          : lastResult != null && lastResult.status !== "passed" && lastResult.status !== "skipped";
+        if (!failed) continue;
+        const primaryError = lastResult?.errors?.[0];
+        results.push({
+          file,
+          titlePath: specPath,
+          projectName: test.projectName,
+          status: lastResult?.status ?? "failed",
+          errorMessage: primaryError?.message ?? "Unknown error",
+          errorStack: primaryError?.stack ?? null,
+        });
       }
     }
   }
@@ -45,7 +50,11 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const PORT_RE = /:\d{4,5}\b/g;
 
 export function normalizeError(message) {
+  // Match paths before flattening backslashes so WIN_PATH_RE can consume
+  // drive-letter paths (e.g. the C:\a\<repo> Actions workspace) whole, then
+  // again afterwards for any POSIX-style paths revealed by the flattening.
   return message
+    .replace(PATH_RE, "<path>")
     .replace(BSLASH_RE, "/")
     .replace(PATH_RE, "<path>")
     .replace(WIN_DRIVE_RE, "")

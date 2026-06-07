@@ -739,11 +739,22 @@ jobs:
             const reportsDir = path.join(workspace, 'failure-reports');
             const failures = [];
             if (fs.existsSync(reportsDir)) {
+              // Re-runs upload a fresh attempt-suffixed artifact per shard.
+              // Keep only the latest attempt per shard so stale attempt-1
+              // failures don't survive a green re-run.
+              const latestByShard = new Map();
               for (const entry of fs.readdirSync(reportsDir, { withFileTypes: true })) {
                 if (!entry.isDirectory()) continue;
+                const attemptMatch = entry.name.match(/-attempt-(\d+)$/);
+                const attempt = attemptMatch ? Number(attemptMatch[1]) : 0;
+                const shardKey = attemptMatch ? entry.name.slice(0, attemptMatch.index) : entry.name;
+                const prev = latestByShard.get(shardKey);
+                if (!prev || attempt > prev.attempt) latestByShard.set(shardKey, { entry, attempt });
+              }
+              for (const { entry } of latestByShard.values()) {
                 const reportPath = path.join(reportsDir, entry.name, 'failure-report.json');
                 if (!fs.existsSync(reportPath)) continue;
-                const osMatch = entry.name.match(/-(Linux|macOS|Windows)-s\d+of\d+$/);
+                const osMatch = entry.name.match(/-(Linux|macOS|Windows)-s\d+of\d+(?:-attempt-\d+)?$/);
                 const os = osMatch ? osMatch[1] : 'unknown';
                 try {
                   for (const r of JSON.parse(fs.readFileSync(reportPath, 'utf8'))) {
