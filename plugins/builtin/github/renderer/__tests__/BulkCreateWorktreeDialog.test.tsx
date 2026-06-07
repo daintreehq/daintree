@@ -536,6 +536,39 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.queryByText(/failed/)).toBeNull();
   });
 
+  it("keeps retrying a transient worktree creation past the old 3-attempt cap", async () => {
+    // Five consecutive transient failures — beyond the old MAX_AUTO_RETRIES cap
+    // of 3 total attempts — then success. Proves the count ceiling is gone for
+    // worktree creation, not just assignment (see #10128).
+    let callCount = 0;
+    mockWorktreeCreate.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 5) {
+        return Promise.reject(new Error("index.lock: File exists"));
+      }
+      return Promise.resolve("wt-1");
+    });
+
+    const props = {
+      ...defaultProps,
+      selectedIssues: [makeIssue(1)],
+    };
+
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Each worktree backoff is capped at 30s; drain enough virtual time (still
+    // under the 5-minute ceiling) for all five retries to elapse.
+    await advanceTimersGradually(240000, 5000);
+
+    expect(callCount).toBe(6);
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
   it("classifies rate limit errors as transient", async () => {
     let callCount = 0;
     mockWorktreeCreate.mockImplementation(() => {
@@ -1685,7 +1718,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     expect(screen.queryByText(/failed/)).toBeNull();
   });
 
-  it("succeeds when assignment recovers on the final permitted attempt", async () => {
+  it("succeeds when assignment recovers after two transient failures", async () => {
     prefsHolder.assignWorktreeToSelf = true;
     githubConfigHolder.config = { username: "me" };
 
@@ -1706,9 +1739,40 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
     await advanceTimersGradually(70000);
 
-    // Loop bound is `<= MAX_AUTO_RETRIES + 1`, so the third attempt must run
-    // and a success there must short-circuit out of the loop.
+    // Two transient failures inside the wall-clock window must keep retrying;
+    // the third attempt recovers and short-circuits out of the loop.
     expect(assignCallCount).toBe(3);
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
+  it("keeps retrying transient assignment failures past the old 3-attempt cap", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    githubConfigHolder.config = { username: "me" };
+
+    // Six consecutive transient failures — more than the old MAX_AUTO_RETRIES
+    // cap of 3 total attempts — then recovery. Proves the count-based ceiling is
+    // gone and a secondary rate limit that lasts a few minutes is ridden out.
+    let assignCallCount = 0;
+    mockAssignIssue.mockImplementation(() => {
+      assignCallCount++;
+      if (assignCallCount <= 6) {
+        return Promise.reject(new Error("You have exceeded a secondary rate limit."));
+      }
+      return Promise.resolve();
+    });
+
+    render(<BulkCreateWorktreeDialog {...assignProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Each backoff is capped at 60s; drain enough virtual time (still well under
+    // the 5-minute ceiling) for all six retries to elapse.
+    await advanceTimersGradually(420000, 5000);
+
+    expect(assignCallCount).toBe(7);
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
   });
@@ -1761,7 +1825,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     expect(screen.getByText(/Assignment failed/)).toBeTruthy();
   });
 
-  it("surfaces exhausted transient assignment retries as item failures", async () => {
+  it("gives up on a transient assignment failure only after the wall-clock ceiling", async () => {
     prefsHolder.assignWorktreeToSelf = true;
     githubConfigHolder.config = { username: "me" };
 
@@ -1775,12 +1839,13 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // 60s cap on assignment backoff (ASSIGNMENT_BACKOFF_CAP_MS) — drain enough
-    // virtual time for two backoff windows plus slack.
-    await advanceTimersGradually(150000);
+    // A persistent transient failure must keep retrying past the old 3-attempt
+    // cap and surface as a failure only once the 5-minute per-item ceiling
+    // (MAX_TRANSIENT_RETRY_MS) elapses. Drain well past it (each backoff is
+    // capped at 60s, so several attempts accrue before the deadline).
+    await advanceTimersGradually(360000, 5000);
 
-    // MAX_AUTO_RETRIES = 2 → 3 total attempts before giving up.
-    expect(mockAssignIssue).toHaveBeenCalledTimes(3);
+    expect(mockAssignIssue.mock.calls.length).toBeGreaterThan(3);
     expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
     expect(screen.getByText(/1 failed/)).toBeTruthy();
     expect(screen.getByText(/Assignment failed/)).toBeTruthy();
@@ -1801,7 +1866,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     });
 
     // Let the worktree finish and the first assignIssue call fail; the loop
-    // is now suspended on `await delay(assignBackoff)`.
+    // is now suspended on `await cancellableDelay(assignBackoff, …)`.
     await advanceTimersGradually(100);
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
 

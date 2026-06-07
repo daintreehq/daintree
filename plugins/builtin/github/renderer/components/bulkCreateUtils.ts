@@ -5,7 +5,15 @@ import type { PlannedWorktree } from "./bulkCreatePrequery";
 
 export type { PlannedWorktree };
 
-export const MAX_AUTO_RETRIES = 2;
+// Transient failures (secondary rate limits, lock contention, transient network
+// blips) keep retrying until this per-item wall-clock ceiling elapses, rather
+// than giving up after a fixed attempt count (see #10128). A GitHub secondary
+// rate limit typically clears within 1-5 minutes; if it hasn't cleared in 5,
+// the account/IP is in a longer penalty (24-72h) that no in-process retry can
+// outlast anyway. The ceiling is per-item-total — it bounds the combined
+// worktree-creation and assignment dwell time so one item can't stall its queue
+// slot indefinitely. Permanent errors still fail immediately.
+export const MAX_TRANSIENT_RETRY_MS = 5 * 60 * 1000;
 // Cap in-flight creation requests at a small parallel fan-out. The backend
 // leaky-bucket rate limiter remains the primary throttle — pacing at the
 // producer side would only create a conflicting secondary rate limiter and
@@ -26,7 +34,7 @@ export const VERIFICATION_SETTLE_MS = 800;
 // IPC strips structured error fields (lesson #3769), so renderer-side classification
 // matches the strings emitted by `parseGitHubError` in the main process — not status codes.
 const TRANSIENT_ERROR_RE =
-  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file|Rate limit exceeded|Spawn queue full|ETIMEDOUT|ECONNRESET|ECONNREFUSED|GitHub is temporarily unavailable|Cannot reach GitHub|GitHub rate limit exceeded|GitHub secondary rate limit triggered/i;
+  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file|Rate limit exceeded|Spawn queue full|ETIMEDOUT|ECONNRESET|ECONNREFUSED|GitHub is temporarily unavailable|Cannot reach GitHub|GitHub rate limit exceeded|GitHub secondary rate limit triggered|exceeded a secondary rate limit/i;
 
 export function isTransientError(message: string, code?: string): boolean {
   if (code === "VALIDATION_ERROR" || code === "NOT_FOUND") return false;
@@ -41,6 +49,21 @@ export function normalizeError(error: unknown): string {
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Interruptible sleep for backoff waits. Polls `isCancelled` at most once per
+// second so a cancel/reset (dialog closed, new run started) resolves within ~1s
+// instead of blocking for the full 30-60s backoff. Resolves — never rejects —
+// on cancel, matching the `runIdRef.current !== currentRunId` guard pattern the
+// callers re-check after the await returns (see #10128).
+export async function cancellableDelay(ms: number, isCancelled: () => boolean): Promise<void> {
+  const end = performance.now() + ms;
+  let remaining = end - performance.now();
+  while (remaining > 0) {
+    if (isCancelled()) return;
+    await delay(Math.min(1000, remaining));
+    remaining = end - performance.now();
+  }
 }
 
 export function nextBackoffDelay(prevDelay: number, cap: number = BACKOFF_CAP_MS): number {
