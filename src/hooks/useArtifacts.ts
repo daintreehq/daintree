@@ -445,62 +445,67 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
     return result;
   }, [artifacts, cwd, terminalId]);
 
-  const applyAllPatches = useCallback(async (): Promise<BulkResult> => {
-    if (!isElectronAvailable() || !worktreeId || !cwd) {
-      return {
-        succeeded: 0,
-        failed: 0,
-        failures: [],
-      };
-    }
-
-    const patches = artifacts.filter((a) => a.type === "patch");
-    if (patches.length === 0) {
-      return { succeeded: 0, failed: 0, failures: [] };
-    }
-
-    const sorted = sortArtifacts(patches, "extraction");
-    const result: BulkResult = { succeeded: 0, failed: 0, failures: [], modifiedFiles: [] };
-    const modifiedFilesSet = new Set<string>();
-
-    try {
-      for (let i = 0; i < sorted.length; i++) {
-        const artifact = sorted[i]!;
-        setBulkProgress({ action: "apply", current: i + 1, total: sorted.length });
-
-        try {
-          const actionResult = await actionService.dispatch<ApplyPatchResult>(
-            "artifact.applyPatch",
-            { patchContent: artifact.content, cwd },
-            { source: "user" }
-          );
-          if (!actionResult.ok) {
-            throw new Error(actionResult.error.message);
-          }
-          const applyResult = actionResult.result;
-
-          result.succeeded++;
-          applyResult.modifiedFiles.forEach((f) => modifiedFilesSet.add(f));
-        } catch (error) {
-          logErrorWithContext(error, {
-            operation: "bulk_apply_patch",
-            component: "useArtifacts",
-            details: { artifactId: artifact.id, worktreeId, cwd, terminalId },
-          });
-          result.failed++;
-          result.failures.push({
-            artifact,
-            error: formatErrorMessage(error, "Failed to apply patch"),
-          });
-        }
+  // `patchesToApply` lets the caller pass the exact snapshot its confirm dialog
+  // previewed, so patches detected while the dialog was open are not applied unseen.
+  const applyAllPatches = useCallback(
+    async (patchesToApply?: Artifact[]): Promise<BulkResult> => {
+      if (!isElectronAvailable() || !worktreeId || !cwd) {
+        return {
+          succeeded: 0,
+          failed: 0,
+          failures: [],
+        };
       }
-    } finally {
-      setBulkProgress(null);
-    }
 
-    result.modifiedFiles = Array.from(modifiedFilesSet);
-    return result;
-  }, [artifacts, worktreeId, cwd, terminalId]);
+      const patches = (patchesToApply ?? artifacts).filter((a) => a.type === "patch");
+      if (patches.length === 0) {
+        return { succeeded: 0, failed: 0, failures: [] };
+      }
+
+      const sorted = sortArtifacts(patches, "extraction");
+      const result: BulkResult = { succeeded: 0, failed: 0, failures: [], modifiedFiles: [] };
+      const modifiedFilesSet = new Set<string>();
+
+      try {
+        for (let i = 0; i < sorted.length; i++) {
+          const artifact = sorted[i]!;
+          setBulkProgress({ action: "apply", current: i + 1, total: sorted.length });
+
+          try {
+            const actionResult = await actionService.dispatch<ApplyPatchResult>(
+              "artifact.applyPatch",
+              { patchContent: artifact.content, cwd },
+              { source: "user" }
+            );
+            if (!actionResult.ok) {
+              throw new Error(actionResult.error.message);
+            }
+            const applyResult = actionResult.result;
+
+            result.succeeded++;
+            applyResult.modifiedFiles.forEach((f) => modifiedFilesSet.add(f));
+          } catch (error) {
+            logErrorWithContext(error, {
+              operation: "bulk_apply_patch",
+              component: "useArtifacts",
+              details: { artifactId: artifact.id, worktreeId, cwd, terminalId },
+            });
+            result.failed++;
+            result.failures.push({
+              artifact,
+              error: formatErrorMessage(error, "Failed to apply patch"),
+            });
+          }
+        }
+      } finally {
+        setBulkProgress(null);
+      }
+
+      result.modifiedFiles = Array.from(modifiedFilesSet);
+      return result;
+    },
+    [artifacts, worktreeId, cwd, terminalId]
+  );
 
   return {
     artifacts,
