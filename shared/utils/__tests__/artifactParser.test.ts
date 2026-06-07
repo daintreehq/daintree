@@ -38,6 +38,14 @@ describe("artifactParser", () => {
     ]);
   });
 
+  it("extracts a code block with content far larger than the worker's 5KB window", () => {
+    const body = "const x = 1; // padding\n".repeat(500); // ~12KB
+    const blocks = extractCodeBlocks("```typescript\n" + body + "```\n");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.language).toBe("typescript");
+    expect(blocks[0]!.content).toBe(body.trim());
+  });
+
   it("extracts unified diff patches", () => {
     const input = [
       "diff --git a/src/a.ts b/src/a.ts",
@@ -240,6 +248,40 @@ describe("artifactParser", () => {
     expect(patches).toHaveLength(1);
     expect(patches[0]).toContain("--- a/old.txt");
     expect(patches[0]).toContain("+++ /dev/null");
+  });
+
+  it("splits multi-file diffs at diff lines, not mid-patch --- lines", () => {
+    const input = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1 +1 @@",
+      "-old a",
+      "+new a",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "--- a/src/b.ts",
+      "+++ b/src/b.ts",
+      "@@ -1 +1 @@",
+      "-old b",
+      "+new b",
+    ].join("\n");
+
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(2);
+    expect(patches[0]).toContain("+new a");
+    expect(patches[0]).not.toContain("+new b");
+    expect(patches[1]).toContain("+new b");
+  });
+
+  it("extracts a patch with a body far larger than the worker's 5KB window", () => {
+    let patch = "diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n@@ -1,500 +1,500 @@\n";
+    for (let i = 0; i < 500; i++) {
+      patch += `+const generated${i} = ${i};\n`;
+    }
+    const patches = extractPatches(patch + "done\n");
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("+const generated0 = 0;");
+    expect(patches[0]).toContain("+const generated499 = 499;");
   });
 
   it("extracts patch filename from +++ line", () => {
