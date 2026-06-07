@@ -353,7 +353,7 @@ function recomputeActivityTiers(): void {
       activeProjects.has(terminal.projectId);
     const tier = isActiveInAnyWindow ? "active" : "background";
     backpressureManager.setActivityTier(terminal.id, tier, "recompute-activity-tiers");
-    ptyManager.setActivityMonitorTier(terminal.id, tier === "active" ? 50 : 500);
+    ptyManager.setActivityMonitorTier(terminal.id, tier, tier === "active" ? 50 : 500);
 
     // Reconcile the renderer's dedupe baseline. The host rewrites tiers here
     // unilaterally, but TerminalRendererPolicy.setBackendTier dedupes outbound

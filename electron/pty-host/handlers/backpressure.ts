@@ -70,7 +70,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
             : tier === "active"
               ? 50
               : 500;
-        ptyManager.setActivityMonitorTier(msg.id, pollingInterval);
+        ptyManager.setActivityMonitorTier(msg.id, tier, pollingInterval);
       }
 
       if (!atCoordinator?.isPaused) {
@@ -114,7 +114,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       // Apply active tier polling (50ms) when waking
       const terminal = ptyManager.getTerminal(msg.id);
       if (terminal) {
-        ptyManager.setActivityMonitorTier(msg.id, 50);
+        ptyManager.setActivityMonitorTier(msg.id, "active", 50);
       }
 
       let state: string | null;
