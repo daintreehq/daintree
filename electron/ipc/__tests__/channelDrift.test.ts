@@ -349,6 +349,26 @@ describe("IPC channel drift guardrails", () => {
     ).toEqual([]);
   });
 
+  it("no IpcInvokeMap key appears in GeneratedIpcInvokeMap (half-migrated channels)", async () => {
+    const mapsSrc = await readFile(MAPS_TS, "utf8");
+    const generatedSrc = await readFile(GENERATED_TS, "utf8");
+    const handMaintained = extractKeysFromBlock(mapsSrc, "export interface IpcInvokeMap");
+    const generated = extractKeysFromBlock(generatedSrc, "export interface GeneratedIpcInvokeMap");
+
+    expect(handMaintained.size).toBeGreaterThan(0);
+    expect(generated.size).toBeGreaterThan(0);
+
+    const duplicates = [...handMaintained].filter((k) => generated.has(k)).sort();
+
+    expect(
+      duplicates,
+      "These channels appear in both IpcInvokeMap (maps.ts) and GeneratedIpcInvokeMap " +
+        "(generated.ts). A defineIpcNamespace migration was left half-done — delete the " +
+        "hand-written entry from maps.ts once codegen owns the channel, and lower the count " +
+        "in ipc-handwritten-baseline.json to match."
+    ).toEqual([]);
+  });
+
   it("every IpcEventMap key resolves to a declared CHANNELS value", async () => {
     const mapsSrc = await readFile(MAPS_TS, "utf8");
     const eventKeys = extractEventMapKeys(mapsSrc);

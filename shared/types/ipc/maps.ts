@@ -143,7 +143,7 @@ import type {
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
 } from "./system.js";
-import type { CloneRepoOptions, CloneRepoProgressEvent, CloneRepoResult } from "./gitClone.js";
+import type { CloneRepoProgressEvent } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
 import type {
@@ -1378,16 +1378,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Global env channels
   // Global recipe channels
   // Help channels
-  // Project clone channels
-  "project:clone-repo": {
-    args: [options: CloneRepoOptions];
-    result: CloneRepoResult;
-  };
-  "project:clone-cancel": {
-    args: [];
-    result: void;
-  };
-
   // Bulk project stats
   "project:get-bulk-stats": {
     args: [projectIds: string[]];
