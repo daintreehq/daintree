@@ -18,19 +18,21 @@ import {
   signalFirstInteractive,
   getDeferredQueueState,
   resetDeferredQueue,
+  haltDeferredQueue,
+  __resetDeferredQueueForTests,
 } from "../deferredInitQueue.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { trackEvent } from "../../services/TelemetryService.js";
 
 describe("deferredInitQueue", () => {
   beforeEach(() => {
-    resetDeferredQueue();
+    __resetDeferredQueueForTests();
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
-    resetDeferredQueue();
+    __resetDeferredQueueForTests();
     vi.useRealTimers();
   });
 
@@ -382,5 +384,125 @@ describe("deferredInitQueue", () => {
     expect(task).not.toHaveBeenCalled();
     expect(getDeferredQueueState().drainState).toBe("idle");
     expect(getDeferredQueueState().firstInteractiveReceived).toBe(true);
+  });
+
+  it("halt stops an in-flight drain — remaining tasks never run", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstRun = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+    const secondRun = vi.fn();
+
+    registerDeferredTask({ name: "hang", run: firstRun });
+    registerDeferredTask({ name: "after-halt", run: secondRun });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+
+    // Let the first task start but not finish
+    await vi.advanceTimersByTimeAsync(0);
+    expect(firstRun).toHaveBeenCalledTimes(1);
+    expect(getDeferredQueueState().drainState).toBe("draining");
+
+    // before-quit fires mid-drain
+    haltDeferredQueue();
+
+    releaseFirst();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(secondRun).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("draining");
+  });
+
+  it("signalFirstInteractive after halt does not start a drain", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+    finalizeDeferredRegistration(10_000);
+
+    haltDeferredQueue();
+    signalFirstInteractive(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+  });
+
+  it("fallback timer armed before halt never fires tasks", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "fb", run: task });
+    finalizeDeferredRegistration(5_000);
+
+    haltDeferredQueue();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+  });
+
+  it("finalize after halt does not arm the fallback timer", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+
+    haltDeferredQueue();
+    finalizeDeferredRegistration(5_000);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+    expect(getDeferredQueueState().registrationComplete).toBe(false);
+  });
+
+  it("registration after halt is dropped, not run immediately", async () => {
+    // Drain fully so the "run immediately" late path would normally apply
+    registerDeferredTask({ name: "early", run: vi.fn() });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+    await waitForDrain();
+
+    haltDeferredQueue();
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const late = vi.fn();
+    registerDeferredTask({ name: "late", run: late });
+
+    expect(late).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalled();
+    consoleWarn.mockRestore();
+  });
+
+  it("halt does not break a later fresh cycle when reset is not part of a quit", async () => {
+    // macOS re-open regression guard: a cycle that never saw haltDeferredQueue
+    // (reset on last-window-close, new window, new drain) works normally.
+    const t1 = vi.fn();
+    registerDeferredTask({ name: "t1", run: t1 });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+    await waitForDrain();
+
+    resetDeferredQueue();
+
+    const t2 = vi.fn();
+    registerDeferredTask({ name: "t2", run: t2 });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(2);
+    await waitForDrain();
+    expect(t2).toHaveBeenCalledTimes(1);
+  });
+
+  it("resetDeferredQueue does not undo a halt", async () => {
+    haltDeferredQueue();
+    // Last-window-close reset racing the quit sequence must not unhalt
+    resetDeferredQueue();
+
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
   });
 });
