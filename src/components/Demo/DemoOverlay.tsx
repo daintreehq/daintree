@@ -5,6 +5,7 @@ import type {
   DemoAnnotationSize,
   DemoDismissAnnotationPayload,
 } from "@shared/types/ipc/demo";
+import { runSpringLoop } from "@/lib/demoSpring";
 
 interface SpotlightState {
   x: number;
@@ -402,50 +403,32 @@ export function DemoOverlay() {
         return;
       }
 
-      // Spring-animate the cutout from the previous rect to the target.
-      const current = { ...start };
-      let cancelled = false;
-      const stiffness = 70;
-      const damping = 20;
-      const vel = { x: 0, y: 0, width: 0, height: 0 };
-
-      let lastTime = performance.now();
-      function step(now: number) {
-        if (cancelled || !overlayRef.current) return;
-        let dt = (now - lastTime) / 1000;
-        dt = Math.min(dt, 0.032);
-        lastTime = now;
-
-        let settled = true;
-        for (const key of ["x", "y", "width", "height"] as const) {
-          const force = -stiffness * (current[key] - target[key]) - damping * vel[key];
-          vel[key] += force * dt;
-          current[key] += vel[key] * dt;
-          if (Math.abs(vel[key]) > 0.5 || Math.abs(target[key] - current[key]) > 0.5) {
-            settled = false;
-          }
-        }
-
-        const snap: SpotlightState = settled
-          ? target
-          : {
-              x: current.x,
-              y: current.y,
-              width: Math.max(0, current.width),
-              height: Math.max(0, current.height),
-            };
-        currentRectRef.current = snap;
-        applyMask(snap);
-
-        if (!settled) requestAnimationFrame(step);
-      }
-
-      spotlightAnimRef.current = {
-        cancel: () => {
-          cancelled = true;
+      // Frame-rate-independent spring glide of the cutout (see src/lib/demoSpring.ts).
+      spotlightAnimRef.current = runSpringLoop(
+        {
+          x: { current: start.x, velocity: 0 },
+          y: { current: start.y, velocity: 0 },
+          width: { current: start.width, velocity: 0 },
+          height: { current: start.height, velocity: 0 },
         },
-      };
-      requestAnimationFrame(step);
+        { x: target.x, y: target.y, width: target.width, height: target.height },
+        (axes) => {
+          if (!overlayRef.current) return false;
+          const snap: SpotlightState = {
+            x: axes.x.current,
+            y: axes.y.current,
+            width: Math.max(0, axes.width.current),
+            height: Math.max(0, axes.height.current),
+          };
+          currentRectRef.current = snap;
+          applyMask(snap);
+          return true;
+        },
+        () => {
+          currentRectRef.current = target;
+          applyMask(target);
+        }
+      );
     },
     [applyMask]
   );
@@ -561,6 +544,12 @@ export function DemoOverlay() {
 
     return () => {
       for (const cleanup of cleanups) cleanup();
+      spotlightAnimRef.current?.cancel();
+      spotlightAnimRef.current = null;
+      if (spotlightExitTimerRef.current) {
+        clearTimeout(spotlightExitTimerRef.current);
+        spotlightExitTimerRef.current = null;
+      }
     };
   }, [animateSpotlightRect]);
 

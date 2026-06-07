@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { isMac } from "@/lib/platform";
+import { runSpringLoop } from "@/lib/demoSpring";
 import { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -291,6 +292,7 @@ export function DemoCursor() {
   const posRef = useRef({ x: 0, y: 0 });
   const pauseResolversRef = useRef<Array<() => void>>([]);
   const pausedRef = useRef(false);
+  const scrollAnimRef = useRef<{ cancel: () => void } | null>(null);
 
   useEffect(() => {
     posRef.current = {
@@ -782,32 +784,20 @@ export function DemoCursor() {
             Math.min(targetScrollTop, container.scrollHeight - container.clientHeight)
           );
 
-          // Spring animation (semi-implicit Euler)
-          const stiffness = 70;
-          const damping = 20;
-          let current = container.scrollTop;
-          let velocity = 0;
-
+          // Frame-rate-independent spring glide (see src/lib/demoSpring.ts).
           await new Promise<void>((resolve) => {
-            let lastTime = performance.now();
-            function step(now: number) {
-              let dt = (now - lastTime) / 1000;
-              dt = Math.min(dt, 0.032);
-              lastTime = now;
-
-              const force = -stiffness * (current - clampedTarget) - damping * velocity;
-              velocity += force * dt;
-              current += velocity * dt;
-              container!.scrollTop = current;
-
-              if (Math.abs(velocity) < 0.5 && Math.abs(clampedTarget - current) < 0.5) {
+            scrollAnimRef.current = runSpringLoop(
+              { scroll: { current: container!.scrollTop, velocity: 0 } },
+              { scroll: clampedTarget },
+              (axes) => {
+                container!.scrollTop = axes.scroll.current;
+              },
+              () => {
                 container!.scrollTop = clampedTarget;
+                scrollAnimRef.current = null;
                 resolve();
-              } else {
-                requestAnimationFrame(step);
               }
-            }
-            requestAnimationFrame(step);
+            );
           });
 
           sendDone(payload.requestId);
@@ -1104,6 +1094,8 @@ export function DemoCursor() {
 
     return () => {
       for (const cleanup of cleanups) cleanup();
+      scrollAnimRef.current?.cancel();
+      scrollAnimRef.current = null;
     };
   }, []);
 
