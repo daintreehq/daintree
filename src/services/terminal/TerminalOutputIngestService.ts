@@ -234,6 +234,10 @@ export class TerminalOutputIngestService {
         globalThis.setTimeout(() => {
           if (this.queues.get(id) !== queue) return;
           queue.drainScheduled = false;
+          // Tier may have flipped to BACKGROUND between scheduling and firing —
+          // draining now would parse into a hidden pane. The held bytes are
+          // flushed by resumeFlush on the next tier upgrade.
+          if (this.isBackgrounded(id)) return;
           this.tryDrain(id, queue);
         }, 0);
         return;

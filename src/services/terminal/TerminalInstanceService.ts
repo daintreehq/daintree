@@ -171,7 +171,14 @@ class TerminalInstanceService {
     this.hibernationManager = new TerminalHibernationManager({
       getInstance: (id) => this.instances.get(id),
       destroyRestoreState: (id) => this.restoreController.destroy(id),
-      resetBufferedOutput: (id) => this.dataBuffer.resetForTerminal(id),
+      resetBufferedOutput: (id) => {
+        // Ack bytes held in the ingest queue before wiping it: the pty-host's
+        // queuedBytes ledger counts them, and a silent discard leaves a
+        // permanent deficit that degrades backpressure to the 10s safety
+        // timeout (#9910).
+        terminalClient.discardPortAcks(id);
+        this.dataBuffer.resetForTerminal(id);
+      },
       releaseWebGL: (id) => this.webGLManager.onTerminalDestroyed(id),
       clearResizeJob: (managed) => this.resizeController.clearResizeJob(managed),
       clearSettledTimer: (id) => this.resizeController.clearSettledTimer(id),
@@ -209,6 +216,7 @@ class TerminalInstanceService {
       },
       onPostWake: (id) => this.handlePostWake(id),
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
+      onDiscardHeld: (id) => this.discardHeldOutput(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       onBackgrounded: (id) => this.wakeManager.cancelPendingWake(id),
       onTierApplied: (id, tier, managed) => {
@@ -953,7 +961,7 @@ class TerminalInstanceService {
     // clears it in place. No-op for DOM-renderer terminals.
     this.webGLManager.repairAtlasForReactivation(id);
 
-    const ok = await this.wakeManager.wakeAndRestore(id);
+    const { ok, replayedMainBuffer } = await this.wakeManager.wakeAndRestore(id);
 
     // Re-check after async: terminal may have been destroyed, hibernated, or
     // replaced while wakeAndRestore was in flight.
@@ -966,7 +974,24 @@ class TerminalInstanceService {
     if (ok) {
       this.handlePostWake(id);
     }
-    this.dataBuffer.resumeFlush(id);
+    if (replayedMainBuffer) {
+      // The replayed snapshot already contains the held bytes — flushing
+      // would double-paint them (#9910).
+      this.discardHeldOutput(id);
+    } else {
+      this.dataBuffer.resumeFlush(id);
+    }
+  }
+
+  /**
+   * Drop bytes held in the ingest queue while backgrounded and ack them to
+   * the pty-host. Used after a successful main-buffer replay: the snapshot
+   * already contains those bytes, so flushing them would double-paint the
+   * tail, but the host's queuedBytes ledger still needs the acks (#9910).
+   */
+  private discardHeldOutput(id: string): void {
+    terminalClient.discardPortAcks(id);
+    this.dataBuffer.resetForTerminal(id);
   }
 
   /**

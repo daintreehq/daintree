@@ -614,6 +614,35 @@ describe("TerminalOutputIngestService", () => {
       vi.useRealTimers();
     });
 
+    it("ink-erase drain scheduled while foreground does not fire into a terminal backgrounded before the timer (#9910)", () => {
+      vi.useFakeTimers();
+      const writeToTerminal = vi.fn();
+      const tiers = new Map<string, TerminalRefreshTier>([["term-1", TerminalRefreshTier.FOCUSED]]);
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        (id) => tiers.get(id) ?? TerminalRefreshTier.FOCUSED
+      );
+
+      // Complete ink-erase pattern in ONE foreground chunk: the chunk stays
+      // queued and the deferred drain is scheduled with it still in the queue.
+      service.bufferData("term-1", "\x1b[2K\x1b[1Acontent");
+      expect(writeToTerminal).not.toHaveBeenCalled();
+
+      // Tier flips to BACKGROUND between scheduling and firing — the timer
+      // must not drain the held chunk into the hidden pane.
+      tiers.set("term-1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(0);
+      expect(writeToTerminal).not.toHaveBeenCalled();
+
+      // Back to active + resume → held bytes flush normally.
+      tiers.set("term-1", TerminalRefreshTier.FOCUSED);
+      service.resumeFlush("term-1");
+      expect(writeToTerminal).toHaveBeenCalledTimes(1);
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K\x1b[1Acontent");
+
+      vi.useRealTimers();
+    });
+
     it("isolates the background gate per terminal", () => {
       const writeToTerminal = vi.fn();
       const tiers = new Map<string, TerminalRefreshTier>([

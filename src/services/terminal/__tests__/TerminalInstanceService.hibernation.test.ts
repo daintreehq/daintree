@@ -14,6 +14,7 @@ const mockTerminalClient = {
   getSharedBuffer: vi.fn(() => null),
   acknowledgeData: vi.fn(),
   acknowledgePortData: vi.fn(),
+  discardPortAcks: vi.fn(),
 };
 
 vi.mock("@/clients", () => ({
@@ -319,6 +320,34 @@ describe("TerminalInstanceService - Hibernation", () => {
       service.hibernate("t1");
 
       expect(managed.hibernationTimer).toBeUndefined();
+    });
+
+    it("should ack held port bytes before discarding the ingest queue (#9910)", () => {
+      const managed = makeMockManaged();
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      const order: string[] = [];
+      mockTerminalClient.discardPortAcks.mockImplementation(() => {
+        order.push("discardPortAcks");
+      });
+      const dataBuffer = (
+        service as unknown as { dataBuffer: { resetForTerminal: (id: string) => void } }
+      ).dataBuffer;
+      const resetForTerminal = vi.spyOn(dataBuffer, "resetForTerminal").mockImplementation(() => {
+        order.push("resetForTerminal");
+      });
+
+      service.hibernate("t1");
+
+      // The ack must drain the pendingPortAckBytes FIFO BEFORE the held
+      // queue is wiped, otherwise the pty-host's queuedBytes ledger keeps a
+      // permanent deficit and backpressure degrades to the 10s safety timeout.
+      expect(mockTerminalClient.discardPortAcks).toHaveBeenCalledWith("t1");
+      expect(resetForTerminal).toHaveBeenCalledWith("t1");
+      expect(order).toEqual(["discardPortAcks", "resetForTerminal"]);
+
+      resetForTerminal.mockRestore();
+      mockTerminalClient.discardPortAcks.mockReset();
     });
 
     it("should keep hostElement in DOM for reuse during unhibernation", () => {

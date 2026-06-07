@@ -57,7 +57,10 @@ describe("TerminalWakeManager", () => {
     };
     const manager = new TerminalWakeManager(deps);
 
-    await expect(manager.wakeAndRestore("term-1")).resolves.toBe(false);
+    await expect(manager.wakeAndRestore("term-1")).resolves.toEqual({
+      ok: false,
+      replayedMainBuffer: false,
+    });
   });
 
   it("allows retry after a failed wakeAndRestore call", async () => {
@@ -107,8 +110,8 @@ describe("TerminalWakeManager", () => {
 
     resolveWake({ state: "serialized-state" });
 
-    await expect(first).resolves.toBe(true);
-    await expect(second).resolves.toBe(true);
+    await expect(first).resolves.toEqual({ ok: true, replayedMainBuffer: true });
+    await expect(second).resolves.toEqual({ ok: true, replayedMainBuffer: true });
     expect(deps.restoreFromSerialized).toHaveBeenCalledTimes(1);
   });
 
@@ -134,7 +137,10 @@ describe("TerminalWakeManager", () => {
 
     const result = await manager.wakeAndRestore("term-alt");
 
-    expect(result).toBe(true);
+    // The alt-buffer snapshot is replayed like any main-buffer snapshot
+    // (#9894): replayedMainBuffer is true, so the policy discards the held
+    // bytes (the snapshot already contains them) rather than double-painting.
+    expect(result).toEqual({ ok: true, replayedMainBuffer: true });
     expect(deps.restoreFromSerialized).toHaveBeenCalledWith("term-alt", "serialized-state");
   });
 
@@ -161,7 +167,7 @@ describe("TerminalWakeManager", () => {
 
     const result = await manager.wakeAndRestore("term-alt-null-state");
 
-    expect(result).toBe(false);
+    expect(result).toEqual({ ok: false, replayedMainBuffer: false });
     expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
     expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
     // A null snapshot is a user-visible gap — the marker is drawn once.
@@ -188,7 +194,7 @@ describe("TerminalWakeManager", () => {
 
     const result = await manager.wakeAndRestore("term-normal");
 
-    expect(result).toBe(true);
+    expect(result).toEqual({ ok: true, replayedMainBuffer: true });
     expect(deps.restoreFromSerialized).toHaveBeenCalledWith("term-normal", "serialized-state");
   });
 
@@ -210,7 +216,7 @@ describe("TerminalWakeManager", () => {
 
     const result = await manager.wakeAndRestore("term-normal-null-state");
 
-    expect(result).toBe(false);
+    expect(result).toEqual({ ok: false, replayedMainBuffer: false });
     expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
     expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
 
@@ -700,7 +706,7 @@ describe("TerminalWakeManager", () => {
 
       const result = await manager.wakeAndRestore("term-fail-small");
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false, replayedMainBuffer: false });
       expect(setScrollbackRestoreErrorMock).toHaveBeenCalledTimes(1);
       expect(setScrollbackRestoreErrorMock).toHaveBeenCalledWith("term-fail-small", restoreError);
       // The buffer refresh that success would perform is skipped on failure.
@@ -726,7 +732,7 @@ describe("TerminalWakeManager", () => {
 
       const result = await manager.wakeAndRestore("term-fail-incr");
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false, replayedMainBuffer: false });
       expect(setScrollbackRestoreErrorMock).toHaveBeenCalledTimes(1);
       expect(setScrollbackRestoreErrorMock).toHaveBeenCalledWith("term-fail-incr", restoreError);
     });
@@ -744,7 +750,7 @@ describe("TerminalWakeManager", () => {
 
       const result = await manager.wakeAndRestore("term-success");
 
-      expect(result).toBe(true);
+      expect(result).toEqual({ ok: true, replayedMainBuffer: true });
       expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
       expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
     });
@@ -764,7 +770,7 @@ describe("TerminalWakeManager", () => {
 
       const result = await manager.wakeAndRestore("term-fail-no-error");
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false, replayedMainBuffer: false });
       expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
     });
 
@@ -801,7 +807,7 @@ describe("TerminalWakeManager", () => {
         const first = manager.wakeAndRestore("term-rate-fail");
         await vi.advanceTimersByTimeAsync(0);
         const firstResult = await first;
-        expect(firstResult).toBe(false); // signals failure to triggerWake
+        expect(firstResult.ok).toBe(false); // signals failure to triggerWake
 
         // Second wake fires immediately (no rate-limit coalescing) because
         // triggerWake observed `false` and did not record lastWakeTime.
@@ -834,7 +840,7 @@ describe("TerminalWakeManager", () => {
 
       const result = await manager.wakeAndRestore("term-recover");
 
-      expect(result).toBe(true);
+      expect(result).toEqual({ ok: true, replayedMainBuffer: true });
       expect(setScrollbackRestoreErrorMock).not.toHaveBeenCalled();
       expect(clearScrollbackRestoreErrorMock).toHaveBeenCalledTimes(1);
       expect(clearScrollbackRestoreErrorMock).toHaveBeenCalledWith("term-recover");
@@ -859,7 +865,7 @@ describe("TerminalWakeManager", () => {
 
       const result = await manager.wakeAndRestore("term-fail-no-clear");
 
-      expect(result).toBe(false);
+      expect(result).toEqual({ ok: false, replayedMainBuffer: false });
       expect(clearScrollbackRestoreErrorMock).not.toHaveBeenCalled();
     });
   });
@@ -902,7 +908,7 @@ describe("TerminalWakeManager", () => {
         const manager = new TerminalWakeManager(deps);
 
         const first = await manager.wakeAndRestore("term-decline-sel");
-        expect(first).toBe(false);
+        expect(first).toEqual({ ok: false, replayedMainBuffer: false });
         // The selection guard fires before the wake IPC — no snapshot fetched.
         expect(wakeMock).not.toHaveBeenCalled();
         // No marker for a selection decline — it would write into the terminal
@@ -932,7 +938,7 @@ describe("TerminalWakeManager", () => {
         const manager = new TerminalWakeManager(makeDeclineDeps(managed, onDeclined));
 
         const first = await manager.wakeAndRestore("term-decline-null");
-        expect(first).toBe(false);
+        expect(first).toEqual({ ok: false, replayedMainBuffer: false });
         expect(onDeclined).toHaveBeenCalledTimes(1);
         expect(wakeMock).toHaveBeenCalledTimes(1);
 
@@ -1076,7 +1082,7 @@ describe("TerminalWakeManager", () => {
 
         // A direct wake (e.g. from RendererPolicy) succeeds before the retry.
         const result = await manager.wakeAndRestore("term-decline-direct");
-        expect(result).toBe(true);
+        expect(result).toEqual({ ok: true, replayedMainBuffer: true });
         expect(manager.hasPendingWake("term-decline-direct")).toBe(false);
 
         // The leftover decline timer must not fire another wake.

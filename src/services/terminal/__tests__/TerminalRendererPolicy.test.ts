@@ -33,7 +33,7 @@ describe("TerminalRendererPolicy", () => {
 
     mockDeps = {
       getInstance: vi.fn(() => mockManagedTerminal as ManagedTerminal),
-      wakeAndRestore: vi.fn(() => Promise.resolve(true)),
+      wakeAndRestore: vi.fn(() => Promise.resolve({ ok: true, replayedMainBuffer: true })),
     };
 
     const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -216,7 +216,9 @@ describe("TerminalRendererPolicy", () => {
     it("does not call onPostWake when wake fails", async () => {
       const onPostWake = vi.fn();
       mockDeps.onPostWake = onPostWake;
-      mockDeps.wakeAndRestore = vi.fn(() => Promise.resolve(false));
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: false, replayedMainBuffer: false })
+      );
       mockManagedTerminal.isAltBuffer = true;
       mockManagedTerminal.needsWake = true;
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
@@ -257,6 +259,80 @@ describe("TerminalRendererPolicy", () => {
       });
 
       expect(terminal.scrollToBottom).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("wake-result flush dispatch (#9910)", () => {
+    let onResumeFlush: ReturnType<typeof vi.fn>;
+    let onDiscardHeld: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      onResumeFlush = vi.fn();
+      onDiscardHeld = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
+      mockDeps.onDiscardHeld = onDiscardHeld as unknown as ((id: string) => void) | undefined;
+      mockManagedTerminal.needsWake = true;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    });
+
+    async function applyActiveUpgrade(): Promise<void> {
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      policy.initializeBackendTier("test-id", "background");
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      await vi.waitFor(() => {
+        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
+      });
+    }
+
+    it("discards held bytes (no flush) after a successful main-buffer replay", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: true, replayedMainBuffer: true })
+      );
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onDiscardHeld).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("flushes held bytes on an alt-buffer wake (ok without replay)", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: true, replayedMainBuffer: false })
+      );
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onDiscardHeld).not.toHaveBeenCalled();
+    });
+
+    it("flushes held bytes when the wake fails", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: false, replayedMainBuffer: false })
+      );
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onDiscardHeld).not.toHaveBeenCalled();
+    });
+
+    it("flushes held bytes when the wake rejects", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() => Promise.reject(new Error("boom")));
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onDiscardHeld).not.toHaveBeenCalled();
     });
   });
 

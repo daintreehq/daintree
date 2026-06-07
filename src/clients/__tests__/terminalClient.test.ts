@@ -328,6 +328,93 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("discardPortAcks posts a single batched ack with the summed FIFO total and clears the queue", () => {
+    const port = acquirePort();
+
+    // Live path: queue three pending ack entries (10 + 20 + 12 bytes).
+    terminalClient.onData("term-1", () => {});
+    port.postMessage({ type: "data", id: "term-1", data: "aaaaaaaaaa", bytes: 10 });
+    port.postMessage({ type: "data", id: "term-1", data: "bbbbbbbbbbbbbbbbbbbb", bytes: 20 });
+    port.postMessage({ type: "data", id: "term-1", data: "cccccccccccc", bytes: 12 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const acks: Record<string, unknown>[] = [];
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack" && msg.id === "term-1") acks.push(msg);
+        });
+        port.start();
+
+        terminalClient.discardPortAcks("term-1");
+        // The FIFO is now empty — a follow-up acknowledgePortData must not
+        // double-ack the discarded bytes.
+        terminalClient.acknowledgePortData("term-1", 999);
+
+        setTimeout(() => {
+          expect(acks).toEqual([{ type: "ack", id: "term-1", bytes: 42 }]);
+          resolve();
+        }, 100);
+      }, 50);
+    });
+  });
+
+  it("discardPortAcks is a no-op when the FIFO is empty", () => {
+    const port = acquirePort();
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      terminalClient.discardPortAcks("term-1");
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
+
+  it("discardPortAcks does not throw when no port is connected", () => {
+    expect(() => terminalClient.discardPortAcks("term-1")).not.toThrow();
+  });
+
+  it("discardPortAcks does not leak the FIFO across terminals", () => {
+    const port = acquirePort();
+
+    terminalClient.onData("term-1", () => {});
+    terminalClient.onData("term-2", () => {});
+    port.postMessage({ type: "data", id: "term-1", data: "aaaa", bytes: 4 });
+    port.postMessage({ type: "data", id: "term-2", data: "bbbbbb", bytes: 6 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const acks: Record<string, unknown>[] = [];
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack") acks.push(msg);
+        });
+        port.start();
+
+        terminalClient.discardPortAcks("term-1");
+        // term-2's entry must survive and ack normally.
+        terminalClient.acknowledgePortData("term-2", 999);
+
+        setTimeout(() => {
+          expect(acks).toEqual([
+            { type: "ack", id: "term-1", bytes: 4 },
+            { type: "ack", id: "term-2", bytes: 6 },
+          ]);
+          resolve();
+        }, 100);
+      }, 50);
+    });
+  });
+
   it("dispatches to correct terminal only", () => {
     const port = acquirePort();
     const received1: string[] = [];

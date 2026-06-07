@@ -17,6 +17,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
   appClient: { getHydrationState: vi.fn() },
@@ -83,12 +84,14 @@ type ManagedTerminalMock = {
 
 type FullWakeTestService = {
   instances: Map<string, ManagedTerminalMock>;
-  wakeManager: { wakeAndRestore: (id: string) => Promise<boolean> };
+  wakeManager: {
+    wakeAndRestore: (id: string) => Promise<{ ok: boolean; replayedMainBuffer: boolean }>;
+  };
   resizeController: {
     applyDeferredResize: (id: string) => void;
     lockResize: (id: string, locked: boolean, ms?: number) => void;
   };
-  dataBuffer: { resumeFlush: (id: string) => void };
+  dataBuffer: { resumeFlush: (id: string) => void; resetForTerminal: (id: string) => void };
   webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
   handlePostWake: (id: string) => void;
   unhibernate: (id: string) => void;
@@ -134,7 +137,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     if (service) service.instances.clear();
   });
 
-  it("runs applyDeferredResize → forceXtermReflow → wakeAndRestore → refresh → handlePostWake → resumeFlush in order on success", async () => {
+  it("runs applyDeferredResize → forceXtermReflow → wakeAndRestore → refresh → handlePostWake → discard in order on replay success", async () => {
     const id = "fw-1";
     const instance = makeInstance();
     service.instances.set(id, instance);
@@ -152,7 +155,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.wakeManager, "wakeAndRestore")
       .mockImplementation(async () => {
         calls.push("wakeAndRestore");
-        return true;
+        return { ok: true, replayedMainBuffer: true };
       });
     const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {
       calls.push("handlePostWake");
@@ -160,26 +163,60 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {
       calls.push("resumeFlush");
     });
+    const resetForTerminal = vi
+      .spyOn(service.dataBuffer, "resetForTerminal")
+      .mockImplementation(() => {
+        calls.push("resetForTerminal");
+      });
     (instance.terminal.refresh as ReturnType<typeof vi.fn>).mockImplementation(() => {
       calls.push("refresh");
     });
 
     await service.fullWakeForVisibilityRestore(id);
 
+    // The replayed snapshot already contains the held bytes, so the sequence
+    // ends with the discard (resetForTerminal), not a flush (#9910).
     expect(calls).toEqual([
       "applyDeferredResize",
       "forceXtermReflow",
       "wakeAndRestore",
       "refresh",
       "handlePostWake",
-      "resumeFlush",
+      "resetForTerminal",
     ]);
 
     expect(applyDeferredResize).toHaveBeenCalledWith(id);
     expect(forceXtermReflowMock).toHaveBeenCalledWith(instance.terminal.element);
     expect(wakeAndRestore).toHaveBeenCalledWith(id);
     expect(handlePostWake).toHaveBeenCalledWith(id);
+    expect(resetForTerminal).toHaveBeenCalledWith(id);
+    expect(resumeFlush).not.toHaveBeenCalled();
+
+    const { terminalClient } = await import("@/clients");
+    expect(terminalClient.discardPortAcks).toHaveBeenCalledWith(id);
+  });
+
+  it("flushes (no discard) when the wake succeeds without a main-buffer replay (alt-buffer)", async () => {
+    const id = "fw-1b";
+    const instance = makeInstance();
+    service.instances.set(id, instance);
+
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: true,
+      replayedMainBuffer: false,
+    });
+    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+    const resetForTerminal = vi
+      .spyOn(service.dataBuffer, "resetForTerminal")
+      .mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(resumeFlush).toHaveBeenCalledWith(id);
+    expect(resetForTerminal).not.toHaveBeenCalled();
   });
 
   it("repairs the WebGL atlas before the async wakeAndRestore IPC (#9679)", async () => {
@@ -197,10 +234,11 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       });
     vi.spyOn(service.wakeManager, "wakeAndRestore").mockImplementation(async () => {
       calls.push("wakeAndRestore");
-      return true;
+      return { ok: true, replayedMainBuffer: true };
     });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resetForTerminal").mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
@@ -217,7 +255,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
     vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(false);
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -233,7 +273,10 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     service.instances.set(id, instance);
 
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(false);
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: false,
+      replayedMainBuffer: false,
+    });
     const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -256,7 +299,10 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.resizeController, "lockResize")
       .mockImplementation(() => {});
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: true,
+      replayedMainBuffer: true,
+    });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -289,7 +335,10 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
       calls.push("applyDeferredResize");
     });
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: true,
+      replayedMainBuffer: true,
+    });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -311,7 +360,10 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
       .spyOn(service.resizeController, "lockResize")
       .mockImplementation(() => {});
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: true,
+      replayedMainBuffer: true,
+    });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -328,7 +380,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const applyDeferredResize = vi
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
 
     await service.fullWakeForVisibilityRestore(id);
 
@@ -344,7 +398,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const applyDeferredResize = vi
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
 
     await service.fullWakeForVisibilityRestore(id);
 
@@ -366,7 +422,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
       throw new Error("terminal disposed mid-wake");
     });
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
 
     // The throw propagates, but the deferred-wake flag must already be set so
     // notifyAttachSettledWaiters re-runs the wake once attach settles.
@@ -396,7 +454,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {
       calls.push("applyDeferredResize");
     });
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
 
     await service.fullWakeForVisibilityRestore(id);
 
@@ -415,7 +475,10 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     service.instances.set(id, instance);
 
     vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue({
+      ok: true,
+      replayedMainBuffer: true,
+    });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -439,7 +502,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const applyDeferredResize = vi
       .spyOn(service.resizeController, "applyDeferredResize")
       .mockImplementation(() => {});
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
     vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
 
@@ -462,7 +527,9 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     const instance = makeInstance({ isAttaching: false, hostElement });
     service.instances.set(id, instance);
 
-    const wakeAndRestore = vi.spyOn(service.wakeManager, "wakeAndRestore").mockResolvedValue(true);
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
 
     service.notifyAttachSettledWaiters(id);
     await Promise.resolve();
@@ -486,14 +553,18 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     vi.spyOn(service.wakeManager, "wakeAndRestore").mockImplementation(async () => {
       // Replace the managed terminal mid-flight
       service.instances.set(id, makeInstance());
-      return true;
+      return { ok: true, replayedMainBuffer: true };
     });
     const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
     const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+    const resetForTerminal = vi
+      .spyOn(service.dataBuffer, "resetForTerminal")
+      .mockImplementation(() => {});
 
     await service.fullWakeForVisibilityRestore(id);
 
     expect(handlePostWake).not.toHaveBeenCalled();
     expect(resumeFlush).not.toHaveBeenCalled();
+    expect(resetForTerminal).not.toHaveBeenCalled();
   });
 });

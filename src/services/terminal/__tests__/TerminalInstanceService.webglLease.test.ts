@@ -53,7 +53,7 @@ describe("WebGL lease through tier transitions", () => {
 
     mockDeps = {
       getInstance: vi.fn(() => mockManagedTerminal as ManagedTerminal),
-      wakeAndRestore: vi.fn(() => Promise.resolve(true)),
+      wakeAndRestore: vi.fn(() => Promise.resolve({ ok: true, replayedMainBuffer: true })),
       onTierApplied: onTierApplied as RendererPolicyDeps["onTierApplied"],
     };
 
