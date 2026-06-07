@@ -15,15 +15,16 @@ interface DockPanelOffscreenContainerProps {
 }
 
 export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenContainerProps) {
-  // Track portal targets (popover containers) for each terminal
-  const [portalTargets, setPortalTargets] = useState<Map<string, HTMLElement>>(new Map());
-  // Track offscreen slots (stable DOM elements in the hidden container)
-  const offscreenSlotsRef = useRef<Map<string, HTMLElement>>(new Map());
+  // One stable wrapper <div> per dock panel. Each wrapper is created once and
+  // is the permanent createPortal container for that panel — React never sees
+  // it change identity, so opening/closing a popover (or switching tabs) never
+  // unmounts the panel subtree. The wrapper lives in the offscreen container
+  // when parked and is imperatively relocated into the popover via moveBefore.
+  const wrappersRef = useRef<Map<string, HTMLElement>>(new Map());
   const offscreenContainerRef = useRef<HTMLDivElement>(null);
-  const [, forceUpdate] = useState(0);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   // The ref remains the authoritative source; state snapshots it for render.
-  const [offscreenSlots, setOffscreenSlots] = useState<Map<string, HTMLElement>>(() => new Map());
+  const [wrappers, setWrappers] = useState<Map<string, HTMLElement>>(() => new Map());
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
@@ -106,80 +107,91 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     [getPanelGroup, createTabGroup, addPanelToGroup, deleteTabGroup, addPanel, setActiveTab]
   );
 
-  // Create offscreen slots eagerly after container mounts
-  // This ensures slots exist before terminals try to portal to them
+  // Create the stable wrapper for each panel eagerly after the container mounts,
+  // so the wrapper exists (and createPortal can target it) before a popover
+  // tries to relocate it. Wrappers stay parked in the offscreen container until
+  // a popover opens.
   useLayoutEffect(() => {
     if (!offscreenContainerRef.current) return;
 
     const container = offscreenContainerRef.current;
     const currentIds = new Set(dockTerminals.map((t) => t.id));
+    let changed = false;
 
-    // Create slots for new terminals
+    // Create wrappers for new terminals
     for (const terminal of dockTerminals) {
-      if (!offscreenSlotsRef.current.has(terminal.id)) {
-        const slot = document.createElement("div");
-        slot.setAttribute("data-offscreen-slot", terminal.id);
-        slot.className = "offscreen-panel-slot";
-        slot.style.width = "100%";
-        slot.style.height = "100%";
-        container.appendChild(slot);
-        offscreenSlotsRef.current.set(terminal.id, slot);
+      if (!wrappersRef.current.has(terminal.id)) {
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-dock-panel-wrapper", terminal.id);
+        wrapper.style.width = "100%";
+        wrapper.style.height = "100%";
+        wrapper.style.display = "flex";
+        wrapper.style.flexDirection = "column";
+        container.appendChild(wrapper);
+        wrappersRef.current.set(terminal.id, wrapper);
+        changed = true;
       }
     }
 
-    // Remove slots for removed terminals
-    for (const [id, slot] of offscreenSlotsRef.current) {
+    // Remove wrappers for removed terminals (the portal content for them has
+    // already been unmounted by React, so the wrapper is empty).
+    for (const [id, wrapper] of wrappersRef.current) {
       if (!currentIds.has(id)) {
-        slot.remove();
-        offscreenSlotsRef.current.delete(id);
+        wrapper.remove();
+        wrappersRef.current.delete(id);
+        changed = true;
       }
     }
 
-    // Force update to ensure portals render with new slots
-    forceUpdate((n) => n + 1);
-    setOffscreenSlots(new Map(offscreenSlotsRef.current));
+    if (changed) {
+      setWrappers(new Map(wrappersRef.current));
+    }
   }, [dockTerminals]);
 
-  // Cleanup portal targets for removed terminals
-  useEffect(() => {
-    const currentIds = new Set(dockTerminals.map((t) => t.id));
-    setPortalTargets((prev) => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const id of prev.keys()) {
-        if (!currentIds.has(id)) {
-          next.delete(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [dockTerminals]);
+  // Relocate a panel's stable wrapper into the popover container (or back to the
+  // offscreen parking container when destination is null). Uses moveBefore so
+  // the move is atomic — xterm's canvas/WebGL context and focus survive without
+  // a React remount. Guards both nodes' connectedness because moveBefore throws
+  // HierarchyRequestError on disconnected/cross-document moves (e.g. while Radix
+  // is tearing down PopoverContent); appendChild is the reconnecting fallback.
+  const moveToDestination = useCallback((panelId: string, destination: HTMLElement | null) => {
+    const wrapper = wrappersRef.current.get(panelId);
+    if (!wrapper) return;
+    const dest = destination ?? offscreenContainerRef.current;
+    if (!dest || wrapper.parentElement === dest) return;
 
-  const portalTarget = useCallback((terminalId: string, target: HTMLElement | null) => {
-    setPortalTargets((prev) => {
-      const prevTarget = prev.get(terminalId);
-      if (prevTarget === target) return prev;
+    // Capture focus so we can restore it on the appendChild fallback path
+    // (moveBefore preserves focus itself; appendChild does not) and to work
+    // around the Cr148 quirk where moving a focused field drops it.
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const hadFocus = !!active && wrapper.contains(active);
 
-      const next = new Map(prev);
-      if (target) {
-        next.set(terminalId, target);
-      } else {
-        next.delete(terminalId);
+    if (wrapper.isConnected && dest.isConnected && typeof dest.moveBefore === "function") {
+      try {
+        dest.moveBefore(wrapper, null);
+      } catch {
+        dest.appendChild(wrapper);
       }
-      return next;
-    });
+    } else {
+      dest.appendChild(wrapper);
+    }
+
+    if (hadFocus && active && active.isConnected && document.activeElement !== active) {
+      active.focus();
+    }
   }, []);
 
   const contextValue: DockPanelContextValue = {
-    portalTarget,
+    moveToDestination,
   };
 
   return (
     <DockPanelContext.Provider value={contextValue}>
       {children}
 
-      {/* Hidden container for dock panels - keeps them mounted */}
+      {/* Hidden parking container for dock panel wrappers. Each panel's stable
+          wrapper lives here while its popover is closed and is moved into the
+          popover (via moveBefore) on open — never unmounted. */}
       {/* IMPORTANT: Size must be large enough for xterm to initialize (MIN_CONTAINER_SIZE = 50px) */}
       {/* content-visibility:hidden skips render work while preserving layout geometry */}
       <div
@@ -200,15 +212,15 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         aria-hidden="true"
       />
 
-      {/* Render panels via portal - ALWAYS use portal to avoid unmount/remount */}
+      {/* Render each panel into its stable wrapper. The wrapper is always the
+          portal container — its DOM position changes (offscreen ↔ popover) via
+          moveBefore, but its identity never does, so React never remounts. */}
       {dockTerminals.map((terminal) => {
-        // Use popover target if available, otherwise use offscreen slot
-        const target = portalTargets.get(terminal.id);
-        const offscreenSlot = offscreenSlots.get(terminal.id);
-        const portalContainer = target || offscreenSlot;
+        const wrapper = wrappers.get(terminal.id);
 
-        // Skip if no container yet (will render on next update after slots are created)
-        if (!portalContainer) {
+        // Skip until the wrapper exists (created in the layout effect; renders
+        // on the next update once setWrappers commits).
+        if (!wrapper) {
           return null;
         }
 
@@ -246,8 +258,10 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
           </DockPopoverChildProvider>
         );
 
-        // Always use createPortal with same key to prevent unmount/remount
-        return createPortal(content, portalContainer, `dock-panel-${terminal.id}`);
+        // Portal into the stable wrapper. Because the wrapper identity never
+        // changes, React keeps the same fiber across open/close — the wrapper is
+        // simply relocated in the DOM by moveToDestination.
+        return createPortal(content, wrapper, `dock-panel-${terminal.id}`);
       })}
     </DockPanelContext.Provider>
   );

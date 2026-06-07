@@ -103,6 +103,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const activePanel = useMemo(() => {
     return panels.find((p) => p.id === activeTabId) ?? panels[0];
   }, [panels, activeTabId]);
+  const activePanelId = activePanel?.id;
 
   // Derive isOpen from store state - open if ANY panel in this group is active
   const isOpen = panels.some((p) => p.id === activeDockTerminalId);
@@ -125,7 +126,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     };
   }, [sidebarHidden]);
 
-  const portalTarget = useDockPanelPortal();
+  const moveToDestination = useDockPanelPortal();
   const portalContainerElementRef = useRef<HTMLDivElement | null>(null);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
 
@@ -134,51 +135,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     setPortalContainer(node);
   }, []);
 
-  // True once the active panel's terminal host has migrated into the popover
-  // portal. Keyed to the active panel id and matched by `data-dock-panel-id`
-  // (not a bare child count) so a tab switch — which swaps the portal child
-  // rather than adding one — re-detects the new panel before focusing it.
-  const [migrated, setMigrated] = useState(false);
-
+  // Toggle buffering based on popover open state. The active panel's stable
+  // wrapper is relocated into this popover's container on open (and parked
+  // offscreen on close / tab switch) without a React remount. One layout pass
+  // after the move settles is enough for `checkVisibility()` inside `fit()` to
+  // flip — no retry loop needed.
   useEffect(() => {
-    const activeId = activePanel?.id;
-    if (!isOpen || !portalContainer || !activeId) {
-      setMigrated(false);
-      return;
-    }
-    const isPresent = () =>
-      Array.from(portalContainer.querySelectorAll("[data-dock-panel-id]")).some(
-        (el) => el.getAttribute("data-dock-panel-id") === activeId
-      );
-    if (isPresent()) {
-      setMigrated(true);
-      return;
-    }
-    setMigrated(false);
-    const observer = new MutationObserver(() => {
-      if (isPresent()) {
-        setMigrated(true);
-        observer.disconnect();
-      }
-    });
-    observer.observe(portalContainer, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [isOpen, portalContainer, activePanel?.id]);
-
-  // Toggle buffering based on popover open state. The terminal stays mounted
-  // in DockPanelOffscreenContainer across open/close cycles; the popover only
-  // shuttles the host element into a visible container. One layout pass after
-  // the portal-target ref settles is enough for `checkVisibility()` inside
-  // `fit()` to flip — no retry loop needed.
-  useEffect(() => {
-    if (!activePanel) return;
-    const activeId = activePanel.id;
+    if (!activePanelId) return;
 
     if (!isOpen) {
       try {
-        terminalInstanceService.applyRendererPolicy(activeId, TerminalRefreshTier.BACKGROUND);
+        terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND);
       } catch (error) {
-        console.warn(`Failed to apply dock state for panel ${activeId}:`, error);
+        console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
       return;
     }
@@ -187,18 +156,18 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     const rafId = requestAnimationFrame(() => {
       try {
-        const dims = terminalInstanceService.fit(activeId);
+        const dims = terminalInstanceService.fit(activePanelId);
         if (!dims) return;
-        terminalInstanceService.applyRendererPolicy(activeId, TerminalRefreshTier.VISIBLE);
+        terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.VISIBLE);
       } catch (error) {
-        console.warn(`Failed to apply dock state for panel ${activeId}:`, error);
+        console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
     });
 
     return () => {
       cancelAnimationFrame(rafId);
     };
-  }, [isOpen, portalContainer, activePanel]);
+  }, [isOpen, portalContainer, activePanelId]);
 
   // Auto-close popover when drag starts for any panel in this group
   useDndMonitor({
@@ -209,32 +178,33 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     },
   });
 
-  // Register/unregister portal target for active panel
+  // Move the active panel's stable wrapper into this popover on open (and park
+  // it offscreen on close or tab switch). Scalar `activePanelId` dep — not the
+  // activePanel object — so agent-state polling that mints a new panel object
+  // doesn't re-fire the move.
   useEffect(() => {
-    if (isOpen && portalContainer && activePanel) {
-      portalTarget(activePanel.id, portalContainer);
-    } else if (activePanel) {
-      portalTarget(activePanel.id, null);
+    if (!activePanelId) return;
+    if (isOpen && portalContainer) {
+      moveToDestination(activePanelId, portalContainer);
+    } else {
+      moveToDestination(activePanelId, null);
     }
 
     return () => {
-      if (activePanel) {
-        portalTarget(activePanel.id, null);
-      }
+      moveToDestination(activePanelId, null);
     };
-  }, [isOpen, portalContainer, activePanel, portalTarget]);
+  }, [isOpen, portalContainer, activePanelId, moveToDestination]);
 
-  // Focus the active panel's terminal once it has migrated into the popover
-  // portal — never the offscreen host. Honors focus-preserve / hybrid-input.
-  // Scalar deps (id / focusPolicy / isAgent value), not the activePanel object —
-  // so agent-state polling that mints a new panel object doesn't re-fire focus
-  // and yank it back into the terminal while the popover is open.
-  const activePanelId = activePanel?.id;
+  // Focus the active panel's terminal once the popover is open and its wrapper
+  // has been moved in (the move effect above runs first). Honors focus-preserve
+  // / hybrid-input. Scalar deps (id / focusPolicy / isAgent value), not the
+  // activePanel object — so agent-state polling that mints a new panel object
+  // doesn't re-fire focus and yank it back into the terminal while open.
   const activeFocusPolicy = activePanel?.focusPolicy;
   const activeIsAgent = activePanel ? deriveTerminalChrome(activePanel).isAgent : false;
 
   useEffect(() => {
-    if (!isOpen || !migrated || !activePanelId) return;
+    if (!isOpen || !portalContainer || !activePanelId) return;
     if (activeFocusPolicy === "preserve") return;
 
     const focusTarget = getTerminalFocusTarget({
@@ -248,7 +218,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     terminalInstanceService.focus(activePanelId);
   }, [
     isOpen,
-    migrated,
+    portalContainer,
     activePanelId,
     activeFocusPolicy,
     activeIsAgent,
@@ -625,9 +595,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
           onFocusOutside={handleDockFocusOutside}
           onOpenAutoFocus={(event) => {
-            // Block Radix's own auto-focus; we focus the terminal once it has
-            // migrated into the portal (see the migration-focus effect), not on
-            // a fixed timer that races a cold xterm mount.
+            // Block Radix's own auto-focus; we focus the active tab's terminal
+            // ourselves once its wrapper has been moved in (see the focus effect).
             event.preventDefault();
           }}
         >

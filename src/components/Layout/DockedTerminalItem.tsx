@@ -71,7 +71,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     };
   }, [sidebarHidden]);
 
-  const portalTarget = useDockPanelPortal();
+  const moveToDestination = useDockPanelPortal();
   const portalContainerElementRef = useRef<HTMLDivElement | null>(null);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
 
@@ -81,44 +81,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     setPortalContainer(node);
   }, []);
 
-  // True once this terminal's host has actually migrated into the popover portal
-  // (its `data-dock-panel-id` node is a live DOM descendant of PopoverContent).
-  // The terminal is rendered offscreen and portaled in asynchronously, so we
-  // focus it off this signal — observing the specific node's insertion — rather
-  // than a fixed timer that races a cold xterm mount. Matching the panel id (not
-  // a bare child count) keeps the signal correct when the portal child is
-  // swapped rather than added.
-  const [migrated, setMigrated] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen || !portalContainer) {
-      setMigrated(false);
-      return;
-    }
-    const isPresent = () =>
-      Array.from(portalContainer.querySelectorAll("[data-dock-panel-id]")).some(
-        (el) => el.getAttribute("data-dock-panel-id") === terminal.id
-      );
-    if (isPresent()) {
-      setMigrated(true);
-      return;
-    }
-    setMigrated(false);
-    const observer = new MutationObserver(() => {
-      if (isPresent()) {
-        setMigrated(true);
-        observer.disconnect();
-      }
-    });
-    observer.observe(portalContainer, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [isOpen, portalContainer, terminal.id]);
-
-  // Toggle buffering based on popover open state. The terminal stays mounted
-  // in DockPanelOffscreenContainer across open/close cycles; the popover only
-  // shuttles the host element into a visible container. One layout pass after
-  // the portal-target ref settles is enough for `checkVisibility()` inside
-  // `fit()` to flip — no retry loop needed.
+  // Toggle buffering based on popover open state. The terminal's stable wrapper
+  // is relocated into this popover's container on open (and parked offscreen on
+  // close) without a React remount. One layout pass after the move settles is
+  // enough for `checkVisibility()` inside `fit()` to flip — no retry loop needed.
   useEffect(() => {
     if (!isOpen) {
       try {
@@ -155,18 +121,20 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     },
   });
 
-  // Register/unregister portal target when popover opens and container is available
+  // Move the panel's stable wrapper into this popover when it opens and back to
+  // the offscreen parking container when it closes. The move is synchronous and
+  // preserves the subtree (no remount), so a tab/popover toggle is cheap.
   useEffect(() => {
     if (isOpen && portalContainer) {
-      portalTarget(terminal.id, portalContainer);
+      moveToDestination(terminal.id, portalContainer);
     } else {
-      portalTarget(terminal.id, null);
+      moveToDestination(terminal.id, null);
     }
 
     return () => {
-      portalTarget(terminal.id, null);
+      moveToDestination(terminal.id, null);
     };
-  }, [isOpen, portalContainer, terminal.id, portalTarget]);
+  }, [isOpen, portalContainer, terminal.id, moveToDestination]);
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -266,11 +234,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     ]
   );
 
-  // Focus the terminal once it has migrated into the popover portal — keyboard
-  // focus lands on a live DOM descendant of PopoverContent, never the offscreen
-  // host. Honors the focus-preserve and hybrid-input skips (see #6959).
+  // Focus the terminal once the popover is open and its wrapper has been moved
+  // in. The move effect above runs first (effects fire in declaration order),
+  // so by the time this runs the terminal host is a live descendant of
+  // PopoverContent. Honors the focus-preserve and hybrid-input skips (see #6959).
   useEffect(() => {
-    if (!isOpen || !migrated) return;
+    if (!isOpen || !portalContainer) return;
     if (terminal.focusPolicy === "preserve") return;
 
     const focusTarget = getTerminalFocusTarget({
@@ -284,7 +253,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     terminalInstanceService.focus(terminal.id);
   }, [
     isOpen,
-    migrated,
+    portalContainer,
     terminal.id,
     terminal.focusPolicy,
     preferredTerminalFocusTarget,
@@ -422,9 +391,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainerElementRef.current)}
           onFocusOutside={handleDockFocusOutside}
           onOpenAutoFocus={(event) => {
-            // Block Radix's own auto-focus; we focus the terminal once it has
-            // migrated into the portal (see the migration-focus effect), not on
-            // a fixed timer that races a cold xterm mount.
+            // Block Radix's own auto-focus; we focus the terminal ourselves once
+            // its wrapper has been moved into the popover (see the focus effect).
             event.preventDefault();
           }}
         >
