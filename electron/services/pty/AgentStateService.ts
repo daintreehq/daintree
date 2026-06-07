@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { events } from "../events.js";
 import { nextAgentState, getStateChangeTimestamp, type AgentEvent } from "../AgentStateMachine.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 // AgentState type used implicitly via TerminalInfo.agentState
 import {
   AgentStateChangedSchema,
@@ -112,7 +113,7 @@ export class AgentStateService {
     } catch (err) {
       console.error(
         "[AgentStateService] Failed to emit agent:state-transition-dropped:",
-        err instanceof Error ? err.message : err
+        formatErrorMessage(err, "unknown emit failure")
       );
     }
   }
