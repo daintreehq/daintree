@@ -512,6 +512,9 @@ port.on("message", async (rawMsg: any) => {
       case "set-pr-poll-cadence":
         {
           const { pullRequestService } = await import("./services/PullRequestService.js");
+          // Disable enrichment before slowing the cadence so there's no window
+          // where the expensive CI fetch still fires at the new blurred rate.
+          pullRequestService.setCIEnrichmentEnabled(request.focused);
           pullRequestService.setFocusCadence(request.focused);
         }
         break;

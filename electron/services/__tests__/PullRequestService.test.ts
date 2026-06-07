@@ -2535,4 +2535,268 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
   });
+
+  describe("CI enrichment gating (#10124)", () => {
+    const ROLE_ENV = "DAINTREE_INSTANCE_ROLE";
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.resetModules();
+      vi.clearAllMocks();
+      lastMockBridge = null;
+    });
+
+    function makeDetectedPR(overrides?: {
+      number?: number;
+      ciStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      stagnantPollCount?: number;
+    }) {
+      return {
+        number: overrides?.number ?? 42,
+        title: "Test PR",
+        url: "https://github.com/o/r/pull/42",
+        state: "open" as const,
+        isDraft: false,
+        ciStatus: overrides?.ciStatus,
+        providerId: "daintree.github.github",
+        stagnantPollCount: overrides?.stagnantPollCount ?? 0,
+      };
+    }
+
+    // Worker instances never own a focused window, so enrichment must default
+    // off — set before the singleton is imported so the field initializer reads
+    // it. withRole restores the prior env regardless of assertion outcome.
+    async function withRole<T>(role: string | undefined, fn: () => Promise<T>): Promise<T> {
+      const prev = process.env[ROLE_ENV];
+      if (role === undefined) delete process.env[ROLE_ENV];
+      else process.env[ROLE_ENV] = role;
+      try {
+        return await fn();
+      } finally {
+        if (prev === undefined) delete process.env[ROLE_ENV];
+        else process.env[ROLE_ENV] = prev;
+      }
+    }
+
+    it("initializes enrichment disabled for the worker role", async () => {
+      await withRole("worker", async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const svc = pullRequestService as any;
+
+        expect(svc.ciEnrichmentEnabled).toBe(false);
+        pullRequestService.destroy();
+      });
+    });
+
+    it("initializes enrichment enabled for attended (non-worker) instances", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const svc = pullRequestService as any;
+
+        expect(svc.ciEnrichmentEnabled).toBe(true);
+        pullRequestService.destroy();
+      });
+    });
+
+    it("skips the getCIStatuses batch entirely on worker instances", async () => {
+      await withRole("worker", async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+        const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+          const map = new Map<string, ForgePR | null>();
+          for (const branch of branches)
+            map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+          return map;
+        });
+        const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+        const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+          const map = new Map<number, CIStatus | null>();
+          for (const n of prNumbers) map.set(n, makeMockCIStatus());
+          return map;
+        });
+        mockImpl.batchLookups = { getCIStatuses };
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.initialize("/repo");
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+        );
+
+        await pullRequestService.refresh();
+        await flushLoaders();
+
+        // The expensive enrichment fan-out never runs...
+        expect(getCIStatuses).not.toHaveBeenCalled();
+        expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+
+        // ...and the detection emit omits the loading flag: there is no phase-2
+        // coming, so a held "loading" would spin forever (#6240).
+        const detection = detected.find((d) => d.prNumber === 7);
+        expect(detection).toBeDefined();
+        expect(detection?.isCiStatusLoading).toBeUndefined();
+        expect(detection?.prCiStatus).toBeUndefined();
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("clears in-flight CI and collapses the boost when enrichment is disabled", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+        svc.boostExpiresAt = Date.now() + 15 * 60 * 1000;
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        // PENDING is cleared to undefined (unknown), never SUCCESS (#6240).
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBeUndefined();
+        // No PENDING entry left → boost collapses so cadence decays to baseline.
+        expect(svc.boostExpiresAt).toBeNull();
+
+        // The re-emit drops the dot: absent CI fields + no loading flag mean the
+        // host full-replaces to "no checks" rather than holding the stale dot.
+        const clear = detected.find((d) => d.worktreeId === "wt-1" && d.prNumber === 7);
+        expect(clear).toBeDefined();
+        expect(clear?.prCiStatus).toBeUndefined();
+        expect(clear?.ciStatus).toBeUndefined();
+        expect(clear?.isCiStatusLoading).toBeUndefined();
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("leaves terminal CI states untouched and emits nothing for them on disable", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "SUCCESS" }));
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        // SUCCESS is already correct for the renderer — no sweep, no noise emit.
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("SUCCESS");
+        expect(detected).toHaveLength(0);
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("is idempotent — a second disable does not re-sweep or re-emit", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+        const afterFirst = detected.length;
+        // Re-seed a PENDING entry: if the second call still swept, it would emit.
+        svc.detectedPRs.get("wt-1").ciStatus = "PENDING";
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        expect(afterFirst).toBe(1);
+        expect(detected).toHaveLength(afterFirst);
+        // The re-seeded value is left alone — the no-op early-returns before sweep.
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("PENDING");
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("does not write CI back when enrichment is disabled mid-flight", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+        let resolveCi: (m: Map<number, CIStatus | null>) => void = () => {};
+        const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+          const map = new Map<string, ForgePR | null>();
+          for (const branch of branches)
+            map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+          return map;
+        });
+        const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+        const getCIStatuses = vi.fn(
+          (_repo: RepoRef, _prNumbers: number[]) =>
+            new Promise<Map<number, CIStatus | null>>((resolve) => {
+              resolveCi = resolve;
+            })
+        );
+        mockImpl.batchLookups = { getCIStatuses };
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+        );
+        await pullRequestService.refresh();
+        await flushLoaders();
+
+        // Enrichment is dispatched but still pending. Disable, then let it land.
+        expect(getCIStatuses).toHaveBeenCalledTimes(1);
+        pullRequestService.setCIEnrichmentEnabled(false);
+        resolveCi(new Map([[7, makeMockCIStatus()]]));
+        await flushLoaders();
+
+        // The stale in-flight result is discarded — the PR keeps no CI status.
+        const pr = svc.detectedPRs.get("wt-1");
+        expect(pr?.ciStatus).toBeUndefined();
+
+        pullRequestService.destroy();
+      });
+    });
+  });
 });
