@@ -2,15 +2,23 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { addErrorMock, removeErrorMock, isAvailableMock, cancelMock, onProgressMock } = vi.hoisted(
-  () => ({
+const { addErrorMock, removeErrorMock, isAvailableMock, cancelMock, onProgressMock, injectMock } =
+  vi.hoisted(() => ({
     addErrorMock: vi.fn(),
     removeErrorMock: vi.fn(),
-    isAvailableMock: vi.fn(() => new Promise<boolean>(() => {})),
+    isAvailableMock: vi.fn<() => Promise<boolean>>(() => new Promise<boolean>(() => {})),
     cancelMock: vi.fn(() => undefined),
     onProgressMock: vi.fn(() => () => {}),
-  })
-);
+    injectMock:
+      vi.fn<
+        (
+          terminalId: string,
+          worktreeId: string,
+          options: unknown,
+          injectionUuid?: string
+        ) => Promise<{ error?: string; fileCount?: number }>
+      >(),
+  }));
 
 const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
   const terminalState = {
@@ -22,7 +30,7 @@ const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
         agentId: undefined,
         agentState: "idle",
       },
-    } as Record<string, { id: string; worktreeId: string; agentId: undefined; agentState: string }>,
+    } as Record<string, Record<string, unknown>>,
     panelIds: ["term-1"],
   };
 
@@ -54,16 +62,27 @@ vi.mock("@/clients", () => ({
   copyTreeClient: {
     onProgress: onProgressMock,
     isAvailable: isAvailableMock,
-    injectToTerminal: vi.fn(),
+    injectToTerminal: injectMock,
     cancel: cancelMock,
+  },
+  // usePanelStore (pulled in transitively) constructs panelPersistence with
+  // projectClient at module load.
+  projectClient: {
+    getTerminals: vi.fn().mockResolvedValue([]),
+    setTerminals: vi.fn().mockResolvedValue(undefined),
+    setTabGroups: vi.fn().mockResolvedValue(undefined),
+    getSettings: vi.fn().mockResolvedValue(null),
   },
 }));
 
-import { useContextInjection } from "../useContextInjection";
+import { useContextInjection, cancelContextInjection } from "../useContextInjection";
 
 describe("useContextInjection", () => {
   beforeEach(() => {
+    // Reset the module-level singleton between tests via its public API
+    cancelContextInjection();
     vi.clearAllMocks();
+    isAvailableMock.mockImplementation(() => new Promise<boolean>(() => {}));
     terminalState.focusedId = "term-1";
     terminalState.panelsById = {
       "term-1": {
@@ -88,5 +107,192 @@ describe("useContextInjection", () => {
         result.current.cancel();
       });
     }).not.toThrow();
+  });
+
+  it("cancelling an active injection does not record an error", async () => {
+    isAvailableMock.mockResolvedValue(true);
+    let resolveInject!: (value: { error?: string }) => void;
+    injectMock.mockImplementation(
+      () =>
+        new Promise<{ error?: string }>((resolve) => {
+          resolveInject = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useContextInjection("term-1"));
+
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-1");
+    });
+    await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
+    expect(result.current.isInjecting).toBe(true);
+    expect(result.current.injectionStatus).toBe("injecting");
+
+    const injectionUuid = injectMock.mock.calls[0]?.[3];
+    expect(injectionUuid).toBeTruthy();
+    act(() => {
+      result.current.cancel();
+    });
+    expect(cancelMock).toHaveBeenCalledWith(injectionUuid);
+
+    await act(async () => {
+      resolveInject({ error: "Injection cancelled" });
+      await injectPromise;
+    });
+
+    expect(addErrorMock).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.isInjecting).toBe(false);
+    expect(result.current.injectionStatus).toBe("idle");
+  });
+
+  it("cancels the backend operation with the specific injection UUID", async () => {
+    isAvailableMock.mockResolvedValue(true);
+    injectMock.mockImplementation(() => new Promise(() => {}));
+
+    const { result } = renderHook(() => useContextInjection("term-1"));
+
+    act(() => {
+      void result.current.inject("wt-1", "term-1");
+    });
+    await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
+
+    const injectionUuid = injectMock.mock.calls[0]?.[3];
+    expect(injectionUuid).toBeTruthy();
+
+    act(() => {
+      result.current.cancel();
+    });
+
+    expect(cancelMock).toHaveBeenCalledTimes(1);
+    expect(cancelMock).toHaveBeenCalledWith(injectionUuid);
+  });
+
+  it("cancelling a pending injection clears the waiting state without recording an error", async () => {
+    terminalState.panelsById = {
+      "term-agent": {
+        id: "term-agent",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+    };
+    terminalState.focusedId = "term-agent";
+    terminalState.panelIds = ["term-agent"];
+
+    const { result } = renderHook(() => useContextInjection("term-agent"));
+
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-agent");
+    });
+    await vi.waitFor(() => expect(result.current.isPendingInjection).toBe(true));
+    expect(result.current.injectionStatus).toBe("waiting");
+
+    await act(async () => {
+      result.current.cancel();
+      await injectPromise;
+    });
+
+    expect(result.current.isPendingInjection).toBe(false);
+    expect(result.current.injectionStatus).toBe("idle");
+    expect(result.current.error).toBeNull();
+    expect(addErrorMock).not.toHaveBeenCalled();
+    // No active backend operation while waiting — nothing to cancel over IPC
+    expect(injectMock).not.toHaveBeenCalled();
+  });
+
+  it("cancelling during the availability check aborts before any context is written", async () => {
+    let resolveAvailable!: (value: boolean) => void;
+    isAvailableMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveAvailable = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useContextInjection("term-1"));
+
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-1");
+    });
+    await vi.waitFor(() => expect(result.current.isInjecting).toBe(true));
+
+    act(() => {
+      result.current.cancel();
+    });
+
+    await act(async () => {
+      resolveAvailable(true);
+      await injectPromise;
+    });
+
+    expect(injectMock).not.toHaveBeenCalled();
+    expect(addErrorMock).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.isInjecting).toBe(false);
+    expect(result.current.injectionStatus).toBe("idle");
+  });
+
+  it("still records a real injection failure as an error", async () => {
+    isAvailableMock.mockResolvedValue(true);
+    injectMock.mockResolvedValue({ error: "copytree exploded" });
+    addErrorMock.mockReturnValue("error-1");
+
+    const { result } = renderHook(() => useContextInjection("term-1"));
+
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-1");
+    });
+    await act(async () => {
+      await injectPromise;
+    });
+
+    expect(addErrorMock).toHaveBeenCalledTimes(1);
+    expect(addErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Context injection failed: copytree exploded",
+        source: "ContextInjection",
+      })
+    );
+    expect(result.current.error).toBe("copytree exploded");
+  });
+
+  it("cancelContextInjection cancels the active injection from outside the hook", async () => {
+    isAvailableMock.mockResolvedValue(true);
+    let resolveInject!: (value: { error?: string }) => void;
+    injectMock.mockImplementation(
+      () =>
+        new Promise<{ error?: string }>((resolve) => {
+          resolveInject = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useContextInjection("term-1"));
+
+    let injectPromise!: Promise<void>;
+    act(() => {
+      injectPromise = result.current.inject("wt-1", "term-1");
+    });
+    await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
+
+    const injectionUuid = injectMock.mock.calls[0]?.[3];
+    expect(injectionUuid).toBeTruthy();
+    act(() => {
+      cancelContextInjection();
+    });
+    expect(cancelMock).toHaveBeenCalledWith(injectionUuid);
+
+    await act(async () => {
+      resolveInject({ error: "Injection cancelled" });
+      await injectPromise;
+    });
+
+    expect(addErrorMock).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.isInjecting).toBe(false);
   });
 });

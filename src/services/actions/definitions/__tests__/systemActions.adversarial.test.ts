@@ -43,6 +43,14 @@ vi.mock("@/clients", () => ({
   systemClient: systemClientMock,
   cliAvailabilityClient: cliAvailabilityClientMock,
   artifactClient: artifactClientMock,
+  // usePanelStore (pulled in transitively via useContextInjection) constructs
+  // panelPersistence with projectClient at module load.
+  projectClient: {
+    getTerminals: vi.fn().mockResolvedValue([]),
+    setTerminals: vi.fn().mockResolvedValue(undefined),
+    setTabGroups: vi.fn().mockResolvedValue(undefined),
+    getSettings: vi.fn().mockResolvedValue(null),
+  },
 }));
 
 import { registerSystemActions } from "../systemActions";

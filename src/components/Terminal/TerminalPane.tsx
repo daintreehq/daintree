@@ -8,7 +8,7 @@ import React, {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Settings, OctagonAlert, RotateCcw } from "lucide-react";
+import { Settings, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -33,6 +33,7 @@ import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
+import { useContextInjection } from "@/hooks/useContextInjection";
 import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
@@ -547,6 +548,17 @@ function TerminalPaneComponent({
 
   const { showBanner: showForceResumeStall, resetQueue: resetForceResumeQueue } =
     useForceResumeCycleWatchdog(id);
+
+  const {
+    cancel: cancelInjection,
+    isInjecting,
+    isPendingInjection,
+    injectionStatus,
+    progress: injectionProgress,
+  } = useContextInjection(id);
+  // Single gate across waiting → injecting so the banner doesn't flicker on
+  // the phase transition; fast injections (<400ms) show nothing.
+  const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -1335,6 +1347,37 @@ function TerminalPaneComponent({
             icon: RotateCcw,
             onClick: resetForceResumeQueue,
           }}
+        />
+      </BannerSlot>
+
+      <BannerSlot visible={showInjectionBanner}>
+        <InlineStatusBanner
+          icon={injectionStatus === "waiting" ? Hourglass : Folders}
+          severity={injectionStatus === "waiting" ? "neutral" : "info"}
+          title={injectionStatus === "waiting" ? "Waiting for agent" : "Injecting context"}
+          description={
+            injectionStatus === "waiting" ? "Context will inject when the agent is idle" : undefined
+          }
+          contextLine={injectionStatus === "injecting" ? injectionProgress?.message : undefined}
+          role="status"
+          ariaLive="polite"
+          action={{
+            id: "cancel-context-injection",
+            label: "Cancel",
+            onClick: cancelInjection,
+          }}
+          descriptionExtras={
+            injectionStatus === "injecting" ? (
+              <div className="mt-1.5 h-0.5 w-full rounded bg-daintree-border/60">
+                <div
+                  className="h-full rounded bg-status-info/60 transition-[width] duration-150 ease-out"
+                  style={{
+                    width: `${Math.min(Math.max((injectionProgress?.progress ?? 0) * 100, 0), 100)}%`,
+                  }}
+                />
+              </div>
+            ) : undefined
+          }
         />
       </BannerSlot>
 
