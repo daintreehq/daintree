@@ -95,8 +95,7 @@ export class RunHistoryLog {
           // but on-disk JSON is not trusted (mirrors the MCP audit backfill).
           .map(backfillRecord)
       : [];
-    this.records =
-      safe.length > this.maxRecords ? safe.slice(safe.length - this.maxRecords) : safe;
+    this.records = safe.length > this.maxRecords ? safe.slice(safe.length - this.maxRecords) : safe;
     this.hydrated = true;
   }
 
