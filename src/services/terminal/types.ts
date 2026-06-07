@@ -102,6 +102,14 @@ export interface ManagedTerminal {
   // Render backpressure / synchronization hints
   pendingWrites?: number;
   needsWake?: boolean;
+  // Lifetime flag (#10309): set true the first time a wake successfully replays
+  // a serialized snapshot. Gates the wake-decline data-loss marker so a fresh
+  // terminal — which legitimately wakes with no snapshot (serialize() returns
+  // "" and is coerced to null) — is not falsely marked as having dropped
+  // output. Only a terminal that previously restored and then woke with a null
+  // snapshot represents a genuine gap. Never reset on tier transitions or in
+  // clearWakeState; it is a property of the instance, cleared only on teardown.
+  everWoken?: boolean;
 
   // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
   // (performance.now()) just before terminal.open() in attach(); the first real
