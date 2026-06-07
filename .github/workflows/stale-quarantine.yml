@@ -143,6 +143,9 @@ jobs:
               console.log(`  ${relPath}: ${annotations.length} stale annotation(s)`);
             }
 
+            // Strip the moving threshold date so an unchanged report dedups across weekly runs
+            const normalize = (s) => (s || '').replace(/\(threshold: `[^`]*`\)/g, '(threshold: NORMALIZED)');
+
             // List all open test-quarantine issues (may be more than one page)
             const existingIssues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
@@ -177,17 +180,25 @@ jobs:
                 const existing = existingIssues.find(i => i.title === title);
 
                 if (existing) {
-                  // Check if the most recent comment already matches this body
-                  const { data: comments } = await github.rest.issues.listComments({
+                  // The first report for an issue lives in the issue body, not a
+                  // comment, so dedup against it too or run 2 would always re-post.
+                  if (normalize(existing.body) === normalize(body)) {
+                    console.log(`Skipped commenting on #${existing.number}: issue body already matches.`);
+                    continue;
+                  }
+
+                  // Check if the most recent comment already matches this body.
+                  // The issue-comments endpoint ignores sort/direction and returns
+                  // comments oldest-first, so paginate and take the last one.
+                  const comments = await github.paginate(github.rest.issues.listComments, {
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     issue_number: existing.number,
-                    per_page: 1,
-                    sort: 'created',
-                    direction: 'desc',
+                    per_page: 100,
                   });
+                  const latestComment = comments.at(-1);
 
-                  if (comments.length > 0 && comments[0].body === body) {
+                  if (latestComment && normalize(latestComment.body) === normalize(body)) {
                     console.log(`Skipped commenting on #${existing.number}: most recent comment already matches.`);
                     continue;
                   }
