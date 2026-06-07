@@ -620,7 +620,7 @@ describe("WorkspaceClient multi-process manager", () => {
       });
     });
 
-    it("emits top-level worktree-activated event when setActiveWorktree succeeds", async () => {
+    it("emits the plugin-bus worktree-activated exactly once for a non-silent activation (#9945)", async () => {
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load;
@@ -628,17 +628,32 @@ describe("WorkspaceClient multi-process manager", () => {
       const listener = vi.fn();
       client.on("worktree-activated", listener);
 
+      // Non-silent Main-originated activation (the githubWorkIssue path).
       const activatePromise = client.setActiveWorktree("wt-1", 1);
-      // The set-active request is queued on sendWithResponse — resolve it
-      // so setActiveWorktree finishes and emits.
       await tick();
       const setActiveReq = h(0)
         .getAllRequests()
         .find((r) => r.type === "set-active");
       expect(setActiveReq).toBeDefined();
+      // The host's silent flag must propagate so the router can gate on it.
+      expect(setActiveReq).toMatchObject({ silent: undefined });
       h(0).resolveRequest(setActiveReq!.requestId, { success: true });
       await activatePromise;
 
+      // WorkspaceClient itself must NOT emit on the plugin bus — that was the
+      // duplicate source. At this point (before the host round-trip) the bus is
+      // silent.
+      expect(listener).not.toHaveBeenCalled();
+
+      // The host always round-trips a `worktree-activated` event for every
+      // successful set-active; the router is the SOLE plugin-bus source.
+      h(0).emit("host-event", {
+        type: "worktree-activated",
+        worktreeId: "wt-1",
+        silent: undefined,
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
         worktreeId: "wt-1",
         projectPath: path.resolve("/project-a"),
@@ -658,8 +673,18 @@ describe("WorkspaceClient multi-process manager", () => {
       const setActiveReq = h(0)
         .getAllRequests()
         .find((r) => r.type === "set-active");
+      // The silent flag must reach the host so its round-trip event carries it
+      // and the router suppresses the bus emit.
+      expect(setActiveReq).toMatchObject({ silent: true });
       h(0).resolveRequest(setActiveReq!.requestId, { success: true });
       await activatePromise;
+
+      // Router suppresses the silent host round-trip too.
+      h(0).emit("host-event", {
+        type: "worktree-activated",
+        worktreeId: "wt-1",
+        silent: true,
+      });
 
       expect(listener).not.toHaveBeenCalled();
     });

@@ -108,6 +108,31 @@ export class WorkspaceHostEventRouter {
         });
         break;
 
+      case "worktree-activated":
+        // Host-originated active-worktree change (#9945). The per-view
+        // renderer consumes this via the MessagePort path (see
+        // `DIRECT_RENDERER_EVENTS` in `electron/workspace-host.ts`) so no
+        // `sendToEntryWindows` hop is needed — the new `WorktreeStoreContext`
+        // does not subscribe to the legacy `window.electron.worktree.onActivated`
+        // IPC channel after the #9327276d7 per-view migration. Mirror to the
+        // plugin bus so `PluginService.subscribeWorktreeEvent(pluginId,
+        // "worktree-activated", ...)` still receives host-originated
+        // activations on the same payload shape.
+        //
+        // Respect the `silent` flag propagated from the originating
+        // `set-active` IPC request. PR #3603's silent contract suppresses
+        // the legacy `CHANNELS.WORKTREE_ACTIVATED` echo and the
+        // `WorkspaceClient`-level plugin-bus emit; this router case must
+        // mirror that suppression or plugin subscribers to
+        // `onDidChangeActiveWorktree` would receive notifications for
+        // activations the caller explicitly marked silent.
+        if (event.silent) break;
+        this.emit("worktree-activated", {
+          worktreeId: event.worktreeId,
+          projectPath: entry.projectPath,
+        });
+        break;
+
       case "pr-detected": {
         // `linked` is the source of truth (#8452) — derive the canonical
         // provider/owner/repo from it rather than reintroducing empty

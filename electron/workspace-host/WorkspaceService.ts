@@ -1617,7 +1617,19 @@ export class WorkspaceService {
     });
   }
 
-  setActiveWorktree(requestId: string, worktreeId: string): void {
+  setActiveWorktree(requestId: string, worktreeId: string, options?: { silent?: boolean }): void {
+    // Reject unknown worktree ids with success:false. Pre-PR, an unknown id
+    // would mutate `this.activeWorktreeId` to a value the renderer could not
+    // resolve; the new `worktree-activated` emit would propagate that miss
+    // to the per-view store via MessagePort, where the listener would call
+    // `selectWorktree(unknown)` and leave the sidebar in a half-state until
+    // the next event. The new contract: unknown id → no-op + reject the
+    // IPC request so the caller can surface the error.
+    if (!this.monitors.has(worktreeId)) {
+      this.sendEvent({ type: "set-active-result", requestId, success: false });
+      return;
+    }
+
     const previousActiveId = this.activeWorktreeId;
     this.activeWorktreeId = worktreeId;
 
@@ -1657,6 +1669,32 @@ export class WorkspaceService {
       this.lruTouch(previousActiveId);
     }
     this.applyWatcherBudget();
+
+    // Host-originated activation. Fires on every `setActiveWorktree` call
+    // (auto-switch in `runTopologyReconcile` and `deleteWorktree` AND
+    // Main-originated IPC round-trips). Main-originated activations are
+    // idempotent on the renderer side — the listener at
+    // `WorktreeStoreContext.tsx` calls `selectWorktree` which is a no-op
+    // when the id is already the active one. The auto-switch case is the
+    // bug fix for #9945: without this emit, the renderer learned of the
+    // loss via `worktree-removed` (clearing `activeWorktreeId` to null) and
+    // only recovered on the next render tick via `useActiveWorktreeSync`.
+    //
+    // Separate surface from the legacy `CHANNELS.WORKTREE_ACTIVATED` echo
+    // path that PR #3603's `silent` flag suppresses for renderer-initiated
+    // IPC. The legacy echo reaches `window.electron.worktree.onActivated`
+    // (no per-view consumer since the #9327276d7 migration); this MessagePort
+    // event is what the per-view `WorktreeStoreContext` actually listens to.
+    // `silent` is propagated so the main-process router can mirror the
+    // legacy `silent` contract on the plugin bus and avoid double-notifying
+    // subscribers that the legacy path already suppressed.
+    this.sendEvent({
+      type: "worktree-activated",
+      worktreeId,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
+      silent: options?.silent,
+    });
 
     this.sendEvent({ type: "set-active-result", requestId, success: true });
   }

@@ -61,6 +61,13 @@ const worktreePorts: MessagePort[] = [];
 const DIRECT_RENDERER_EVENTS = new Set([
   "worktree-update",
   "worktree-removed",
+  // Host-originated active-worktree changes — fan out direct so the
+  // per-view `WorktreeStoreContext` listener (`worktree-activated`) fires in
+  // the same tick as any accompanying `worktree-removed` (the host-originated
+  // auto-switch in `runTopologyReconcile` and `deleteWorktree`). The legacy
+  // `CHANNELS.WORKTREE_ACTIVATED` echo path is still gated by PR #3603's
+  // `silent` flag and is unaffected by this allowlist.
+  "worktree-activated",
   "pr-detected",
   "pr-cleared",
   "pr-detection-state",
@@ -421,7 +428,9 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "set-active":
-        workspaceService.setActiveWorktree(request.requestId, request.worktreeId);
+        workspaceService.setActiveWorktree(request.requestId, request.worktreeId, {
+          silent: request.silent,
+        });
         break;
 
       case "refresh":
