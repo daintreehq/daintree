@@ -456,6 +456,76 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(webview.stop).not.toHaveBeenCalled();
   });
 
+  it("exposes the loading overlay to screen readers via role=status (#9964)", () => {
+    const { container, getByRole } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    // The overlay is Doherty-gated — it only mounts after the 400ms threshold.
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    const status = getByRole("status");
+    expect(status.getAttribute("aria-busy")).toBe("true");
+    expect(status.getAttribute("aria-label")).toBe("Loading…");
+    expect(status.textContent).toContain("Loading…");
+  });
+
+  it("announces the slow-load escalation via a polite live region (#9964)", () => {
+    // aria-busy on the status wrapper suppresses inner live regions, so the
+    // escalation must flow through the sibling aria-live span.
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    const liveRegion = container.querySelector('[aria-live="polite"]');
+    expect(liveRegion).not.toBeNull();
+    expect(liveRegion?.textContent).toBe("");
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(liveRegion?.textContent).toContain("taking longer than usual");
+  });
+
+  it("removes the loading status region after did-stop-loading (#9964)", () => {
+    const { container, queryByRole } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+    expect(queryByRole("status")).not.toBeNull();
+
+    act(() => {
+      webview.setMockLoading(false);
+      emitWebviewEvent(webview, "did-stop-loading");
+    });
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    expect(queryByRole("status")).toBeNull();
+  });
+
   describe("back/forward navigation guard (#9942)", () => {
     function getLoadingOverlay(container: HTMLElement): Element | null {
       return container.querySelector(".bg-daintree-bg.z-10");
@@ -1488,6 +1558,48 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(webview.reload).toHaveBeenCalledTimes(1);
       expect(container.textContent).toContain("Page process crashed");
       expect(container.textContent).toContain("Reason: oom (exit code 9)");
+    });
+
+    it("does not emit a durable notification on the first crash (#9964)", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("emits a durable high-priority notification on the second crash within 60s (#9964)", () => {
+      // A crash loop in a background pane is otherwise silent — the in-flow
+      // banner is only visible when the pane is. Mirrors DevPreviewPane.
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      act(() => {
+        emitRenderProcessGone(webview, "oom", 9);
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Page crashed repeatedly",
+          message: expect.stringContaining("oom"),
+          priority: "high",
+          duration: 0,
+          supersedeKey: "browser-pane-crash-loop:browser-panel-1",
+          correlationId: "browser-panel-1",
+          context: expect.objectContaining({
+            eventKind: "recovery",
+            panelId: "browser-panel-1",
+          }),
+        })
+      );
     });
 
     it("surfaces the banner on OS-pressure memory-eviction (no Daintree eviction in flight)", () => {

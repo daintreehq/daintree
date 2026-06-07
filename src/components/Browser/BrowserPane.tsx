@@ -289,25 +289,40 @@ export function BrowserPane({
     return () => clearTimeout(timer);
   }, [blockedNav]);
 
-  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
-    const now = Date.now();
-    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
-    timestamps.push(now);
-    crashTimestampsRef.current = timestamps;
+  const handleRenderProcessGone = useCallback(
+    (details: { reason: string; exitCode: number }) => {
+      const now = Date.now();
+      const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+      timestamps.push(now);
+      crashTimestampsRef.current = timestamps;
 
-    // Clear any stale load-error overlay (z-30, absolute inset-0) — without
-    // this it would occlude the crash banner, which is an in-flow element.
-    setLoadError(null);
-    setCrashDetails(details);
-    setCrashState("crashed");
+      // Clear any stale load-error overlay (z-30, absolute inset-0) — without
+      // this it would occlude the crash banner, which is an in-flow element.
+      setLoadError(null);
+      setCrashDetails(details);
+      setCrashState("crashed");
 
-    // Auto-reload silently on the first crash within the 60s window so a
-    // one-off renderer fault recovers transparently. A second crash within
-    // the window leaves the banner up so the user can act.
-    if (timestamps.length < 2) {
-      crashReloadRef.current();
-    }
-  }, []);
+      // Auto-reload silently on the first crash within the 60s window so a
+      // one-off renderer fault recovers transparently. A second crash within
+      // the window leaves the banner up so the user can act.
+      if (timestamps.length < 2) {
+        crashReloadRef.current();
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Page crashed repeatedly",
+          message: `The browser page crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload to recover.`,
+          priority: "high",
+          duration: 0,
+          context: { eventKind: "recovery", panelId: id },
+          supersedeKey: `browser-pane-crash-loop:${id}`,
+          correlationId: id,
+        });
+      }
+    },
+    [id]
+  );
 
   useWebviewEvents({
     webviewElement,
@@ -997,10 +1012,23 @@ export function BrowserPane({
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {showLoadingOverlay && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg z-10 gap-3">
-                  <Spinner size="2xl" className="text-status-info" />
+                  {/* aria-busy on the status wrapper suppresses inner live regions,
+                      so the slow-load escalation announces via the sibling
+                      aria-live span below (SkeletonHint pattern). */}
+                  <div role="status" aria-busy="true" aria-label="Loading…">
+                    <span className="sr-only">Loading…</span>
+                    <Spinner size="2xl" className="text-status-info" />
+                  </div>
+                  <span className="sr-only" aria-live="polite" aria-atomic="true">
+                    {isSlowLoad
+                      ? "Loading is taking longer than usual. Select Cancel to stop."
+                      : ""}
+                  </span>
                   {isSlowLoad && (
                     <>
-                      <p className="text-xs text-daintree-text/50">Taking longer than usual...</p>
+                      <p aria-hidden="true" className="text-xs text-daintree-text/50">
+                        Taking longer than usual...
+                      </p>
                       <Button
                         onClick={handleCancelLoad}
                         variant="ghost"
