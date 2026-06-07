@@ -2,21 +2,24 @@ import type { ReactElement } from "react";
 import { Trash2 } from "lucide-react";
 import type { FleetSavedScope } from "@shared/types";
 import { actionService } from "@/services/ActionService";
-import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 interface SavedFleetRowProps {
   scope: FleetSavedScope;
   onRequestDelete: (id: string) => void;
+  /** Live count of panes this scope would currently arm. */
+  count: number;
+  /** True for snapshots whose stored terminal IDs are all gone. */
+  isStale: boolean;
 }
 
-export function SavedFleetRow({ scope, onRequestDelete }: SavedFleetRowProps): ReactElement {
-  // Counts are computed at render time — the dropdown opens fresh each time,
-  // so re-running this on every paint of the open menu is fine and there's no
-  // need for a panelStore subscription that would burn cycles while closed.
-  const count = computeSavedScopePaneCount(scope);
+export function SavedFleetRow({
+  scope,
+  onRequestDelete,
+  count,
+  isStale,
+}: SavedFleetRowProps): ReactElement {
   const flavorLabel = scope.kind === "snapshot" ? "Snapshot" : "Live";
-  const isStale = scope.kind === "snapshot" && count === 0;
   return (
     <DropdownMenuItem
       aria-disabled={isStale || undefined}
