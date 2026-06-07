@@ -18,6 +18,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
   appClient: { getHydrationState: vi.fn() },

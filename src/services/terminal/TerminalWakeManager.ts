@@ -38,12 +38,28 @@ export interface WakeManagerDeps {
   onDeclined?: (id: string) => void;
 }
 
+export interface WakeResult {
+  ok: boolean;
+  /**
+   * True only when the host's serialized main-buffer snapshot was actually
+   * replayed into the still-current xterm instance (restoreFromSerialized /
+   * incremental succeeded). Selection skips, missing state, failures, and a
+   * mid-wake instance swap all resolve with `false` — xterm was not
+   * reset+replayed for the live instance, so bytes held while backgrounded
+   * must still be flushed. Alt-buffer wakes replay like any main-buffer
+   * snapshot (#9894) and so resolve `true`. Callers use this to choose between
+   * flushing the held ingest queue and discarding it (the snapshot already
+   * contains those bytes — flushing would double-paint them, #9910).
+   */
+  replayedMainBuffer: boolean;
+}
+
 export class TerminalWakeManager {
   private lastWakeTime = new Map<string, number>();
   private pendingWakes = new Map<string, { retries: number; timeoutId: NodeJS.Timeout }>();
   private pendingRateLimitedWakes = new Map<string, NodeJS.Timeout>();
   private declineRetries = new Map<string, { attempt: number; timeoutId: NodeJS.Timeout }>();
-  private inFlightWakes = new Map<string, Promise<boolean>>();
+  private inFlightWakes = new Map<string, Promise<WakeResult>>();
   private deps: WakeManagerDeps;
 
   constructor(deps: WakeManagerDeps) {
@@ -70,16 +86,16 @@ export class TerminalWakeManager {
     );
   }
 
-  async wakeAndRestore(id: string): Promise<boolean> {
+  async wakeAndRestore(id: string): Promise<WakeResult> {
     const inFlight = this.inFlightWakes.get(id);
     if (inFlight) {
       return inFlight;
     }
 
-    const wakePromise = (async () => {
+    const wakePromise = (async (): Promise<WakeResult> => {
       try {
         const managed = this.deps.getInstance(id);
-        if (!managed) return false;
+        if (!managed) return { ok: false, replayedMainBuffer: false };
 
         // xterm v6 clears selection when terminal.reset() is called during
         // restoreFromSerialized. Skip the restore if the user has an active
@@ -88,7 +104,7 @@ export class TerminalWakeManager {
         // is protecting) so the resync lands once the selection is released.
         if (managed.terminal.hasSelection()) {
           this.noteDecline(id, false);
-          return false;
+          return { ok: false, replayedMainBuffer: false };
         }
 
         const { state } = await terminalClient.wake(id);
@@ -96,7 +112,7 @@ export class TerminalWakeManager {
         // Re-check after async: selection may have started while we were awaiting.
         if (managed.terminal.hasSelection()) {
           this.noteDecline(id, false);
-          return false;
+          return { ok: false, replayedMainBuffer: false };
         }
 
         // No serialized snapshot to replay. The host discarded the buffered
@@ -104,10 +120,10 @@ export class TerminalWakeManager {
         // retry in case the snapshot becomes available. Alternate-screen TUIs
         // fall through here too: addon-serialize includes the alt-buffer frame
         // (\x1b[?1049h + content), so a present snapshot correctly repaints the
-        // TUI rather than being silently treated as a no-op resync.
+        // TUI rather than being silently treated as a no-op resync (#9894).
         if (!state) {
           this.noteDecline(id, true);
-          return false;
+          return { ok: false, replayedMainBuffer: false };
         }
 
         const restoreOk =
@@ -130,8 +146,15 @@ export class TerminalWakeManager {
             usePanelStore.getState().setScrollbackRestoreError(id, restoreError);
             logWarn(`Scrollback restore failed for wake of ${id}`, { error: restoreError });
           }
-          return false;
+          return { ok: false, replayedMainBuffer: false };
         }
+
+        // A successful replay resynced the pane — cancel any decline retry left
+        // over from an earlier declined wake of this terminal, regardless of
+        // which caller invoked wakeAndRestore (direct RendererPolicy /
+        // visibility-restore wakes don't run triggerWake's success branch).
+        // Otherwise the stale timer fires a redundant reset on an active pane.
+        this.clearDeclineRetry(id);
 
         if (this.deps.getInstance(id) === managed) {
           managed.terminal.refresh(0, managed.terminal.rows - 1);
@@ -139,17 +162,16 @@ export class TerminalWakeManager {
           // in the panel store. Mirror the hydration retry path's cleanup
           // (#8535): clear it now that the replay has succeeded.
           usePanelStore.getState().clearScrollbackRestoreError(id);
+          return { ok: true, replayedMainBuffer: true };
         }
-        // A successful replay resynced the pane — cancel any decline retry left
-        // over from an earlier declined wake of this terminal, regardless of
-        // which caller invoked wakeAndRestore (direct RendererPolicy /
-        // visibility-restore wakes don't run triggerWake's success branch).
-        // Otherwise the stale timer fires a redundant reset on an active pane.
-        this.clearDeclineRetry(id);
-        return true;
+        // Instance replaced mid-wake (LRU eviction + respawn under the same
+        // id): the replay landed in a stale terminal, so don't claim a
+        // main-buffer replay for the id — callers would wrongly discard the
+        // replacement's held bytes.
+        return { ok: true, replayedMainBuffer: false };
       } catch (error) {
         console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
-        return false;
+        return { ok: false, replayedMainBuffer: false };
       }
     })();
 
@@ -164,8 +186,8 @@ export class TerminalWakeManager {
 
   private triggerWake(id: string): void {
     const startedAt = Date.now();
-    void this.wakeAndRestore(id).then((success) => {
-      if (success) {
+    void this.wakeAndRestore(id).then(({ ok }) => {
+      if (ok) {
         // wakeAndRestore already cancels any pending decline retry on success.
         this.lastWakeTime.set(id, startedAt);
       } else {
@@ -216,8 +238,8 @@ export class TerminalWakeManager {
     }
 
     const startedAt = Date.now();
-    const success = await this.wakeAndRestore(id);
-    if (success) {
+    const { ok } = await this.wakeAndRestore(id);
+    if (ok) {
       this.lastWakeTime.set(id, startedAt);
       this.declineRetries.delete(id);
       return;

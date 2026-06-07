@@ -412,6 +412,33 @@ export const terminalClient = {
   },
 
   /**
+   * Drain the entire pending port-ack FIFO for a terminal as one batched ack.
+   * Called when held ingest bytes are discarded without ever reaching xterm
+   * (hibernation reset, post-replay discard on wake) — the pty-host's
+   * queuedBytes ledger still counts them, so dropping the queue without
+   * acking leaves a permanent deficit that degrades every backpressure pause
+   * to the 10s safety timeout (#9910). The FIFO entry is always deleted, even
+   * when the port is gone or postMessage throws: stale entries would be
+   * re-summed into phantom acks on the next discard.
+   */
+  discardPortAcks: (id: string): void => {
+    const queue = pendingPortAckBytes.get(id);
+    if (!queue) return;
+    pendingPortAckBytes.delete(id);
+    if (!messagePort) return;
+    let bytes = 0;
+    for (const entry of queue) {
+      bytes += entry;
+    }
+    if (bytes === 0) return;
+    try {
+      messagePort.postMessage({ type: "ack", id, bytes });
+    } catch {
+      // Port closed — ack lost, safety timeout will resume PTY
+    }
+  },
+
+  /**
    * Query backend for terminals belonging to a specific project.
    * Used during state hydration to reconcile UI with backend processes.
    */

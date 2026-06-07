@@ -14,6 +14,7 @@ const mockTerminalClient = {
   getSharedBuffer: vi.fn(() => null),
   acknowledgeData: vi.fn(),
   acknowledgePortData: vi.fn(),
+  discardPortAcks: vi.fn(),
 };
 
 vi.mock("@/clients", () => ({

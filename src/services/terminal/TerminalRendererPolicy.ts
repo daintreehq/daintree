@@ -1,13 +1,22 @@
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { ManagedTerminal } from "./types";
+import type { WakeResult } from "./TerminalWakeManager";
 import { TIER_DOWNGRADE_HYSTERESIS_MS } from "./types";
 
 export interface RendererPolicyDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
-  wakeAndRestore: (id: string) => Promise<boolean>;
+  wakeAndRestore: (id: string) => Promise<WakeResult>;
   onPostWake?: (id: string) => void;
   onResumeFlush?: (id: string) => void;
+  /**
+   * Discard bytes held while backgrounded instead of flushing them: the wake
+   * replayed the host's main-buffer snapshot, which already contains every
+   * byte the renderer has received — flushing would paint the tail twice
+   * (#9910). Implementations must also ack the discarded bytes so the
+   * pty-host's queuedBytes ledger drains.
+   */
+  onDiscardHeld?: (id: string) => void;
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
   applyDeferredResize?: (id: string) => void;
   onBackgrounded?: (id: string) => void;
@@ -183,7 +192,7 @@ export class TerminalRendererPolicy {
         const wakeTarget = managed;
         void this.deps
           .wakeAndRestore(id)
-          .then((ok) => {
+          .then(({ ok, replayedMainBuffer }) => {
             if (this.wakeGeneration.get(id) !== wakeGeneration) return;
             const current = this.deps.getInstance(id);
             if (!current || current !== wakeTarget) return;
@@ -200,10 +209,18 @@ export class TerminalRendererPolicy {
               this.deps.onPostWake?.(id);
             }
 
-            // Flush bytes held while backgrounded AFTER scrollback restore +
-            // refresh. wakeAndRestore calls terminal.reset() during replay;
-            // flushing earlier would wipe these bytes.
-            this.deps.onResumeFlush?.(id);
+            if (replayedMainBuffer) {
+              // The replayed snapshot already contains every held byte —
+              // flushing on top would double-paint the tail (#9910). Discard
+              // the queue and ack the bytes instead.
+              this.deps.onDiscardHeld?.(id);
+            } else {
+              // No replay happened (alt-buffer wake, selection skip, missing
+              // state, restore failure) — flush bytes held while backgrounded
+              // AFTER refresh. wakeAndRestore calls terminal.reset() during
+              // replay; flushing earlier would wipe these bytes.
+              this.deps.onResumeFlush?.(id);
+            }
           })
           .catch(() => {
             if (this.wakeGeneration.get(id) !== wakeGeneration) return;
