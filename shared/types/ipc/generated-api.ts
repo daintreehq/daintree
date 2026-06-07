@@ -259,6 +259,9 @@ export interface GeneratedElectronAPI {
     listActiveClients(
       ...args: IpcInvokeMap["mcp-server:list-active-clients"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-active-clients"]["result"]>;
+    listHelpSessionBearers(
+      ...args: IpcInvokeMap["mcp-server:list-help-session-bearers"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-help-session-bearers"]["result"]>;
     resetDenialCounts(
       ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;

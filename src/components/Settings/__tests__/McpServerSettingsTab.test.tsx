@@ -99,6 +99,7 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     clearTurnOutcomeLog: vi.fn().mockResolvedValue(undefined),
     onRuntimeStateChanged: vi.fn().mockReturnValue(vi.fn()),
     listActiveBearers: vi.fn().mockResolvedValue([]),
+    listHelpSessionBearers: vi.fn().mockResolvedValue([]),
     disconnectBearer: vi.fn().mockResolvedValue({ tokenHash: "", disconnected: true }),
     ...overrides,
   };
@@ -1294,6 +1295,104 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
       expect(container.textContent).not.toContain("Kept alive by Daintree Assistant");
+    });
+  });
+
+  describe("internal connections (#10036)", () => {
+    const helpBearer = {
+      userAgent: "Daintree Assistant/1.0",
+      lastActiveAt: Date.now() - 5000,
+      requestsSinceLaunch: 4,
+      sessionCount: 2,
+    };
+
+    it("hides the internal-connections row when no internal bearer is connected", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("Internal connections");
+    });
+
+    it("shows the internal-connection row read-only, with no disconnect control", async () => {
+      const listHelpSessionBearers = vi.fn().mockResolvedValue([helpBearer]);
+      installMcpApi({ listHelpSessionBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Internal connections (1)");
+
+      fireEvent.click(screen.getByRole("button", { name: /internal connections/i }));
+      await waitFor(() => {
+        expect(container.textContent).toContain("Daintree Assistant/1.0");
+      });
+      // Session and request counts are surfaced...
+      expect(container.textContent).toContain("2 sessions");
+      expect(container.textContent).toContain("4 requests");
+      // ...but there is no disconnect affordance for an internal connection.
+      expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
+    });
+
+    it("keeps the internal row read-only while the external row stays disconnectable (#9151)", async () => {
+      const externalBearer = {
+        tokenHash: "b".repeat(64),
+        token4LastChars: "abcd",
+        userAgent: "Cursor/0.42",
+        lastActiveAt: Date.now() - 1000,
+        requestsSinceLaunch: 7,
+      };
+      const listActiveBearers = vi.fn().mockResolvedValue([externalBearer]);
+      const listHelpSessionBearers = vi.fn().mockResolvedValue([helpBearer]);
+      installMcpApi({ listActiveBearers, listHelpSessionBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "External clients (1)");
+      await waitForContent(container, "Internal connections (1)");
+
+      // Expand both sections so every row is rendered.
+      fireEvent.click(screen.getByRole("button", { name: /external clients/i }));
+      fireEvent.click(screen.getByRole("button", { name: /internal connections/i }));
+      await waitFor(() => {
+        expect(container.textContent).toContain("Cursor/0.42");
+        expect(container.textContent).toContain("Daintree Assistant/1.0");
+      });
+
+      // Exactly one Disconnect button exists — the external row's. The internal
+      // row never offers one, even when both sections are visible at once.
+      expect(screen.getAllByRole("button", { name: "Disconnect" })).toHaveLength(1);
+    });
+
+    it("populates the internal-connections row when a runtime-state change fires after mount", async () => {
+      let runtimeCb: ((snapshot: unknown) => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: (snapshot: unknown) => void) => {
+        runtimeCb = cb;
+        return vi.fn();
+      });
+      const listHelpSessionBearers = vi
+        .fn()
+        .mockResolvedValueOnce([]) // initial mount: nothing connected
+        .mockResolvedValue([helpBearer]); // after the push: connected
+      installMcpApi({ onRuntimeStateChanged, listHelpSessionBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("Internal connections");
+
+      runtimeCb?.({ enabled: true, state: "ready", port: 9020, lastError: null });
+      await waitForContent(container, "Internal connections (1)");
     });
   });
 

@@ -495,6 +495,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").McpActiveClientInfo[];
   };
+  "mcp-server:list-help-session-bearers": {
+    args: [];
+    result: import("./mcpServer.js").HelpSessionBearerRecord[];
+  };
   "mcp-server:reset-denial-counts": {
     args: [payload: { sessionId: string }];
     result: void;

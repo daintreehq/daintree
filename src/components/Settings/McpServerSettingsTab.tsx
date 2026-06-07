@@ -12,6 +12,7 @@ import {
   ScrollText,
   Plug,
   ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,7 @@ import {
   type AssistantTurnRecord,
   type McpAuditStats,
   type ActiveBearerRecord,
+  type HelpSessionBearerRecord,
   type McpRuntimeSnapshot,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
@@ -111,6 +113,12 @@ export function McpServerSettingsTab() {
   const [activeBearers, setActiveBearers] = useState<ActiveBearerRecord[]>([]);
   const [bearersExpanded, setBearersExpanded] = useState(false);
   const [disconnectingHash, setDisconnectingHash] = useState<string | null>(null);
+  // Read-only inventory of Daintree's own internal MCP connections — the
+  // help-chat assistant and in-panel agents (#10036) — surfaced so the External
+  // clients row no longer hides them, but with no disconnect control (these are
+  // Daintree's own consumers, severed via their owning surface, not here).
+  const [helpSessionBearers, setHelpSessionBearers] = useState<HelpSessionBearerRecord[]>([]);
+  const [helpBearersExpanded, setHelpBearersExpanded] = useState(false);
   // Drives the neutral attribution pill on the top card: when the Daintree
   // Assistant holds the server open, the toggle reflects assistant intent
   // rather than a manual choice.
@@ -127,6 +135,15 @@ export function McpServerSettingsTab() {
       setActiveBearers(bearers);
     } catch (err) {
       logError("Failed to load MCP active bearers", err);
+    }
+  };
+
+  const refreshHelpSessionBearers = async (): Promise<void> => {
+    try {
+      const bearers = await window.electron.mcpServer.listHelpSessionBearers();
+      setHelpSessionBearers(bearers);
+    } catch (err) {
+      logError("Failed to load MCP help-session bearers", err);
     }
   };
 
@@ -210,6 +227,7 @@ export function McpServerSettingsTab() {
       });
 
     void refreshActiveBearers();
+    void refreshHelpSessionBearers();
     void refreshAssistantControl();
 
     const unsub = window.electron.mcpServer.onRuntimeStateChanged((next) => {
@@ -230,8 +248,9 @@ export function McpServerSettingsTab() {
           logError("Failed to refresh MCP status on runtime change", err);
         });
       // A runtime-state push fires on connect/disconnect, server restart, and
-      // the assistant toggling `daintreeControl` — refresh both derived views.
+      // the assistant toggling `daintreeControl` — refresh all derived views.
       void refreshActiveBearers();
+      void refreshHelpSessionBearers();
       void refreshAssistantControl();
     });
 
@@ -635,6 +654,52 @@ export function McpServerSettingsTab() {
                                 ? "Disconnecting…"
                                 : "Disconnect"}
                             </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {helpSessionBearers.length > 0 && (
+                  <div className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setHelpBearersExpanded((v) => !v)}
+                      aria-expanded={helpBearersExpanded}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                          helpBearersExpanded && "rotate-90"
+                        )}
+                      />
+                      <Sparkles className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                      Internal connections ({helpSessionBearers.length})
+                    </button>
+
+                    {helpBearersExpanded && (
+                      <ul className="border-t border-daintree-border divide-y divide-daintree-border">
+                        {helpSessionBearers.map((bearer, i) => (
+                          <li
+                            key={`${bearer.userAgent}-${i}`}
+                            className="flex items-center gap-3 px-3 py-2"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs text-daintree-text/80">
+                                {bearer.userAgent}
+                              </div>
+                              <div className="text-[11px] text-daintree-text/50">
+                                {bearer.sessionCount}{" "}
+                                {bearer.sessionCount === 1 ? "session" : "sessions"}
+                                {" · "}
+                                {bearer.requestsSinceLaunch}{" "}
+                                {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
+                                {" · active "}
+                                {formatRelativeTime(bearer.lastActiveAt)}
+                              </div>
+                            </div>
                           </li>
                         ))}
                       </ul>

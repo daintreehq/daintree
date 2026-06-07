@@ -816,7 +816,7 @@ describe("HttpLifecycle", () => {
       expect(bearers[0]).not.toHaveProperty("sessionIds");
     });
 
-    it("hides internal (help/pane) bearers from the settings list but still tracks them (#9151)", () => {
+    it("hides internal (help/pane) bearers from the External-clients list but still tracks them (#9151)", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       const handle = lc as unknown as BearerTestHandle;
@@ -827,13 +827,65 @@ describe("HttpLifecycle", () => {
       // ...but tracked in the register so eager teardown can find them.
       expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-help"]);
       expect(lc.getBearerSessionIds(hashOf(authB))).toEqual(["sess-pane"]);
-      // Help-bearer handshakes don't push a runtime-state change (they never
-      // surface in the UI) — only the external bearer below does.
-      expect(deps.emitRuntimeStateChange).not.toHaveBeenCalled();
       // A subsequent external bearer is still tracked AND listed.
       handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
       expect(lc.listActiveBearers()).toHaveLength(1);
+    });
+
+    it("surfaces help-session bearers in listHelpSessionBearers with display fields only (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-1", "action");
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-2", "action");
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+
+      const help = lc.listHelpSessionBearers();
+      // Only the help-session bearer is returned — the external one is excluded.
+      expect(help).toHaveLength(1);
+      expect(help[0]).toEqual({
+        userAgent: "Daintree Assistant/1",
+        lastActiveAt: expect.any(Number),
+        requestsSinceLaunch: 2,
+        sessionCount: 2,
+      });
+      // No token, hash, or raw session ids cross the listing surface.
+      const serialized = JSON.stringify(help);
+      expect(serialized).not.toContain("secret-token-aaaa");
+      expect(help[0]).not.toHaveProperty("tokenHash");
+      expect(help[0]).not.toHaveProperty("token4LastChars");
+      expect(help[0]).not.toHaveProperty("sessionIds");
+    });
+
+    it("listHelpSessionBearers is empty when only external bearers are connected (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Claude/1", "sess-ext", "external");
+      expect(lc.listHelpSessionBearers()).toHaveLength(0);
+    });
+
+    it("listHelpSessionBearers covers every non-external tier, not just the help chat (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      // In-panel agent (pane) tokens are non-external too — they belong in the
+      // Internal connections row alongside the help-chat assistant.
+      handle.touchBearer(authA, "Help/1", "sess-help", "action");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+
+      const help = lc.listHelpSessionBearers();
+      expect(help).toHaveLength(2);
+      expect(help.map((h) => h.userAgent).sort()).toEqual(["Help/1", "Pane/1"]);
+    });
+
+    it("pushes a runtime-state change on help-session connect and disconnect (#10036)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help", "action");
       expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
+      handle.detachBearerSession("sess-help");
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
+      expect(lc.listHelpSessionBearers()).toHaveLength(0);
     });
 
     it("findHelpBearerHash resolves a help token to its register key, ignoring external bearers (#9151)", () => {

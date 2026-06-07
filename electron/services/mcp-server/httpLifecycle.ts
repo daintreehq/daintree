@@ -21,6 +21,7 @@ import type {
 } from "./shared.js";
 import type {
   ActiveBearerRecord,
+  HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpBearerIdentity,
   McpIssueGrantResult,
@@ -364,10 +365,11 @@ export class HttpLifecycle {
     entry.requestsSinceLaunch += 1;
     entry.sessionIds.add(sessionId);
     this.sessionToTokenHash.set(sessionId, tokenHash);
-    // Only external bearers surface in the settings UI, so only their
-    // handshakes need a runtime-state push. Help bearers are filtered out of
-    // `listActiveBearers`; emitting for them would be needless IPC chatter.
-    if (!isHelpSession) this.deps.emitRuntimeStateChange();
+    // Both external bearers (External clients row) and help-session bearers
+    // (the "Daintree Assistant connections" row, #10036) surface on the
+    // settings tab, so every handshake needs a runtime-state push to keep the
+    // open tab live.
+    this.deps.emitRuntimeStateChange();
   }
 
   /**
@@ -420,10 +422,10 @@ export class HttpLifecycle {
     if (entry.sessionIds.size === 0) {
       this.bearerRegister.delete(tokenHash);
     }
-    // Help bearers are filtered out of `listActiveBearers`, so their teardown
-    // changes nothing the settings UI shows — skip the runtime-state push to
-    // avoid needless IPC chatter (mirrors the `touchBearer` gate).
-    if (!entry.isHelpSession) this.deps.emitRuntimeStateChange();
+    // Both external and help-session bearers surface on the settings tab
+    // (#10036), so every teardown needs a runtime-state push so an open tab
+    // drops the row.
+    this.deps.emitRuntimeStateChange();
   }
 
   /**
@@ -442,6 +444,29 @@ export class HttpLifecycle {
         userAgent: entry.userAgent,
         lastActiveAt: entry.lastActiveAt,
         requestsSinceLaunch: entry.requestsSinceLaunch,
+      });
+    }
+    return records;
+  }
+
+  /**
+   * Read-only inventory of the renderer-pinned help-session bearers (the
+   * Daintree Assistant's own internal MCP connections) for the separate
+   * "Daintree Assistant connections" settings row (#10036). The inverse filter
+   * of {@link listActiveBearers}: only `isHelpSession` entries. Exposes display
+   * fields only — never the `helpToken`, `tokenHash`, or `token4LastChars`
+   * (those identify an internal credential and stay main-side, #9318); there is
+   * no disconnect action for help sessions so no hash is needed to target one.
+   */
+  listHelpSessionBearers(): HelpSessionBearerRecord[] {
+    const records: HelpSessionBearerRecord[] = [];
+    for (const entry of this.bearerRegister.values()) {
+      if (!entry.isHelpSession) continue;
+      records.push({
+        userAgent: entry.userAgent,
+        lastActiveAt: entry.lastActiveAt,
+        requestsSinceLaunch: entry.requestsSinceLaunch,
+        sessionCount: entry.sessionIds.size,
       });
     }
     return records;

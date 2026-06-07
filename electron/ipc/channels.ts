@@ -662,6 +662,13 @@ export const CHANNELS = {
    */
   MCP_SERVER_LIST_ACTIVE_BEARERS: "mcp-server:list-active-bearers",
   /**
+   * Read-only inventory of the renderer-pinned help-session bearers (the
+   * Daintree Assistant's own internal MCP connections). Backs the separate
+   * "Daintree Assistant connections" row on the MCP Server settings tab,
+   * which has no disconnect control (#10036).
+   */
+  MCP_SERVER_LIST_HELP_SESSION_BEARERS: "mcp-server:list-help-session-bearers",
+  /**
    * Disconnect a single external bearer by its token hash: revoke every
    * session it owns and evict it from the live register. One bearer only —
    * key rotation (revoke-all) stays a separate action (#8778).
