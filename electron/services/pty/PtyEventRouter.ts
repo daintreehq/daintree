@@ -266,6 +266,8 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       emitter.emit("host-memory-warning", {
         isWarning: event.isWarning,
         utilizationPercent: event.utilizationPercent,
+        heapMb: event.heapMb,
+        externalMb: event.externalMb,
         timestamp: event.timestamp,
       });
       return true;
