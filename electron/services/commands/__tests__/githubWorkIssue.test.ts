@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Issue } from "../../../../shared/types/forge.js";
 
 const {
-  hasGitHubTokenMock,
+  hasActivatedForgeProviderMock,
   resolveForCwdMock,
   getIssueMock,
   getWorkspaceClientMock,
@@ -14,7 +14,7 @@ const {
   validatePathPatternMock,
   resolveWorktreePatternMock,
 } = vi.hoisted(() => ({
-  hasGitHubTokenMock: vi.fn(),
+  hasActivatedForgeProviderMock: vi.fn(),
   resolveForCwdMock: vi.fn(),
   getIssueMock: vi.fn(),
   getWorkspaceClientMock: vi.fn(),
@@ -27,8 +27,8 @@ const {
   resolveWorktreePatternMock: vi.fn(),
 }));
 
-vi.mock("../../GitHubService.js", () => ({
-  hasGitHubToken: hasGitHubTokenMock,
+vi.mock("../../forgeProviderRegistry.js", () => ({
+  hasActivatedForgeProvider: hasActivatedForgeProviderMock,
 }));
 
 vi.mock("../../../ipc/handlers/forgeResolution.js", () => ({
@@ -80,7 +80,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
 describe("githubWorkIssueCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hasGitHubTokenMock.mockReturnValue(true);
+    hasActivatedForgeProviderMock.mockReturnValue(true);
     getIssueMock.mockResolvedValue(makeIssue());
     resolveForCwdMock.mockResolvedValue({
       namespaceId: "builtin.github/github",
@@ -130,8 +130,50 @@ describe("githubWorkIssueCommand", () => {
       issueNumber: 55,
     });
 
+    expect(resolveForCwdMock).toHaveBeenCalledTimes(1);
     expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
     expect(getIssueMock).toHaveBeenCalledWith({ owner: "daintree", repo: "app" }, 55);
+  });
+
+  it("routes through a non-GitHub provider end-to-end", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "builtin.gitlab/gitlab",
+      providerId: "gitlab",
+      repoRef: { owner: "group", repo: "proj" },
+      impl: { getIssue: getIssueMock },
+    });
+    getIssueMock.mockResolvedValue(
+      makeIssue({
+        number: 12,
+        title: "Add widget",
+        url: "https://gitlab.com/group/proj/-/issues/12",
+      })
+    );
+
+    const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
+      issueNumber: 12,
+    });
+
+    expect(result.success).toBe(true);
+    expect(getIssueMock).toHaveBeenCalledWith({ owner: "group", repo: "proj" }, 12);
+    expect(result.data?.issueUrl).toBe("https://gitlab.com/group/proj/-/issues/12");
+    const workspaceClient = getWorkspaceClientMock.mock.results[0]?.value as {
+      createWorktree: ReturnType<typeof vi.fn>;
+    };
+    expect(workspaceClient.createWorktree).toHaveBeenCalledWith(
+      "/repo",
+      expect.objectContaining({ newBranch: "issue-12-add-widget" })
+    );
+  });
+
+  it("is enabled when a forge provider is active and disabled otherwise", () => {
+    hasActivatedForgeProviderMock.mockReturnValue(true);
+    expect(githubWorkIssueCommand.isEnabled?.({} as never)).toBe(true);
+    expect(githubWorkIssueCommand.disabledReason?.({} as never)).toBeUndefined();
+
+    hasActivatedForgeProviderMock.mockReturnValue(false);
+    expect(githubWorkIssueCommand.isEnabled?.({} as never)).toBe(false);
+    expect(githubWorkIssueCommand.disabledReason?.({} as never)).toMatch(/forge provider/i);
   });
 
   it("uses the issue URL returned by the forge provider", async () => {
@@ -158,7 +200,7 @@ describe("githubWorkIssueCommand", () => {
     expect(result.error?.code).toBe("ISSUE_NOT_FOUND");
   });
 
-  it("returns NOT_GIT_REPO when forge resolution fails", async () => {
+  it("returns FORGE_PROVIDER_ERROR with no worktree side-effects when resolution fails", async () => {
     resolveForCwdMock.mockRejectedValue(new Error("No remote URL found for this repository"));
 
     const result = await githubWorkIssueCommand.execute({ cwd: "/repo" } as never, {
@@ -166,7 +208,10 @@ describe("githubWorkIssueCommand", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error?.code).toBe("NOT_GIT_REPO");
+    expect(result.error?.code).toBe("FORGE_PROVIDER_ERROR");
+    expect(getIssueMock).not.toHaveBeenCalled();
+    expect(findAvailableBranchNameMock).not.toHaveBeenCalled();
+    expect(getWorkspaceClientMock).not.toHaveBeenCalled();
   });
 
   it("normalizes accented Latin characters in slugified branch names", async () => {

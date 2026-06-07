@@ -17,7 +17,7 @@ import type {
   CommandResult,
 } from "../../../shared/types/commands.js";
 import type { NormalizedIssueState } from "../../../shared/types/forge.js";
-import { hasGitHubToken } from "../GitHubService.js";
+import { hasActivatedForgeProvider } from "../forgeProviderRegistry.js";
 import { resolveForCwd } from "../../ipc/handlers/forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../forge/forgeAuditService.js";
 import { getWorkspaceClient } from "../WorkspaceClient.js";
@@ -214,10 +214,12 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
 
   keywords: ["github", "issue", "worktree", "branch", "work", "parallel", "isolate"],
 
-  isEnabled: () => hasGitHubToken(),
+  isEnabled: () => hasActivatedForgeProvider(),
 
   disabledReason: () =>
-    hasGitHubToken() ? undefined : "GitHub token not configured. Set it in Settings.",
+    hasActivatedForgeProvider()
+      ? undefined
+      : "No forge provider is active. Enable one (e.g. GitHub) in Settings.",
 
   async execute(
     context: CommandContext,
@@ -271,12 +273,15 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
     try {
       resolved = await resolveForCwd(rootPath);
     } catch (error) {
-      const message = formatErrorMessage(error, "Failed to determine repository context");
+      // resolveForCwd throws distinct messages for "no remote", "no provider
+      // registered", "provider not activated", etc. — preserve them rather than
+      // flattening to NOT_GIT_REPO (the git-root check above already owns that).
+      const message = formatErrorMessage(error, "Failed to resolve forge provider");
       return {
         success: false,
         error: {
-          code: "NOT_GIT_REPO",
-          message: `Failed to determine repository context: ${message}`,
+          code: "FORGE_PROVIDER_ERROR",
+          message: `Failed to resolve forge provider: ${message}`,
         },
       };
     }
@@ -318,7 +323,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
           success: false,
           error: {
             code: "GITHUB_ERROR",
-            message: "Timed out reaching GitHub. Try again.",
+            message: "Timed out reaching the forge provider. Try again.",
           },
         };
       }
@@ -329,7 +334,7 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
           success: false,
           error: {
             code: "GITHUB_ERROR",
-            message: "Network error connecting to GitHub.",
+            message: "Network error connecting to the forge provider.",
           },
         };
       }
