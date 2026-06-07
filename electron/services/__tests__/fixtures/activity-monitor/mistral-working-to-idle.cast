@@ -1,0 +1,11 @@
+{"version":2,"width":120,"height":10,"title":"mistral-working-to-idle"}
+[0,"o","Mistral Vibe"]
+[0.3,"o","\r\nv2.9.0 · Type /help for more information"]
+[0.5,"o","\r\n> "]
+[1,"o","\r\n⠋ Generating (1s Esc/Ctrl+C to interrupt)"]
+[2,"o","\r\n⠙ Generating (2s Esc/Ctrl+C to interrupt)"]
+[5,"o","\r\n⠹ Reading files (5s Esc/Ctrl+C to interrupt)"]
+[8,"o","\r\n⠼ Vibing (8s Esc/Ctrl+C to interrupt)"]
+[12,"o","\r\n⠦ Generating (12s Esc/Ctrl+C to interrupt)"]
+[13,"o","\r\n⠏ Thinking"]
+[15,"o","\r\n> "]

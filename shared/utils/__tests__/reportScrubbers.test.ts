@@ -70,6 +70,50 @@ describe("scrubReportPath", () => {
     );
   });
 
+  it("redacts SSH git remotes but keeps the host", () => {
+    const result = scrubReportPath("origin git@github.com:acme/secret-repo.git (fetch)");
+    expect(result).toBe("origin git@github.com:REDACTED/REDACTED (fetch)");
+  });
+
+  it("redacts SSH git remotes without a .git suffix", () => {
+    expect(scrubReportPath("git@gitlab.example.com:team/project")).toBe(
+      "git@gitlab.example.com:REDACTED/REDACTED"
+    );
+  });
+
+  it("redacts HTTPS git remotes only when they end in .git", () => {
+    expect(scrubReportPath("cloning https://github.com/acme/secret-repo.git now")).toBe(
+      "cloning https://github.com/REDACTED/REDACTED.git now"
+    );
+    expect(scrubReportPath("see https://github.com/acme/secret-repo/issues/1")).toContain(
+      "acme/secret-repo"
+    );
+  });
+
+  it("redacts nested HTTPS git remote paths", () => {
+    const result = scrubReportPath("https://git.example.com/group/subgroup/project.git");
+    expect(result).toBe("https://git.example.com/REDACTED/REDACTED.git");
+  });
+
+  it("redacts tilde-relative home paths", () => {
+    expect(scrubReportPath("cwd: ~/Projects/client-work/app")).toBe("cwd: ~/REDACTED");
+    expect(scrubReportPath('{"dir":"~/Projects/secret"}')).toBe('{"dir":"~/REDACTED"}');
+  });
+
+  it("does not treat an embedded tilde as a home path", () => {
+    expect(scrubReportPath("backup~/file")).toBe("backup~/file");
+  });
+
+  it("redacts /tmp and /var/folders paths", () => {
+    expect(scrubReportPath("wrote /tmp/daintree-greg-1234/out.log")).toBe(
+      "wrote /tmp/REDACTED"
+    );
+    expect(scrubReportPath("/var/folders/ab/x1y2z3/T/session.sock")).toBe(
+      "/var/folders/REDACTED"
+    );
+    expect(scrubReportPath("/private/tmp/scratch/file")).toBe("/private/tmp/REDACTED");
+  });
+
   it("handles multiple occurrences", () => {
     expect(scrubReportPath("/Users/alice/foo and /Users/bob/bar")).toBe(
       "/Users/USER/foo and /Users/USER/bar"
@@ -85,6 +129,11 @@ describe("scrubReportPath", () => {
       "\\\\wsl$\\Ubuntu\\home\\alice\\project",
       "\\\\wsl.localhost\\Debian\\home\\bob",
       JSON.stringify({ cwd: "\\\\wsl$\\Ubuntu\\home\\alice" }),
+      "git@github.com:acme/secret-repo.git",
+      "https://github.com/acme/secret-repo.git",
+      "~/Projects/client-work",
+      "/tmp/daintree-greg-1234/out.log",
+      "/var/folders/ab/x1y2z3/T/session.sock",
     ];
     for (const input of inputs) {
       const once = scrubReportPath(input);

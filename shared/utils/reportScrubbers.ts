@@ -46,6 +46,31 @@ export function scrubReportPath(str: string): string {
       .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
       // Windows forward-slash form (e.g. from a posix-normalized path).
       .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
+      // Git remotes — the org/repo segment names private projects. The host is
+      // kept (useful signal, same rationale as keeping the WSL distro). SSH
+      // form first (a `.git` suffix folds into the redaction — repo names may
+      // themselves contain dots), then HTTPS (requires the `.git` suffix so
+      // ordinary web URLs in output are left alone). Both replacements
+      // re-match to themselves, so the pass stays idempotent.
+      .replace(
+        /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}/g,
+        "$1REDACTED/REDACTED"
+      )
+      .replace(
+        /(https?:\/\/[A-Za-z0-9.-]{1,253}\/)(?:[A-Za-z0-9._-]{1,100}\/){0,5}[A-Za-z0-9._-]{1,100}\.git\b/g,
+        "$1REDACTED/REDACTED.git"
+      )
+      // Tilde-relative home paths — the segments after `~/` can name private
+      // projects (terminal prompts and agent CWD lines print them constantly),
+      // and there is no username segment to scrub selectively, so the whole
+      // remainder is collapsed. The lookbehind avoids matching a `~` embedded
+      // in a token (e.g. `backup~/file`).
+      .replace(/(?<![\w~.-])~\/[^\s"'`)\]}>,;:]+/g, "~/REDACTED")
+      // Temp dirs — `/tmp/...` and macOS `/var/folders/...` entries embed
+      // usernames and per-session tokens. Also covers `/private/tmp/...`
+      // (matched at the inner `/tmp/`).
+      .replace(/(\/tmp\/)[^\s"'`)\]}>,;:]+/g, "$1REDACTED")
+      .replace(/(\/var\/folders\/)[^\s"'`)\]}>,;:]+/g, "$1REDACTED")
   );
 }
 

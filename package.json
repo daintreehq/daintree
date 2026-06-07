@@ -128,6 +128,8 @@
     "pattern-discovery:record": "tsx scripts/pattern-discovery/runner.ts",
     "pattern-discovery:analyze": "tsx scripts/pattern-discovery/analyzer.ts",
     "pattern-discovery:update": "tsx scripts/pattern-discovery/update-registry.ts",
+    "pattern-discovery:jsonl-to-cast": "tsx scripts/pattern-discovery/jsonl-to-cast.ts",
+    "pattern-discovery:redact-cast": "tsx scripts/pattern-discovery/redact-cast.ts",
     "eval:turn-outcome": "tsx scripts/eval/turnOutcome.ts",
     "prepare": "husky"
   },

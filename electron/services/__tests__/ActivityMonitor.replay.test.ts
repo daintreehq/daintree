@@ -31,6 +31,9 @@ const REPLAY_CASES: ReplayCase[] = [
   { name: "gemini-working-to-idle", agentId: "gemini" },
   { name: "codex-completion", agentId: "codex" },
   { name: "claude-silence-after-busy", agentId: "claude" },
+  { name: "aider-working-to-idle", agentId: "aider" },
+  { name: "mistral-working-to-idle", agentId: "mistral" },
+  { name: "goose-working-to-completed", agentId: "goose" },
 ];
 
 describe("ActivityMonitor replay harness", () => {
