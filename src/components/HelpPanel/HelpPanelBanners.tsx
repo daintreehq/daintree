@@ -78,7 +78,13 @@ function GrantActiveBanner({
       <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-daintree-text/60" aria-hidden="true" />
       <span className="flex-1 min-w-0 select-text">
         <span className="font-mono text-daintree-text/90">{grant.toolId}</span> approved ·{" "}
-        <span className="tabular-nums">{formatRemaining(remainingSeconds)}</span> left
+        {/* The countdown re-derives every second; keep it out of the parent's
+            polite live region (`aria-live="off"`) so screen readers announce
+            the "<tool> approved" message once instead of the ticking time. */}
+        <span aria-live="off" className="tabular-nums">
+          {formatRemaining(remainingSeconds)}
+        </span>{" "}
+        left
       </span>
       <button
         type="button"
