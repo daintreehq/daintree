@@ -45,6 +45,7 @@ import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
+import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -2410,6 +2411,8 @@ const api: ElectronAPI = {
   },
 
   forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
+
+  runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
 
   // Voice Input API
   voiceInput: {

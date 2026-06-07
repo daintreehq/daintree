@@ -365,6 +365,14 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn(`[main] pushSnapshotTo failed for wc ${wcId}:`, err);
           });
+        // Replay the run-history snapshot to the freshly-loaded view so a
+        // cold-started / LRU-restored renderer's history store is current even
+        // if every prior push fired against a previous V8 context (#9949).
+        import("./services/runHistory/runHistoryService.js")
+          .then(({ pushRunHistorySnapshotTo }) => pushRunHistorySnapshotTo(wc))
+          .catch((err) => {
+            console.warn(`[main] run-history pushSnapshotTo failed for wc ${wcId}:`, err);
+          });
       },
     });
     setProjectViewManager(pvm);

@@ -380,6 +380,23 @@ export {
   PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
 } from "./ipc/pluginAudit.js";
 
+// Run history types - durable recipe/fleet automation outcomes (#9949)
+export type {
+  RunHistoryRecord,
+  RecipeRunHistoryRecord,
+  FleetRunHistoryRecord,
+  RunHistoryTargetOutcome,
+  RunHistoryAppendInput,
+} from "./ipc/runHistory.js";
+export {
+  RUN_HISTORY_SCHEMA_VERSION,
+  RUN_HISTORY_DEFAULT_MAX_RECORDS,
+  RUN_HISTORY_REASON_MAX_LENGTH,
+  RUN_HISTORY_DRAFT_PREVIEW_MAX_LENGTH,
+  RUN_HISTORY_TITLE_MAX_LENGTH,
+  RUN_HISTORY_MAX_TARGETS,
+} from "./ipc/runHistory.js";
+
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";
 

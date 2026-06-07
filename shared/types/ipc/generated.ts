@@ -354,7 +354,7 @@ export interface GeneratedIpcInvokeMap {
         updates: Partial<
           Omit<
             import("../project.js").TerminalRecipe,
-            "id" | "projectId" | "worktreeId" | "createdAt"
+            "id" | "worktreeId" | "projectId" | "createdAt"
           >
         >;
       },
@@ -905,6 +905,18 @@ export interface GeneratedIpcInvokeMap {
   "project:set-terminals": {
     args: [payload: { projectId: string; terminals: import("../project.js").PanelSnapshot[] }];
     result: void;
+  };
+  "run-history:append": {
+    args: [input: import("./runHistory.js").RunHistoryAppendInput];
+    result: void;
+  };
+  "run-history:clear": {
+    args: [];
+    result: void;
+  };
+  "run-history:get-records": {
+    args: [];
+    result: import("./runHistory.js").RunHistoryRecord[];
   };
   "scratch:create": {
     args: [name?: string | undefined];
