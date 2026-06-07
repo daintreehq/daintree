@@ -396,6 +396,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.setWslOptIn(request.worktreeId, request.enabled, request.dismissed);
         break;
 
+      case "reprobe-wsl":
+        void workspaceService.reprobeWslForWorktree(request.worktreeId);
+        break;
+
       case "sync":
         try {
           await workspaceService.syncMonitors(

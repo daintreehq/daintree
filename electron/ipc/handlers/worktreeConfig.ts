@@ -106,6 +106,19 @@ export function registerWorktreeConfigHandlers(deps: HandlerDependencies): () =>
           deps.worktreeService?.setWslOptIn(worktreeId, enabled, true);
         }
       ),
+      reprobeWsl: op(
+        WORKTREE_CONFIG_METHOD_CHANNELS.reprobeWsl,
+        async (payload: { worktreeId: string }): Promise<void> => {
+          if (!payload || typeof payload !== "object") {
+            throw new Error("Invalid reprobe-wsl payload");
+          }
+          const { worktreeId } = payload;
+          if (typeof worktreeId !== "string" || !worktreeId.trim()) {
+            throw new Error("Invalid worktreeId: must be a non-empty string");
+          }
+          deps.worktreeService?.reprobeWsl(worktreeId);
+        }
+      ),
     },
   });
 

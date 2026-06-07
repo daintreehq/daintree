@@ -272,6 +272,12 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  reprobeWsl(worktreeId: string): void {
+    for (const entry of this.pool.entries.values()) {
+      entry.host.send({ type: "reprobe-wsl", worktreeId });
+    }
+  }
+
   updateMonitorConfig(config: MonitorConfig): void {
     for (const entry of this.pool.entries.values()) {
       const requestId = entry.host.generateRequestId();

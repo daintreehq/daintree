@@ -29,6 +29,7 @@ export type {
   WorktreeLifecycleStatus,
   Worktree,
   WorktreeState,
+  WslGitEligibility,
 } from "./worktree.js";
 
 // Notification types

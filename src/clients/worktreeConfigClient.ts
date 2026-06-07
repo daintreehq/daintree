@@ -16,4 +16,8 @@ export const worktreeConfigClient = {
   dismissWslBanner: (worktreeId: string): Promise<void> => {
     return window.electron.worktreeConfig.dismissWslBanner(worktreeId);
   },
+
+  reprobeWsl: (worktreeId: string): Promise<void> => {
+    return window.electron.worktreeConfig.reprobeWsl(worktreeId);
+  },
 } as const;

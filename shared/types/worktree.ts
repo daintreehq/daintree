@@ -13,6 +13,15 @@ export type FleetScopeToken = string & { readonly __brand: unique symbol };
 /** Worktree mood indicator */
 export type WorktreeMood = "stable" | "active" | "stale" | "error";
 
+/**
+ * Three-state WSL git eligibility. Replaces a bare boolean so the renderer can
+ * distinguish "ineligible" (probe ran, distro mismatch) from "unprobed" (probe
+ * hasn't run, is in flight, or failed). The old `boolean | undefined` shape
+ * collapsed `false` and `undefined` together, hiding the difference. `'unprobed'`
+ * is also what a missing/legacy snapshot field maps to at the renderer boundary.
+ */
+export type WslGitEligibility = "eligible" | "ineligible" | "unprobed";
+
 /** Phase of worktree lifecycle script execution */
 export type WorktreeLifecyclePhase =
   | "setup"
@@ -330,12 +339,13 @@ export interface Worktree {
   wslDistro?: string;
 
   /**
-   * True when the detected `wslDistro` matches the WSL default distro and
+   * Whether the detected `wslDistro` matches the WSL default distro and
    * Daintree can therefore route git operations through `wsl.exe git` (which
-   * always targets the default distro). When false, the banner shows a
-   * read-only informational note instead of an enable button.
+   * always targets the default distro). `'eligible'` shows the enable button;
+   * `'ineligible'` shows a read-only informational note; `'unprobed'` (or
+   * absent) means the probe hasn't resolved yet or failed.
    */
-  wslGitEligible?: boolean;
+  wslGitEligible?: WslGitEligibility;
 
   /**
    * User has opted in to routing this worktree's git operations through WSL.

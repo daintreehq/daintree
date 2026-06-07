@@ -1988,7 +1988,7 @@ describe("WorktreeMonitor", () => {
         isWslPath: true,
         wslDistro: "Ubuntu",
         wslPosixPath: "/home/user/repo",
-        wslGitEligible: true,
+        wslGitEligible: "eligible",
         wslGitOptIn: false,
       };
       const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
@@ -2014,7 +2014,7 @@ describe("WorktreeMonitor", () => {
           isWslPath: true,
           wslDistro: "Ubuntu",
           wslPosixPath: "/home/user/repo",
-          wslGitEligible: true,
+          wslGitEligible: "eligible",
           wslGitOptIn: true,
         };
         const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
@@ -2056,7 +2056,7 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
-          wslGitEligible: true,
+          wslGitEligible: "eligible",
           wslGitOptIn: true,
         };
         const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
@@ -2085,7 +2085,7 @@ describe("WorktreeMonitor", () => {
           isWslPath: true,
           wslDistro: "Ubuntu",
           wslPosixPath: "/home/user/repo",
-          wslGitEligible: true,
+          wslGitEligible: "eligible",
           wslGitOptIn: false,
         };
         const callbacks = makeCallbacks();
@@ -2108,6 +2108,125 @@ describe("WorktreeMonitor", () => {
       } finally {
         Object.defineProperty(process, "platform", { value: original, configurable: true });
       }
+    });
+
+    it("serializes ineligible as 'ineligible', not absent (#9924)", async () => {
+      // The old `this._wslGitEligible || undefined` coercion dropped `false` to
+      // absent, making "ineligible" indistinguishable from "unprobed" on the
+      // renderer. The three-state field must round-trip 'ineligible' verbatim.
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Debian\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Debian",
+        wslPosixPath: "/home/user/repo",
+        wslGitEligible: "ineligible",
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(monitor.getSnapshot().wslGitEligible).toBe("ineligible");
+
+      monitor.stop();
+    });
+
+    it("defaults eligibility to 'unprobed' when the field is absent (#9924)", async () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(monitor.getSnapshot().wslGitEligible).toBe("unprobed");
+
+      monitor.stop();
+    });
+
+    it("setWslEligible flips git routing at runtime without restart (#9924)", async () => {
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const wsl: Worktree = {
+          ...TEST_WORKTREE,
+          path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          isWslPath: true,
+          wslDistro: "Ubuntu",
+          wslPosixPath: "/home/user/repo",
+          // Start ineligible + opted in: no WSL routing yet.
+          wslGitEligible: "ineligible",
+          wslGitOptIn: true,
+        };
+        const callbacks = makeCallbacks();
+        const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, callbacks, "main");
+        await monitor.start();
+        await flushInitialStatus();
+
+        // Becoming the default distro mid-session flips eligibility → routing on.
+        const updateCallsBefore = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls
+          .length;
+        monitor.setWslEligible("eligible");
+        const updateCallsAfter = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+        expect(updateCallsAfter).toBeGreaterThan(updateCallsBefore);
+        expect(monitor.getSnapshot().wslGitEligible).toBe("eligible");
+
+        mockGetWorktreeChangesWithStats.mockClear();
+        await monitor.refresh();
+
+        const lastCall =
+          mockGetWorktreeChangesWithStats.mock.calls[
+            mockGetWorktreeChangesWithStats.mock.calls.length - 1
+          ];
+        expect(lastCall[1]?.wsl).toEqual({
+          distro: "Ubuntu",
+          uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          posixPath: "/home/user/repo",
+        });
+
+        monitor.stop();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
+    });
+
+    it("setWslEligible is a no-op when the value is unchanged (#9924)", async () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
+        wslGitEligible: "ineligible",
+      };
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      const before = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+      monitor.setWslEligible("ineligible");
+      const after = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(after).toBe(before);
+
+      monitor.stop();
+    });
+
+    it("exposes isWslPath and wslDistro getters for eligibility refresh (#9924)", () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      expect(monitor.isWslPath).toBe(true);
+      expect(monitor.wslDistro).toBe("Ubuntu");
     });
   });
 

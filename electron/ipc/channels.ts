@@ -407,6 +407,7 @@ export const CHANNELS = {
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
   WORKTREE_CONFIG_SET_WSL_GIT: "worktree-config:set-wsl-git",
   WORKTREE_CONFIG_DISMISS_WSL_BANNER: "worktree-config:dismiss-wsl-banner",
+  WORKTREE_CONFIG_REPROBE_WSL: "worktree-config:reprobe-wsl",
 
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
   WINDOW_RELOAD: "window:reload",

@@ -24,6 +24,7 @@ import type {
   WorktreeLifecycleStatus,
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
+  WslGitEligibility,
 } from "./worktree.js";
 import type { Credentials, RepoRef } from "./forge.js";
 import type { GitHubPRCIStatus } from "./github.js";
@@ -227,8 +228,12 @@ export interface WorktreeSnapshot {
   /** Distro name parsed from the WSL UNC mount, when `isWslPath` is true. */
   wslDistro?: string;
 
-  /** Whether `wslDistro` matches the WSL default distro (gates "Enable" UI). */
-  wslGitEligible?: boolean;
+  /**
+   * WSL git eligibility: `'eligible'` matches the default distro (gates "Enable"
+   * UI), `'ineligible'` is a confirmed mismatch, `'unprobed'`/absent means the
+   * probe hasn't resolved or failed.
+   */
+  wslGitEligible?: WslGitEligibility;
 
   /** User has opted in to WSL-routed git for this worktree. */
   wslGitOptIn?: boolean;
@@ -377,6 +382,8 @@ export type WorkspaceHostRequest =
       enabled: boolean;
       dismissed: boolean;
     }
+  // Re-probe the WSL default distro on demand and refresh eligibility (Windows only)
+  | { type: "reprobe-wsl"; worktreeId: string }
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }

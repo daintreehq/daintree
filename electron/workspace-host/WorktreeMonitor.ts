@@ -9,6 +9,7 @@ import type {
   WorktreeMood,
   WorktreeLifecycleStatus,
   WorktreeLifecyclePhaseResult,
+  WslGitEligibility,
 } from "../../shared/types/worktree.js";
 import type { GitHubPRCIStatus } from "../../shared/types/github.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
@@ -263,7 +264,7 @@ export class WorktreeMonitor {
   // WSL routing state (Windows only)
   private _isWslPath: boolean = false;
   private _wslDistro: string | undefined;
-  private _wslGitEligible: boolean = false;
+  private _wslGitEligible: WslGitEligibility = "unprobed";
   private _wslGitOptIn: boolean = false;
   private _wslGitDismissed: boolean = false;
   private _wslPosixPath: string | undefined;
@@ -407,7 +408,7 @@ export class WorktreeMonitor {
     this._isWslPath = Boolean(worktree.isWslPath);
     this._wslDistro = worktree.wslDistro;
     this._wslPosixPath = worktree.wslPosixPath;
-    this._wslGitEligible = Boolean(worktree.wslGitEligible);
+    this._wslGitEligible = worktree.wslGitEligible ?? "unprobed";
     this._wslGitOptIn = Boolean(worktree.wslGitOptIn);
     this._wslGitDismissed = Boolean(worktree.wslGitDismissed);
   }
@@ -420,7 +421,8 @@ export class WorktreeMonitor {
    */
   private get wslInvocation(): WslGitInvocation | undefined {
     if (process.platform !== "win32") return undefined;
-    if (!this._isWslPath || !this._wslGitEligible || !this._wslGitOptIn) return undefined;
+    if (!this._isWslPath || this._wslGitEligible !== "eligible" || !this._wslGitOptIn)
+      return undefined;
     if (!this._wslDistro || !this._wslPosixPath) return undefined;
     return {
       distro: this._wslDistro,
@@ -447,6 +449,31 @@ export class WorktreeMonitor {
     if (changed && this._hasInitialStatus) {
       this.emitUpdate();
     }
+  }
+
+  /**
+   * Update the WSL git eligibility at runtime. Called by `WorkspaceService`
+   * when the WSL default distro changes (background poll) or the user triggers
+   * a re-probe. Re-emits a snapshot so the renderer banner reflects the new
+   * state. Safe to flip while running: `createWslHardenedGit` is built per
+   * invocation from the `wslInvocation` getter, so the next poll/fetch picks up
+   * the routing change without swapping a stored git instance.
+   */
+  setWslEligible(eligibility: WslGitEligibility): void {
+    if (this._wslGitEligible === eligibility) return;
+    this._wslGitEligible = eligibility;
+    if (this._hasInitialStatus) {
+      this.emitUpdate();
+    }
+  }
+
+  /** WSL routing inputs, read by `WorkspaceService` to recompute eligibility. */
+  get isWslPath(): boolean {
+    return this._isWslPath;
+  }
+
+  get wslDistro(): string | undefined {
+    return this._wslDistro;
   }
 
   /**
@@ -1138,7 +1165,10 @@ export class WorktreeMonitor {
       isWslPath: this._isWslPath || undefined,
       wslDistro: this._wslDistro,
       wslPosixPath: this._wslPosixPath,
-      wslGitEligible: this._wslGitEligible || undefined,
+      // Emit the three-state value directly for WSL paths so the renderer can
+      // tell "ineligible" (distro mismatch) from "unprobed" (probe pending /
+      // failed). Suppressed for non-WSL worktrees to keep snapshots lean.
+      wslGitEligible: this._isWslPath ? this._wslGitEligible : undefined,
       wslGitOptIn: this._wslGitOptIn || undefined,
       wslGitDismissed: this._wslGitDismissed || undefined,
       linked: this._linked,
