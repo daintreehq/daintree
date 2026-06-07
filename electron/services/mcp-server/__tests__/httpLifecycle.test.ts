@@ -16,9 +16,18 @@ vi.mock("../../../store.js", () => ({
 // Mock electron so the suite loads without the Electron binary present (no
 // `node_modules/electron/path.txt`). httpLifecycle.ts and its transitive imports
 // only touch these at runtime — never in these unit tests — so stubs suffice.
+// The controllable WebContents registry lets targeted-send paths (e.g.
+// notifyTurnOutcomeAlert) be exercised without a real renderer; the source only
+// imports `webContents` from electron, so this mock is a superset of that.
+const { mockWebContentsById } = vi.hoisted(() => ({
+  mockWebContentsById: new Map<
+    number,
+    { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }
+  >(),
+}));
 vi.mock("electron", () => ({
   app: { getVersion: () => "0.0.0-test" },
-  webContents: { fromId: () => undefined },
+  webContents: { fromId: (id: number) => mockWebContentsById.get(id) ?? null },
   ipcMain: { on: () => undefined, removeListener: () => undefined },
 }));
 
@@ -1115,6 +1124,89 @@ describe("HttpLifecycle", () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
       expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("notifyTurnOutcomeAlert (#10018)", () => {
+    beforeEach(() => {
+      mockWebContentsById.clear();
+    });
+
+    function liveWc(id: number) {
+      const wc = { isDestroyed: () => false, send: vi.fn() };
+      mockWebContentsById.set(id, wc);
+      return wc;
+    }
+    function deadWc(id: number) {
+      const wc = { isDestroyed: () => true, send: vi.fn() };
+      mockWebContentsById.set(id, wc);
+      return wc;
+    }
+
+    it("sends the alert to the pinned WebContents of the matching help session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("transport-1", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      const wc = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
+
+      expect(wc.send).toHaveBeenCalledTimes(1);
+      expect(wc.send).toHaveBeenCalledWith(
+        "mcp-server:turn-outcome-alert",
+        expect.objectContaining({ helpSessionId: "help-9", outcome: "agent-stuck" })
+      );
+      // No turnId on the payload means none is forwarded.
+      expect(wc.send.mock.calls[0]![1]).not.toHaveProperty("turnId");
+    });
+
+    it("forwards turnId when present", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("transport-1", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      const wc = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({
+        helpSessionId: "help-9",
+        outcome: "reasoning-loop",
+        turnId: "turn-7",
+      });
+
+      expect(wc.send).toHaveBeenCalledWith(
+        "mcp-server:turn-outcome-alert",
+        expect.objectContaining({ outcome: "reasoning-loop", turnId: "turn-7" })
+      );
+    });
+
+    it("falls through a destroyed WebContents to a second live transport for the same help session", () => {
+      const deps = fakeDeps();
+      // Two transports map to the same help session; the first is destroyed.
+      deps.sessionStore.sessionHelpIdMap.set("transport-dead", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-dead", 41);
+      deps.sessionStore.sessionHelpIdMap.set("transport-live", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-live", 42);
+      const dead = deadWc(41);
+      const live = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
+
+      expect(dead.send).not.toHaveBeenCalled();
+      expect(live.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("no-ops when no transport session maps to the help session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("transport-1", "help-other");
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      const wc = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
+
+      expect(wc.send).not.toHaveBeenCalled();
     });
   });
 });
