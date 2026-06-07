@@ -1,5 +1,8 @@
 import { markPerformance } from "../utils/performance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { notifyError } from "../ipc/errorHandlers.js";
+import { trackEvent } from "../services/TelemetryService.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export type DeferredTask = {
   name: string;
@@ -31,10 +34,10 @@ export function registerDeferredTask(task: DeferredTask): void {
     try {
       const res = task.run();
       if (res instanceof Promise) {
-        res.catch((err) => console.error(`[DeferredInit] Late task "${task.name}" failed:`, err));
+        res.catch((err) => reportDeferredTaskFailure(task.name, err));
       }
     } catch (err) {
-      console.error(`[DeferredInit] Late task "${task.name}" threw:`, err);
+      reportDeferredTaskFailure(task.name, err);
     }
     return;
   }
@@ -112,6 +115,33 @@ export function resetDeferredQueue(): void {
   drainedSenderIds.clear();
 }
 
+/**
+ * Surface a deferred-init task failure beyond the console. These failures are
+ * otherwise invisible — a background service is silently absent for the rest of
+ * the session — so route them through the shared error infrastructure
+ * (persisted `ErrorRecord` + renderer broadcast) and telemetry. Both
+ * `notifyError` and `trackEvent` are safe to call here (no throw, no-op before
+ * their respective services initialize), and neither alters the queue's
+ * failure-isolation guarantee: the caller still advances to the next task.
+ */
+function reportDeferredTaskFailure(taskName: string, err: unknown): void {
+  // Reporting is best-effort and must never throw: the synchronous drain catch
+  // calls this immediately before `scheduleNext()`, so a throw here would strand
+  // the queue in "draining" forever. Guard the whole body — a non-Error thrown
+  // value (`String(err)`) or a store-write failure inside `notifyError` must not
+  // break failure isolation.
+  try {
+    const message = formatErrorMessage(err, "unknown error");
+    console.error(`[DeferredInit] Task "${taskName}" failed:`, err);
+    notifyError(new Error(`Deferred task "${taskName}" failed: ${message}`, { cause: err }), {
+      source: "deferred-init",
+    });
+    trackEvent("deferred_init_task_failed", { taskName });
+  } catch (reportErr) {
+    console.error(`[DeferredInit] Failed to report failure for task "${taskName}":`, reportErr);
+  }
+}
+
 function doDrain(): void {
   if (drainState !== "idle") return;
   drainState = "draining";
@@ -148,14 +178,14 @@ function drainNext(index: number, startedAt: number, drainGen: number): void {
     if (result instanceof Promise) {
       result
         .catch((err) => {
-          console.error(`[DeferredInit] Task "${task.name}" failed:`, err);
+          reportDeferredTaskFailure(task.name, err);
         })
         .finally(scheduleNext);
     } else {
       scheduleNext();
     }
   } catch (err) {
-    console.error(`[DeferredInit] Task "${task.name}" threw:`, err);
+    reportDeferredTaskFailure(task.name, err);
     scheduleNext();
   }
 }
