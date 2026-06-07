@@ -193,13 +193,14 @@ export function computeBezierKeyframes(
   const p2y = fromY + dy * p2t + perpY * p2Dist * p2Sign;
 
   const jitterAmplitude = Math.min(2, dist * 0.003);
+  const safeSteps = Math.max(1, steps);
   const frames: Array<{ transform: string }> = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
+  for (let i = 0; i <= safeSteps; i++) {
+    const t = i / safeSteps;
     let x = cubicBezier(t, fromX, p1x, p2x, toX) - fromX;
     let y = cubicBezier(t, fromY, p1y, p2y, toY) - fromY;
 
-    if (i > 0 && i < steps && jitterAmplitude > 0) {
+    if (i > 0 && i < safeSteps && jitterAmplitude > 0) {
       const noiseVal = (noise1D(i * 0.15 + seed) * 2 - 1) * jitterAmplitude;
       x += perpX * noiseVal;
       y += perpY * noiseVal;

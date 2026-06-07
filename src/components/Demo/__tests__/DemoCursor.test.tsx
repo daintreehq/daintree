@@ -1233,21 +1233,24 @@ describe("computeBezierKeyframes geometry", () => {
     randomSpy = undefined;
   });
 
+  function maxBow(toX: number, toY: number): number {
+    const frames = computeBezierKeyframes(0, 0, toX, toY, 40, 0);
+    return Math.max(...signedPerpDeviations(frames, toX, toY).map(Math.abs));
+  }
+
   it("scales arc deviation sub-linearly with distance", () => {
     randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    const short = signedPerpDeviations(computeBezierKeyframes(0, 0, 30, 0, 40, 0), 30, 0);
-    const long = signedPerpDeviations(computeBezierKeyframes(0, 0, 600, 0, 40, 0), 600, 0);
+    // Distances chosen well under the 80px deviation cap and a 4x apart, so the
+    // shape of the taper is what's measured, not the ceiling. A sqrt taper
+    // predicts a ~2x (sqrt(4)) bow ratio; the old linear `dist * fraction` — or
+    // a plain `min(dist, cap)` — would predict ~4x here. Asserting < 3 fails
+    // either of those and only passes for genuinely sub-linear growth.
+    const near = maxBow(64, 0);
+    const far = maxBow(256, 0);
 
-    const shortMax = Math.max(...short.map(Math.abs));
-    const longMax = Math.max(...long.map(Math.abs));
-
-    // Longer moves bow more in absolute terms...
-    expect(longMax).toBeGreaterThan(shortMax);
-    // ...but sub-linearly: a 20x longer move must not produce a 20x bigger arc,
-    // otherwise short nudges read just as dramatically curved as long sweeps.
-    const distanceRatio = 600 / 30;
-    expect(longMax / shortMax).toBeLessThan(distanceRatio);
+    expect(far).toBeGreaterThan(near);
+    expect(far / near).toBeLessThan(3);
   });
 
   it("never inflects below the two-phase threshold", () => {
@@ -1273,6 +1276,32 @@ describe("computeBezierKeyframes geometry", () => {
     // the jitter band (min(2, 400 * 0.003) = 1.2px) by a comfortable margin.
     expect(Math.min(...dev)).toBeLessThan(-2);
     expect(Math.max(...dev)).toBeGreaterThan(2);
+  });
+
+  it("starts at the origin and lands exactly on the target", () => {
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    // Non-zero start: transforms are deltas from the start point, so the first
+    // frame is the zero vector and the last is the full displacement. Endpoints
+    // carry no jitter, so these are exact.
+    const frames = computeBezierKeyframes(500, 400, 950, 760, 40, 0);
+    const parse = (t: string) => {
+      const m = /translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\s*\)/.exec(t)!;
+      return { x: parseFloat(m[1]!), y: parseFloat(m[2]!) };
+    };
+
+    expect(frames).toHaveLength(41);
+    expect(parse(frames[0]!.transform)).toEqual({ x: 0, y: 0 });
+    expect(parse(frames[frames.length - 1]!.transform)).toEqual({ x: 450, y: 360 });
+  });
+
+  it("bows perpendicular to the chord for non-horizontal moves", () => {
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    // The arc must deviate off the chord regardless of its orientation. A
+    // hard-coded horizontal perpendicular would collapse these to ~0.
+    expect(maxBow(0, 400)).toBeGreaterThan(5); // vertical
+    expect(maxBow(300, 400)).toBeGreaterThan(5); // diagonal
   });
 });
 
