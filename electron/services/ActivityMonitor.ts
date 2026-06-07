@@ -24,6 +24,7 @@ import {
   AGENT_OUTPUT_ACTIVITY_LINE_COUNT,
   AgentActivityTemperature,
   type AgentActivityObservationResult,
+  type AgentActivitySignalKind,
 } from "./pty/AgentActivityTemperature.js";
 import {
   detectPrompt,
@@ -190,6 +191,9 @@ export class ActivityMonitor {
   private lastActivityTimestamp = Date.now();
   private lastDataTimestamp = Date.now();
   private lastOutputActivityAt = 0;
+  // Latched when simple-output data matches isStatusLineRewrite — lets the
+  // polling cycle classify visible-content changes as indicator-driven (#9874).
+  private lastStatusRewriteAt = 0;
   private lastWorkingIndicatorTimestamp = 0;
   private promptStableSince = 0;
 
@@ -437,8 +441,18 @@ export class ActivityMonitor {
           this.fireBootComplete(now);
         }
       }
+      // Semantic status-line rewrites (spinner, retry countdown, elapsed-time
+      // counter) are strong liveness evidence even at 1Hz cadence (#9874).
+      const isIndicatorRewrite = isStatusLineRewrite(data);
+      if (isIndicatorRewrite) {
+        this.lastStatusRewriteAt = now;
+      }
       if (!this.getVisibleLines) {
-        this.noteSimpleOutputSnapshot(createVisibleContentSnapshot(stripAnsi(data)), now);
+        this.noteSimpleOutputSnapshot(
+          createVisibleContentSnapshot(stripAnsi(data)),
+          now,
+          isIndicatorRewrite ? "indicator" : "content"
+        );
       }
       return;
     }
@@ -711,9 +725,13 @@ export class ActivityMonitor {
     return createVisibleContentSnapshot(this.getVisibleLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT));
   }
 
-  private noteSimpleOutputSnapshot(snapshot: VisibleContentSnapshot, now: number): void {
+  private noteSimpleOutputSnapshot(
+    snapshot: VisibleContentSnapshot,
+    now: number,
+    signalKind?: AgentActivitySignalKind
+  ): void {
     this.applySimpleOutputTemperature(
-      this.simpleOutputTemperature.observeSnapshot(now, snapshot),
+      this.simpleOutputTemperature.observeSnapshot(now, snapshot, { signalKind }),
       now
     );
   }
@@ -797,6 +815,7 @@ export class ActivityMonitor {
     this.workingHoldUntil = 0;
     this.lastDataTimestamp = 0;
     this.lastOutputActivityAt = 0;
+    this.lastStatusRewriteAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
     this.promptStableSince = 0;
   }
@@ -1008,7 +1027,13 @@ export class ActivityMonitor {
 
       const snapshot = this.captureSimpleOutputSnapshot();
       if (snapshot !== undefined) {
-        this.noteSimpleOutputSnapshot(snapshot, now);
+        // Classify the polled change as indicator-driven when status-line
+        // rewrite data arrived recently — the data path can't feed the
+        // temperature directly here (it gates on !getVisibleLines), so the
+        // latched timestamp is the correlation signal (#9874).
+        const indicatorActive =
+          this.lastStatusRewriteAt > 0 && now - this.lastStatusRewriteAt <= SPINNER_ACTIVE_MS;
+        this.noteSimpleOutputSnapshot(snapshot, now, indicatorActive ? "indicator" : "content");
       }
 
       if (

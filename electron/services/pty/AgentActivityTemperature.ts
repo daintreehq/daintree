@@ -11,6 +11,8 @@ const DEFAULT_WAITING_THRESHOLD = 40;
 const DEFAULT_WORKING_DWELL_MS = 2000;
 const DEFAULT_WORKING_MIN_CHANGED_SAMPLES = 4;
 const DEFAULT_WORKING_MAX_CHANGE_GAP_MS = 900;
+const DEFAULT_INDICATOR_MAX_CHANGE_GAP_MS = 2000;
+const DEFAULT_WORKING_MIN_INDICATOR_SAMPLES = 2;
 const DEFAULT_WAITING_DWELL_MS = 6000;
 const DEFAULT_ACTIVE_GAP_RESET_MS = 3000;
 const DEFAULT_RESIZE_QUIET_MS = 500;
@@ -26,6 +28,8 @@ export interface AgentActivityTemperatureOptions {
   workingDwellMs?: number;
   workingMinChangedSamples?: number;
   workingMaxChangeGapMs?: number;
+  indicatorMaxChangeGapMs?: number;
+  workingMinIndicatorSamples?: number;
   waitingDwellMs?: number;
   activeGapResetMs?: number;
   resizeQuietMs?: number;
@@ -35,9 +39,16 @@ export interface AgentActivityTemperatureOptions {
   decorativeImpulse?: number;
 }
 
+// "indicator" marks semantic status-line activity (spinner, retry countdown,
+// elapsed-time counter) — strong liveness evidence that may tick as slowly as
+// 1Hz, so it gets a looser change-gap and a lower sample minimum than generic
+// "content" churn. "decorative" stays heat-capped noise.
+export type AgentActivitySignalKind = "content" | "indicator" | "decorative";
+
 export interface AgentActivityDeltaObservation {
   changedChars: number;
   decorative?: boolean;
+  signalKind?: AgentActivitySignalKind;
 }
 
 export interface AgentActivityObservationResult {
@@ -57,6 +68,8 @@ export class AgentActivityTemperature {
   private readonly workingDwellMs: number;
   private readonly workingMinChangedSamples: number;
   private readonly workingMaxChangeGapMs: number;
+  private readonly indicatorMaxChangeGapMs: number;
+  private readonly workingMinIndicatorSamples: number;
   private readonly waitingDwellMs: number;
   private readonly activeGapResetMs: number;
   private readonly resizeQuietMs: number;
@@ -74,6 +87,7 @@ export class AgentActivityTemperature {
   private baselineInvalid = false;
   private lastSnapshot: VisibleContentSnapshot | undefined;
   private changedSampleCount = 0;
+  private activeEvidenceKind: AgentActivitySignalKind = "content";
 
   constructor(options?: AgentActivityTemperatureOptions) {
     this.halfLifeMs = positive(options?.halfLifeMs, DEFAULT_HALF_LIFE_MS);
@@ -87,6 +101,14 @@ export class AgentActivityTemperature {
     this.workingMaxChangeGapMs = positive(
       options?.workingMaxChangeGapMs,
       DEFAULT_WORKING_MAX_CHANGE_GAP_MS
+    );
+    this.indicatorMaxChangeGapMs = positive(
+      options?.indicatorMaxChangeGapMs,
+      DEFAULT_INDICATOR_MAX_CHANGE_GAP_MS
+    );
+    this.workingMinIndicatorSamples = positiveInteger(
+      options?.workingMinIndicatorSamples,
+      DEFAULT_WORKING_MIN_INDICATOR_SAMPLES
     );
     this.waitingDwellMs = nonNegative(options?.waitingDwellMs, DEFAULT_WAITING_DWELL_MS);
     this.activeGapResetMs = positive(options?.activeGapResetMs, DEFAULT_ACTIVE_GAP_RESET_MS);
@@ -117,6 +139,7 @@ export class AgentActivityTemperature {
     this.baselineInvalid = false;
     this.lastSnapshot = undefined;
     this.changedSampleCount = 0;
+    this.activeEvidenceKind = "content";
   }
 
   noteResize(now: number, quietMs = this.resizeQuietMs): void {
@@ -127,6 +150,7 @@ export class AgentActivityTemperature {
     this.lastChangedAt = 0;
     this.quietStartedAt = 0;
     this.changedSampleCount = 0;
+    this.activeEvidenceKind = "content";
   }
 
   seedSnapshot(snapshot: VisibleContentSnapshot, now: number): AgentActivityObservationResult {
@@ -140,7 +164,7 @@ export class AgentActivityTemperature {
   observeSnapshot(
     now: number,
     snapshot: VisibleContentSnapshot,
-    options?: { decorative?: boolean }
+    options?: { decorative?: boolean; signalKind?: AgentActivitySignalKind }
   ): AgentActivityObservationResult {
     const suppressed = this.consumeResizeSuppression(now);
     if (suppressed) {
@@ -154,7 +178,11 @@ export class AgentActivityTemperature {
     this.applyDecay(now);
     const delta = measureVisibleContentDelta(this.lastSnapshot, snapshot);
     this.lastSnapshot = snapshot;
-    return this.observeDeltaAfterDecay(now, delta.changedChars, options?.decorative === true);
+    return this.observeDeltaAfterDecay(
+      now,
+      delta.changedChars,
+      resolveSignalKind(options?.signalKind, options?.decorative)
+    );
   }
 
   observeDelta(
@@ -178,14 +206,14 @@ export class AgentActivityTemperature {
     return this.observeDeltaAfterDecay(
       now,
       observation.changedChars,
-      observation.decorative === true
+      resolveSignalKind(observation.signalKind, observation.decorative)
     );
   }
 
   private observeDeltaAfterDecay(
     now: number,
     rawChangedChars: number,
-    decorative: boolean
+    signalKind: AgentActivitySignalKind
   ): AgentActivityObservationResult {
     const changedChars = Number.isFinite(rawChangedChars) ? Math.max(0, rawChangedChars) : 0;
 
@@ -193,6 +221,7 @@ export class AgentActivityTemperature {
       if (this.lastChangedAt > 0 && now - this.lastChangedAt > this.activeGapResetMs) {
         this.activeEvidenceStartedAt = 0;
         this.changedSampleCount = 0;
+        this.activeEvidenceKind = "content";
       }
       if (this.quietStartedAt === 0) {
         this.quietStartedAt = now;
@@ -200,17 +229,24 @@ export class AgentActivityTemperature {
       return this.result(now, false, 0, 0, false, false);
     }
 
-    const heatAdded = this.heatForChange(changedChars, decorative);
+    const heatAdded = this.heatForChange(changedChars, signalKind === "decorative");
     this.temperature = Math.min(this.maxTemperature, this.temperature + heatAdded);
 
+    // Indicator-class changes (semantic status lines) may tick as slowly as
+    // 1Hz, so they get a looser gap before the evidence window resets (#9874).
+    // Generic content keeps the tight 900ms gate that guards against
+    // scroll/resize repaint bursts (699d9a050).
+    const maxChangeGapMs =
+      signalKind === "indicator" ? this.indicatorMaxChangeGapMs : this.workingMaxChangeGapMs;
     if (
       this.activeEvidenceStartedAt === 0 ||
-      (this.lastChangedAt > 0 && now - this.lastChangedAt > this.workingMaxChangeGapMs)
+      (this.lastChangedAt > 0 && now - this.lastChangedAt > maxChangeGapMs)
     ) {
       this.activeEvidenceStartedAt = now;
       this.changedSampleCount = 0;
     }
     this.changedSampleCount += 1;
+    this.activeEvidenceKind = signalKind;
     this.lastChangedAt = now;
     this.quietStartedAt = 0;
 
@@ -237,11 +273,16 @@ export class AgentActivityTemperature {
   }
 
   private computeStateHint(now: number, changed: boolean): "busy" | "idle" | undefined {
+    const minChangedSamples =
+      this.activeEvidenceKind === "indicator"
+        ? this.workingMinIndicatorSamples
+        : this.workingMinChangedSamples;
     if (
       changed &&
+      this.activeEvidenceKind !== "decorative" &&
       this.temperature >= this.workingThreshold &&
       this.activeEvidenceStartedAt > 0 &&
-      this.changedSampleCount >= this.workingMinChangedSamples &&
+      this.changedSampleCount >= minChangedSamples &&
       now - this.activeEvidenceStartedAt >= this.workingDwellMs
     ) {
       return "busy";
@@ -312,6 +353,13 @@ export class AgentActivityTemperature {
     this.resizeSuppressUntil = 0;
     this.baselineInvalid = false;
   }
+}
+
+function resolveSignalKind(
+  signalKind: AgentActivitySignalKind | undefined,
+  decorative: boolean | undefined
+): AgentActivitySignalKind {
+  return signalKind ?? (decorative === true ? "decorative" : "content");
 }
 
 function positive(value: number | undefined, fallback: number): number {

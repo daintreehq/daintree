@@ -5894,4 +5894,101 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("once-per-second indicator recovery (Issue #9874)", () => {
+    it("recovers idle→busy from a 1Hz status-line countdown in simple-output polling mode", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      let statusLine = "Retrying in 9s · 100 tokens";
+      const monitor = new ActivityMonitor("indicator-1hz", 100, onStateChange, {
+        agentId: "kimi",
+        simpleOutputState: true,
+        getVisibleLines: () => ["$ agent run", statusLine],
+        getCursorLine: () => statusLine,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+      });
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // 1Hz countdown: each second the agent rewrites its status line with a
+      // CR + erase-line sequence (matches isStatusLineRewrite).
+      for (let i = 1; i <= 6 && monitor.getState() !== "busy"; i += 1) {
+        vi.advanceTimersByTime(1000);
+        statusLine = `Retrying in ${9 - i}s · ${100 + i * 137} tokens`;
+        monitor.onData(`\r\x1b[2K${statusLine}`);
+      }
+
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).toHaveBeenCalledWith("indicator-1hz", 100, "busy", {
+        trigger: "output",
+      });
+
+      monitor.dispose();
+    });
+
+    it("expires the status-rewrite latch so later plain content is not indicator-classified", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      let statusLine = "Retrying in 9s · 100 tokens";
+      const monitor = new ActivityMonitor("latch-expiry", 100, onStateChange, {
+        agentId: "kimi",
+        simpleOutputState: true,
+        getVisibleLines: () => ["$ agent run", statusLine],
+        getCursorLine: () => statusLine,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+      });
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // One status-line rewrite latches lastStatusRewriteAt…
+      statusLine = "Retrying in 8s · 237 tokens";
+      monitor.onData(`\r\x1b[2K${statusLine}`);
+
+      // …but the agent then emits only plain newline-terminated content at
+      // 1Hz. Once the 1500ms latch expires, changes classify as content and
+      // the strict 900ms gap keeps resetting the evidence window.
+      for (let i = 1; i <= 8; i += 1) {
+        vi.advanceTimersByTime(1000);
+        statusLine = `layout pass ${i * 137}`;
+        monitor.onData(`${statusLine}\n`);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("negative control: 1Hz non-indicator content changes do not recover idle→busy", () => {
+      vi.setSystemTime(10000);
+      const onStateChange = vi.fn();
+      let bodyLine = "layout pass 0";
+      const monitor = new ActivityMonitor("content-1hz", 100, onStateChange, {
+        agentId: "kimi",
+        simpleOutputState: true,
+        getVisibleLines: () => ["$ agent run", bodyLine],
+        getCursorLine: () => bodyLine,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+      });
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // Same cadence, but plain newline-terminated output — no status-line
+      // rewrite sequences, so the strict 900ms content gap still applies.
+      for (let i = 1; i <= 8; i += 1) {
+        vi.advanceTimersByTime(1000);
+        bodyLine = `layout pass ${i * 137}`;
+        monitor.onData(`${bodyLine}\n`);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+  });
 });
