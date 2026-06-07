@@ -393,6 +393,20 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toMatch(/<h2[^>]*>Worktrees<\/h2>/);
+    // The loading header's vertical padding must match the loaded header's, or
+    // the bar shrinks and the list jumps up when worktrees finish loading
+    // (#10318). Compare the two against each other rather than pinning a literal.
+    const loadingHeaderDiv = branch.match(
+      /<div className="flex items-center [^"]*border-b[^"]*"/
+    )?.[0];
+    const loadedHeaderDiv = source.match(
+      /<div className="group\/header flex items-center [^"]*border-b[^"]*"/
+    )?.[0];
+    const loadingPy = loadingHeaderDiv?.match(/\bpy-\d+\b/)?.[0];
+    const loadedPy = loadedHeaderDiv?.match(/\bpy-\d+\b/)?.[0];
+    expect(loadingPy).toBeDefined();
+    expect(loadedPy).toBeDefined();
+    expect(loadingPy).toBe(loadedPy);
   });
 
   it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {

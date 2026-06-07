@@ -51,7 +51,18 @@ describe("SidebarContent accessibility — issue #9662", () => {
       expect(source).toMatch(/prevReconnecting\.current/);
       expect(source).toMatch(/prevEscalated\.current/);
       expect(source).toMatch(/if \(showReconnecting && !prevReconnecting\.current\)/);
-      expect(source).toMatch(/if \(showReconnectingEscalated && !prevEscalated\.current\)/);
+      // Escalation is also gated on the Doherty-gated `showReconnecting` so a
+      // mid-outage remount can't fire "Still reconnecting…" before the base
+      // "Reconnecting…" announcement and invert their order (issue #10318).
+      expect(source).toMatch(
+        /if \(showReconnecting && showReconnectingEscalated && !prevEscalated\.current\)/
+      );
+      // …and the escalated edge-tracker is gated the same way, so the remount
+      // doesn't consume the edge before the base announcement lands and drop
+      // "Still reconnecting…" permanently (issue #10318).
+      expect(source).toMatch(
+        /prevEscalated\.current = showReconnecting && showReconnectingEscalated;/
+      );
     });
   });
 

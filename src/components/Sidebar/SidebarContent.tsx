@@ -461,11 +461,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     // `showReconnectingEscalated` reads raw `isReconnecting`, so mounting mid-
     // outage could otherwise fire "Still reconnecting…" 400ms before the base
     // "Reconnecting…" announcement and invert their order.
-    if (showReconnectingEscalated && !prevEscalated.current) {
+    if (showReconnecting && showReconnectingEscalated && !prevEscalated.current) {
       useAnnouncerStore.getState().announce("Still reconnecting…", "polite");
     }
     prevReconnecting.current = showReconnecting;
-    prevEscalated.current = showReconnectingEscalated;
+    // Gate the escalated edge-tracker on `showReconnecting` too, so a mid-outage
+    // remount (escalated true while the Doherty gate still reads false) doesn't
+    // consume the edge before the base announcement lands — otherwise the next
+    // render, once the gate flips true, would skip "Still reconnecting…"
+    // entirely. With this gate, that render fires base then escalated, in order.
+    prevEscalated.current = showReconnecting && showReconnectingEscalated;
   }, [showReconnecting, showReconnectingEscalated]);
   const currentProject = useProjectStore((state) => state.currentProject);
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
@@ -1389,7 +1394,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         {worktreeLoadErrorBanner}
-        <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
+        <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
           <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
         </div>
         <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
@@ -1423,7 +1428,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           {worktreeLoadErrorBanner}
-          <div className="flex items-center px-4 py-4 border-b border-divider shrink-0">
+          <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
             <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
           </div>
           {errorBanner}
