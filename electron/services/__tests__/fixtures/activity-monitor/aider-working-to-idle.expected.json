@@ -1,0 +1,11 @@
+{
+  "agentId": "aider",
+  "settleMs": 8000,
+  "idleDebounceMs": 6000,
+  "promptFastPathMinQuietMs": 6000,
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 6050, "state": "completed", "trigger": "pattern" },
+    { "atMs": 6550, "state": "idle", "trigger": "pattern" }
+  ]
+}

@@ -212,6 +212,7 @@ Use these focused tests when changing the monitor:
 - `electron/services/pty/__tests__/SynchronizedFrameAnalyzer.test.ts`
 - `electron/services/pty/__tests__/AgentPatternDetector.test.ts`
 - `electron/services/pty/__tests__/Osc94Parser.test.ts`
+- `electron/services/__tests__/ActivityMonitor.replay.test.ts` — golden-trace replay of `.cast` fixtures through the production `buildActivityMonitorOptions` path (see [Adding replay fixtures](#adding-replay-fixtures)).
 
 Manual release checks live in [activity-testing.md](../activity-testing.md).
 
@@ -226,10 +227,28 @@ Important scenarios:
 - prompt redraws and protocol noise do not enter working;
 - completion patterns produce completed before waiting.
 
+## Adding Replay Fixtures
+
+The replay suite (`electron/services/__tests__/ActivityMonitor.replay.test.ts`) feeds asciinema v2 `.cast` recordings through the harness in `electron/services/__tests__/replay/castReplayHarness.ts`, which builds the monitor via the production `buildActivityMonitorOptions` path and asserts the recorded state transitions against a sibling `.expected.json`. Fixtures live in `electron/services/__tests__/fixtures/activity-monitor/` and are named `{agent}-{scenario}` (e.g. `aider-working-to-idle`).
+
+### Workflow: corpus → convert → trim → calibrate
+
+1. **Get a recording.** Either convert a pattern-discovery JSONL corpus (`scripts/pattern-discovery/corpus/*.jsonl`, recorded via `npm run pattern-discovery:record -- --agent <id>`) with `npm run pattern-discovery:jsonl-to-cast -- --corpus <corpus.jsonl> --out electron/services/__tests__/fixtures/activity-monitor/{agent}-{scenario} --width 120 --height 10`, or redact a real terminal capture with `npm run pattern-discovery:redact-cast -- --in capture.cast`.
+2. **Redaction is mandatory for field recordings.** Both tools run `scrubReportText` (user paths, git remotes, tilde/temp paths, all secret sigils in `shared/utils/secretScrubber.ts`) over every event at the write boundary, so converter output is safe by construction; for hand-edited or externally recorded casts, run `redact-cast` before committing and eyeball the result — the scrubbers are a backstop, not a substitute for review. Never commit the `.bak` file the in-place mode leaves behind.
+3. **Trim.** Cut events that don't serve the scenario (post-prompt chatter, resume hints) so the fixture ends on the signal you're asserting — a trailing low-byte hint line can re-arm output-activity detection and turn a clean prompt-idle into a timeout-idle.
+4. **Calibrate.** The converter writes a stub `.expected.json` with a `STUB_REPLACE_ME` sentinel that always fails. Add the fixture to `REPLAY_CASES`, run the replay test, copy the timings from the `Recorded transitions` block in the failure output into real `transitions` entries, and delete the `_stub` field. Re-run to confirm green. A fixture needing custom `pollingMaxBootMs`/`maxWorkingSilenceMs` overrides follows the bespoke `it()` pattern of `input-event-triggers-busy` instead of `REPLAY_CASES`.
+
+### Fixture-authoring gotchas
+
+- **Terminal geometry is load-bearing.** Prompt and visible-tail detection read the bottom rows of the viewport, so size `height` small enough (existing fixtures use `120x10`) that meaningful content lands in the bottom `promptScanLineCount` rows — a 30-row terminal with 14 lines of content leaves the scan window empty and silently downgrades prompt/completion detection to timeout-idle.
+- **Line-structured vs raw events.** Synthetic corpora store bare strings with no control characters; the converter auto-prepends `\r\n` to each event (`--line-events`/`--raw` to force) so cursor-line prompt detection works. Raw PTY captures already carry their own line discipline and must convert with `--raw` semantics (the auto-detect handles this).
+- **Timing pins.** The harness pins `idleDebounceMs`/`promptFastPathMinQuietMs` to the legacy 6000ms floor (production is 8000ms); new fixtures should state both fields explicitly in `.expected.json` so the calibrated `atMs` values are self-documenting.
+- **OSC 9;4 is not routed yet** (#9870): casts captured from agents that emit progress sequences (e.g. Claude Code) replay through the pattern path only; when OSC routing lands, those fixtures will need recalibration.
+- **Cast format is v2** (absolute timestamps). The harness also parses v3, but v2 is what the tooling emits and what hand-editing expects.
+
 ## Future Work
 
 - Add marker-anchored visible snapshots for structural resize immunity.
 - Add transition telemetry that records temperature, heat, changed chars, trigger, and suppression reason.
-- Add golden trace replay from real terminal captures.
 - Add property tests for decay invariants, dwell impossibility, resize suppression, and external temperature reads.
 - Parse OSC 133/633 shell-integration signals when agents provide them, while keeping passive observation as the fallback.
