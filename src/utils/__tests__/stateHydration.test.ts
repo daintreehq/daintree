@@ -54,7 +54,6 @@ const loadOverridesMock = vi.fn().mockResolvedValue(undefined);
 const fetchAndRestoreMock = vi.fn().mockResolvedValue(undefined);
 const restoreFetchedStateMock = vi.fn().mockResolvedValue(undefined);
 const getManagedTerminalMock = vi.fn().mockReturnValue(null);
-const isTerminalWarmInProjectSwitchCacheMock = vi.fn().mockReturnValue(false);
 
 vi.mock("@/clients", () => ({
   appClient: appClientMock,
@@ -123,10 +122,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("@/services/projectSwitchRendererCache", () => ({
-  isTerminalWarmInProjectSwitchCache: isTerminalWarmInProjectSwitchCacheMock,
-}));
-
 const notifyMock = vi.fn().mockReturnValue("notification-id");
 vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => notifyMock(...args),
@@ -178,7 +173,6 @@ describe("hydrateAppState", () => {
       }
       return managedCache.get(id);
     });
-    isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(false);
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
     terminalClientMock.getSerializedStates.mockRejectedValue(
@@ -901,7 +895,7 @@ describe("hydrateAppState", () => {
     await hydrationPromise;
   });
 
-  it("skips snapshot fetch for warm cached terminal instances already restored", async () => {
+  it("skips scrollback restore for a terminal already in the 'done' state", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -930,10 +924,8 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(true);
-
-    // Warm cached terminals already have their scrollback loaded, so
-    // scheduleScrollbackRestore skips them (scrollbackRestoreState !== "none").
+    // A terminal whose scrollback is already loaded ("done") is skipped by
+    // scheduleScrollbackRestore's gate (scrollbackRestoreState !== "none").
     getManagedTerminalMock.mockImplementation((id: string) => {
       if (id === "terminal-cached") {
         return {
