@@ -304,8 +304,24 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       // exact output preset, not the surface's native backing-store size.
       // CAPTURE_W/H come from the resolution preset while the asserted values
       // are parsed from the actual encoded file, so removing the applyConstraints
-      // pin (which would record at SCALE×LOGICAL) breaks this assertion.
+      // pin (which would record at NATIVE_W/H = SCALE×LOGICAL) breaks this when
+      // native ≠ target. The pin is only load-bearing when those differ (e.g.
+      // 1440p: native 3840×2160 vs target 2560×1440); presets where native ==
+      // target (default 4k, 1080p) still assert correctness but can't catch a
+      // missing pin — log which case this run exercised so coverage is visible.
+      const NATIVE_W = LOGICAL_W * SCALE;
+      const NATIVE_H = LOGICAL_H * SCALE;
+      const pinLoadBearing = NATIVE_W !== CAPTURE_W || NATIVE_H !== CAPTURE_H;
+      console.log(
+        `[demo-reel] native ${NATIVE_W}×${NATIVE_H} → target ${CAPTURE_W}×${CAPTURE_H} ` +
+          `(pin ${pinLoadBearing ? "load-bearing — true regression guard" : "no-op for this preset"})`
+      );
       const dims = readVideoDimensions(outputPath);
+      // When ffmpeg is available the check is mandatory — a parse failure must
+      // not silently skip the guard. Only skip when ffmpeg-static is absent.
+      if (ffmpegPath) {
+        expect(dims, "ffmpeg present but recorded dimensions could not be read").not.toBeNull();
+      }
       if (dims) {
         console.log(`[demo-reel] recorded dimensions ${dims.width}×${dims.height}`);
         expect(dims.width).toBe(CAPTURE_W);

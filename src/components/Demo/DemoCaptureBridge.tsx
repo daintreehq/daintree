@@ -100,13 +100,27 @@ export function DemoCaptureBridge() {
           return;
         }
 
+        // Resolution is all-or-nothing: a partial request (one dimension, or a
+        // non-positive value) would silently fall through to native size, which
+        // is exactly the wrong-resolution bug this guards against. Fail fast.
+        const wantWidth = typeof width === "number" && width > 0;
+        const wantHeight = typeof height === "number" && height > 0;
+        if (wantWidth !== wantHeight) {
+          stream.getTracks().forEach((t) => t.stop());
+          api.sendCommandDone(
+            requestId,
+            "Capture resolution requires both width and height (got one)"
+          );
+          return;
+        }
+
         // Pin the captured frame to the exact requested size. getDisplayMedia
         // ignores width/height, so applyConstraints({ exact }) is the only seam
         // that forces Chromium to downscale the track (e.g. 3840×2160 backing
         // store → 2560×1440). It succeeds when the requested ratio matches the
         // surface (the demo window is sized to match), otherwise it rejects.
         // Fail hard on any miss rather than silently recording the wrong size.
-        if (width && height) {
+        if (wantWidth && wantHeight) {
           const videoTrack = stream.getVideoTracks()[0];
           if (!videoTrack) {
             stream.getTracks().forEach((t) => t.stop());
