@@ -152,4 +152,60 @@ describe("FigureRail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
     expect(screen.queryByTestId("figure-lightbox")).toBeNull();
   });
+
+  // Animated WebP (#10278) plays via the native image decoder; the render path
+  // must hand the original URL straight to a plain <img> with no poster/still
+  // swap, in both the thumbnail and the lightbox, so the animation can loop.
+  it("passes an animated WebP url through unmodified to the thumbnail img", () => {
+    const url = "https://daintree.org/demo-loop.webp";
+    render(<FigureRail figures={[makeFigure(1, { url })]} />);
+
+    const img = screen.getByAltText("Alt 1");
+    expect(img.getAttribute("src")).toBe(url);
+    // No still-frame substitution: the rendered element is a plain <img>, not a
+    // <canvas>/<video> poster surface.
+    expect(img.tagName).toBe("IMG");
+  });
+
+  it("opens an animated WebP figure in the lightbox with the same unmodified url", () => {
+    const url = "https://daintree.org/demo-loop.webp";
+    render(<FigureRail figures={[makeFigure(1, { url })]} />);
+    fireEvent.load(screen.getByAltText("Alt 1"));
+    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+
+    const lightbox = screen.getByTestId("figure-lightbox");
+    const img = within(lightbox).getByAltText("Alt 1");
+    expect(img.getAttribute("src")).toBe(url);
+    expect(img.tagName).toBe("IMG");
+  });
+
+  it("renders an animated WebP figure normally under prefers-reduced-motion", () => {
+    // Chromium 148 does not pause native animated images for
+    // prefers-reduced-motion (no shipped CSS image-animation property), so the
+    // component intentionally renders the <img> the same way regardless. This
+    // documents the known gap rather than asserting a (non-existent) pause.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("prefers-reduced-motion"),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }))
+    );
+
+    const url = "https://daintree.org/demo-loop.webp";
+    render(<FigureRail figures={[makeFigure(1, { url })]} />);
+
+    const img = screen.getByAltText("Alt 1");
+    expect(img.getAttribute("src")).toBe(url);
+
+    // Restore only matchMedia — vi.unstubAllGlobals() would also wipe the
+    // module-level ResizeObserver stub other tests rely on.
+    vi.stubGlobal("matchMedia", undefined);
+  });
 });
