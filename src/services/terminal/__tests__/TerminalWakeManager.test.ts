@@ -1036,5 +1036,84 @@ describe("TerminalWakeManager", () => {
         vi.useRealTimers();
       }
     });
+
+    it("reports a pending decline retry via hasPendingWake (watchdog flush guard)", async () => {
+      // The reconciliation watchdog gates its stalled-bytes flush on
+      // !hasPendingWake. A pending decline retry will reset the terminal on
+      // replay, so the flush must wait — hasPendingWake must report it.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: null });
+        const managed = makeManaged(vi.fn(() => false));
+        const manager = new TerminalWakeManager(makeDeclineDeps(managed));
+
+        expect(manager.hasPendingWake("term-decline-pending")).toBe(false);
+
+        await manager.wakeAndRestore("term-decline-pending");
+        expect(manager.hasPendingWake("term-decline-pending")).toBe(true);
+
+        manager.clearWakeState("term-decline-pending");
+        expect(manager.hasPendingWake("term-decline-pending")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels a pending decline retry when a direct wakeAndRestore later succeeds", async () => {
+      // RendererPolicy / visibility-restore wakes call wakeAndRestore directly,
+      // bypassing triggerWake. A success there must cancel the leftover decline
+      // timer so it doesn't fire a redundant reset on the active pane.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValueOnce({ state: null }).mockResolvedValue({
+          state: "serialized-state",
+        });
+        const managed = makeManaged(vi.fn(() => false));
+        const manager = new TerminalWakeManager(makeDeclineDeps(managed));
+
+        await manager.wakeAndRestore("term-decline-direct");
+        expect(manager.hasPendingWake("term-decline-direct")).toBe(true);
+
+        // A direct wake (e.g. from RendererPolicy) succeeds before the retry.
+        const result = await manager.wakeAndRestore("term-decline-direct");
+        expect(result).toBe(true);
+        expect(manager.hasPendingWake("term-decline-direct")).toBe(false);
+
+        // The leftover decline timer must not fire another wake.
+        await vi.advanceTimersByTimeAsync(900);
+        expect(wakeMock).toHaveBeenCalledTimes(2); // initial null + direct success
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("exhausts selection retries silently when the selection is held throughout", async () => {
+      // Documented tradeoff: while a selection is held the guard never fetches
+      // or replays a snapshot (it would destroy the selection), and no marker is
+      // drawn (it would write into the guarded terminal). The pane re-wakes on
+      // the next tier transition; the bounded retries just give up quietly.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        const onDeclined = vi.fn();
+        const managed = makeManaged(vi.fn(() => true)); // selection held forever
+        const manager = new TerminalWakeManager(makeDeclineDeps(managed, onDeclined));
+
+        await manager.wakeAndRestore("term-decline-stuck");
+        // Run out the full retry budget.
+        await vi.advanceTimersByTimeAsync(300);
+        await vi.advanceTimersByTimeAsync(300);
+        await vi.advanceTimersByTimeAsync(300);
+        await vi.advanceTimersByTimeAsync(900);
+
+        // Selection guard returns before the wake IPC, so no snapshot is ever
+        // fetched and no marker is drawn.
+        expect(wakeMock).not.toHaveBeenCalled();
+        expect(onDeclined).not.toHaveBeenCalled();
+        expect(manager.hasPendingWake("term-decline-stuck")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

@@ -56,12 +56,18 @@ export class TerminalWakeManager {
 
   /**
    * A wake that has been requested but not yet started: instance-retry
-   * scheduled or coalesced behind the rate limit. Its eventual wakeAndRestore
-   * resets the terminal during replay, so flushing held bytes ahead of it
-   * would feed them into a buffer that's about to be wiped.
+   * scheduled, coalesced behind the rate limit, or a declined-wake retry
+   * waiting to re-attempt the snapshot. Its eventual wakeAndRestore resets the
+   * terminal during replay, so flushing held bytes ahead of it would feed them
+   * into a buffer that's about to be wiped — the reconciliation watchdog reads
+   * this before its stalled-bytes flush (#9894).
    */
   hasPendingWake(id: string): boolean {
-    return this.pendingWakes.has(id) || this.pendingRateLimitedWakes.has(id);
+    return (
+      this.pendingWakes.has(id) ||
+      this.pendingRateLimitedWakes.has(id) ||
+      this.declineRetries.has(id)
+    );
   }
 
   async wakeAndRestore(id: string): Promise<boolean> {
@@ -134,6 +140,12 @@ export class TerminalWakeManager {
           // (#8535): clear it now that the replay has succeeded.
           usePanelStore.getState().clearScrollbackRestoreError(id);
         }
+        // A successful replay resynced the pane — cancel any decline retry left
+        // over from an earlier declined wake of this terminal, regardless of
+        // which caller invoked wakeAndRestore (direct RendererPolicy /
+        // visibility-restore wakes don't run triggerWake's success branch).
+        // Otherwise the stale timer fires a redundant reset on an active pane.
+        this.clearDeclineRetry(id);
         return true;
       } catch (error) {
         console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
@@ -154,10 +166,8 @@ export class TerminalWakeManager {
     const startedAt = Date.now();
     void this.wakeAndRestore(id).then((success) => {
       if (success) {
+        // wakeAndRestore already cancels any pending decline retry on success.
         this.lastWakeTime.set(id, startedAt);
-        // A successful wake resynced the pane; cancel any decline retry left
-        // over from an earlier failed attempt for this terminal.
-        this.clearDeclineRetry(id);
       } else {
         this.lastWakeTime.delete(id);
       }
