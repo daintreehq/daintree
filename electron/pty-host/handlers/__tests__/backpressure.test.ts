@@ -75,6 +75,85 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   };
 }
 
+describe("wake-terminal handler", () => {
+  function makeWakePtyManager(order: string[], opts: { asyncThrows?: boolean } = {}) {
+    return {
+      getTerminal: vi.fn(() => undefined),
+      getAll: vi.fn(() => []),
+      setActivityMonitorTier: vi.fn(),
+      acknowledgeData: vi.fn(),
+      getSerializedStateAsync: vi.fn(async () => {
+        if (opts.asyncThrows) {
+          throw new Error("serialize failed");
+        }
+        order.push("serialized");
+        return "snapshot";
+      }),
+      getSerializedState: vi.fn(() => "fallback"),
+    } as unknown as HostContext["ptyManager"];
+  }
+
+  it("releases the backpressure hold only after the snapshot is serialized (#9897)", async () => {
+    // Resuming the PTY before serialization lets bytes emitted in the gap
+    // land in both the snapshot and the live stream — the renderer then
+    // replays them twice after restore.
+    const order: string[] = [];
+    const coord = makeCoordinator();
+    coord.resume.mockImplementation(() => {
+      order.push("resumed");
+    });
+    const ctx = makeCtx({
+      ptyManager: makeWakePtyManager(order),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    vi.mocked(ctx.backpressureManager.getPausedInterval).mockReturnValue(
+      setTimeout(() => {}, 60_000) as never,
+    );
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "req-1" });
+
+    expect(order).toEqual(["serialized", "resumed"]);
+    expect(coord.resume).toHaveBeenCalledExactlyOnceWith("backpressure");
+  });
+
+  it("still resumes the hold when async serialization throws (#9896 invariant)", async () => {
+    const order: string[] = [];
+    const coord = makeCoordinator();
+    const ctx = makeCtx({
+      ptyManager: makeWakePtyManager(order, { asyncThrows: true }),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    vi.mocked(ctx.backpressureManager.getPausedInterval).mockReturnValue(
+      setTimeout(() => {}, 60_000) as never,
+    );
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "req-1" });
+
+    expect(coord.resume).toHaveBeenCalledExactlyOnceWith("backpressure");
+    expect(ctx.sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "wake-result", id: "term-1", state: "fallback" }),
+    );
+  });
+
+  it("does not resume the coordinator when no backpressure pause was active", async () => {
+    const coord = makeCoordinator();
+    const ctx = makeCtx({
+      ptyManager: makeWakePtyManager([]),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "req-1" });
+
+    expect(coord.resume).not.toHaveBeenCalled();
+    expect(ctx.sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "wake-result", id: "term-1", state: "snapshot" }),
+    );
+  });
+});
+
 describe("force-resume handler", () => {
   beforeEach(() => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
