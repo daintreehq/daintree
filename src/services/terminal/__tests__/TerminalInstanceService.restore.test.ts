@@ -18,6 +18,7 @@ vi.mock("@/clients", () => ({
     wake: vi.fn(),
     getSerializedState: vi.fn(),
     getSharedBuffer: vi.fn(() => null),
+    discardPortAcks: vi.fn(),
   },
   systemClient: {
     openExternal: vi.fn(),

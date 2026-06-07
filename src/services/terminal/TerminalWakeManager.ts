@@ -42,10 +42,12 @@ export interface WakeResult {
   ok: boolean;
   /**
    * True only when the host's serialized main-buffer snapshot was actually
-   * replayed into xterm (restoreFromSerialized / incremental succeeded). The
-   * alt-buffer early return, selection skips, missing state, and failures all
-   * resolve with `false` — xterm was not reset+replayed, so bytes held while
-   * backgrounded must still be flushed. Callers use this to choose between
+   * replayed into the still-current xterm instance (restoreFromSerialized /
+   * incremental succeeded). Selection skips, missing state, failures, and a
+   * mid-wake instance swap all resolve with `false` — xterm was not
+   * reset+replayed for the live instance, so bytes held while backgrounded
+   * must still be flushed. Alt-buffer wakes replay like any main-buffer
+   * snapshot (#9894) and so resolve `true`. Callers use this to choose between
    * flushing the held ingest queue and discarding it (the snapshot already
    * contains those bytes — flushing would double-paint them, #9910).
    */
@@ -147,20 +149,26 @@ export class TerminalWakeManager {
           return { ok: false, replayedMainBuffer: false };
         }
 
-        if (this.deps.getInstance(id) === managed) {
-          managed.terminal.refresh(0, managed.terminal.rows - 1);
-          // A previous failed wake of this terminal may have left a banner
-          // in the panel store. Mirror the hydration retry path's cleanup
-          // (#8535): clear it now that the replay has succeeded.
-          usePanelStore.getState().clearScrollbackRestoreError(id);
-        }
         // A successful replay resynced the pane — cancel any decline retry left
         // over from an earlier declined wake of this terminal, regardless of
         // which caller invoked wakeAndRestore (direct RendererPolicy /
         // visibility-restore wakes don't run triggerWake's success branch).
         // Otherwise the stale timer fires a redundant reset on an active pane.
         this.clearDeclineRetry(id);
-        return { ok: true, replayedMainBuffer: true };
+
+        if (this.deps.getInstance(id) === managed) {
+          managed.terminal.refresh(0, managed.terminal.rows - 1);
+          // A previous failed wake of this terminal may have left a banner
+          // in the panel store. Mirror the hydration retry path's cleanup
+          // (#8535): clear it now that the replay has succeeded.
+          usePanelStore.getState().clearScrollbackRestoreError(id);
+          return { ok: true, replayedMainBuffer: true };
+        }
+        // Instance replaced mid-wake (LRU eviction + respawn under the same
+        // id): the replay landed in a stale terminal, so don't claim a
+        // main-buffer replay for the id — callers would wrongly discard the
+        // replacement's held bytes.
+        return { ok: true, replayedMainBuffer: false };
       } catch (error) {
         console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
         return { ok: false, replayedMainBuffer: false };

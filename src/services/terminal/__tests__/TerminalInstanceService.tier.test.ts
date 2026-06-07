@@ -18,6 +18,7 @@ const mockTerminalClient = {
   getSerializedState: vi.fn(),
   getSharedBuffer: vi.fn(() => null),
   acknowledgePortData: vi.fn(),
+  discardPortAcks: vi.fn(),
   acknowledgeData: vi.fn(),
 };
 

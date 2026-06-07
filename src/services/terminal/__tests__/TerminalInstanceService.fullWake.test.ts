@@ -171,17 +171,23 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     (instance.terminal.refresh as ReturnType<typeof vi.fn>).mockImplementation(() => {
       calls.push("refresh");
     });
+    const { terminalClient } = await import("@/clients");
+    vi.mocked(terminalClient.discardPortAcks).mockImplementation(() => {
+      calls.push("discardPortAcks");
+    });
 
     await service.fullWakeForVisibilityRestore(id);
 
     // The replayed snapshot already contains the held bytes, so the sequence
-    // ends with the discard (resetForTerminal), not a flush (#9910).
+    // ends with the discard (ack the FIFO, then wipe the queue), not a flush
+    // (#9910).
     expect(calls).toEqual([
       "applyDeferredResize",
       "forceXtermReflow",
       "wakeAndRestore",
       "refresh",
       "handlePostWake",
+      "discardPortAcks",
       "resetForTerminal",
     ]);
 
@@ -191,8 +197,6 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(resetForTerminal).toHaveBeenCalledWith(id);
     expect(resumeFlush).not.toHaveBeenCalled();
-
-    const { terminalClient } = await import("@/clients");
     expect(terminalClient.discardPortAcks).toHaveBeenCalledWith(id);
   });
 

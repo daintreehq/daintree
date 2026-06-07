@@ -359,6 +359,34 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("discardPortAcks sums the stored pty-host byte counts, not renderer string lengths", () => {
+    const port = acquirePort();
+
+    terminalClient.onData("term-1", () => {});
+    // UTF-8 multi-byte content: msg.bytes (pty-host count) differs from
+    // data.length (UTF-16 code units). The FIFO stores msg.bytes.
+    port.postMessage({ type: "data", id: "term-1", data: "a", bytes: 300 });
+    port.postMessage({ type: "data", id: "term-1", data: "b", bytes: 7 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const acks: Record<string, unknown>[] = [];
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack" && msg.id === "term-1") acks.push(msg);
+        });
+        port.start();
+
+        terminalClient.discardPortAcks("term-1");
+
+        setTimeout(() => {
+          expect(acks).toEqual([{ type: "ack", id: "term-1", bytes: 307 }]);
+          resolve();
+        }, 100);
+      }, 50);
+    });
+  });
+
   it("discardPortAcks is a no-op when the FIFO is empty", () => {
     const port = acquirePort();
 

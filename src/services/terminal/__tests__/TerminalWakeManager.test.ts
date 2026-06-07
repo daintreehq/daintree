@@ -225,6 +225,41 @@ describe("TerminalWakeManager", () => {
     manager.dispose();
   });
 
+  it("does not claim a main-buffer replay when the instance was replaced mid-wake", async () => {
+    wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+    const original: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      isAltBuffer: false,
+    };
+    const replacement: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      isAltBuffer: false,
+    };
+    let current = original;
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => current as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => {
+        // LRU eviction + respawn under the same id while the replay runs.
+        current = replacement;
+        return true;
+      }),
+      restoreFromSerializedIncremental: vi.fn(async () => true),
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    const result = await manager.wakeAndRestore("term-swapped");
+
+    // The replay landed in a stale terminal — claiming replayedMainBuffer
+    // would make callers discard the replacement's held bytes.
+    expect(result).toEqual({ ok: true, replayedMainBuffer: false });
+    expect(original.terminal.refresh).not.toHaveBeenCalled();
+    expect(replacement.terminal.refresh).not.toHaveBeenCalled();
+  });
+
   it("deduplicates overlapping wake() triggers while restore is in flight", async () => {
     let resolveWake!: (value: { state: string }) => void;
     const wakePromise = new Promise<{ state: string }>((resolve) => {

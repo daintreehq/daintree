@@ -2891,6 +2891,11 @@ class TerminalInstanceService {
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearResizeLock(id);
     this.resizeController.clearSettledTimer(id);
+    // Renderer-side destroy without a prior kill (project close, LRU
+    // eviction of an exited terminal) must still drain the port-ack FIFO
+    // before the held queue is wiped (#9910). kill/gracefulKill/trash clear
+    // the FIFO themselves, so this is a no-op on those paths.
+    terminalClient.discardPortAcks(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
     this.hibernationListeners.delete(id);

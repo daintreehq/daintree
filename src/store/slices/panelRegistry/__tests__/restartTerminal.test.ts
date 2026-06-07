@@ -21,6 +21,7 @@ vi.mock("@/clients", () => ({
     submit: vi.fn().mockResolvedValue(undefined),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
   },
