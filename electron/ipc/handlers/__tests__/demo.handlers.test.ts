@@ -412,7 +412,7 @@ describe("registerDemoHandlers", () => {
     // The watchdog setTimeout is the only one armed with a delay other than the
     // 5ms auto-ack scheduler; return that delay so tests assert the derived budget.
     function watchdogDelay(spy: ReturnType<typeof vi.spyOn>): number | undefined {
-      const call = spy.mock.calls.find(([, delay]) => delay !== 5);
+      const call = spy.mock.calls.find((args: unknown[]) => args[1] !== 5);
       return call?.[1] as number | undefined;
     }
 
