@@ -1286,5 +1286,93 @@ describe("TerminalWakeManager", () => {
         vi.useRealTimers();
       }
     });
+
+    it("treats an empty-string snapshot as a no-op for a fresh terminal (falsy, not just null)", async () => {
+      // serialize() returns "" for a fresh terminal; "" is falsy and must hit
+      // the same fresh no-op path as null — no marker, no retry.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "" });
+        const onDeclined = vi.fn();
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+          isAltBuffer: false,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed, onDeclined));
+
+        const result = await manager.wakeAndRestore("term-empty-state");
+
+        expect(result).toEqual({ ok: false, replayedMainBuffer: false });
+        expect(onDeclined).not.toHaveBeenCalled();
+        expect(manager.hasPendingWake("term-empty-state")).toBe(false);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("sets everWoken on the incremental restore path, not just the small-state path", async () => {
+      // A snapshot larger than the incremental threshold restores via
+      // restoreFromSerializedIncremental; everWoken must be set there too.
+      const longState = "x".repeat(2_000_000); // > indicatorThresholdBytes
+      wakeMock.mockResolvedValueOnce({ state: longState });
+      const onDeclined = vi.fn();
+      const managed: MockManagedTerminal = {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+        terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        isAltBuffer: false,
+      };
+      const deps = makeDeps(managed, onDeclined);
+      const manager = new TerminalWakeManager(deps);
+
+      const result = await manager.wakeAndRestore("term-incremental");
+
+      expect(result).toEqual({ ok: true, replayedMainBuffer: true });
+      expect(deps.restoreFromSerializedIncremental).toHaveBeenCalledWith(
+        "term-incremental",
+        longState
+      );
+      expect(managed.everWoken).toBe(true);
+
+      manager.dispose();
+    });
+
+    it("preserves everWoken across clearWakeState (lifetime flag, not per-wake)", async () => {
+      // clearWakeState runs on tier transitions; it must not re-arm the
+      // spurious-marker path. A restored terminal that is cleared and then
+      // wakes with no snapshot still retries (no marker), not silent no-op.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+        const onDeclined = vi.fn();
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+          isAltBuffer: false,
+          lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed, onDeclined));
+
+        const first = await manager.wakeAndRestore("term-clear-everwoken");
+        expect(first).toEqual({ ok: true, replayedMainBuffer: true });
+        expect(managed.everWoken).toBe(true);
+
+        manager.clearWakeState("term-clear-everwoken");
+        expect(managed.everWoken).toBe(true);
+
+        wakeMock.mockResolvedValue({ state: null });
+        const second = await manager.wakeAndRestore("term-clear-everwoken");
+        expect(second).toEqual({ ok: false, replayedMainBuffer: false });
+        expect(onDeclined).not.toHaveBeenCalled();
+        // Still treated as previously-restored: retry scheduled, no marker.
+        expect(manager.hasPendingWake("term-clear-everwoken")).toBe(true);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
