@@ -841,6 +841,12 @@ class PullRequestService {
    * stale forever (no phase-2 emit is coming while disabled).
    */
   public setCIEnrichmentEnabled(enabled: boolean): void {
+    // Worker instances must stay disabled regardless of any focus signal that
+    // reaches them — the env role is the authoritative invariant, not the
+    // transient IPC cadence flag.
+    if (enabled && process.env.DAINTREE_INSTANCE_ROLE === "worker") {
+      return;
+    }
     if (this.ciEnrichmentEnabled === enabled) {
       return;
     }
@@ -850,6 +856,13 @@ class PullRequestService {
     }
 
     this.ciEnrichmentEnabled = enabled;
+
+    if (!enabled) {
+      // The boost just collapsed (boostExpiresAt = null), but an already-armed
+      // boosted revalidationTimer would still fire early. Reschedule now so the
+      // next tick lands at the 90s baseline instead of the stale 30s.
+      this.scheduleRevalidation();
+    }
   }
 
   // Clear in-flight CI state and re-emit the affected PRs without a CI status so
@@ -858,15 +871,24 @@ class PullRequestService {
   // already-unknown PRs are correct as-is, so re-emitting them would be noise.
   private sweepStaleCiStatus(): void {
     const repo = this.repoRef;
-    const cleared = new Set<number>();
+    // Track the exact worktrees we sweep, not the PR numbers: sibling worktrees
+    // on the same branch share one InternalLinkedPR object (so clearing it once
+    // covers them all), while two worktrees that coincidentally resolve the same
+    // PR number through different objects must not cross-clear — re-emitting a
+    // SUCCESS worktree without its CI field would wrongly blank its dot.
+    const sweptWorktrees: string[] = [];
+    const sweptObjects = new Set<InternalLinkedPR>();
 
-    for (const pr of this.detectedPRs.values()) {
+    for (const [worktreeId, pr] of this.detectedPRs) {
       if (pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED") {
-        pr.ciStatus = undefined;
-        pr._ciStatus = undefined;
-        pr.stagnantPollCount = 0;
-        cleared.add(pr.number);
+        sweptWorktrees.push(worktreeId);
+        sweptObjects.add(pr);
       }
+    }
+    for (const pr of sweptObjects) {
+      pr.ciStatus = undefined;
+      pr._ciStatus = undefined;
+      pr.stagnantPollCount = 0;
     }
 
     // updateBoostFromDetectedPRs runs unconditionally — with no PENDING entries
@@ -874,12 +896,13 @@ class PullRequestService {
     // picks the 90s baseline instead of the boosted 30s.
     this.updateBoostFromDetectedPRs();
 
-    if (!repo || cleared.size === 0) {
+    if (!repo || sweptWorktrees.length === 0) {
       return;
     }
 
-    for (const [worktreeId, detected] of this.detectedPRs) {
-      if (!cleared.has(detected.number)) continue;
+    for (const worktreeId of sweptWorktrees) {
+      const detected = this.detectedPRs.get(worktreeId);
+      if (!detected) continue;
       events.emit("sys:pr:detected", {
         worktreeId,
         prNumber: detected.number,

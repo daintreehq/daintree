@@ -2798,5 +2798,54 @@ describe("PullRequestService", () => {
         pullRequestService.destroy();
       });
     });
+
+    it("keeps worker instances disabled even when asked to re-enable", async () => {
+      await withRole("worker", async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const svc = pullRequestService as any;
+
+        // A stray focus signal must not flip a worker back on.
+        pullRequestService.setCIEnrichmentEnabled(true);
+        expect(svc.ciEnrichmentEnabled).toBe(false);
+
+        pullRequestService.destroy();
+      });
+    });
+
+    it("does not blank a SUCCESS worktree that shares a PR number with a swept one", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        // Two distinct PR objects coincidentally numbered 42: one PENDING (to be
+        // swept), one SUCCESS (must survive untouched).
+        svc.detectedPRs.set("wt-pending", makeDetectedPR({ number: 42, ciStatus: "PENDING" }));
+        svc.detectedPRs.set("wt-success", makeDetectedPR({ number: 42, ciStatus: "SUCCESS" }));
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        // The SUCCESS entry keeps its status and is never re-emitted as cleared.
+        expect(svc.detectedPRs.get("wt-success").ciStatus).toBe("SUCCESS");
+        expect(detected.some((d) => d.worktreeId === "wt-success")).toBe(false);
+        // The PENDING entry was swept and re-emitted without a CI status.
+        expect(svc.detectedPRs.get("wt-pending").ciStatus).toBeUndefined();
+        expect(detected.some((d) => d.worktreeId === "wt-pending")).toBe(true);
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
   });
 });
