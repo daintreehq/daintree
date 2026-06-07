@@ -40,6 +40,10 @@ The activity monitor starts when an agent identity is detected or expected, and 
 
 Activity detection is deliberately layered. No single layer is authoritative in all terminal modes.
 
+### Simple Output Mode
+
+Agent monitors run in simple output mode (`simpleOutputState`, set by `buildActivityMonitorOptions` whenever an agent id is present): busy/idle is driven by output observation — the visible-tail temperature model, the OSC 9;4 heartbeat, and the 8s idle debounce — rather than the non-simple working-signal arbitration. The detection layers below still run inside simple mode (#9873): compiled working patterns are matched against the rolling raw-stream buffer in `onData`, completion patterns are scanned from the polling cycle (feeding the `completed` transition with extracted cost/tokens), prompt patterns can exit boot early, every busy→idle transition classifies a `waitingReason`, and the polling cycle stays busy while boot is in progress. The synchronized-frame layer is the exception: `onSynchronizedFrame` returns early in simple mode, so frame signals currently have no consumer for agent terminals.
+
 ### Raw Stream And Pattern Layer
 
 `ActivityMonitor.onData()` receives PTY output. It:
@@ -62,6 +66,8 @@ Some CLIs bracket redraws with DEC mode 2026 synchronized output. The headless t
 - `none`: no structural activity signal.
 
 Spinner and time-counter frames are activity evidence. Cosmetic-only frames can keep an already-working agent alive, but idle-to-working recovery still needs sustained signal.
+
+This layer applies to non-simple monitors only — simple-output agent monitors return early from `onSynchronizedFrame`, so frame signals have no consumer for live agent terminals.
 
 ### Escape-Sequence Progress Layer
 
