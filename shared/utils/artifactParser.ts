@@ -27,45 +27,145 @@ export function extractCodeBlocks(text: string): CodeBlock[] {
   return blocks;
 }
 
+// === Patch detection helpers ===
+//
+// `extractPatches` previously opened a block on any `---` line, which meant
+// Markdown horizontal rules, YAML front-matter delimiters, and bulleted lists
+// were emitted as patch artifacts and handed to `git apply` (which rejected
+// them noisily). The helpers below form a three-tier classifier:
+//
+//   Tier 1 — trigger:  `diff --git ...` or `--- a/<file>`
+//   Tier 2 — corroborate: a `+++ b/<file>` target header within a few lines
+//                            (only required for the `--- a/<file>` opener;
+//                            `diff --git` is unambiguous)
+//   Tier 3 — commit:  at least one `@@` / `@@@` hunk header in the block
+//
+// A block is only emitted when all three tiers are satisfied. Bare `---` and
+// `--- ` (no path) never reach Tier 1, which is what stops the false positives.
+
+// Tier 1 trigger: `diff --git ...`, `diff -u ...`, `diff -Naur ...`,
+// `diff --combined ...`, `diff (GNU patch) ...`, etc.
+function isDiffStart(line: string): boolean {
+  return line.startsWith("diff ");
+}
+
+// Tier 1 trigger (with corroboration): a `--- a/<file>` source header.
+// Bare `---` (Markdown HR, YAML front-matter) does NOT match — it needs
+// whitespace AND a non-whitespace token after the `--- `. `--- /dev/null`
+// (new-file diff) and `---` followed by a custom path (e.g. `--- foo` from
+// `git diff --no-prefix`) both pass.
+const UNIFIED_OPENER_REGEX = /^---\s+\S/;
+function isUnifiedOpener(line: string): boolean {
+  return UNIFIED_OPENER_REGEX.test(line);
+}
+
+// The `+++ b/<file>` target header that must corroborate a `--- a/<file>`
+// opener. The path prefix is not enforced (`git diff --no-prefix` omits `b/`,
+// and `+++ /dev/null` marks a deleted file).
+const TARGET_HEADER_REGEX = /^\+\+\+\s+\S/;
+function isTargetHeader(line: string): boolean {
+  return TARGET_HEADER_REGEX.test(line);
+}
+
+// Walk forward from a `--- a/<file>` opener and confirm a `+++ b/<file>`
+// target header appears in the next few lines. Blank lines and additional
+// `---` headers are skipped (combined diffs and octopus merges list one
+// source header per parent before the target). Bounded to keep the scan
+// cheap — 4 covers 3-parent octopus merges (`git merge-octopus`).
+const TARGET_HEADER_LOOKAHEAD = 4;
+function findTargetHeader(lines: string[], openerIndex: number): boolean {
+  for (
+    let j = openerIndex + 1;
+    j < lines.length && j <= openerIndex + TARGET_HEADER_LOOKAHEAD;
+    j++
+  ) {
+    const line = lines[j]!;
+    if (line.trim() === "") continue;
+    // Combined diffs have multiple `--- a/<parent>` headers before the
+    // target; tolerate them.
+    if (line.startsWith("---")) continue;
+    return isTargetHeader(line);
+  }
+  return false;
+}
+
+// Real hunk header: `@@ -N +M @@` or combined `@@@ -A,B -C,D +E,F @@@`.
+// Anchored at line start, requires whitespace and a `-<digits>` after the
+// run of `@`s so prose like `@@user` and `@@@handle` are rejected.
+const HUNK_HEADER_REGEX = /^@@@*\s+-\d+/;
+function isHunkHeader(line: string): boolean {
+  return HUNK_HEADER_REGEX.test(line);
+}
+
+function hasHunkHeader(patch: string[]): boolean {
+  return patch.some(isHunkHeader);
+}
+
+// A line that is part of a diff body (in-block continuation). Same set as
+// before so existing well-formed diffs still parse unchanged, with one
+// addition: the `\` prefix is the `git diff` `\ No newline at end of file`
+// marker, which `git apply` requires to avoid "corrupt patch" errors.
+function isBlockBodyLine(line: string): boolean {
+  return (
+    line.startsWith("+++") ||
+    line.startsWith("@@") ||
+    line.startsWith("+") ||
+    line.startsWith("-") ||
+    line.startsWith(" ") ||
+    line.startsWith("\\") ||
+    line.trim() === ""
+  );
+}
+
 export function extractPatches(text: string): string[] {
   const patches: string[] = [];
   const lines = text.split("\n");
   let currentPatch: string[] = [];
   let inPatch = false;
 
-  for (const line of lines) {
-    const startsPatch = line.startsWith("diff ") || (!inPatch && line.startsWith("---"));
-    if (startsPatch) {
-      if (inPatch && currentPatch.length > 3) {
-        patches.push(currentPatch.join("\n"));
+  // Commit the in-flight block if it looks like a real diff: long enough AND
+  // contains at least one hunk header. The hunk check is the structural
+  // guarantee that `git apply` will accept the block — anything without `@@`
+  // is prose that happens to share prefixes with a diff.
+  const finalize = () => {
+    if (inPatch && currentPatch.length > 3 && hasHunkHeader(currentPatch)) {
+      patches.push(currentPatch.join("\n"));
+    }
+    currentPatch = [];
+    inPatch = false;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+
+    if (!inPatch) {
+      // Tier 1: unambiguous openers — no corroboration needed.
+      if (isDiffStart(line)) {
+        currentPatch = [line];
+        inPatch = true;
+      } else if (isUnifiedOpener(line) && findTargetHeader(lines, i)) {
+        // Tier 1 + Tier 2: `--- a/<file>` needs a nearby `+++ b/<file>` to
+        // be promoted to a diff header pair. This is what stops `--- a/x`
+        // prose (Markdown HR with a path-shaped tail) from opening a block.
+        currentPatch = [line];
+        inPatch = true;
       }
-      currentPatch = [line];
-      inPatch = true;
-    } else if (inPatch) {
-      if (
-        line.startsWith("+++") ||
-        line.startsWith("@@") ||
-        line.startsWith("+") ||
-        line.startsWith("-") ||
-        line.startsWith(" ")
-      ) {
-        currentPatch.push(line);
-      } else if (line.trim() === "") {
-        currentPatch.push(line);
-      } else {
-        if (currentPatch.length > 3) {
-          patches.push(currentPatch.join("\n"));
-        }
-        currentPatch = [];
-        inPatch = false;
-      }
+      continue;
+    }
+
+    if (isBlockBodyLine(line)) {
+      currentPatch.push(line);
+    } else {
+      // A non-body line ends the current block. Commit it, then re-process this
+      // same line as a potential opener — back-to-back patches put the 2nd
+      // block's `diff --git ...` header here, and skipping it would drop that
+      // header (the body re-opens on the next `--- a/` line, masking the loss).
+      finalize();
+      i--;
     }
   }
 
-  if (inPatch && currentPatch.length > 3) {
-    patches.push(currentPatch.join("\n"));
-  }
-
+  finalize();
   return patches;
 }
 
