@@ -600,7 +600,7 @@ describe("ResourceGovernor", () => {
   });
 
   describe("throughput rate gauge", () => {
-    it("emits throughput-rate with exact rates on second tick (first tick seeds baselines)", () => {
+    it("emits throughput-rate with exact rates on second tick (first tick seeds hasThroughputBaseline)", () => {
       vi.mocked(metricsEnabled).mockReturnValue(true);
 
       let call = 0;
@@ -789,6 +789,137 @@ describe("ResourceGovernor", () => {
       // Second emission: prev = 6, current = 9, delta = 3
       expect((gaugeCalls[1][0] as Record<string, unknown>).payload).toMatchObject({
         pauseCountDelta: 3,
+      });
+
+      governor.dispose();
+    });
+
+    it("uses fixed 2s window for rate after an idle gap (does not underreport)", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      let call = 0;
+      const deps = createMockDeps({
+        getThroughputSnapshot: vi.fn().mockImplementation(() => {
+          call++;
+          // Tick 1: seed (zero bytes). Ticks 2–16 (15 ticks = 30s) return null
+          // to simulate an idle gap. Tick 17: an active burst of 2048 bytes.
+          if (call === 1) {
+            return {
+              timestamp: call * 2000,
+              totalBytes: 0,
+              totalPackets: 0,
+              perTerminal: [],
+              pauseCount: 0,
+            };
+          }
+          if (call >= 2 && call <= 16) {
+            return null;
+          }
+          return {
+            timestamp: call * 2000,
+            totalBytes: 2048,
+            totalPackets: 4,
+            perTerminal: [{ terminalId: "t1", byteCount: 2048, packetCount: 4 }],
+            pauseCount: 0,
+          };
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 17 ticks total: 1 seed + 15 idle + 1 active = 34s
+      vi.advanceTimersByTime(17 * 2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "throughput-rate"
+      );
+
+      // Exactly one emission (the active tick). No rate emission on the seed or
+      // the null-snapshot idle ticks.
+      expect(gaugeCalls).toHaveLength(1);
+
+      // Rate is computed against the 2s poll window, not the 34s wall-clock gap.
+      // Bug underfix would report ~60 B/s (2048 / 34s); correct is 1024 B/s.
+      expect((gaugeCalls[0][0] as Record<string, unknown>).payload).toMatchObject({
+        totalBytesPerSecond: 1024,
+        perTerminalThroughput: [
+          {
+            terminalId: "t1",
+            bytesPerSecond: 1024,
+            avgPacketSizeBytes: 512,
+          },
+        ],
+      });
+
+      governor.dispose();
+    });
+
+    it("does not misattribute idle-window pauseCount deltas to the next active tick", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+
+      let call = 0;
+      const deps = createMockDeps({
+        getThroughputSnapshot: vi.fn().mockImplementation(() => {
+          call++;
+          // Tick 1: seed (zero bytes, no pauses). Tick 2: zero-byte non-null
+          // snapshot with 5 pauses accumulated since seed. Tick 3: active tick
+          // with 1 additional pause.
+          if (call === 1) {
+            return {
+              timestamp: call * 2000,
+              totalBytes: 0,
+              totalPackets: 0,
+              perTerminal: [],
+              pauseCount: 0,
+            };
+          }
+          if (call === 2) {
+            return {
+              timestamp: call * 2000,
+              totalBytes: 0,
+              totalPackets: 0,
+              perTerminal: [],
+              pauseCount: 5,
+            };
+          }
+          return {
+            timestamp: call * 2000,
+            totalBytes: 1024,
+            totalPackets: 2,
+            perTerminal: [{ terminalId: "t1", byteCount: 1024, packetCount: 2 }],
+            pauseCount: 6,
+          };
+        }),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 3 ticks
+      vi.advanceTimersByTime(3 * 2000);
+
+      const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
+      const gaugeCalls = calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "throughput-rate"
+      );
+
+      // Exactly one emission (the active tick on tick 3). The zero-byte tick 2
+      // advances prevPauseCount silently — no emission.
+      expect(gaugeCalls).toHaveLength(1);
+
+      // pauseCountDelta is 1 (the pause in the active window), not 6 (which
+      // would leak the idle-window pauses into this emission).
+      expect((gaugeCalls[0][0] as Record<string, unknown>).payload).toMatchObject({
+        totalBytesPerSecond: 512,
+        pauseCountDelta: 1,
       });
 
       governor.dispose();
