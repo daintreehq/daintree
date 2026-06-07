@@ -16,6 +16,7 @@ import {
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
@@ -942,10 +943,9 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
 // the display, so reaching zero shows "expiring" until the row is pulled out.
 function GrantCountdown({ expiresAt }: { expiresAt: number }) {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  // Per-second tick that pauses while the window is hidden (the canonical
+  // compliant timer wrapper — direct setInterval is lint-restricted).
+  useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
   const remainingMs = expiresAt - now;
   return (
     <span className="font-mono text-daintree-text/50 tabular-nums shrink-0">
