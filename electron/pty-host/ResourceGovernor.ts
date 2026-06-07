@@ -101,7 +101,7 @@ export class ResourceGovernor {
   private readonly fdMonitor: FdMonitor;
   private readonly killedPids = new Map<number, number>();
   private readonly ORPHAN_GRACE_MS = 4000;
-  private prevThroughputTimestamp = 0;
+  private hasThroughputBaseline = false;
   private prevPauseCount = 0;
   private readonly pausedTerminalIds = new Set<string>();
   private isWarning = false;
@@ -176,7 +176,8 @@ export class ResourceGovernor {
 
     // EMA smoothing — rejects single-tick GC sawtooth spikes. Seeded with the
     // first real reading (not 0) to avoid a warmup ramp that falsely stays
-    // below threshold. Mirrors the seeding idiom used by prevThroughputTimestamp.
+    // below threshold. Mirrors the hasThroughputBaseline seeding idiom used
+    // by the throughput gauge.
     let smoothedPercent: number;
     if (this.smoothedUtilizationPercent === undefined) {
       this.smoothedUtilizationPercent = utilizationPercent;
@@ -356,23 +357,27 @@ export class ResourceGovernor {
     const snapshot = this.deps.getThroughputSnapshot();
     if (!snapshot) return;
 
-    // First tick: seed baselines without emitting. Prevents epoch-scale
-    // division on the first real interval (prevThroughputTimestamp starts at 0).
-    if (this.prevThroughputTimestamp === 0) {
-      this.prevThroughputTimestamp = snapshot.timestamp;
+    // First non-null snapshot seeds the pause baseline without emitting.
+    // Throughput snapshots are already bounded by the fixed poll interval
+    // (the accumulator in pty-host.ts is reset on every tick), so we don't
+    // need a timestamp baseline to compute the rate.
+    if (!this.hasThroughputBaseline) {
+      this.hasThroughputBaseline = true;
       this.prevPauseCount = snapshot.pauseCount;
       return;
     }
 
-    // Always track pauseCount baseline so idle ticks don't accumulate deltas
-    // that get misattributed to the next byte-producing tick.
+    // Always track pauseCount baseline on sampled ticks so zero-byte
+    // windows don't get misattributed to the next byte-producing tick.
     const pauseCountDelta = snapshot.pauseCount - this.prevPauseCount;
     this.prevPauseCount = snapshot.pauseCount;
 
     if (snapshot.totalBytes <= 0) return;
 
-    const elapsedMs = snapshot.timestamp - this.prevThroughputTimestamp;
-    const elapsedSec = elapsedMs > 0 ? elapsedMs / 1000 : 2;
+    // The accumulator in pty-host.ts is reset on every poll, so the byte
+    // count always represents the last CHECK_INTERVAL_MS window — no need
+    // to subtract a stored timestamp.
+    const elapsedSec = this.CHECK_INTERVAL_MS / 1000;
     const totalBytesPerSecond = Math.round(snapshot.totalBytes / elapsedSec);
 
     const perTerminalThroughput = snapshot.perTerminal.map((entry) => ({
@@ -393,8 +398,6 @@ export class ResourceGovernor {
         perTerminalThroughput,
       },
     });
-
-    this.prevThroughputTimestamp = snapshot.timestamp;
   }
 
   private emitPausedDurationGauge(): void {
@@ -616,6 +619,8 @@ export class ResourceGovernor {
     this.sampleCount = 0;
     this.lastDisengageAt = 0;
     this.trimAttemptedForCurrentPressure = false;
+    this.hasThroughputBaseline = false;
+    this.prevPauseCount = 0;
     console.log("[ResourceGovernor] Disposed");
   }
 }
