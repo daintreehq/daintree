@@ -137,7 +137,7 @@ function cubicBezier(t: number, p0: number, p1: number, p2: number, p3: number):
   return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
 }
 
-function computeBezierKeyframes(
+export function computeBezierKeyframes(
   fromX: number,
   fromY: number,
   toX: number,
@@ -152,23 +152,55 @@ function computeBezierKeyframes(
   const perpX = dist > 0 ? -dy / dist : 0;
   const perpY = dist > 0 ? dx / dist : 0;
 
-  const offset = dist * (0.05 + Math.random() * 0.25);
+  // Which way the arc bows. Drawn first so the call order stays stable.
   const sign = Math.random() > 0.5 ? 1 : -1;
 
-  const p1x = fromX + dx * 0.33 + perpX * offset * sign;
-  const p1y = fromY + dy * 0.33 + perpY * offset * sign;
+  // Sqrt taper: the leading control point's deviation grows sub-linearly with
+  // distance, so short nudges stay nearly straight while long sweeps bow
+  // noticeably, capped so very long moves don't balloon.
+  const p1Dist = Math.min(Math.sqrt(dist) * (1.5 + Math.random() * 1.5), 80);
 
-  const p2x = fromX + dx * 0.8 + perpX * offset * 0.3 * sign + dx * 0.05;
-  const p2y = fromY + dy * 0.8 + perpY * offset * 0.3 * sign + dy * 0.05;
+  // Occasional mid-flight correction: only long moves can inflect into an S, and
+  // only some of the time.
+  const isSCurve = dist > TWO_PHASE_THRESHOLD && Math.random() < 0.2;
+
+  let p1t: number;
+  let p2t: number;
+  let p2Dist: number;
+  let p2Sign: number;
+  if (isSCurve) {
+    // S-shaped path: a comparable second lobe to the opposite side, placed
+    // mid-flight so the inflection is actually visible rather than a sub-pixel
+    // wobble at the very end.
+    p1t = 0.2 + Math.random() * 0.1;
+    p2t = 0.6 + Math.random() * 0.1;
+    p2Dist = p1Dist * (0.5 + Math.random() * 0.3);
+    p2Sign = -sign;
+  } else {
+    // Single bow: peak early during acceleration, then settle the trailing
+    // control point most of the way back to the chord so the path decelerates
+    // straight into the target.
+    p1t = 0.25 + Math.random() * 0.15;
+    p2t = 0.9 + Math.random() * 0.05;
+    p2Dist = p1Dist * (0.1 + Math.random() * 0.15);
+    p2Sign = sign;
+  }
+
+  const p1x = fromX + dx * p1t + perpX * p1Dist * sign;
+  const p1y = fromY + dy * p1t + perpY * p1Dist * sign;
+
+  const p2x = fromX + dx * p2t + perpX * p2Dist * p2Sign;
+  const p2y = fromY + dy * p2t + perpY * p2Dist * p2Sign;
 
   const jitterAmplitude = Math.min(2, dist * 0.003);
+  const safeSteps = Math.max(1, steps);
   const frames: Array<{ transform: string }> = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
+  for (let i = 0; i <= safeSteps; i++) {
+    const t = i / safeSteps;
     let x = cubicBezier(t, fromX, p1x, p2x, toX) - fromX;
     let y = cubicBezier(t, fromY, p1y, p2y, toY) - fromY;
 
-    if (i > 0 && i < steps && jitterAmplitude > 0) {
+    if (i > 0 && i < safeSteps && jitterAmplitude > 0) {
       const noiseVal = (noise1D(i * 0.15 + seed) * 2 - 1) * jitterAmplitude;
       x += perpX * noiseVal;
       y += perpY * noiseVal;
