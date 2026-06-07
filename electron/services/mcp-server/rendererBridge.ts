@@ -28,6 +28,35 @@ export function createRendererBridge(
 ) {
   let cachedManifest: ActionManifestEntry[] | null = null;
 
+  // Per-WebContents manifest cache for pinned help sessions (#9887). The shared
+  // `cachedManifest` is bypassed for pinned routing (#7002) so window A's
+  // manifest can never be served to a session pinned to window B — but with no
+  // replacement, every CallTool dispatch re-fetched the full ~287-entry
+  // manifest over IPC (lookupManifestEntry in sessionServer.ts). These per-id
+  // maps restore a cache while keeping the cross-window isolation: each entry
+  // is keyed strictly by `webContentsId`, so a pinned session only ever reads
+  // its own window's manifest. The manifest is the full, tier-independent
+  // action list (tier filtering happens server-side), so it stays valid for the
+  // view's lifetime — invalidation is by WebContents teardown and server
+  // stop/restart only, not by tier elevation/decay.
+  const perWebContentsCache = new Map<number, ActionManifestEntry[]>();
+  // In-flight fetches, for singleflight coalescing of concurrent callers. This
+  // is read-only for freshness: callers never short-circuit on the resolved
+  // `perWebContentsCache`, only on a live in-flight promise, so a pinned
+  // `tools/list` always reflects runtime action-set changes (plugin
+  // enable/disable) exactly as the unpinned shared path does. Each entry pairs
+  // the coalesced promise with a stable identity `token`; the resurrection
+  // guard compares tokens (not the promise itself) so it never reads a
+  // not-yet-assigned `const` and stays correct even if a fetch were to resolve
+  // synchronously.
+  const perWebContentsInflight = new Map<
+    number,
+    { token: object; promise: Promise<ActionManifestEntry[]> }
+  >();
+  // WebContents ids that already have a teardown-eviction listener wired, so we
+  // never double-register one across repeated fetches or a server restart.
+  const perWebContentsEvictionWired = new Set<number>();
+
   function getActiveProjectWebContents(): Electron.WebContents {
     const registry = getRegistry();
     if (registry) {
@@ -226,20 +255,72 @@ export function createRendererBridge(
     );
   }
 
+  /** Evict every cached manifest reference for a torn-down WebContents. */
+  function evictWebContentsManifest(id: number): void {
+    perWebContentsCache.delete(id);
+    perWebContentsInflight.delete(id);
+  }
+
+  /**
+   * Wire a one-shot teardown listener that drops the pinned view's cached
+   * manifest when its WebContents is destroyed (LRU eviction, window close).
+   * Registered once per id — `perWebContentsEvictionWired` guards against
+   * double-registration across repeated fetches and survives a server restart
+   * (the listener is still live, so `clearCache()` leaves the set intact).
+   */
+  function ensureManifestEviction(id: number): void {
+    if (perWebContentsEvictionWired.has(id)) return;
+    const wc = electronWebContents.fromId(id);
+    if (!wc || wc.isDestroyed()) return;
+    perWebContentsEvictionWired.add(id);
+    wc.once("destroyed", () => {
+      evictWebContentsManifest(id);
+      perWebContentsEvictionWired.delete(id);
+    });
+  }
+
   /**
    * Manifest fetch pinned to a specific renderer WebContents (per-session
-   * routing for #7002). Bypasses `cachedManifest` because that cache is
-   * shared across all callers — caching window A's manifest and serving it
-   * to a session pinned to window B would re-introduce the cross-window
-   * leak this routing is meant to prevent.
+   * routing for #7002). Writes a per-id cache (#9887) — keyed by
+   * `webContentsId` so a session pinned to window B never reads window A's
+   * manifest, preserving the isolation the shared `cachedManifest` bypass was
+   * meant to protect. Concurrent callers coalesce onto one in-flight fetch, but
+   * a fully resolved cache never short-circuits a new call: each invocation
+   * still fetches fresh (mirroring the unpinned `requestManifest`) so a pinned
+   * `tools/list` reflects runtime action-set changes. The cache it populates is
+   * read back by `getCachedManifestForWebContents`, which is what the per-call
+   * `lookupManifestEntry` hot path consults to avoid re-fetching every dispatch.
    */
   function requestManifestForWebContents(id: number): Promise<ActionManifestEntry[]> {
-    return sendManifestRequest(
+    const inflight = perWebContentsInflight.get(id);
+    if (inflight) return inflight.promise;
+
+    // Stable identity for this fetch, created before the request so the
+    // resurrection guard never dereferences a not-yet-assigned binding.
+    const token: object = {};
+    const fetchPromise = sendManifestRequest(
       () => getPinnedWebContents(id),
-      () => {
-        // Intentionally do not write the shared cachedManifest.
+      (manifest) => {
+        // Resurrection guard (#7554): only publish to the cache if this fetch
+        // is still the live in-flight request for the id. A view destroyed (or
+        // a `clearCache()`) mid-flight drops the inflight entry, so a late
+        // resolve must not repopulate a dead/cleared id.
+        if (perWebContentsInflight.get(id)?.token === token) {
+          perWebContentsCache.set(id, manifest);
+          perWebContentsInflight.delete(id);
+        }
       }
     );
+    perWebContentsInflight.set(id, { token, promise: fetchPromise });
+    // Drop the inflight marker on failure so the next call retries — never cache
+    // errors. Identity-guarded so a stale rejection can't evict a newer fetch.
+    fetchPromise.catch(() => {
+      if (perWebContentsInflight.get(id)?.token === token) {
+        perWebContentsInflight.delete(id);
+      }
+    });
+    ensureManifestEviction(id);
+    return fetchPromise;
   }
 
   /**
@@ -333,8 +414,18 @@ export function createRendererBridge(
     requestManifestForWebContents,
     dispatchActionForWebContents,
     getCachedManifest: () => cachedManifest,
+    getCachedManifestForWebContents: (id: number): ActionManifestEntry[] | null =>
+      perWebContentsCache.get(id) ?? null,
     clearCache: () => {
       cachedManifest = null;
+      // Drop all per-WebContents manifest knowledge in lockstep (#9887) so a
+      // server stop/restart can't leave a stale pinned manifest alive. The
+      // teardown-eviction listeners stay registered (they self-remove on real
+      // WebContents destruction and only ever evict their own id), so
+      // `perWebContentsEvictionWired` is deliberately left intact to avoid
+      // double-registering on the next fetch.
+      perWebContentsCache.clear();
+      perWebContentsInflight.clear();
     },
   };
 }

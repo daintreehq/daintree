@@ -196,6 +196,7 @@ export class McpServerService {
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
       getCachedManifest: () => this.bridge.getCachedManifest(),
+      getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,

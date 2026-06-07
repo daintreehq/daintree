@@ -13,6 +13,15 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 
+// Mock electron so the suite loads without the Electron binary present (no
+// `node_modules/electron/path.txt`). httpLifecycle.ts and its transitive imports
+// only touch these at runtime — never in these unit tests — so stubs suffice.
+vi.mock("electron", () => ({
+  app: { getVersion: () => "0.0.0-test" },
+  webContents: { fromId: () => undefined },
+  ipcMain: { on: () => undefined, removeListener: () => undefined },
+}));
+
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
@@ -496,6 +505,70 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("buildSessionServerDeps — pinned manifest cache routing (#9887)", () => {
+    type CacheDeps = {
+      getCachedManifest: () => unknown[] | null;
+    };
+    const buildDeps = (lc: HttpLifecycle, sessionId: string): CacheDeps =>
+      (
+        lc as unknown as { buildSessionServerDeps: (id: string) => CacheDeps }
+      ).buildSessionServerDeps(sessionId);
+
+    it("routes a pinned session's getCachedManifest to its own per-WebContents cache, never the shared one", () => {
+      const deps = fakeDeps();
+      (deps.getCachedManifest as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "shared" }]);
+      const perWc = vi.fn(() => [{ id: "pinned" }]);
+      deps.getCachedManifestForWebContents =
+        perWc as unknown as typeof deps.getCachedManifestForWebContents;
+      deps.sessionStore.sessionWebContentsMap.set("session-1", 101);
+      const lc = new HttpLifecycle(deps);
+
+      const result = buildDeps(lc, "session-1").getCachedManifest();
+
+      expect(result).toEqual([{ id: "pinned" }]);
+      expect(perWc).toHaveBeenCalledWith(101);
+      expect(deps.getCachedManifest).not.toHaveBeenCalled();
+    });
+
+    it("routes an unpinned session's getCachedManifest to the shared cache", () => {
+      const deps = fakeDeps();
+      (deps.getCachedManifest as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "shared" }]);
+      const perWc = vi.fn(() => [{ id: "pinned" }]);
+      deps.getCachedManifestForWebContents =
+        perWc as unknown as typeof deps.getCachedManifestForWebContents;
+      // No sessionWebContentsMap entry → api-key/external session.
+      const lc = new HttpLifecycle(deps);
+
+      const result = buildDeps(lc, "session-1").getCachedManifest();
+
+      expect(result).toEqual([{ id: "shared" }]);
+      expect(perWc).not.toHaveBeenCalled();
+    });
+
+    it("a pinned session torn down mid-call stays pinned (fails closed), never flipping to the shared cache", () => {
+      const deps = fakeDeps();
+      (deps.getCachedManifest as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "shared" }]);
+      // After teardown the per-WebContents cache is evicted → returns null.
+      const perWc = vi.fn(() => null);
+      deps.getCachedManifestForWebContents =
+        perWc as unknown as typeof deps.getCachedManifestForWebContents;
+      deps.sessionStore.sessionWebContentsMap.set("session-1", 101);
+      const lc = new HttpLifecycle(deps);
+      const sessionDeps = buildDeps(lc, "session-1");
+
+      // Simulate the pin being deleted (idle timeout / revoke) after deps build.
+      deps.sessionStore.sessionWebContentsMap.delete("session-1");
+
+      const result = sessionDeps.getCachedManifest();
+
+      // Build-time capture keeps it pinned → null (fail-closed), not the shared
+      // cache — the #7003 isolation invariant the fix protects.
+      expect(result).toBeNull();
+      expect(perWc).toHaveBeenCalledWith(101);
+      expect(deps.getCachedManifest).not.toHaveBeenCalled();
     });
   });
 
