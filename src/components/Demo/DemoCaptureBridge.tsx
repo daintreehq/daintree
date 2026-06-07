@@ -77,10 +77,11 @@ export function DemoCaptureBridge() {
           return;
         }
 
-        // Pin the capture resolution when requested so the recorded frame is a
-        // precise size (e.g. 3840×2160) rather than whatever the surface
-        // happens to be. `ideal` keeps the request soft so capture still
-        // succeeds if the backend can't hit the exact size.
+        // Request the capture resolution as `ideal` so acquisition stays soft —
+        // `exact` here throws TypeError for display capture. Chromium treats
+        // width/height as advisory for getDisplayMedia, so the delivered track
+        // is the surface's native backing-store size; we pin it precisely below
+        // via applyConstraints().
         const videoConstraints: MediaTrackConstraints = { frameRate: fps };
         if (width && height) {
           videoConstraints.width = { ideal: width };
@@ -97,6 +98,42 @@ export function DemoCaptureBridge() {
           const message = formatErrorMessage(err, "getDisplayMedia failed");
           api.sendCommandDone(requestId, `getDisplayMedia failed: ${message}`);
           return;
+        }
+
+        // Pin the captured frame to the exact requested size. getDisplayMedia
+        // ignores width/height, so applyConstraints({ exact }) is the only seam
+        // that forces Chromium to downscale the track (e.g. 3840×2160 backing
+        // store → 2560×1440). It succeeds when the requested ratio matches the
+        // surface (the demo window is sized to match), otherwise it rejects.
+        // Fail hard on any miss rather than silently recording the wrong size.
+        if (width && height) {
+          const videoTrack = stream.getVideoTracks()[0];
+          if (!videoTrack) {
+            stream.getTracks().forEach((t) => t.stop());
+            api.sendCommandDone(requestId, "No video track in capture stream");
+            return;
+          }
+          try {
+            await videoTrack.applyConstraints({
+              width: { exact: width },
+              height: { exact: height },
+            });
+          } catch (err) {
+            stream.getTracks().forEach((t) => t.stop());
+            const message = formatErrorMessage(err, "applyConstraints failed");
+            api.sendCommandDone(requestId, `Capture resolution pin failed: ${message}`);
+            return;
+          }
+          const settings = videoTrack.getSettings();
+          if (settings.width !== width || settings.height !== height) {
+            stream.getTracks().forEach((t) => t.stop());
+            api.sendCommandDone(
+              requestId,
+              `Capture resolution mismatch: got ${settings.width}×${settings.height}, ` +
+                `wanted ${width}×${height}`
+            );
+            return;
+          }
         }
 
         const mimeType = MediaRecorder.isTypeSupported(requestedMime)
