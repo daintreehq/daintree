@@ -56,6 +56,18 @@ describe("mcpAnomalyStore", () => {
     expect(useMcpAnomalyStore.getState().hasAnomaly).toBe(false);
   });
 
+  it("clears a stale count when a later poll reports suppression", () => {
+    const store = useMcpAnomalyStore.getState();
+    store.setFromStats(statsFixture({ anomalySignals: [signalFixture("a"), signalFixture("b")] }));
+    expect(useMcpAnomalyStore.getState().anomalyCount).toBe(2);
+
+    store.setFromStats(
+      statsFixture({ anomalySignals: [signalFixture("a")], anomalySuppressed: true })
+    );
+    expect(useMcpAnomalyStore.getState().hasAnomaly).toBe(false);
+    expect(useMcpAnomalyStore.getState().anomalyCount).toBe(0);
+  });
+
   it("stays quiet when there are no signals", () => {
     useMcpAnomalyStore.getState().setFromStats(statsFixture({ anomalySignals: [] }));
     expect(useMcpAnomalyStore.getState().hasAnomaly).toBe(false);
@@ -78,6 +90,7 @@ describe("mcpAnomalyStore", () => {
 
     store.setFromStats(null);
     expect(useMcpAnomalyStore.getState().hasAnomaly).toBe(false);
+    expect(useMcpAnomalyStore.getState().anomalyCount).toBe(0);
   });
 
   it("reset() returns to the initial state", () => {
@@ -93,8 +106,17 @@ describe("mcpAnomalyStore", () => {
     store.setFromStats(statsFixture({ anomalySignals: [] }));
     const before = useMcpAnomalyStore.getState();
     store.setFromStats(statsFixture({ anomalySignals: [] }));
-    const after = useMcpAnomalyStore.getState();
-    expect(after.hasAnomaly).toBe(before.hasAnomaly);
-    expect(after.anomalyCount).toBe(before.anomalyCount);
+    // Same object reference — a no-op poll must not trigger a re-render. This is
+    // the load-bearing assertion; comparing values alone would pass even if a
+    // fresh object were returned every 30s tick.
+    expect(useMcpAnomalyStore.getState()).toBe(before);
+  });
+
+  it("keeps a stable reference across repeated identical anomaly polls", () => {
+    const store = useMcpAnomalyStore.getState();
+    store.setFromStats(statsFixture({ anomalySignals: [signalFixture("a")] }));
+    const before = useMcpAnomalyStore.getState();
+    store.setFromStats(statsFixture({ anomalySignals: [signalFixture("a")] }));
+    expect(useMcpAnomalyStore.getState()).toBe(before);
   });
 });

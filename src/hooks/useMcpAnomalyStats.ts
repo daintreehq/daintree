@@ -36,7 +36,10 @@ export function useMcpAnomalyStats(): void {
   const poll = useCallback(async () => {
     const projectId = activeIdRef.current;
     try {
-      const stats = await window.electron.mcpServer.getAuditStats();
+      // Passive read (markSeen=false): this background poll must not acknowledge
+      // transient `first-seen-combination` signals — that "fire once"
+      // acknowledgment belongs to the user-facing Settings audit log (#10022).
+      const stats = await window.electron.mcpServer.getAuditStats(false);
       if (activeIdRef.current !== projectId) return;
       setFromStats(stats);
     } catch (error) {

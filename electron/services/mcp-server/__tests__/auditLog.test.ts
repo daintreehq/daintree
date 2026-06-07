@@ -655,6 +655,48 @@ describe("AuditService anomaly detection", () => {
     expect(firstSeen[0]!.tier).toBe("external");
   });
 
+  it("first-seen: passive read (markSeen=false) does not consume the signal", () => {
+    const service = makeRecords(50, () => ({
+      toolId: "tool.a",
+      tier: "action",
+      durationMs: 10,
+    }));
+    service.getAuditStats(); // seed baseline known combos
+
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+
+    // Two passive reads in a row both still surface the new combo — a
+    // background poll must not acknowledge it (#10022).
+    const firstPassive = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstPassive).toHaveLength(1);
+    const secondPassive = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(secondPassive).toHaveLength(1);
+
+    // A user-facing read (default markSeen=true) acknowledges it...
+    const acknowledged = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(acknowledged).toHaveLength(1);
+
+    // ...so the next read (passive or not) sees it as known and stays quiet.
+    const afterAck = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(afterAck).toHaveLength(0);
+  });
+
   it("first-seen: knownCombinations survives clear()", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",

@@ -108,9 +108,12 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     getAuditStats: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditStats,
-      async (): Promise<McpAuditStats> => {
+      // `markSeen` defaults to true (user-facing reads acknowledge first-seen
+      // combos). Passive pollers pass false so a background read doesn't consume
+      // the transient first-seen signal before the user sees it (#10022).
+      async (markSeen?: boolean): Promise<McpAuditStats> => {
         const svc = await getMcpServerService();
-        return svc.getAuditStats();
+        return svc.getAuditStats(markSeen ?? true);
       }
     ),
     clearAuditLog: op(MCP_SERVER_METHOD_CHANNELS.clearAuditLog, async (): Promise<void> => {
