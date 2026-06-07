@@ -13,6 +13,10 @@ export interface WakeManagerDeps {
   hasInstance: (id: string) => boolean;
   restoreFromSerialized: (id: string, state: string) => boolean;
   restoreFromSerializedIncremental: (id: string, state: string) => Promise<boolean>;
+  // Optional guard (#9906): when the terminal has been backgrounded, a
+  // scheduled wake must not fire its stale `wake-terminal` IPC. Absent (in
+  // tests), the guard is a no-op and wakes proceed as before.
+  isBackgrounded?: (id: string) => boolean;
 }
 
 export class TerminalWakeManager {
@@ -160,7 +164,14 @@ export class TerminalWakeManager {
       const delay = Math.max(0, WAKE_RATE_LIMIT_MS - (now - lastWake));
       const timeoutId = setTimeout(() => {
         this.pendingRateLimitedWakes.delete(id);
-        if (this.deps.hasInstance(id)) {
+        // The terminal may have been backgrounded between scheduling and now
+        // (#9906). Firing the wake here would send a stale `wake-terminal` IPC
+        // that promotes the host tier to "active" against a hidden pane —
+        // exactly the late-wake desync. cancelPendingWake covers the case where
+        // the BACKGROUND tier has been applied; this guard also covers the
+        // window before the debounced tier apply runs, since backgroundedTerminals
+        // is updated synchronously when the pane is hidden.
+        if (this.deps.hasInstance(id) && this.deps.isBackgrounded?.(id) !== true) {
           this.triggerWake(id);
         }
       }, delay);
@@ -181,6 +192,11 @@ export class TerminalWakeManager {
       this.pendingWakes.delete(id);
 
       if (this.deps.hasInstance(id)) {
+        // Don't wake a terminal that was backgrounded while the retry was
+        // queued (#9906) — same stale-IPC hazard as the rate-limited path.
+        if (this.deps.isBackgrounded?.(id) === true) {
+          return;
+        }
         // Instance now exists, proceed with wake
         const now = Date.now();
         const lastWake = this.lastWakeTime.get(id) ?? 0;

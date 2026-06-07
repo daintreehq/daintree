@@ -708,6 +708,44 @@ describe("TerminalOutputIngestService", () => {
       expect(flushed.endsWith("NEWEST")).toBe(true);
     });
 
+    it("acks each evicted chunk so the host flow-control ledger stays balanced", () => {
+      const writeToTerminal = vi.fn();
+      const onEvict = vi.fn();
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => TerminalRefreshTier.BACKGROUND,
+        onEvict
+      );
+
+      // 8 × 512 KB fills exactly to the cap (no eviction yet).
+      for (let i = 0; i < 8; i++) {
+        service.bufferData("term-1", CHUNK);
+      }
+      expect(onEvict).not.toHaveBeenCalled();
+
+      // Each subsequent chunk evicts exactly one oldest chunk → one ack.
+      service.bufferData("term-1", CHUNK);
+      expect(onEvict).toHaveBeenCalledTimes(1);
+      expect(onEvict).toHaveBeenCalledWith("term-1");
+
+      service.bufferData("term-1", CHUNK);
+      expect(onEvict).toHaveBeenCalledTimes(2);
+    });
+
+    it("acks the dropped chunk when a single oversized chunk is evicted", () => {
+      const writeToTerminal = vi.fn();
+      const onEvict = vi.fn();
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => TerminalRefreshTier.BACKGROUND,
+        onEvict
+      );
+
+      service.bufferData("term-1", "z".repeat(5 * 1024 * 1024));
+      expect(onEvict).toHaveBeenCalledTimes(1);
+      expect(service.getQueuedBytes("term-1")).toBe(0);
+    });
+
     it("does not cap or evict for active (non-background) terminals", () => {
       const writeToTerminal = vi.fn();
       const service = new TerminalOutputIngestService(

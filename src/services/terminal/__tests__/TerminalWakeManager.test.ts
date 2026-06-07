@@ -474,6 +474,85 @@ describe("TerminalWakeManager", () => {
     });
   });
 
+  describe("background guard on scheduled wake (#9906)", () => {
+    it("does not fire a trailing-edge wake if the terminal is backgrounded when the timer fires", async () => {
+      // Covers the hysteresis window: the wake was scheduled before the user
+      // backgrounded the pane, and the debounced BACKGROUND tier apply (which
+      // calls cancelPendingWake) hasn't run yet — but backgroundedTerminals is
+      // already true. The timer must check it and skip the stale IPC.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: "serialized-state" });
+        let backgrounded = false;
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        };
+        const deps: WakeManagerDeps = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+          hasInstance: vi.fn(() => true),
+          restoreFromSerialized: vi.fn(() => true),
+          restoreFromSerializedIncremental: vi.fn(async () => true),
+          isBackgrounded: () => backgrounded,
+        };
+        const manager = new TerminalWakeManager(deps);
+
+        manager.wake("term-bg-guard");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        // Schedule a trailing wake, then background the pane before it fires.
+        vi.setSystemTime(Date.now() + 200);
+        manager.wake("term-bg-guard");
+        backgrounded = true;
+
+        await vi.advanceTimersByTimeAsync(2000);
+        // The trailing wake's IPC was suppressed by the background guard.
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("skips an instance-retry wake that resolves while backgrounded", () => {
+      vi.useFakeTimers();
+      try {
+        let hasInstance = false;
+        let backgrounded = false;
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+        };
+        const deps: WakeManagerDeps = {
+          getInstance: vi.fn(() =>
+            hasInstance ? (managed as unknown as ManagedTerminal) : undefined
+          ),
+          hasInstance: vi.fn(() => hasInstance),
+          restoreFromSerialized: vi.fn(() => true),
+          restoreFromSerializedIncremental: vi.fn(async () => true),
+          isBackgrounded: () => backgrounded,
+        };
+        const manager = new TerminalWakeManager(deps);
+
+        // No instance yet → schedules a retry.
+        manager.wake("term-retry-bg");
+        // The instance appears but the pane is backgrounded before the retry.
+        hasInstance = true;
+        backgrounded = true;
+
+        vi.advanceTimersByTime(500);
+        expect(wakeMock).not.toHaveBeenCalled();
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("hasInFlightWake", () => {
     it("is true only while a wakeAndRestore is in flight", async () => {
       let resolveWake!: (value: { state: string }) => void;
