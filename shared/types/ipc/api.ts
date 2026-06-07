@@ -1039,6 +1039,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setWslGit(worktreeId: string, enabled: boolean): Promise<void>;
     /** Hide the WSL git suggestion banner for this worktree without enabling. */
     dismissWslBanner(worktreeId: string): Promise<void>;
+    /**
+     * Re-probe the WSL default distro on demand (user "Re-check") and refresh
+     * eligibility across all WSL worktrees. Windows-only.
+     */
+    reprobeWsl(worktreeId: string): Promise<void>;
   };
   window: {
     /** Subscribe to fullscreen state changes */

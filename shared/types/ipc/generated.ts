@@ -1177,6 +1177,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./worktree.js").WorktreeConfig;
   };
+  "worktree-config:reprobe-wsl": {
+    args: [payload: { worktreeId: string }];
+    result: void;
+  };
   "worktree-config:set-pattern": {
     args: [payload: { pattern: string }];
     result: import("./worktree.js").WorktreeConfig;
