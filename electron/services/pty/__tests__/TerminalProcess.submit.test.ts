@@ -238,6 +238,120 @@ describe("TerminalProcess.submit", () => {
     expect(busyCalls.length).toBe(0);
   });
 
+  it("noteAgentOutputActivity arms ActivityMonitor via notifyExternalPromotion when it promotes (#9875)", () => {
+    const handleActivityState = vi.fn();
+    const ctx = defaultSpawnContext();
+    const terminal = new TerminalProcess(
+      "t-ext-promo",
+      {
+        cwd: process.cwd(),
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        launchAgentId: "claude",
+      },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: { handleActivityState } as any,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      ctx,
+      createMockPty()
+    );
+
+    const internals = terminal as unknown as {
+      terminalInfo: { agentState: string };
+      activityMonitor: { notifyExternalPromotion: (now?: number) => void };
+      agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
+      agentOutputContentSnapshot: unknown;
+      noteAgentOutputActivity: (before: unknown) => void;
+      getAgentOutputContentSnapshot: () => unknown;
+    };
+
+    Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
+    internals.terminalInfo.agentState = "waiting";
+    internals.agentOutputContentSnapshot = { lines: ["before"] };
+    internals.getAgentOutputContentSnapshot = () => ({ lines: ["after redraw with new text"] });
+    // The temperature needs several sustained samples before hinting busy;
+    // force the hint so the test exercises the promotion branch directly.
+    vi.spyOn(internals.agentOutputTemperature, "observeDelta").mockReturnValue({
+      stateHint: "busy",
+      changed: true,
+      changedChars: 64,
+      heatAdded: 50,
+      temperature: 80,
+      suppressed: false,
+      seeded: false,
+    });
+    const promoteSpy = vi.spyOn(internals.activityMonitor, "notifyExternalPromotion");
+    handleActivityState.mockClear();
+
+    internals.noteAgentOutputActivity({ lines: ["before"] });
+
+    // The direct FSM promotion still fires…
+    expect(handleActivityState).toHaveBeenCalledWith(expect.anything(), "busy", {
+      trigger: "output",
+    });
+    // …and now also arms the monitor so its idle paths can bring the FSM back.
+    expect(promoteSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("noteAgentOutputActivity does not arm ActivityMonitor while focus-suppressed (#9875)", () => {
+    const handleActivityState = vi.fn();
+    const ctx = defaultSpawnContext();
+    const terminal = new TerminalProcess(
+      "t-ext-promo-focus",
+      {
+        cwd: process.cwd(),
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        launchAgentId: "claude",
+      },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: { handleActivityState } as any,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      ctx,
+      createMockPty()
+    );
+
+    const internals = terminal as unknown as {
+      terminalInfo: { agentState: string };
+      activityMonitor: {
+        notifyFocus: (ms?: number) => void;
+        notifyExternalPromotion: (now?: number) => void;
+      };
+      agentOutputTemperature: { observeDelta: (...args: unknown[]) => unknown };
+      agentOutputContentSnapshot: unknown;
+      noteAgentOutputActivity: (before: unknown) => void;
+      getAgentOutputContentSnapshot: () => unknown;
+    };
+
+    Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
+    internals.terminalInfo.agentState = "waiting";
+    internals.agentOutputContentSnapshot = { lines: ["before"] };
+    internals.getAgentOutputContentSnapshot = () => ({ lines: ["after redraw with new text"] });
+    vi.spyOn(internals.agentOutputTemperature, "observeDelta").mockReturnValue({
+      stateHint: "busy",
+      changed: true,
+      changedChars: 64,
+      heatAdded: 50,
+      temperature: 80,
+      suppressed: false,
+      seeded: false,
+    });
+    const promoteSpy = vi.spyOn(internals.activityMonitor, "notifyExternalPromotion");
+
+    internals.activityMonitor.notifyFocus(2000);
+    internals.noteAgentOutputActivity({ lines: ["before"] });
+
+    expect(promoteSpy).not.toHaveBeenCalled();
+  });
+
   it("delays Enter for Copilot (submitEnterDelayMs: 200) so Ink TUI registers input", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "copilot" });

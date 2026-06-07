@@ -1491,6 +1491,10 @@ export class TerminalProcess {
       this.deps.agentStateService.handleActivityState(this.terminalInfo, "busy", {
         trigger: "output",
       });
+      // Arm the monitor's private busy state so its idle paths can transition
+      // the FSM back to waiting — without this the direct promotion above
+      // strands the FSM in working (#9875).
+      this.activityMonitor?.notifyExternalPromotion();
     }
   }
 
