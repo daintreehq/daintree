@@ -302,6 +302,7 @@ export class BackpressureManager {
     this.pauseStartTimes.delete(id);
 
     this.suspendedDueToStall.add(id);
+    this.stats.suspendCount++;
     this.clearPendingVisual(id);
 
     this.emitTerminalStatus(id, "suspended", utilization, pauseDuration, reason);

@@ -417,6 +417,15 @@ async function collectTerminals(ptyClient?: PtyClient) {
   }
 }
 
+async function collectFlowControl(ptyClient?: PtyClient) {
+  try {
+    if (!ptyClient) return { error: "PtyClient not available" };
+    return await ptyClient.getFlowControlSnapshotAsync();
+  } catch {
+    return { error: "Failed to get flow-control snapshot" };
+  }
+}
+
 async function collectLogs() {
   try {
     const entries = logBuffer.getAll();
@@ -475,6 +484,7 @@ export async function collectDiagnosticsWithKeys(
     { key: "git", fn: collectGit },
     { key: "config", fn: collectStoreConfig },
     { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
+    { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
     { key: "logs", fn: collectLogs },
     { key: "events", fn: () => collectEvents(deps) },
   ];

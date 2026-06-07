@@ -65,6 +65,7 @@ import type {
   PtyHostActivityTier,
   CrashType,
   SpawnResult,
+  FlowControlSnapshot,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -1000,6 +1001,33 @@ export class PtyClient extends EventEmitter {
     const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
     this.send({ type: "get-all-terminals", requestId });
     return promise.catch(() => []);
+  }
+
+  /**
+   * Get an on-demand structured flow-control snapshot from the pty-host
+   * (per-terminal flow status, held pause tokens, queue depths, backpressure
+   * stats, and resource-governor state). Used by `DiagnosticsCollector` for
+   * support bundles. Resolves to an empty snapshot on IPC failure/timeout —
+   * the diagnostics caller never throws.
+   */
+  async getFlowControlSnapshotAsync(): Promise<FlowControlSnapshot> {
+    const requestId = this.broker.generateId("flow-control-snapshot");
+    const promise = this.broker.register<FlowControlSnapshot>(requestId);
+    this.send({ type: "get-flow-control-snapshot", requestId });
+    return promise.catch(() => ({
+      timestamp: Date.now(),
+      terminals: [],
+      queueDepth: [],
+      totalPendingBytes: 0,
+      stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
+      resourceGovernor: {
+        isThrottling: false,
+        isWarning: false,
+        activeProfile: "balanced",
+        smoothedUtilizationPercent: null,
+        throttleDurationMs: 0,
+      },
+    }));
   }
 
   /**

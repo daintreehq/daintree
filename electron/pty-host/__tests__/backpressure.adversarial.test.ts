@@ -83,6 +83,9 @@ describe("BackpressureManager adversarial", () => {
     expect(backpressure.isPaused("term-1")).toBe(false);
     expect(backpressure.getPauseStartTime("term-1")).toBeUndefined();
     expect(backpressure.hasPendingSegments("term-1")).toBe(false);
+    // suspendVisualStream is the sole producer of the suspend transition, so
+    // it owns the suspendCount increment (the counter was previously dead).
+    expect(backpressure.stats.suspendCount).toBe(1);
     expect(sendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "terminal-status",

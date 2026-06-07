@@ -1,0 +1,83 @@
+import type {
+  FlowControlQueueEntry,
+  FlowControlSnapshot,
+  FlowControlTerminalSnapshot,
+} from "../../../shared/types/pty-host.js";
+import type { HandlerMap, HostContext } from "./types.js";
+
+/**
+ * On-demand diagnostic pulls assembled from live pty-host state. Unlike the
+ * periodic reliability-metric push, these read the always-populated flow-control
+ * maps directly and are NOT gated by `metricsEnabled()` — a support bundle must
+ * be able to capture flow-control state regardless of the streaming-metrics flag.
+ */
+export function createDiagnosticsHandlers(ctx: HostContext): HandlerMap {
+  const {
+    backpressureManager,
+    ipcQueueManager,
+    resourceGovernor,
+    pauseCoordinators,
+    rendererConnections,
+    getPauseCoordinator,
+    sendEvent,
+  } = ctx;
+
+  return {
+    "get-flow-control-snapshot": (msg) => {
+      const now = Date.now();
+
+      // Union every terminal id known to any flow-control map so a terminal
+      // that is paused/suspended/held but has no recorded status still appears.
+      const ids = new Set<string>();
+      for (const id of backpressureManager.terminalStatusesMap.keys()) ids.add(id);
+      for (const id of backpressureManager.suspendedSet) ids.add(id);
+      for (const id of backpressureManager.pauseStartTimesMap.keys()) ids.add(id);
+      for (const id of pauseCoordinators.keys()) ids.add(id);
+
+      const terminals: FlowControlTerminalSnapshot[] = [];
+      for (const id of ids) {
+        const pauseStart = backpressureManager.getPauseStartTime(id);
+        terminals.push({
+          terminalId: id,
+          flowStatus: backpressureManager.terminalStatusesMap.get(id) ?? null,
+          heldTokens: Array.from(getPauseCoordinator(id)?.heldTokens ?? []).sort(),
+          isSuspended: backpressureManager.isSuspended(id),
+          activityTier: backpressureManager.getActivityTier(id),
+          pausedDurationMs: pauseStart !== undefined ? Math.max(0, now - pauseStart) : null,
+        });
+      }
+      terminals.sort((a, b) => a.terminalId.localeCompare(b.terminalId));
+
+      // Live IPC + per-window MessagePort queue depths. The FUTURE_SAB path is
+      // dead in production and excluded here to match the streaming
+      // queue-depth gauge, keeping dead-code and live paths independently
+      // observable. totalPendingBytes sums the same live paths.
+      const queueDepth: FlowControlQueueEntry[] = [];
+      let totalPendingBytes = 0;
+      const ipc = ipcQueueManager.getQueueSnapshot();
+      totalPendingBytes += ipc.totalPendingBytes;
+      for (const { terminalId, pendingBytes } of ipc.perTerminal) {
+        if (pendingBytes > 0) queueDepth.push({ terminalId, layer: "ipc", pendingBytes });
+      }
+      for (const conn of rendererConnections.values()) {
+        const port = conn.portQueueManager.getQueueSnapshot();
+        totalPendingBytes += port.totalPendingBytes;
+        for (const { terminalId, pendingBytes } of port.perTerminal) {
+          if (pendingBytes > 0) queueDepth.push({ terminalId, layer: "port", pendingBytes });
+        }
+      }
+
+      const snapshot: FlowControlSnapshot = {
+        timestamp: now,
+        terminals,
+        queueDepth,
+        totalPendingBytes,
+        // Spread-copy so later mutations don't bleed into the diagnostics object.
+        stats: { ...backpressureManager.stats },
+        resourceGovernor: resourceGovernor.getSnapshot(),
+      };
+
+      sendEvent({ type: "flow-control-snapshot", requestId: msg.requestId, snapshot });
+    },
+  };
+}

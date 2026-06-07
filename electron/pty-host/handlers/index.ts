@@ -1,6 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
 import { createBackpressureHandlers } from "./backpressure.js";
 import { createConnectionHandlers } from "./connection.js";
+import { createDiagnosticsHandlers } from "./diagnostics.js";
 import { createLifecycleHandlers } from "./lifecycle.js";
 import { createResourceConfigHandlers } from "./resourceConfig.js";
 import { createStateConfigHandlers } from "./stateConfig.js";
@@ -35,6 +36,7 @@ export function createPtyHostMessageDispatcher(
     ...createLifecycleHandlers(ctx),
     ...createTerminalIOHandlers(ctx),
     ...createBackpressureHandlers(ctx),
+    ...createDiagnosticsHandlers(ctx),
     ...createTerminalQueryHandlers(ctx),
     ...createStateConfigHandlers(ctx),
     ...createResourceConfigHandlers(ctx),

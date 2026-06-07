@@ -229,6 +229,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.info);
       return true;
 
+    case "flow-control-snapshot":
+      broker.resolve(event.requestId, event.snapshot);
+      return true;
+
     case "terminal-pid":
       state.terminalPids.set(event.id, event.pid);
       if (callbacks.onTerminalPid) {
