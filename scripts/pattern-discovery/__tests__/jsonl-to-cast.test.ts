@@ -89,6 +89,15 @@ describe("corpusEntriesToCast", () => {
     expect(JSON.parse(lines[2])[2]).toBe("second");
   });
 
+  it("scrubs the header title", () => {
+    const cast = corpusEntriesToCast([entry(0, "x")], {
+      ...BASE_OPTS,
+      title: "capture of /Users/alice/secret",
+    });
+    const header = JSON.parse(cast.split("\n")[0]);
+    expect(header.title).toBe("capture of /Users/USER/secret");
+  });
+
   it("throws on an empty corpus", () => {
     expect(() => corpusEntriesToCast([], BASE_OPTS)).toThrow(/empty/i);
   });

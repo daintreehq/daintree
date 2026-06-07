@@ -53,11 +53,16 @@ export function scrubReportPath(str: string): string {
       // ordinary web URLs in output are left alone). Both replacements
       // re-match to themselves, so the pass stays idempotent.
       .replace(
-        /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}/g,
+        // Trailing (?:\/segment)* consumes GitLab nested groups
+        // (group/subgroup/repo) so the leaf repo name can't survive.
+        /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g,
         "$1REDACTED/REDACTED"
       )
       .replace(
-        /(https?:\/\/[A-Za-z0-9.-]{1,253}\/)(?:[A-Za-z0-9._-]{1,100}\/){0,5}[A-Za-z0-9._-]{1,100}\.git\b/g,
+        // Optional userinfo (`token:x@`) before the host — authenticated
+        // remotes must still match here; the credentials themselves are
+        // scrubbed later by the url-basic-auth pattern in scrubSecrets.
+        /(https?:\/\/(?:[^@/\s"'`]{1,512}@)?[A-Za-z0-9.-]{1,253}\/)(?:[A-Za-z0-9._-]{1,100}\/){0,5}[A-Za-z0-9._-]{1,100}\.git\b/g,
         "$1REDACTED/REDACTED.git"
       )
       // Tilde-relative home paths — the segments after `~/` can name private

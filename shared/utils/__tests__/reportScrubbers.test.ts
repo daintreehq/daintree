@@ -95,6 +95,19 @@ describe("scrubReportPath", () => {
     expect(result).toBe("https://git.example.com/REDACTED/REDACTED.git");
   });
 
+  it("redacts SSH remotes with nested groups so the leaf repo cannot leak", () => {
+    const result = scrubReportPath("git@gitlab.com:group/subgroup/private-repo.git");
+    expect(result).toBe("git@gitlab.com:REDACTED/REDACTED");
+    expect(result).not.toContain("private-repo");
+  });
+
+  it("redacts authenticated HTTPS remotes", () => {
+    const result = scrubReportPath("https://mytoken:x@github.com/acme/private-repo.git");
+    expect(result).not.toContain("acme");
+    expect(result).not.toContain("private-repo");
+    expect(result).toContain("REDACTED/REDACTED.git");
+  });
+
   it("redacts tilde-relative home paths", () => {
     expect(scrubReportPath("cwd: ~/Projects/client-work/app")).toBe("cwd: ~/REDACTED");
     expect(scrubReportPath('{"dir":"~/Projects/secret"}')).toBe('{"dir":"~/REDACTED"}');
@@ -130,7 +143,9 @@ describe("scrubReportPath", () => {
       "\\\\wsl.localhost\\Debian\\home\\bob",
       JSON.stringify({ cwd: "\\\\wsl$\\Ubuntu\\home\\alice" }),
       "git@github.com:acme/secret-repo.git",
+      "git@gitlab.com:group/subgroup/private-repo.git",
       "https://github.com/acme/secret-repo.git",
+      "https://mytoken:x@github.com/acme/secret-repo.git",
       "~/Projects/client-work",
       "/tmp/daintree-greg-1234/out.log",
       "/var/folders/ab/x1y2z3/T/session.sock",

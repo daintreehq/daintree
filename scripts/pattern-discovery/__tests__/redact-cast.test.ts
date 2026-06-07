@@ -57,11 +57,31 @@ describe("redactCastText", () => {
     expect(result).toContain("plain output");
   });
 
-  it("preserves blank lines and # comments verbatim", () => {
-    const input = `# trimmed from a longer capture\n${HEADER}\n\n${JSON.stringify([0, "o", "x"])}\n`;
+  it("preserves blank lines and # comments but scrubs comment text", () => {
+    const input = `# trimmed from /Users/alice/capture.cast\n${HEADER}\n\n${JSON.stringify([0, "o", "x"])}\n`;
     const result = redactCastText(input);
-    expect(result.split("\n")[0]).toBe("# trimmed from a longer capture");
+    expect(result.split("\n")[0]).toBe("# trimmed from /Users/USER/capture.cast");
     expect(result).toContain("\n\n");
+  });
+
+  it("scrubs string values inside the env header object", () => {
+    const token = "ghp_" + "0123456789".repeat(4);
+    const header = JSON.stringify({
+      version: 2,
+      width: 80,
+      height: 24,
+      env: { PWD: "/Users/alice/client", GH_TOKEN: token, TERM: "xterm-256color" },
+    });
+    const result = redactCastText(header + "\n" + JSON.stringify([0, "o", "hi"]) + "\n");
+    const parsed = JSON.parse(result.split("\n")[0]);
+    expect(parsed.env.PWD).toBe("/Users/USER/client");
+    expect(parsed.env.GH_TOKEN).toBe("[REDACTED]");
+    expect(parsed.env.TERM).toBe("xterm-256color");
+  });
+
+  it("throws when an event data payload is not a string", () => {
+    const input = cast(JSON.stringify([0, "o", { text: "/Users/alice" }]));
+    expect(() => redactCastText(input)).toThrow(/must be a string at line 2/);
   });
 
   it("is idempotent", () => {

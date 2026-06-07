@@ -40,6 +40,7 @@ const DEFAULT_WIDTH = 80;
 const DEFAULT_HEIGHT = 30;
 
 export function corpusLooksSynthetic(entries: CorpusEntry[]): boolean {
+  // eslint-disable-next-line no-control-regex -- ESC is the signal being detected
   return entries.every((e) => !/[\r\n\u001b]/.test(e.chunk));
 }
 
@@ -52,7 +53,9 @@ export function corpusEntriesToCast(entries: CorpusEntry[], opts: ConvertOptions
     version: 2,
     width: opts.width,
     height: opts.height,
-    title: opts.title,
+    // The CLI derives the title from the fixture basename, but programmatic
+    // callers may pass arbitrary text — scrub it like every other payload.
+    title: scrubReportText(opts.title),
   });
   const lines = [header];
   for (let i = 0; i < entries.length; i++) {

@@ -26,10 +26,11 @@ export function redactCastText(raw: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Preserve blank lines and `#` comments verbatim — the replay harness
-    // skips them, and comments are useful for trimming notes.
+    // Keep blank lines and `#` comments (the replay harness skips them, and
+    // comments are useful for trimming notes) — but scrub comment text too: a
+    // note like `# captured on alice's repo` must not escape redaction.
     if (line.length === 0 || line.startsWith("#")) {
-      out.push(line);
+      out.push(scrubReportText(line));
       continue;
     }
 
@@ -41,11 +42,19 @@ export function redactCastText(raw: string): string {
       } catch (error) {
         throw new Error(`Cast header is not valid JSON (line ${i + 1})`, { cause: error });
       }
-      // Scrub free-text header fields (title, command, cwd, env values) while
-      // leaving structural fields (version, width, height) untouched.
+      // Scrub free-text header fields (title, command, cwd) and string values
+      // one level deep in object fields (`env` carries PWD and exported keys),
+      // while leaving structural fields (version, width, height) untouched.
       for (const [key, value] of Object.entries(header)) {
         if (typeof value === "string") {
           header[key] = scrubReportText(value);
+        } else if (value && typeof value === "object" && !Array.isArray(value)) {
+          const nested = value as Record<string, unknown>;
+          for (const [innerKey, innerValue] of Object.entries(nested)) {
+            if (typeof innerValue === "string") {
+              nested[innerKey] = scrubReportText(innerValue);
+            }
+          }
         }
       }
       out.push(JSON.stringify(header));
@@ -63,10 +72,15 @@ export function redactCastText(raw: string): string {
     if (!Array.isArray(row) || row.length < 3) {
       throw new Error(`Event row must be a 3-tuple at line ${i + 1}`);
     }
+    if (typeof row[2] !== "string") {
+      // Coercing would both destroy the payload ("[object Object]") and skip
+      // any leakage inside it — hard-error like the other malformed shapes.
+      throw new Error(`Event data must be a string at line ${i + 1}`);
+    }
     // Scrub the data field for every event kind — output ("o"), input ("i"),
     // markers ("m"); resize ("r") payloads are dimension strings the scrub
     // passes through unchanged.
-    const scrubbed = [row[0], row[1], scrubReportText(String(row[2])), ...row.slice(3)];
+    const scrubbed = [row[0], row[1], scrubReportText(row[2]), ...row.slice(3)];
     out.push(JSON.stringify(scrubbed));
   }
 
