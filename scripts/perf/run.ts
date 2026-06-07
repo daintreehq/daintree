@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
+import { checkBaselineCoverage, checkBaselineFreshness } from "./lib/baselineCoverage";
 import { compareSamples } from "./lib/comparison";
 import { evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
@@ -114,9 +115,27 @@ async function run(): Promise<void> {
   const budgetConfig = loadBudgetConfig();
   const baseline = readJson<BaselineSummary>(cli.baselinePath);
 
+  checkBaselineFreshness(baseline, cli.mode);
+
   const scenarios = getScenariosForMode(cli.mode);
   if (scenarios.length === 0) {
     throw new Error(`No scenarios configured for mode ${cli.mode}`);
+  }
+
+  // Regenerating the baseline is exactly how coverage gaps get fixed, so let an
+  // --update-baseline run proceed even when entries are missing.
+  if (!cli.updateBaseline) {
+    const coverageGaps = checkBaselineCoverage(baseline, budgetConfig, scenarios);
+    if (coverageGaps.length > 0) {
+      const ids = coverageGaps.map((gap) => gap.scenarioId).join(", ");
+      console.error(
+        `[perf:${cli.mode}] FAIL ${coverageGaps.length} budgeted scenario(s) missing from ` +
+          `baseline (${cli.baselinePath}) — regression gate cannot run: ${ids}. ` +
+          `Regenerate with --update-baseline.`
+      );
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
