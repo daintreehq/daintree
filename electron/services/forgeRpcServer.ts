@@ -69,13 +69,14 @@ interface InFlightEntry {
   waiters: Waiter[];
 }
 
-// Cross-window singleflight. Each Electron window forks its own workspace-host
-// UtilityProcess; before this map, N windows watching the same project meant
-// N identical GraphQL calls per poll. The bridge-side singleflight in
-// `forgeBridge.ts` only dedupes within a single host. This map sits at the
-// boundary main owns and absorbs the cross-host fan-in: identical concurrent
-// requests join a single in-flight provider call and the result is delivered
-// to every waiter. See #9055.
+// Cross-host singleflight, and the sole dedup layer main owns. Workspace-hosts
+// are pooled one-per-project (`WorkspaceHostPool`), so the windows sharing a
+// project route through a single host; this map still absorbs the fan-in from
+// distinct projects whose calls collapse on `namespacedId`/args, plus any
+// transient overlap when a host is restarting or handing off. Identical
+// concurrent requests join a single in-flight provider call and the result is
+// delivered to every waiter. The bridge-side singleflight in `forgeBridge.ts`
+// only dedupes within a single host; this sits at the boundary main owns.
 //
 // Evicted on settlement (success or error) so retries proceed immediately —
 // no TTL caching here; the GitHub response cache in `forgeProvider.runQuery`

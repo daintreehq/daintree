@@ -696,14 +696,6 @@ class PullRequestService {
     this.boostExpiresAt = null;
     this.clearStagnantPollCounts();
     this.isPolling = false;
-    // Cooperative release so a sibling can poll immediately. Best-effort —
-    // the host's `dispose()` also clears any leases this holder owns, and
-    // the TTL expires within FORGE_POLL_LEASE_TTL_MS regardless.
-    try {
-      getForgeBridge().releasePollLease();
-    } catch {
-      // Bridge not initialized yet (early stop before bootstrap); nothing to release.
-    }
     logInfo("PullRequestService stopped");
   }
 
@@ -1179,21 +1171,6 @@ class PullRequestService {
       return;
     }
 
-    // Per-project poll lease (#9055): only the elected window revalidates per
-    // cycle; siblings receive the resulting sys:pr:detected / sys:pr:cleared
-    // updates through main → renderer fan-out, exactly as checkForPRs relies on.
-    // Gating here is also what makes the open-PR-list ETag baseline single-owner:
-    // the cache is a main-process singleton keyed by owner/repo, so if every
-    // window committed it against its own tracked subset, one window's clean diff
-    // could advance the baseline past a change another window hasn't consumed and
-    // mask it behind a later 304. One revalidating window removes that race (and
-    // the redundant cross-window conditional GETs). Fails open on IPC timeout.
-    const leaseAcquired = await getForgeBridge().acquirePollLease();
-    if (!leaseAcquired) {
-      logDebug("Skipping PR revalidation — sibling window holds poll lease");
-      return;
-    }
-
     // Collect resolved worktrees that need revalidation, plus a per-PR snapshot
     // (state + REST change markers) for the cheap open-PR-list probe below.
     const lookupBranchByWorktreeId = new Map<string, string | undefined>();
@@ -1506,18 +1483,6 @@ class PullRequestService {
       return;
     }
 
-    // Per-project poll lease (#9055): only one workspace-host polls per
-    // cycle when multiple windows watch the same project. Siblings receive
-    // PR updates via the elected host's `sys:pr:detected` / `sys:pr:cleared`
-    // events as they propagate through main → renderer fan-out. Fails open
-    // (returns true) on IPC timeout so a lost lease message can't wedge
-    // polling — `dispatchForgeRpc`'s cross-window singleflight still dedupes
-    // the actual GraphQL calls in that fallback path.
-    const leaseAcquired = await getForgeBridge().acquirePollLease();
-    if (!leaseAcquired) {
-      logDebug("Skipping PR check — sibling window holds poll lease");
-      return;
-    }
     this.lastCheckAt = Date.now();
 
     logDebug("Checking PRs for candidates", { count: activeCandidates.length });

@@ -14,11 +14,6 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
-import {
-  acquirePollLease,
-  releaseAllLeasesForHolder,
-  releasePollLease,
-} from "./forgePollLeaseService.js";
 import { createLogger } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -363,10 +358,6 @@ export class WorkspaceHostProcess extends EventEmitter {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
-    // Free any forge poll-leases this host held so siblings can take over
-    // immediately rather than waiting up to FORGE_POLL_LEASE_TTL_MS (#9055).
-    releaseAllLeasesForHolder(this.serviceName);
-
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
@@ -590,12 +581,6 @@ export class WorkspaceHostProcess extends EventEmitter {
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
       logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
-
-      // Crashed host can't send the cooperative release. Free its leases now
-      // so a sibling can take over without waiting for FORGE_POLL_LEASE_TTL_MS
-      // to expire. The same serviceName identifies the restarted host, so
-      // when it re-acquires after `ready`, the lease entry is already gone.
-      releaseAllLeasesForHolder(this.serviceName);
 
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval);
@@ -912,24 +897,6 @@ export class WorkspaceHostProcess extends EventEmitter {
           },
           (request) => this.send(request)
         );
-        break;
-
-      // Per-project poll-lease arbitration (#9055). The lease key is this
-      // host's `projectPath` and the holder identity is the unique
-      // `serviceName` — both derived in main, never trusted from the
-      // workspace-host's own report.
-      case "forge:poll-lease-acquire": {
-        const acquired = acquirePollLease(this.projectPath, this.serviceName);
-        this.send({
-          type: "forge:poll-lease-result",
-          requestId: event.requestId,
-          acquired,
-        });
-        break;
-      }
-
-      case "forge:poll-lease-release":
-        releasePollLease(this.projectPath, this.serviceName);
         break;
 
       // Spontaneous events - re-emit for the manager to route

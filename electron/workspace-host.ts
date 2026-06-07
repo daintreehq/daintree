@@ -752,12 +752,6 @@ port.on("message", async (rawMsg: any) => {
         forgeBridge.handleResult(request);
         break;
 
-      // Inbound poll-lease decision from main (#9055). Routes to the pending
-      // `acquirePollLease()` promise keyed by `requestId`.
-      case "forge:poll-lease-result":
-        forgeBridge.handleLeaseResult(request);
-        break;
-
       default:
         console.warn("[WorkspaceHost] Unknown message type:", (request as any).type);
     }
