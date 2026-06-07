@@ -1617,35 +1617,25 @@ describe("AgentNotificationService", () => {
       );
     });
 
-    it("flushWaitingBurst drops entries whose terminal has left waiting in the live store", () => {
-      // Simulate a race: a buffered entry survived a completed transition
-      // (e.g. the burst timer was already armed when the completed event
-      // landed, or the entry was pushed directly). The flush must still
-      // re-check live state and drop the entry.
+    it("flushWaitingBurst is a no-op when the in-handler purge emptied the buffer", () => {
+      // Idempotency: if a `completed`/`exited` event lands during the
+      // 200ms burst window and the in-handler splice drains the buffer,
+      // the flush must not throw and must not emit any notification.
+      // (Earlier review draft added a pre-flush live-state re-check; that
+      // was removed because appState.terminals is renderer-pushed with
+      // round-trip latency — it would drop legitimate waiting entries
+      // and is also ambiguous between "absent" and "removed" terminals.
+      // The in-handler splice is the only correct defense, since it runs
+      // on the same event tick as the `completed`/`exited` event and
+      // uses the event's own `state` field.)
       mockStore({ waitingEnabled: true });
       agentNotificationService.syncWatchedPanels(["term-1"]);
 
       events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
-      // term-1 is no longer in `waiting` in the live store (we set its
-      // agentState to "completed" here without emitting a state-changed).
-      mockStore(
-        { waitingEnabled: true },
-        {
-          activeWorktreeId: "wt-1",
-          terminals: [
-            {
-              id: "term-1",
-              kind: "terminal",
-              agentId: "agent-1",
-              title: "Agent 1",
-              location: "dock" as const,
-              worktreeId: "wt-1",
-              agentState: "completed",
-            },
-          ],
-        }
+      events.emit(
+        "agent:state-changed",
+        makePayloadFor("term-1", "agent-1", "completed", "waiting")
       );
-
       vi.advanceTimersByTime(300);
 
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();

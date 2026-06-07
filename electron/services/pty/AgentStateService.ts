@@ -468,16 +468,6 @@ export class AgentStateService {
       temperature?: AgentActivityObservationResult;
     }
   ): void {
-    const event: AgentEvent =
-      activity === "busy"
-        ? metadata?.trigger === "input"
-          ? { type: "input" }
-          : { type: "busy" }
-        : activity === "completed"
-          ? { type: "completion" }
-          : { type: "prompt" };
-    const temperature = metadata?.temperature;
-
     // The ActivityMonitor emits a synthetic `idle` observation with
     // `trigger: "dispose"` during teardown when it was still in the busy
     // state. Without this branch the observation falls through to the
@@ -499,6 +489,16 @@ export class AgentStateService {
       });
       return;
     }
+
+    const event: AgentEvent =
+      activity === "busy"
+        ? metadata?.trigger === "input"
+          ? { type: "input" }
+          : { type: "busy" }
+        : activity === "completed"
+          ? { type: "completion" }
+          : { type: "prompt" };
+    const temperature = metadata?.temperature;
 
     if (metadata?.trigger === "timeout") {
       this.updateAgentState(
