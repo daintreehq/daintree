@@ -137,7 +137,7 @@ The FSM then produces canonical agent states:
 - `working -> completed` on completion
 - any non-exited state -> `exited` on exit
 
-Agent state changes are emitted through the event bus as `agent:state-changed` (from `PtyEventsBridge`). A listener-friendly variant, `terminal:state-changed`, is declared and bridge-eligible in `electron/services/events.ts` but currently has no producer — only `agent:state-changed` is emitted.
+Agent state changes are emitted through the event bus as `agent:state-changed` (from `PtyEventsBridge`). Suppressed and rejected transition attempts (hysteresis, stale-session, schema validation, no-op) are emitted as `agent:state-transition-dropped` for diagnostics, with the same correlation context (`terminalId`, `cwd`, `traceId`) and an `outcome` discriminator so user reports of false `working`/`waiting` can be triaged from the event inspector. The dropped event is diagnostics tier only — no user-facing UI consumes it.
 
 ## Resize Handling
 

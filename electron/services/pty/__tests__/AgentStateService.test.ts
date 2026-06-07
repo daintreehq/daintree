@@ -115,9 +115,13 @@ describe("AgentStateService", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "exited" });
     const stateChanges: unknown[] = [];
+    const dropped: unknown[] = [];
 
     events.on("agent:state-changed", (payload) => {
       stateChanges.push(payload);
+    });
+    events.on("agent:state-transition-dropped", (payload) => {
+      dropped.push(payload);
     });
 
     const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
@@ -125,6 +129,8 @@ describe("AgentStateService", () => {
     expect(changed).toBe(false);
     expect(terminal.agentState).toBe("exited");
     expect(stateChanges).toHaveLength(0);
+    expect(dropped).toHaveLength(1);
+    expect((dropped[0] as { outcome: string }).outcome).toBe("no-op");
   });
 
   it("transitions exited → idle on respawn (Issue #5767 — agent re-detected in same PTY)", () => {
@@ -717,6 +723,201 @@ describe("AgentStateService", () => {
     expect(completedPayloads).toHaveLength(1);
     expect(completedPayloads[0]?.duration).toBe(0);
     expect(completedPayloads[0]?.exitCode).toBe(0);
+  });
+
+  // #9868 — Suppressed and rejected agent state transitions leave no
+  // diagnosable evidence. Each drop site (no-op, hysteresis, stale-session,
+  // schema-invalid) must emit `agent:state-transition-dropped` with the same
+  // context the agent pipeline has at the moment of the drop, so the
+  // diagnostics event inspector can answer "why did the agent say `working`
+  // when it should have said `waiting`?" without losing the original intent.
+  describe("dropped transition diagnostics (#9868)", () => {
+    it("emits agent:state-transition-dropped for a no-op transition", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const dropped: Array<Record<string, unknown>> = [];
+
+      events.on("agent:state-transition-dropped", (payload) => {
+        dropped.push(payload as unknown as Record<string, unknown>);
+      });
+
+      // working + output → working (no-op). `data` is required on the output
+      // event shape; the no-op branch doesn't read it, so an empty string is fine.
+      const changed = service.updateAgentState(terminal, { type: "output", data: "" });
+
+      expect(changed).toBe(false);
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).toMatchObject({
+        terminalId: "term-1",
+        outcome: "no-op",
+        currentState: "working",
+        attemptedState: "working",
+      });
+    });
+
+    it("emits agent:state-transition-dropped for hysteresis suppression", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "idle" });
+      const dropped: Array<Record<string, unknown>> = [];
+
+      // Arm the hysteresis lock with a high-confidence idle→working transition.
+      service.updateAgentState(terminal, { type: "input" });
+      expect(terminal.agentState).toBe("working");
+      expect(terminal.hysteresisLockedUntil).toBeDefined();
+
+      events.on("agent:state-transition-dropped", (payload) => {
+        dropped.push(payload as unknown as Record<string, unknown>);
+      });
+
+      // Within the window: low-confidence opposite-direction prompt is dropped.
+      const changed = service.transitionState(
+        terminal,
+        { type: "prompt" },
+        "heuristic",
+        0.6,
+        terminal.spawnedAt
+      );
+
+      expect(changed).toBe(false);
+      expect(terminal.agentState).toBe("working");
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).toMatchObject({
+        terminalId: "term-1",
+        outcome: "hysteresis",
+        currentState: "working",
+        attemptedState: "waiting",
+        trigger: "heuristic",
+        confidence: 0.6,
+      });
+      expect(typeof dropped[0]?.reason).toBe("string");
+    });
+
+    it("emits agent:state-transition-dropped for a stale-session rejection", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ spawnedAt: 1000, agentState: "idle" });
+      const dropped: Array<Record<string, unknown>> = [];
+
+      events.on("agent:state-transition-dropped", (payload) => {
+        dropped.push(payload as unknown as Record<string, unknown>);
+      });
+
+      const changed = service.transitionState(terminal, { type: "busy" }, "output", 1.0, 999);
+
+      expect(changed).toBe(false);
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).toMatchObject({
+        terminalId: "term-1",
+        outcome: "stale-session",
+        currentState: "idle",
+        trigger: "output",
+        confidence: 1,
+        spawnedAt: 999,
+        terminalSpawnedAt: 1000,
+      });
+    });
+
+    it("emits agent:state-transition-dropped with validationErrors for schema-invalid payloads", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const dropped: Array<Record<string, unknown>> = [];
+      const stateChanges: unknown[] = [];
+
+      events.on("agent:state-transition-dropped", (payload) => {
+        dropped.push(payload as unknown as Record<string, unknown>);
+      });
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push(payload);
+      });
+
+      // Trigger a real Zod validation failure: `sessionCost: -1` fails the
+      // `.nonnegative()` schema on the new payload. The state transition
+      // itself is valid (working → completed) but the built payload is not,
+      // so the build path hits the schema-invalid branch.
+      const changed = service.updateAgentState(
+        terminal,
+        { type: "completion" },
+        "activity",
+        1.0,
+        undefined,
+        -1
+      );
+
+      expect(changed).toBe(false);
+      expect(stateChanges).toHaveLength(0);
+      expect(terminal.agentState).toBe("working");
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).toMatchObject({
+        terminalId: "term-1",
+        outcome: "schema-invalid",
+        currentState: "working",
+        attemptedState: "completed",
+      });
+      expect(Array.isArray(dropped[0]?.validationErrors)).toBe(true);
+      expect((dropped[0]?.validationErrors as string[]).length).toBeGreaterThan(0);
+    });
+
+    it("includes temperature/heatAdded/changedChars on accepted agent:state-changed when observation is provided", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "idle" });
+      const observations: Array<Record<string, unknown>> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        observations.push(payload as unknown as Record<string, unknown>);
+      });
+
+      const changed = service.updateAgentState(
+        terminal,
+        { type: "busy" },
+        "output",
+        1.0,
+        undefined,
+        undefined,
+        undefined,
+        {
+          stateHint: "busy",
+          changed: true,
+          changedChars: 250,
+          heatAdded: 12,
+          temperature: 73.5,
+          suppressed: true, // intentionally present — must NOT leak onto the event
+          seeded: false,
+        }
+      );
+
+      expect(changed).toBe(true);
+      expect(observations).toHaveLength(1);
+      expect(observations[0]).toMatchObject({
+        temperature: 73.5,
+        heatAdded: 12,
+        changedChars: 250,
+      });
+      expect(observations[0]?.suppressed).toBeUndefined();
+    });
+
+    it("omits temperature fields on agent:state-changed when no observation is provided", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "idle" });
+      const observations: Array<Record<string, unknown>> = [];
+
+      events.on("agent:state-changed", (payload) => {
+        observations.push(payload as unknown as Record<string, unknown>);
+      });
+
+      // transitionState path — no temperature observation in scope.
+      const changed = service.transitionState(
+        terminal,
+        { type: "busy" },
+        "output",
+        1.0,
+        terminal.spawnedAt
+      );
+
+      expect(changed).toBe(true);
+      expect(observations).toHaveLength(1);
+      expect(observations[0]?.temperature).toBeUndefined();
+      expect(observations[0]?.heatAdded).toBeUndefined();
+      expect(observations[0]?.changedChars).toBeUndefined();
+    });
   });
 
   // #5803: Runtime-detected agents have no launch-time agentId; lifecycle

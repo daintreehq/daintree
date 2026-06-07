@@ -955,6 +955,11 @@ events.on("agent:state-changed", (payload) => {
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,
+      // Live temperature fields (only populated when the activity detector
+      // drove the transition). Omit when absent so the wire stays minimal.
+      ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
+      ...(payload.heatAdded !== undefined ? { heatAdded: payload.heatAdded } : {}),
+      ...(payload.changedChars !== undefined ? { changedChars: payload.changedChars } : {}),
     });
 
     if (
@@ -964,6 +969,36 @@ events.on("agent:state-changed", (payload) => {
     ) {
       ptyManager.flushAgentSnapshot(payload.terminalId);
     }
+  }
+});
+
+events.on("agent:state-transition-dropped", (payload) => {
+  // Cross-process relay: emit the dropped event on the main-side bus via the
+  // wire protocol. The bridge in `electron/services/pty/PtyEventsBridge.ts`
+  // re-emits it on the bus so the diagnostics event inspector can surface it.
+  if (payload.terminalId) {
+    sendEvent({
+      type: "agent-state-transition-dropped",
+      id: payload.terminalId,
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(payload.worktreeId ? { worktreeId: payload.worktreeId } : {}),
+      outcome: payload.outcome,
+      currentState: payload.currentState,
+      ...(payload.attemptedState !== undefined ? { attemptedState: payload.attemptedState } : {}),
+      ...(payload.trigger !== undefined ? { trigger: payload.trigger } : {}),
+      ...(payload.confidence !== undefined ? { confidence: payload.confidence } : {}),
+      ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
+      ...(payload.spawnedAt !== undefined ? { spawnedAt: payload.spawnedAt } : {}),
+      ...(payload.terminalSpawnedAt !== undefined
+        ? { terminalSpawnedAt: payload.terminalSpawnedAt }
+        : {}),
+      ...(payload.reason !== undefined ? { reason: payload.reason } : {}),
+      ...(payload.validationErrors !== undefined
+        ? { validationErrors: payload.validationErrors }
+        : {}),
+      ...(payload.traceId !== undefined ? { traceId: payload.traceId } : {}),
+      timestamp: payload.timestamp,
+    });
   }
 });
 

@@ -24,6 +24,7 @@ const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["a
 const EVENT_BUS_BRIDGED_MANIFEST = {
   // Agent lifecycle: emitted on TypedEventBus; relayed here.
   "agent:state-changed": "bus",
+  "agent:state-transition-dropped": "bus",
   "agent:all-clear": "bus",
   "agent:detected": "bus",
   "agent:exited": "bus",

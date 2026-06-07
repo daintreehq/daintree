@@ -641,6 +641,15 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Transition agent state from external observer.
+   *
+   * Returns `boolean` — preserved as the load-bearing contract for the
+   * `Promise<boolean>` resolver on the main-side `PtyClient.transitionState`
+   * and the production caller at `electron/ipc/handlers/terminal/io.ts:225`.
+   *
+   * The precise drop reason (hysteresis / stale-session / schema-invalid /
+   * no-op) is emitted on the bus as `agent:state-transition-dropped` from
+   * inside `AgentStateService`. The bus is the source of truth for
+   * diagnostics; the wire carries only the boolean.
    */
   transitionState(
     id: string,
@@ -653,10 +662,6 @@ export class PtyManager extends EventEmitter {
     if (!terminal) {
       return false;
     }
-    // AgentStateService usually expects TerminalInfo.
-    // Let's check if agentStateService can take TerminalProcess or we need to pass info.
-    // Looking at the imports in PtyManager, AgentStateService is imported.
-    // I need to check AgentStateService definition, but likely it takes TerminalInfo.
     return this.agentStateService.transitionState(
       terminal.getInfo(),
       event,
