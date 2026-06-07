@@ -446,62 +446,66 @@ export async function replayCast(
   const rng = opts.fragmentation ? mulberry32(opts.fragmentation.seed) : null;
   const maxSplits = opts.fragmentation?.maxSplits ?? DEFAULT_FRAGMENT_MAX_SPLITS;
 
-  let currentMs = 0;
-  for (const event of cast.events) {
-    const delta = Math.max(0, event.absoluteMs - currentMs);
-    if (delta > 0) {
-      // Polling ordering: timers advance to the event timestamp BEFORE the event
-      // is written/dispatched. A polling tick scheduled exactly at `currentMs+N`
-      // therefore observes pre-event state — the new bytes land immediately
-      // afterward and the next tick sees them. Deterministic and matches how
-      // production polling is interleaved with PTY data callbacks.
-      vi.advanceTimersByTime(delta);
-      currentMs = event.absoluteMs;
-    }
+  try {
+    let currentMs = 0;
+    for (const event of cast.events) {
+      const delta = Math.max(0, event.absoluteMs - currentMs);
+      if (delta > 0) {
+        // Polling ordering: timers advance to the event timestamp BEFORE the
+        // event is written/dispatched. A polling tick scheduled exactly at
+        // `currentMs+N` therefore observes pre-event state — the new bytes land
+        // immediately afterward and the next tick sees them. Deterministic and
+        // matches how production polling is interleaved with PTY data callbacks.
+        vi.advanceTimersByTime(delta);
+        currentMs = event.absoluteMs;
+      }
 
-    if (event.kind === "o") {
-      const bytes = Buffer.from(event.data, "utf8");
-      const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
-      for (const fragment of fragments) {
-        if (fragment.length === 0) continue;
-        writeBytesToTerminal(term, fragment);
-      }
-      // Production calls `monitor.onData(chunk)` with the fully-decoded string
-      // from node-pty (which buffers partial UTF-8). Replay mirrors that
-      // contract: the monitor sees the whole event as one string, not the
-      // fragmented byte chunks. Fragmentation stresses xterm's parser only.
-      // OSC 9;4 is fed first (matching production's feed-before-onData order);
-      // `Date.now()` reflects the replay clock since timers were already
-      // advanced to this event's timestamp above.
-      if (routeOsc94) {
-        osc94Parser.feed(event.data, Date.now());
-      }
-      monitor.onData(event.data);
-    } else if (event.kind === "i") {
-      monitor.onInput(event.data);
-    } else if (event.kind === "r") {
-      const match = /^(\d+)x(\d+)$/.exec(event.data);
-      if (match) {
-        const newCols = Number(match[1]);
-        const newRows = Number(match[2]);
-        try {
-          term.resize(Math.max(1, newCols), Math.max(1, newRows));
-        } catch {
-          // Some xterm builds throw if dims unchanged — ignore.
+      if (event.kind === "o") {
+        const bytes = Buffer.from(event.data, "utf8");
+        const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
+        for (const fragment of fragments) {
+          if (fragment.length === 0) continue;
+          writeBytesToTerminal(term, fragment);
         }
-        monitor.notifyResize();
+        // Production calls `monitor.onData(chunk)` with the fully-decoded string
+        // from node-pty (which buffers partial UTF-8). Replay mirrors that
+        // contract: the monitor sees the whole event as one string, not the
+        // fragmented byte chunks. Fragmentation stresses xterm's parser only.
+        // OSC 9;4 is fed first (matching production's feed-before-onData order);
+        // `Date.now()` reflects the replay clock since timers were already
+        // advanced to this event's timestamp above.
+        if (routeOsc94) {
+          osc94Parser.feed(event.data, Date.now());
+        }
+        monitor.onData(event.data);
+      } else if (event.kind === "i") {
+        monitor.onInput(event.data);
+      } else if (event.kind === "r") {
+        const match = /^(\d+)x(\d+)$/.exec(event.data);
+        if (match) {
+          const newCols = Number(match[1]);
+          const newRows = Number(match[2]);
+          try {
+            term.resize(Math.max(1, newCols), Math.max(1, newRows));
+          } catch {
+            // Some xterm builds throw if dims unchanged — ignore.
+          }
+          monitor.notifyResize();
+        }
       }
+      // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
     }
-    // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
-  }
 
-  const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
-  if (settleMs > 0) {
-    vi.advanceTimersByTime(settleMs);
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
+    if (settleMs > 0) {
+      vi.advanceTimersByTime(settleMs);
+    }
+  } finally {
+    // Always tear down so a throw mid-replay can't leak the polling interval or
+    // debounce timers into the next test under shared fake timers.
+    monitor.dispose();
+    term.dispose();
   }
-
-  monitor.dispose();
-  term.dispose();
   return recorded;
 }
 

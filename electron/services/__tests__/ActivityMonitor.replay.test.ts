@@ -161,6 +161,13 @@ describe("ActivityMonitor replay harness", () => {
       routedIdle - unroutedIdle,
       `routed idle=${routedIdle}ms, unrouted idle=${unroutedIdle}ms`
     ).toBeGreaterThanOrEqual(2500);
+    // Upper bound: the heartbeat must extend busy past the last pulse, not pin
+    // the agent busy forever. If resetDebounceTimer ever looped, idle would
+    // never fire within the settle budget and routedIdle would balloon — this
+    // catches that as a clean assertion rather than a settle-budget timeout.
+    expect(routedIdle, `routed idle=${routedIdle}ms ran past the OSC window`).toBeLessThanOrEqual(
+      12000
+    );
   });
 
   it("input cast events drive monitor.onInput and trigger busy", async () => {
