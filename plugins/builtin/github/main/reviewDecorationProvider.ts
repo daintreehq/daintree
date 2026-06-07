@@ -33,7 +33,7 @@ export function createReviewDecorationProvider(
       const worktree = worktrees.find((w) => w.path === worktreePath);
       const prRef = worktree?.linked?.pr?.ref;
       const prNumber = prRef?.number;
-      if (typeof prNumber !== "number") return {};
+      if (typeof prNumber !== "number" || prRef === undefined) return {};
 
       const counts = await getPRReviewThreads(worktreePath, prNumber);
       const { __clampedAt: _clamped, ...pathCounts } = counts as Record<string, number> & {

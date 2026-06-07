@@ -7,7 +7,7 @@ import type { PluginHostApi, PluginWorktreeSnapshot } from "../../../../../share
 
 const mockGetPRReviewThreads = vi.fn();
 const mockBuildPRFileUrl = vi.fn(
-  (repo: { owner: string; repo: string }, number: number, path: string) =>
+  (repo: { owner: string; repo: string }, number: number, path: string): string =>
     `https://example.test/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${path}`
 );
 

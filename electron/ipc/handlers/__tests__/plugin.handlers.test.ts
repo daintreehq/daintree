@@ -1718,7 +1718,10 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       },
     ]);
     const handler = getHandler();
-    const result = await handler({}, "worktree-diff:/r", ["a.ts"]);
+    const result = (await handler({}, "worktree-diff:/r", ["a.ts"])) as Record<
+      string,
+      { badge?: string; tooltip?: string; color?: string; url?: string }
+    >;
     expect(result["a.ts"]).toEqual({
       badge: "3",
       tooltip: "3 unresolved review comments",
