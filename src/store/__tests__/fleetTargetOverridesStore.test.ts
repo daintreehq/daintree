@@ -3,10 +3,24 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   useFleetTargetOverridesStore,
   __resetFleetTargetOverridesStoreForTesting,
+  subscribeFleetTargetOverridesPruning,
 } from "../fleetTargetOverridesStore";
+import { useFleetArmingStore } from "../fleetArmingStore";
+
+function resetArmingStore(): void {
+  useFleetArmingStore.setState({
+    armedIds: new Set<string>(),
+    armOrder: [],
+    armOrderById: {},
+    lastArmedId: null,
+    broadcastSignal: 0,
+    previewArmedIds: new Set<string>(),
+  });
+}
 
 beforeEach(() => {
   __resetFleetTargetOverridesStoreForTesting();
+  resetArmingStore();
 });
 
 describe("fleetTargetOverridesStore", () => {
@@ -85,6 +99,121 @@ describe("fleetTargetOverridesStore", () => {
       const state = useFleetTargetOverridesStore.getState();
       expect(state.payloadOverrides).toEqual({});
       expect(state.skippedIds.size).toBe(0);
+    });
+  });
+
+  describe("arming-store pruning subscription", () => {
+    it("drops a disarmed pane's override + skip while keeping still-armed panes", () => {
+      const overrides = useFleetTargetOverridesStore.getState();
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      overrides.setPayloadOverride("a", "for a");
+      overrides.setPayloadOverride("b", "for b");
+      overrides.setSkipped("a", true);
+      overrides.setSkipped("b", true);
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        useFleetArmingStore.getState().disarmId("a");
+        const state = useFleetTargetOverridesStore.getState();
+        expect(state.payloadOverrides["a"]).toBeUndefined();
+        expect(state.skippedIds.has("a")).toBe(false);
+        // B is still armed — its entries must survive.
+        expect(state.payloadOverrides["b"]).toBe("for b");
+        expect(state.skippedIds.has("b")).toBe(true);
+      } finally {
+        unsub();
+      }
+    });
+
+    it("clears everything in one shot when the fleet fully drains", () => {
+      const overrides = useFleetTargetOverridesStore.getState();
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      overrides.setPayloadOverride("a", "x");
+      overrides.setSkipped("b", true);
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        useFleetArmingStore.getState().clear();
+        const state = useFleetTargetOverridesStore.getState();
+        expect(state.payloadOverrides).toEqual({});
+        expect(state.skippedIds.size).toBe(0);
+      } finally {
+        unsub();
+      }
+    });
+
+    it("leaves untouched fields ref-identical when only one is pruned", () => {
+      const overrides = useFleetTargetOverridesStore.getState();
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      // Only a skip on the disarmed pane; no payload overrides at all.
+      overrides.setSkipped("a", true);
+      const overridesBefore = useFleetTargetOverridesStore.getState().payloadOverrides;
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        useFleetArmingStore.getState().disarmId("a");
+        const state = useFleetTargetOverridesStore.getState();
+        expect(state.skippedIds.has("a")).toBe(false);
+        // payloadOverrides never changed — identity preserved, no spurious re-render.
+        expect(state.payloadOverrides).toBe(overridesBefore);
+      } finally {
+        unsub();
+      }
+    });
+
+    it("is a no-op when every override/skip id is still armed", () => {
+      const overrides = useFleetTargetOverridesStore.getState();
+      useFleetArmingStore.getState().armIds(["a", "b"]);
+      overrides.setPayloadOverride("a", "x");
+      overrides.setSkipped("b", true);
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        const skippedBefore = useFleetTargetOverridesStore.getState().skippedIds;
+        const overridesBefore = useFleetTargetOverridesStore.getState().payloadOverrides;
+        // Arm a third pane — armedIds changes, but nothing needs pruning.
+        useFleetArmingStore.getState().armId("c");
+        const state = useFleetTargetOverridesStore.getState();
+        expect(state.skippedIds).toBe(skippedBefore);
+        expect(state.payloadOverrides).toBe(overridesBefore);
+      } finally {
+        unsub();
+      }
+    });
+
+    it("reconciles stale entries on initial registration (disarm while torn down)", () => {
+      const overrides = useFleetTargetOverridesStore.getState();
+      // Pane "a" is armed and "ghost" is not — simulating a pane disarmed while
+      // no subscription was registered. Both have entries.
+      useFleetArmingStore.getState().armIds(["a"]);
+      overrides.setPayloadOverride("a", "keep");
+      overrides.setPayloadOverride("ghost", "stale");
+      overrides.setSkipped("ghost", true);
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        const state = useFleetTargetOverridesStore.getState();
+        expect(state.payloadOverrides["ghost"]).toBeUndefined();
+        expect(state.skippedIds.has("ghost")).toBe(false);
+        expect(state.payloadOverrides["a"]).toBe("keep");
+      } finally {
+        unsub();
+      }
+    });
+
+    it("clears stale entries on registration when nothing is armed", () => {
+      const overrides = useFleetTargetOverridesStore.getState();
+      overrides.setPayloadOverride("ghost", "stale");
+      overrides.setSkipped("ghost", true);
+
+      const unsub = subscribeFleetTargetOverridesPruning();
+      try {
+        const state = useFleetTargetOverridesStore.getState();
+        expect(state.payloadOverrides).toEqual({});
+        expect(state.skippedIds.size).toBe(0);
+      } finally {
+        unsub();
+      }
     });
   });
 });

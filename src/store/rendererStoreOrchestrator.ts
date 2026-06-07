@@ -6,6 +6,7 @@ import {
   persistMruList,
 } from "./worktreeStore";
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
+import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
@@ -322,6 +323,12 @@ export function initStoreOrchestrator(): () => void {
   //     deterministically (previously this was a module-scope subscription in
   //     `fleetArmingStore.ts`).
   disposables.add(toDisposable(subscribeFleetArmingPanelPruning()));
+
+  // 5b. Fleet per-target overrides pruning: drop a pane's payload override /
+  //     skip flag when it leaves the armed set, so a disarmed-then-rearmed pane
+  //     isn't silently excluded from the next broadcast by a stale skip (#9973).
+  //     Same orchestrator-scoped lifecycle as the arming pruning above.
+  disposables.add(toDisposable(subscribeFleetTargetOverridesPruning()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

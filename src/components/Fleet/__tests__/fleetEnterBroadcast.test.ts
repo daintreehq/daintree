@@ -7,6 +7,7 @@ import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewSt
 import {
   useFleetTargetOverridesStore,
   __resetFleetTargetOverridesStoreForTesting,
+  subscribeFleetTargetOverridesPruning,
 } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -505,5 +506,31 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     await flush();
     expect(submitMock).toHaveBeenCalledTimes(2);
     expect(onSent).toHaveBeenCalled();
+  });
+
+  it("re-includes a disarmed-then-rearmed pane once pruning is wired (#9973)", async () => {
+    // Exact regression: skip "b", disarm it while the drafting popover is
+    // open, then re-arm it before Enter. Without the pruning subscription the
+    // stale `skippedIds` entry survives and the snapshot at Enter-press
+    // silently excludes "b" forever. With pruning wired, disarm clears the
+    // skip so the re-armed pane receives the broadcast.
+    arm(["a", "b"]);
+    const unsub = subscribeFleetTargetOverridesPruning();
+    try {
+      useFleetTargetOverridesStore.getState().setSkipped("b", true);
+      useFleetArmingStore.getState().disarmId("b");
+      useFleetArmingStore.getState().armId("b");
+
+      expect(useFleetTargetOverridesStore.getState().skippedIds.has("b")).toBe(false);
+
+      tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+      await flush();
+      await flush();
+
+      expect(submitMock).toHaveBeenCalledWith("a", "hello");
+      expect(submitMock).toHaveBeenCalledWith("b", "hello");
+    } finally {
+      unsub();
+    }
   });
 });
