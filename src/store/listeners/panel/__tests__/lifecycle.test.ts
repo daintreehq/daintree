@@ -504,6 +504,21 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
     expect(getPtyHeldDuration("term-1")).toBe(7000);
   });
 
+  it("ipc-cap-drop followed by a genuine pause-end still clears heldDurationMs", () => {
+    // The episode's eventual resume must not be masked by an earlier
+    // drop pulse — ordering guard for #9902.
+    setupPanel({ heldDurationMs: 7000 });
+    const handler = getReliabilityHandler();
+
+    handler({ metricType: "ipc-cap-drop", terminalId: "term-1" });
+    flushPanelStatusBuffer();
+    expect(getPtyHeldDuration("term-1")).toBe(7000);
+
+    handler({ metricType: "pause-end", terminalId: "term-1" });
+    flushPanelStatusBuffer();
+    expect(getPtyHeldDuration("term-1")).toBeUndefined();
+  });
+
   it("ignores non-pause-duration-gauge metric types", () => {
     setupPanel();
     const handler = getReliabilityHandler();

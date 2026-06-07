@@ -703,8 +703,9 @@ describe("pty-host adversarial", () => {
   });
 
   it("IPC_QUEUE_FULL_EMITS_DATA_LOSS_STATUS", async () => {
-    // Metrics on so the gated reliability-metric wire emission fires; the
-    // data-loss status event is ungated and fires regardless.
+    // Metrics on for the baseline case; the drop pulse itself passes
+    // forceEmit so it would fire either way (see the gate-bypass test
+    // below), and the data-loss status event is ungated regardless.
     vi.mocked(metricsEnabled).mockReturnValue(true);
     const parentPort = await loadHost();
     const terminal = createTerminal("t1");
@@ -756,7 +757,7 @@ describe("pty-host adversarial", () => {
       type: "terminal-reliability-metric",
       payload: {
         terminalId: "t1",
-        metricType: "suspend",
+        metricType: "ipc-cap-drop",
         bufferUtilization: 100,
       },
     });
@@ -774,6 +775,39 @@ describe("pty-host adversarial", () => {
           typeof msg === "object" && msg !== null && (msg as { type?: string }).type === "data"
       );
     expect(dataEvents).toHaveLength(0);
+  });
+
+  it("IPC_QUEUE_FULL_METRIC_BYPASSES_METRIC_GATE", async () => {
+    // The drop pulse is a data-loss signal: it must reach the wire even
+    // when metrics are gated off (forceEmit contract, #9902).
+    vi.mocked(metricsEnabled).mockReturnValue(false);
+    const parentPort = await loadHost();
+    const terminal = createTerminal("t1");
+    hostState.terminals.set("t1", terminal);
+
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.isAtCapacity.mockReturnValue(true);
+    ipcQueue.getUtilization.mockReturnValue(100);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(64));
+    await flushMicrotasks();
+
+    const reliabilityEvents = parentPort.postMessage.mock.calls
+      .map((call: unknown[]) => call[0])
+      .filter(
+        (msg: unknown): msg is Record<string, unknown> =>
+          typeof msg === "object" &&
+          msg !== null &&
+          (msg as { type?: string }).type === "terminal-reliability-metric"
+      );
+    expect(reliabilityEvents).toHaveLength(1);
+    expect(reliabilityEvents[0]).toMatchObject({
+      payload: { terminalId: "t1", metricType: "ipc-cap-drop" },
+    });
   });
 
   it("IPC_QUEUE_FULL_DROPPED_BYTES_USES_UTF8_BYTE_COUNT", async () => {
