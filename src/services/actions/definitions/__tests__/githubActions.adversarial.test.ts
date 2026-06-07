@@ -301,7 +301,6 @@ describe("githubClient import boundary", () => {
 
   const allowlist = new Set([
     "src/services/actions/definitions/githubActions.ts",
-    "src/services/actions/definitions/workflowCreationActions.ts",
     "src/hooks/useRepositoryStats.ts",
     "src/hooks/useGitHubRateLimit.ts",
     "src/hooks/useGitHubTokenHealth.ts",
