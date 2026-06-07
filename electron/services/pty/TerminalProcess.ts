@@ -1377,10 +1377,10 @@ export class TerminalProcess {
     this.osc94Parser.reset();
   }
 
-  setActivityMonitorTier(pollingIntervalMs: number): void {
-    // Track activity tier based on polling interval:
-    // 50ms = active (foreground), 500ms = background (project switched away)
-    this._activityTier = pollingIntervalMs <= 50 ? "active" : "background";
+  setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
+    // The tier is authoritative; the polling interval is only a cadence hint
+    // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms).
+    this._activityTier = tier;
 
     if (this.activityMonitor) {
       this.activityMonitor.setPollingInterval(pollingIntervalMs);

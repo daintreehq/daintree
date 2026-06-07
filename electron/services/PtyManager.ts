@@ -570,7 +570,7 @@ export class PtyManager extends EventEmitter {
       lastInputTime: terminalInfo.lastInputTime,
       lastOutputTime: terminalInfo.lastOutputTime,
       lastStateChange: terminalInfo.lastStateChange,
-      activityTier: terminal.getActivityTier() as "focused" | "visible" | "background",
+      activityTier: terminal.getActivityTier() === "active" ? "focused" : "background",
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
@@ -827,7 +827,7 @@ export class PtyManager extends EventEmitter {
         });
 
         // Keep monitors running but reduce polling frequency for background terminals
-        terminalProcess.setActivityMonitorTier(BACKGROUND_POLLING_MS);
+        terminalProcess.setActivityMonitorTier("background", BACKGROUND_POLLING_MS);
         // Notify caller to sync backpressure tier
         onTierChange?.(id, "background");
         // Process detector remains active to detect new agents
@@ -840,7 +840,7 @@ export class PtyManager extends EventEmitter {
         });
 
         // Active terminals get full-speed polling
-        terminalProcess.setActivityMonitorTier(ACTIVE_POLLING_MS);
+        terminalProcess.setActivityMonitorTier("active", ACTIVE_POLLING_MS);
         // Notify caller to sync backpressure tier
         onTierChange?.(id, "active");
         // Ensure process detector is running
@@ -854,10 +854,14 @@ export class PtyManager extends EventEmitter {
   /**
    * Set activity monitoring tier (active vs background).
    */
-  setActivityMonitorTier(id: string, interval: number): void {
+  setActivityMonitorTier(
+    id: string,
+    tier: "active" | "background",
+    pollingIntervalMs: number
+  ): void {
     const terminal = this.registry.get(id);
     if (terminal) {
-      terminal.setActivityMonitorTier(interval);
+      terminal.setActivityMonitorTier(tier, pollingIntervalMs);
     }
   }
 

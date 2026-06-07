@@ -1192,6 +1192,7 @@ describe("pty-host adversarial", () => {
       };
       expect(ptyManager.setActivityMonitorTier).toHaveBeenCalledWith(
         "t1",
+        expected,
         expected === "active" ? 50 : 500
       );
     }
