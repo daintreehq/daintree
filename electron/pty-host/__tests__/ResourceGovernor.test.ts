@@ -377,12 +377,7 @@ describe("ResourceGovernor", () => {
             .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
         });
 
-        vi.spyOn(process, "memoryUsage").mockReturnValue({
-          heapUsed: 900 * 1024 * 1024,
-          rss: 1024 * 1024 * 1024,
-          external: 0,
-          arrayBuffers: 0,
-        } as ReturnType<typeof process.memoryUsage>);
+        mockMemoryUsage(450);
 
         const governor = new ResourceGovernor(deps);
         governor.start();
@@ -395,12 +390,7 @@ describe("ResourceGovernor", () => {
         coordinator.pause(queueToken);
 
         // Now lower memory to trigger disengage
-        vi.spyOn(process, "memoryUsage").mockReturnValue({
-          heapUsed: 500 * 1024 * 1024,
-          rss: 1024 * 1024 * 1024,
-          external: 0,
-          arrayBuffers: 0,
-        } as ReturnType<typeof process.memoryUsage>);
+        mockMemoryUsage(250);
 
         raw.resume.mockClear();
         (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
