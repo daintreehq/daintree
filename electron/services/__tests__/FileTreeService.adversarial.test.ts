@@ -250,7 +250,7 @@ describe("FileTreeService adversarial", () => {
 
   it("WINDOWS_PATH_NORMALIZES_FOR_IGNORE", async () => {
     shared.readdir.mockResolvedValueOnce([d("ignored.txt"), d("visible.txt")]);
-    shared.checkIgnoredPaths.mockImplementationOnce(async (cwd, paths: string[]) => {
+    shared.checkIgnoredPaths.mockImplementationOnce(async (_cwd, paths: string[]) => {
       expect(paths).toEqual(["nested/dir/ignored.txt", "nested/dir/visible.txt"]);
       return new Set(["nested/dir/ignored.txt"]);
     });
@@ -268,7 +268,7 @@ describe("FileTreeService adversarial", () => {
 
   it("DOT_GIT_EXCLUDED_FROM_CHECK_IGNORE", async () => {
     shared.readdir.mockResolvedValueOnce([d(".git", { dir: true }), d("src", { dir: true })]);
-    shared.checkIgnoredPaths.mockImplementationOnce(async (cwd, paths: string[]) => {
+    shared.checkIgnoredPaths.mockImplementationOnce(async (_cwd, paths: string[]) => {
       expect(paths).toEqual(["src"]);
       return new Set();
     });
