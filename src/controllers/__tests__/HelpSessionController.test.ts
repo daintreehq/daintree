@@ -921,6 +921,13 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
       ttlMs: 900_000,
     });
     expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    grantLifecycleListeners[0]?.({
+      type: "tier.decayed",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
     ctrl.stop();
   });
 
@@ -947,9 +954,7 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     ctrl.stop();
   });
 
-  it("revokeGrant() revokes the session's grants and flags the in-flight state", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
+  function issueGrant() {
     grantLifecycleListeners[0]?.({
       type: "grant.issued",
       sessionId: "s1",
@@ -957,12 +962,86 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
       ttlMs: 900_000,
       expiresAt: Date.now() + 900_000,
     });
+  }
+
+  it("revokeGrant() revokes the session's grants and clears the countdown once the IPC settles", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
     ctrl.revokeGrant();
     expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
     expect(mockMcpRevokeSessionGrants).toHaveBeenCalledWith({ sessionId: "s1" });
+    // Authoritative renderer-side fallback: even with no `grant.revoked`
+    // lifecycle event echoed back, the countdown clears when the IPC settles.
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+      expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    });
+    ctrl.stop();
+  });
+
+  it("revokeGrant() is a no-op while a revoke is already in flight", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
+      })
+    );
+    ctrl.revokeGrant();
+    ctrl.revokeGrant();
+    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledTimes(1);
+    resolveRevoke?.();
+    ctrl.stop();
+  });
+
+  it("revokeGrant() does not wipe a newer grant that arrived before the IPC settled", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
+      })
+    );
+    ctrl.revokeGrant();
+    // A new grant for a different tool lands while the revoke is in flight.
+    const newerExpiry = Date.now() + 900_000;
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t2",
+      ttlMs: 900_000,
+      expiresAt: newerExpiry,
+    });
+    resolveRevoke?.();
     await vi.waitFor(() => {
       expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
     });
+    // The settle must not clear the newer t2 grant — only the one we revoked.
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t2");
+    ctrl.stop();
+  });
+
+  it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>(() => {
+        // never resolves — the teardown happens first
+      })
+    );
+    ctrl.revokeGrant();
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.sessionId = "sess-1";
+    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
     ctrl.stop();
   });
 

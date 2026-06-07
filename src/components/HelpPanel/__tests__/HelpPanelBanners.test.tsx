@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
@@ -335,6 +335,35 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
       />
     );
     expect(getByTestId("help-grant-active-banner").textContent).toContain("0:00");
+  });
+
+  it("ticks the countdown down over time and stops after unmount (no leak)", () => {
+    vi.useFakeTimers();
+    try {
+      const base = Date.now();
+      const { getByTestId, unmount } = render(
+        <HelpPanelBanners
+          {...baseProps()}
+          activeGrant={{ sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: base + 5_000 }}
+        />
+      );
+      expect(getByTestId("help-grant-active-banner").textContent).toContain("0:05");
+      // Advance both wall-clock and the interval so the derived value updates.
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(getByTestId("help-grant-active-banner").textContent).toContain("0:03");
+      // Unmount must clear the interval — advancing further is a no-op, not a
+      // post-unmount state update.
+      unmount();
+      expect(() =>
+        act(() => {
+          vi.advanceTimersByTime(5_000);
+        })
+      ).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("wires Revoke access to onRevokeGrant and disables it while revoking", () => {

@@ -984,16 +984,19 @@ export class HelpSessionController {
   /**
    * End the live "Approve once" grant early (#10042). Revokes every grant on
    * the session — the help session only ever holds one per-tool grant at a
-   * time, so this maps to the single banner the user sees. The authoritative
-   * `activeGrant` clear comes from the `grant.revoked` lifecycle event (reason
-   * `user`), which clears the banner silently; `isRevokingGrant` keeps the
-   * button disabled until the IPC settles. No `ConfirmDialog` — this is a D1
-   * action whose inverse (re-approve) is one tool call away.
+   * time, so this maps to the single banner the user sees. Normally the
+   * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
+   * the `.finally` also clears `activeGrant` as a renderer-authoritative
+   * fallback so a dropped event (WebContents torn down before it fired) can't
+   * leave a zombie countdown. The clear is scoped to the exact `(session,
+   * toolId)` we revoked, so it never wipes a newer grant that arrived in the
+   * meantime. No `ConfirmDialog` — this is a D1 action whose inverse
+   * (re-approve) is one tool call away.
    */
   revokeGrant(): void {
     const active = this._snapshot.activeGrant;
     if (!active || this._snapshot.isRevokingGrant) return;
-    const { sessionId } = active;
+    const { sessionId, toolId } = active;
     this._patch({ isRevokingGrant: true });
     safeFireAndForget(
       window.electron.mcpServer
@@ -1008,7 +1011,12 @@ export class HelpSessionController {
           });
         })
         .finally(() => {
-          this._patch({ isRevokingGrant: false });
+          const current = this._snapshot.activeGrant;
+          const stillSame = current?.sessionId === sessionId && current?.toolId === toolId;
+          this._patch({
+            isRevokingGrant: false,
+            ...(stillSame ? { activeGrant: null } : {}),
+          });
         }),
       { context: "HelpPanel:revokeGrant" }
     );
@@ -1432,7 +1440,9 @@ export class HelpSessionController {
 
   private _clearGrantState(): void {
     this._clearGrantEndedTimer();
-    this._patch({ activeGrant: null, grantEnded: null });
+    // Clear `isRevokingGrant` too: a teardown mid-revoke would otherwise leak
+    // a stuck-disabled "Revoke access" button into the next session's grant.
+    this._patch({ activeGrant: null, grantEnded: null, isRevokingGrant: false });
   }
 
   private _clearGrantEndedTimer(): void {
