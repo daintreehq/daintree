@@ -265,6 +265,7 @@ function makeGetCursorLine(term: HeadlessTerminalType): () => string | null {
 
 type CursorBufferLine = {
   getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
+  translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string;
 };
 
 type CursorBuffer = {
