@@ -10,6 +10,7 @@ import {
 import type { StagingStatus, GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
+import type { FileDecoration } from "@shared/types/forge";
 import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 
@@ -116,14 +117,14 @@ export interface ReviewHubContentProps {
 interface BaseBranchFileRowProps {
   file: CrossWorktreeFile;
   onClick: () => void;
-  unresolvedCount?: number;
+  unresolvedDecoration?: FileDecoration;
   onBadgeClick?: () => void;
 }
 
 function BaseBranchFileRow({
   file,
   onClick,
-  unresolvedCount,
+  unresolvedDecoration,
   onBadgeClick,
 }: BaseBranchFileRowProps) {
   const config = getBaseBranchStatusConfig(file.status);
@@ -134,6 +135,14 @@ function BaseBranchFileRow({
   const insertions = file.insertions ?? 0;
   const deletions = file.deletions ?? 0;
   const hasChurn = insertions > 0 || deletions > 0;
+  // Provider-authored badge semantics: the count lives in `decoration.badge`
+  // and the accessible label in `decoration.tooltip` — the host must never
+  // re-derive English phrases from a numeric count (issue #9953). The
+  // badge is rendered only when a provider explicitly attached a
+  // non-empty `badge`; the click target only when a `url` is present.
+  const hasBadge =
+    typeof unresolvedDecoration?.badge === "string" && unresolvedDecoration.badge.length > 0;
+  const badgeLabel = unresolvedDecoration?.tooltip ?? `Unresolved review comments on ${file.path}`;
 
   return (
     <TruncatedTooltip content={file.path}>
@@ -192,20 +201,23 @@ function BaseBranchFileRow({
             {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
           </div>
         )}
-        {unresolvedCount !== undefined && unresolvedCount > 0 && (
+        {hasBadge && (
           <button
             type="button"
             onClick={onBadgeClick}
-            aria-label={`${unresolvedCount} unresolved review comment${unresolvedCount !== 1 ? "s" : ""} on ${file.path}`}
+            aria-label={badgeLabel}
+            disabled={!onBadgeClick}
             className={cn(
               "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 ml-2 rounded-full",
               "text-[10px] font-semibold tabular-nums",
               "bg-status-warning/15 text-status-warning",
-              "hover:bg-status-warning/25 transition-colors cursor-pointer",
+              onBadgeClick
+                ? "hover:bg-status-warning/25 transition-colors cursor-pointer"
+                : "cursor-default",
               "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
             )}
           >
-            {unresolvedCount}
+            {unresolvedDecoration!.badge}
           </button>
         )}
       </div>
@@ -1735,27 +1747,22 @@ export function ReviewHubContent({
                   </span>
                 </div>
                 <div className="px-2 py-1 flex flex-col gap-0.5">
-                  {sortedBaseBranchFiles.map((file) => (
-                    <BaseBranchFileRow
-                      key={`${file.status}:${file.path}`}
-                      file={file}
-                      onClick={() => setSelectedBaseBranchFile(file)}
-                      unresolvedCount={(() => {
-                        const badge = reviewDecorations[file.path]?.badge;
-                        if (badge === undefined) return undefined;
-                        const n = Number.parseInt(badge, 10);
-                        return Number.isNaN(n) ? undefined : n;
-                      })()}
-                      onBadgeClick={
-                        worktreePR?.prUrl
-                          ? () =>
-                              void systemClient.openExternal(
-                                `${worktreePR.prUrl}/files?file=${encodeURIComponent(file.path)}`
-                              )
-                          : undefined
-                      }
-                    />
-                  ))}
+                  {sortedBaseBranchFiles.map((file) => {
+                    const decoration = reviewDecorations[file.path];
+                    return (
+                      <BaseBranchFileRow
+                        key={`${file.status}:${file.path}`}
+                        file={file}
+                        onClick={() => setSelectedBaseBranchFile(file)}
+                        unresolvedDecoration={decoration}
+                        onBadgeClick={
+                          decoration?.url
+                            ? () => void systemClient.openExternal(decoration.url as string)
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
                 </div>
               </div>
             ) : null

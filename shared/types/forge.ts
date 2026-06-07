@@ -500,6 +500,20 @@ export interface ForgeProviderImpl {
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildCommitsUrl(repo: RepoRef, branch?: string): string;
+  /**
+   * Optional. Build a deep-link to a specific file's entry on a PR's
+   * "Files changed" view. The provider knows its own anchor algorithm
+   * (GitHub hashes the path bytes; GitLab uses a different hash + prefix;
+   * Bitbucket uses a literal path) so the renderer never reconstructs a
+   * provider-shaped URL. The renderer consumes the result via
+   * {@link FileDecoration.url}; this method exists for the provider-side
+   * decoration hook to call. The `path` is the raw, repository-relative
+   * path as the provider's review-thread data returns it — do not
+   * URL-encode, the provider decides whether to hash the raw bytes or the
+   * encoded form. Returns nothing (omit the field) when the provider
+   * doesn't support PR-file deep-links.
+   */
+  buildPRFileUrl?(repo: RepoRef, number: number, path: string): string;
 
   // Mutations — providers that don't support a mutation throw "Not supported".
   /**
@@ -582,6 +596,7 @@ export type ForgeCapabilityHint =
   | "milestones"
   | "batch-branch-prs"
   | "identity"
+  | "pr-files"
   | (string & {});
 
 /**
@@ -722,6 +737,15 @@ export interface FileDecoration {
   tooltip?: string;
   /** Opaque color token/class passed through to `className` by the host. */
   color?: string;
+  /**
+   * Optional provider-authored deep-link for a clickable decoration. The host
+   * opens this through `systemClient.openExternal` when present; the
+   * decoration renders as non-interactive when absent. Built by the
+   * decoration provider via the active forge's `buildPRFileUrl` (or a
+   * provider-specific equivalent) — the host never reconstructs a
+   * provider-shaped URL from a base PR URL.
+   */
+  url?: string;
 }
 
 /**

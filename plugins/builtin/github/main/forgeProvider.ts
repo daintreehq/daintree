@@ -1,4 +1,5 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
+import { createHash } from "node:crypto";
 import { configure } from "safe-stable-stringify";
 import type {
   AuthValidation,
@@ -1262,6 +1263,18 @@ export const githubForgeProvider: ForgeProviderImpl = {
   buildCommitsUrl(repo: RepoRef, branch?: string): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/commits`;
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
+  },
+
+  // GitHub's `Files changed` view deep-links to a specific file via a
+  // `#diff-<sha256-of-utf8-path>` anchor (the SHA-256 is computed from the
+  // file's UTF-8 path bytes, not the URL-encoded form). The hash input must
+  // match what the plugin's `getPRReviewThreads` data path uses for the
+  // file path — if that path is normalized upstream, this hash must mirror
+  // the same normalization. Base-SHA-agnostic: github.com resolves the
+  // anchor to the current diff on the PR's "Files changed" tab.
+  buildPRFileUrl(repo: RepoRef, number: number, path: string): string {
+    const hash = createHash("sha256").update(path, "utf8").digest("hex");
+    return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${hash}`;
   },
 
   async createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {

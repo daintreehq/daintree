@@ -33,6 +33,8 @@ const {
   listRemoteCommitsMock,
   listCommitsMock,
   actionDispatchMock,
+  getDecorationsMock,
+  onDecorationsChangedMock,
   worktreeStoreData,
 } = vi.hoisted(() => ({
   getStagingStatusMock: vi.fn(),
@@ -69,6 +71,8 @@ const {
   listRemoteCommitsMock: vi.fn(),
   listCommitsMock: vi.fn().mockResolvedValue({ items: [], hasMore: false, total: 0 }),
   actionDispatchMock: vi.fn().mockResolvedValue({ ok: true }),
+  getDecorationsMock: vi.fn().mockResolvedValue({}),
+  onDecorationsChangedMock: vi.fn().mockReturnValue(vi.fn()),
   worktreeStoreData: {
     current: new Map<string, Partial<WorktreeState>>([
       [
@@ -411,6 +415,8 @@ describe("ReviewHub", () => {
         classification: match ? { code: match[0] } : null,
       };
     });
+    getDecorationsMock.mockReset().mockResolvedValue({});
+    onDecorationsChangedMock.mockReset().mockReturnValue(vi.fn());
 
     Object.defineProperty(window, "electron", {
       value: {
@@ -437,6 +443,14 @@ describe("ReviewHub", () => {
         },
         system: { openInEditor: openInEditorMock },
         worktree: { onUpdate: onUpdateMock },
+        plugin: {
+          // Default to no decorations; per-describe blocks can override via
+          // `getDecorationsMock.mockResolvedValueOnce(...)` once a worktree
+          // PR is set (the scope is empty when no PR is linked, so the
+          // hook skips the IPC anyway).
+          getDecorations: getDecorationsMock,
+          onDecorationsChanged: onDecorationsChangedMock,
+        },
       },
       writable: true,
       configurable: true,
@@ -1224,6 +1238,214 @@ describe("ReviewHub", () => {
       expect(screen.queryByText("passing")).toBeNull();
       expect(screen.queryByText("failing")).toBeNull();
       expect(screen.queryByText("pending")).toBeNull();
+    });
+  });
+
+  // Issue #9953: the review-thread badge on a base-branch file row must
+  // open a provider-authored deep-link (decoration.url), not a hardcoded
+  // GitHub-shaped `${prUrl}/files?file=...` URL the renderer used to
+  // concatenate. The aria-label must be the provider-authored tooltip,
+  // not a count re-derived via `Number.parseInt(decoration.badge)`.
+  describe("review-thread badge deep-link (#9953)", () => {
+    const deepLinkA =
+      "https://github.com/test/repo/pull/42/files#diff-deadbeefcafebabe0000000000000000000000000000000000000000000000";
+
+    function setWorktreePRWithLink() {
+      const existing = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", {
+        ...existing,
+        linked: {
+          providerId: "github",
+          pr: {
+            ref: {
+              providerId: "github",
+              owner: "test",
+              repo: "test",
+              number: 42,
+              rawData: {},
+            },
+            state: "open",
+            url: "https://github.com/test/repo/pull/42",
+          },
+        },
+      });
+    }
+
+    beforeEach(() => {
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [
+          { status: "M", path: "src/component.tsx", insertions: 3, deletions: 1 },
+          { status: "A", path: "src/new-file.ts", insertions: 7, deletions: 0 },
+        ],
+      });
+    });
+
+    async function switchToBaseBranchWithPR() {
+      setWorktreePRWithLink();
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /vs main/i }));
+      });
+      await waitFor(() => screen.getByText("component.tsx"));
+    }
+
+    it("opens the provider-authored deep-link when the badge is clicked", async () => {
+      getDecorationsMock.mockResolvedValueOnce({
+        "src/component.tsx": {
+          badge: "3",
+          tooltip: "3 unresolved review comments",
+          color: "text-status-warning",
+          url: deepLinkA,
+        },
+      });
+
+      await switchToBaseBranchWithPR();
+
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
+      fireEvent.click(badge);
+
+      expect(openExternalMock).toHaveBeenCalledWith(deepLinkA);
+    });
+
+    it("does not concatenate a GitHub-shaped ?file= query onto the PR URL", async () => {
+      // Regression for the original bug: the badge used to open
+      // `${worktreePR.prUrl}/files?file=${encodeURIComponent(file.path)}`,
+      // which github.com doesn't honor.
+      getDecorationsMock.mockResolvedValueOnce({
+        "src/component.tsx": {
+          badge: "3",
+          tooltip: "3 unresolved review comments",
+          color: "text-status-warning",
+          url: deepLinkA,
+        },
+      });
+
+      await switchToBaseBranchWithPR();
+
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
+      fireEvent.click(badge);
+
+      const calledWith = openExternalMock.mock.calls[0]?.[0] as string | undefined;
+      expect(calledWith).toBeDefined();
+      // No legacy `?file=` query
+      expect(calledWith).not.toMatch(/\?file=/);
+      // No `/files?file=` shape at all — the provider's URL is the source
+      // of truth and may or may not contain `/files`.
+      expect(calledWith).not.toMatch(/\/files\?/);
+    });
+
+    it("uses decoration.tooltip verbatim as the aria-label (no Number.parseInt re-derivation)", async () => {
+      getDecorationsMock.mockResolvedValueOnce({
+        "src/component.tsx": {
+          badge: "3",
+          // Provider-authored semantic text, including the
+          // "(partial count)" annotation. The host must NOT re-derive
+          // a count-based label like "3 unresolved review comments on
+          // src/component.tsx".
+          tooltip: "3 unresolved review comments (partial count)",
+          color: "text-status-warning",
+          url: deepLinkA,
+        },
+      });
+
+      await switchToBaseBranchWithPR();
+
+      // The exact provider text is the accessible label.
+      expect(
+        await screen.findByRole("button", {
+          name: "3 unresolved review comments (partial count)",
+        })
+      ).toBeDefined();
+      // The count re-derivation label must NOT appear.
+      expect(
+        screen.queryByRole("button", {
+          name: /3 unresolved review comments on src\/component\.tsx/i,
+        })
+      ).toBeNull();
+    });
+
+    it("renders the decoration.badge as the visible text", async () => {
+      getDecorationsMock.mockResolvedValueOnce({
+        "src/component.tsx": {
+          badge: "3",
+          tooltip: "3 unresolved review comments",
+          color: "text-status-warning",
+          url: deepLinkA,
+        },
+      });
+
+      await switchToBaseBranchWithPR();
+
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
+      // Visible text equals the provider's badge value, not a re-parsed count
+      expect(badge.textContent).toBe("3");
+    });
+
+    it("renders the badge but disables click when decoration.url is absent", async () => {
+      // The provider shipped the badge + tooltip + color but the deep-link
+      // capability is missing (e.g. a future non-GitHub provider that
+      // hasn't implemented `buildPRFileUrl` yet). The badge stays visible
+      // as an indicator; the click target is disabled so a tooltip-only
+      // row doesn't 404.
+      getDecorationsMock.mockResolvedValueOnce({
+        "src/component.tsx": {
+          badge: "3",
+          tooltip: "3 unresolved review comments",
+          color: "text-status-warning",
+        },
+      });
+
+      await switchToBaseBranchWithPR();
+
+      const badge = await screen.findByRole("button", {
+        name: /3 unresolved review comments/i,
+      });
+      expect(badge.hasAttribute("disabled")).toBe(true);
+
+      fireEvent.click(badge);
+      // Click must NOT route through the legacy prUrl-shape fallback
+      // (the old code did `${prUrl}/files?file=...` host-side).
+      expect(openExternalMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to a host-side label when the provider omits tooltip", async () => {
+      // The host keeps a narrow fallback label for any provider that
+      // forgets `tooltip` — the badge is still informative, just less
+      // semantic. This documents the carve-out so a future PR that
+      // removes the fallback knows the contract.
+      getDecorationsMock.mockResolvedValueOnce({
+        "src/component.tsx": {
+          badge: "3",
+          color: "text-status-warning",
+          url: deepLinkA,
+        },
+      });
+
+      await switchToBaseBranchWithPR();
+
+      // `findByRole` polls until the badge appears (the decoration
+      // resolves through an async IPC round-trip, so a single
+      // `getByRole` after `switchToBaseBranchWithPR` can race the
+      // state update under load).
+      const badge = await screen.findByRole("button", {
+        name: /Unresolved review comments on/i,
+      });
+      expect(badge.textContent).toBe("3");
+      // Click still routes through the deep-link.
+      fireEvent.click(badge);
+      expect(openExternalMock).toHaveBeenCalledWith(deepLinkA);
     });
   });
 

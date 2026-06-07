@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
 import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
@@ -1465,6 +1466,78 @@ describe("buildPRsUrl", () => {
       githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "all" })
     );
     expect(q).toBe("bug");
+  });
+});
+
+describe("buildPRFileUrl", () => {
+  // GitHub's "Files changed" deep-link uses a `#diff-<sha256-of-utf8-path>`
+  // anchor. The hash is over the raw UTF-8 path bytes (not URL-encoded) and
+  // the URL must NOT use the legacy `?file=<path>` query — github.com
+  // doesn't honor it. The renderer never reconstructs this URL; the
+  // decoration provider calls into here.
+  function parseDeepLink(url: string): {
+    origin: string;
+    pathname: string;
+    hash: string;
+    search: string;
+  } {
+    const parsed = new URL(url);
+    return {
+      origin: parsed.origin,
+      pathname: parsed.pathname,
+      hash: parsed.hash,
+      search: parsed.search,
+    };
+  }
+
+  it("returns a /pull/<n>/files URL with a #diff-<sha256> fragment", () => {
+    const url = githubForgeProvider.buildPRFileUrl!(repo, 42, "src/a.ts");
+    const { pathname, hash, search } = parseDeepLink(url);
+    expect(pathname).toBe("/owner/repo/pull/42/files");
+    expect(search).toBe(""); // The legacy `?file=` shape must NOT be used
+    expect(hash).toMatch(/^#diff-[0-9a-f]{64}$/);
+  });
+
+  it("hashes the path as raw UTF-8 bytes, not URL-encoded form", () => {
+    // The SHA-256 of "src/has space.ts" must match the raw-byte form.
+    // If the implementation accidentally URL-encodes first, the hash will
+    // diverge from the github.com anchor (which hashes the raw path).
+    const path = "src/has space.ts";
+    const url = githubForgeProvider.buildPRFileUrl!(repo, 1, path);
+    const { hash } = parseDeepLink(url);
+    const rawHash = createHash("sha256").update(path, "utf8").digest("hex");
+    const encodedHash = createHash("sha256").update(encodeURIComponent(path), "utf8").digest("hex");
+    expect(hash).toBe(`#diff-${rawHash}`);
+    // Sanity: URL-encoded form would produce a DIFFERENT hash. If the
+    // implementation encoded the path first, the raw-hash assertion above
+    // would fail — this is just a documentation of why those two are
+    // expected to differ.
+    expect(rawHash).not.toBe(encodedHash);
+  });
+
+  it("produces different hashes for different paths", () => {
+    const url1 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/a.ts");
+    const url2 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/b.ts");
+    expect(parseDeepLink(url1).hash).not.toBe(parseDeepLink(url2).hash);
+  });
+
+  it("produces the same hash for the same path on different PR numbers", () => {
+    const url1 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/a.ts");
+    const url2 = githubForgeProvider.buildPRFileUrl!(repo, 999, "src/a.ts");
+    const hash1 = parseDeepLink(url1).hash;
+    const hash2 = parseDeepLink(url2).hash;
+    expect(hash1).toBe(hash2);
+    // Path component is the only thing that should differ
+    expect(parseDeepLink(url1).pathname).toBe("/owner/repo/pull/1/files");
+    expect(parseDeepLink(url2).pathname).toBe("/owner/repo/pull/999/files");
+  });
+
+  it("uses the well-known SHA-256 of 'src/a.ts' as the anchor", () => {
+    // Locks the algorithm: any future change to the hash function or input
+    // encoding would break this fixture.
+    const expected = createHash("sha256").update("src/a.ts", "utf8").digest("hex");
+    const url = githubForgeProvider.buildPRFileUrl!(repo, 42, "src/a.ts");
+    expect(parseDeepLink(url).hash).toBe(`#diff-${expected}`);
   });
 });
 
