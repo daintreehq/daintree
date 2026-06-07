@@ -90,13 +90,13 @@ The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSeq
 
 Visible changes add heat. Silence decays heat exponentially. The model emits a `busy` hint only when heat is above the working threshold for the working dwell. It emits an `idle` hint only when heat has cooled below the waiting threshold for the waiting dwell.
 
-The important design rule is that status indicators are high-value activity evidence. A one-character spinner change should not be treated the same as a cursor blink or layout reflow. If the implementation needs separate weights, the intended categories are:
+The important design rule is that status indicators are high-value activity evidence. A one-character spinner change should not be treated the same as a cursor blink or layout reflow. Observations carry a `signalKind` (#9874):
 
-- content output: ordinary visible text changes;
-- activity indicator: spinner, status line, token counter, time counter;
-- decorative/noise: changes known not to represent agent progress.
+- `content`: ordinary visible text changes — max change gap `900ms`, minimum `4` changed samples;
+- `indicator`: spinner, status line, token counter, time counter — max change gap `2000ms`, minimum `2` changed samples, so a 1Hz countdown or elapsed-time tick can still recover waiting→working;
+- `decorative`: changes known not to represent agent progress — heat-capped and unable to drive working by itself.
 
-Only the decorative/noise category should be unable to drive working by itself.
+`ActivityMonitor` owns the classification: the simple-output data path latches `lastStatusRewriteAt` when raw PTY data matches `isStatusLineRewrite`, and the polling cycle classifies a visible-content change as `indicator` when that latch is within `SPINNER_ACTIVE_MS` (`1500ms`). The tight `900ms` content gap (introduced to guard against scroll/resize repaint bursts) is unchanged for unclassified changes. Both directions of this timing contract are pinned by tests: 1Hz indicator output must recover, and 1Hz generic content must not.
 
 ### Waiting And Prompt Layer
 
@@ -223,7 +223,6 @@ Important scenarios:
 ## Future Work
 
 - Add marker-anchored visible snapshots for structural resize immunity.
-- Add an explicit activity-indicator weight in the temperature model so spinner and status-line changes are stronger than generic one-character churn.
 - Add transition telemetry that records temperature, heat, changed chars, trigger, and suppression reason.
 - Add golden trace replay from real terminal captures.
 - Add property tests for decay invariants, dwell impossibility, resize suppression, and external temperature reads.

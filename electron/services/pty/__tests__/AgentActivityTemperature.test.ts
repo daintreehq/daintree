@@ -45,6 +45,50 @@ describe("AgentActivityTemperature", () => {
     expect(model.getTemperature()).toBeGreaterThanOrEqual(70);
   });
 
+  it("recovers to busy for once-per-second indicator changes", () => {
+    const model = new AgentActivityTemperature();
+
+    model.seedSnapshot(snapshot("retrying in 9s"), 1000);
+
+    const opts = { signalKind: "indicator" as const };
+    expect(model.observeSnapshot(2000, snapshot("retrying in 8s"), opts).stateHint).toBeUndefined();
+    expect(model.observeSnapshot(3000, snapshot("retrying in 7s"), opts).stateHint).toBeUndefined();
+
+    const result = model.observeSnapshot(4000, snapshot("retrying in 6s"), opts);
+    expect(result.stateHint).toBe("busy");
+    expect(result.temperature).toBeGreaterThanOrEqual(70);
+  });
+
+  it("does not recover for indicator changes spaced beyond the indicator gap", () => {
+    const model = new AgentActivityTemperature();
+
+    model.seedSnapshot(snapshot("tick 0"), 1000);
+
+    const opts = { signalKind: "indicator" as const };
+    expect(model.observeSnapshot(3500, snapshot("tick 1"), opts).stateHint).toBeUndefined();
+    expect(model.observeSnapshot(6000, snapshot("tick 2"), opts).stateHint).toBeUndefined();
+    expect(model.observeSnapshot(8500, snapshot("tick 3"), opts).stateHint).toBeUndefined();
+    expect(model.observeSnapshot(11000, snapshot("tick 4"), opts).stateHint).toBeUndefined();
+  });
+
+  it("requires fresh indicator evidence after a resize", () => {
+    const model = new AgentActivityTemperature();
+
+    model.seedSnapshot(snapshot("retrying in 9s"), 1000);
+
+    const opts = { signalKind: "indicator" as const };
+    model.observeSnapshot(2000, snapshot("retrying in 8s"), opts);
+    model.observeSnapshot(3000, snapshot("retrying in 7s"), opts);
+
+    model.noteResize(3100);
+    expect(model.observeSnapshot(3400, snapshot("reflowed"), opts).suppressed).toBe(true);
+    expect(model.observeSnapshot(3700, snapshot("post resize baseline"), opts).seeded).toBe(true);
+
+    expect(model.observeSnapshot(4700, snapshot("retrying in 5s"), opts).stateHint).toBeUndefined();
+    expect(model.observeSnapshot(5700, snapshot("retrying in 4s"), opts).stateHint).toBeUndefined();
+    expect(model.observeSnapshot(6700, snapshot("retrying in 3s"), opts).stateHint).toBe("busy");
+  });
+
   it("cools through the waiting threshold only after six-second quiet dwell", () => {
     const model = new AgentActivityTemperature();
 
@@ -109,6 +153,20 @@ describe("AgentActivityTemperature", () => {
       const result = model.observeDelta(1000 + i * 250, {
         changedChars: 1,
         decorative: true,
+      });
+      expect(result.stateHint).toBeUndefined();
+    }
+
+    expect(model.getTemperature()).toBeLessThan(70);
+  });
+
+  it("treats signalKind decorative like the decorative flag", () => {
+    const model = new AgentActivityTemperature();
+
+    for (let i = 0; i < 20; i += 1) {
+      const result = model.observeDelta(1000 + i * 250, {
+        changedChars: 1,
+        signalKind: "decorative",
       });
       expect(result.stateHint).toBeUndefined();
     }
