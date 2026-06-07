@@ -1,7 +1,8 @@
-import type { ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenuGroup,
   DropdownMenuLabel,
@@ -9,6 +10,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SavedFleetRow } from "./SavedFleetRow";
 import { SaveFleetForm } from "./SaveFleetForm";
+import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
+import { rankSavedFleets, rankPredicateFleets } from "./fleetRanking";
+import type { FleetSavedScope } from "@shared/types";
 
 interface SavedFleetsSectionProps {
   onRequestDelete: (id: string) => void;
@@ -32,25 +36,59 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
   const savedScopes = useProjectSettingsStore(
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
+  // Subscribe so the stale sub-group re-derives when panes open/close. The
+  // value itself feeds the memo's dep array; the per-row aria-disabled check
+  // in SavedFleetRow reads panel state directly so it stays in sync too.
+  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
 
-  const snapshotScopes = savedScopes.filter((s) => s.kind === "snapshot");
-  const smartSetScopes = savedScopes.filter((s) => s.kind === "predicate" && !isPresetPredicate(s));
+  const { snapshotUsable, snapshotStale, predicateRanked } = useMemo(() => {
+    const snapshots: FleetSavedScope[] = [];
+    const predicates: FleetSavedScope[] = [];
+    for (const scope of savedScopes) {
+      if (scope.kind === "snapshot") {
+        snapshots.push(scope);
+      } else if (!isPresetPredicate(scope)) {
+        predicates.push(scope);
+      }
+    }
+    const now = Date.now();
+    const isStaleById = new Map<string, boolean>();
+    for (const scope of snapshots) {
+      isStaleById.set(scope.id, computeSavedScopePaneCount(scope) === 0);
+    }
+    const { usable, stale } = rankSavedFleets(snapshots, now, isStaleById);
+    return {
+      snapshotUsable: usable,
+      snapshotStale: stale,
+      predicateRanked: rankPredicateFleets(predicates, now),
+    };
+    // panelsById is in the dep list to re-rank when the panel set changes;
+    // savedScopes is the primary driver of re-rank.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- panelsById is a render-trigger
+  }, [savedScopes, panelsById]);
+
+  const hasSnapshots = snapshotUsable.length + snapshotStale.length > 0;
+  const showStaleSeparator = snapshotUsable.length > 0 && snapshotStale.length > 0;
 
   return (
     <>
       <DropdownMenuSeparator />
-      {snapshotScopes.length > 0 && (
+      {hasSnapshots && (
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Pinned</DropdownMenuLabel>
-          {snapshotScopes.map((scope) => (
+          <DropdownMenuLabel>Snapshots</DropdownMenuLabel>
+          {snapshotUsable.map((scope) => (
+            <SavedFleetRow key={scope.id} scope={scope} onRequestDelete={onRequestDelete} />
+          ))}
+          {showStaleSeparator && <DropdownMenuSeparator />}
+          {snapshotStale.map((scope) => (
             <SavedFleetRow key={scope.id} scope={scope} onRequestDelete={onRequestDelete} />
           ))}
         </DropdownMenuGroup>
       )}
-      {smartSetScopes.length > 0 && (
+      {predicateRanked.length > 0 && (
         <DropdownMenuGroup>
           <DropdownMenuLabel>Smart-Sets</DropdownMenuLabel>
-          {smartSetScopes.map((scope) => (
+          {predicateRanked.map((scope) => (
             <SavedFleetRow key={scope.id} scope={scope} onRequestDelete={onRequestDelete} />
           ))}
         </DropdownMenuGroup>
