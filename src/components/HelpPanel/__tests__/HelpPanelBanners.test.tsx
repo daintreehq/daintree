@@ -101,3 +101,33 @@ describe("HelpPanelBanners — launch error", () => {
     expect(queryByTestId("help-launch-error-banner")).toBeNull();
   });
 });
+
+describe("HelpPanelBanners — resume banner (#10057)", () => {
+  it("renders nothing when showResumeBanner is false", () => {
+    const { queryByTestId } = render(
+      <HelpPanelBanners {...baseProps()} showResumeBanner={false} />
+    );
+    expect(queryByTestId("help-resume-banner")).toBeNull();
+  });
+
+  it("renders the resume banner with its specific-session claim when showResumeBanner is true", () => {
+    const { getByTestId, getByText } = render(
+      <HelpPanelBanners {...baseProps()} showResumeBanner={true} />
+    );
+    expect(getByTestId("help-resume-banner").getAttribute("role")).toBe("status");
+    expect(getByText("Resumed your previous session.")).toBeTruthy();
+  });
+
+  it("wires the resume banner's dismiss button to onDismissResume", () => {
+    const onDismissResume = vi.fn();
+    const { getByLabelText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        showResumeBanner={true}
+        onDismissResume={onDismissResume}
+      />
+    );
+    fireEvent.click(getByLabelText("Dismiss resume notice"));
+    expect(onDismissResume).toHaveBeenCalledTimes(1);
+  });
+});
