@@ -207,12 +207,22 @@ describe("DemoCursor", () => {
     );
   });
 
-  it("click dispatches mousedown/mouseup/click events", async () => {
+  it("click leads each mouse event with its pointer event so pointer-first controls actuate", async () => {
     render(<DemoCursor />);
 
     const target = document.createElement("button");
     const events: string[] = [];
+    let pointerDown: PointerEvent | undefined;
+    let pointerUp: PointerEvent | undefined;
+    target.addEventListener("pointerdown", (e) => {
+      events.push("pointerdown");
+      pointerDown = e as PointerEvent;
+    });
     target.addEventListener("mousedown", () => events.push("mousedown"));
+    target.addEventListener("pointerup", (e) => {
+      events.push("pointerup");
+      pointerUp = e as PointerEvent;
+    });
     target.addEventListener("mouseup", () => events.push("mouseup"));
     target.addEventListener("click", () => events.push("click"));
 
@@ -223,7 +233,18 @@ describe("DemoCursor", () => {
 
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(events).toEqual(["mousedown", "mouseup", "click"]);
+    // Pointer events must precede their mouse counterparts: Radix triggers open on
+    // pointerdown and dnd-kit's PointerSensor activates on pointerdown (#10145).
+    expect(events).toEqual(["pointerdown", "mousedown", "pointerup", "mouseup", "click"]);
+    // The pointerdown must satisfy dnd-kit's activation gate (isPrimary && button === 0)
+    // and Radix Select's pointerType === "mouse" guard.
+    expect(pointerDown?.isPrimary).toBe(true);
+    expect(pointerDown?.pointerType).toBe("mouse");
+    expect(pointerDown?.button).toBe(0);
+    // The release carries the same primary-mouse metadata so the full sequence is honored.
+    expect(pointerUp?.isPrimary).toBe(true);
+    expect(pointerUp?.pointerType).toBe("mouse");
+    expect(pointerUp?.buttons).toBe(0);
     // Verify elementFromPoint was called with cursor position (near viewport center, shifted by settle drift)
     const efp = document.elementFromPoint as ReturnType<typeof vi.fn>;
     const [calledX, calledY] = efp.mock.calls[0]!;
@@ -1184,6 +1205,85 @@ describe("DemoCursor", () => {
         document.body.removeChild(dst);
       }
     });
+  });
+
+  it("drag dispatches pointer events with primary mouse metadata for pointer sensors", async () => {
+    const fromEl = document.createElement("div");
+    fromEl.id = "drag-from";
+    const toEl = document.createElement("div");
+    toEl.id = "drag-to";
+    document.body.appendChild(fromEl);
+    document.body.appendChild(toEl);
+
+    const pointerDowns: PointerEvent[] = [];
+    const pointerMoves: PointerEvent[] = [];
+    const pointerUps: PointerEvent[] = [];
+    const onDown = (e: Event) => pointerDowns.push(e as PointerEvent);
+    const onMove = (e: Event) => pointerMoves.push(e as PointerEvent);
+    const onUp = (e: Event) => pointerUps.push(e as PointerEvent);
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+
+    // Fall back to the resolved from/to elements so dispatch targets are deterministic.
+    const origElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => null);
+
+    // Collapse the drag's pauseAwareDelay so the 10-step animation runs synchronously.
+    const origSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: (...args: unknown[]) => void
+    ) => origSetTimeout(fn, 0)) as typeof setTimeout);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-drag", {
+        fromSelector: "#drag-from",
+        toSelector: "#drag-to",
+        durationMs: 100,
+        requestId: "req-drag-1",
+      });
+
+      await vi.waitFor(
+        () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-drag-1", undefined),
+        { timeout: 2000, interval: 20 }
+      );
+
+      // dnd-kit's PointerSensor gates activation on isPrimary && button === 0; the
+      // session also requires a held button across moves and a consistent pointerId (#10145).
+      expect(pointerDowns.length).toBe(1);
+      expect(pointerDowns[0]!.isPrimary).toBe(true);
+      expect(pointerDowns[0]!.pointerType).toBe("mouse");
+      expect(pointerDowns[0]!.button).toBe(0);
+      expect(pointerDowns[0]!.buttons).toBe(1);
+
+      expect(pointerMoves.length).toBeGreaterThan(0);
+      // Moves signal a held button (buttons:1) but no button-state change (button:-1 per spec).
+      expect(
+        pointerMoves.every((e) => e.buttons === 1 && e.pointerType === "mouse" && e.button === -1)
+      ).toBe(true);
+
+      expect(pointerUps.length).toBe(1);
+      expect(pointerUps[0]!.pointerType).toBe("mouse");
+      expect(pointerUps[0]!.isPrimary).toBe(true);
+      expect(pointerUps[0]!.buttons).toBe(0);
+
+      // All events in the session must share the same pointerId for dnd-kit tracking.
+      const ids = new Set([
+        ...pointerDowns.map((e) => e.pointerId),
+        ...pointerMoves.map((e) => e.pointerId),
+        ...pointerUps.map((e) => e.pointerId),
+      ]);
+      expect(ids.size).toBe(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      document.elementFromPoint = origElementFromPoint;
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.body.removeChild(fromEl);
+      document.body.removeChild(toEl);
+    }
   });
 
   it("waitForSelector resolves immediately when element exists", async () => {

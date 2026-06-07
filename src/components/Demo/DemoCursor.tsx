@@ -526,7 +526,19 @@ export function DemoCursor() {
               clientX: cx,
               clientY: cy,
             };
+            // Lead each MouseEvent with its PointerEvent counterpart: Radix triggers
+            // open on onPointerDown and dnd-kit's PointerSensor activates on pointerdown,
+            // so a mouse-only dispatch silently no-ops on pointer-first controls (#10145).
+            const pointerOpts = {
+              ...opts,
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              button: 0,
+            };
+            clickTarget.dispatchEvent(new PointerEvent("pointerdown", { ...pointerOpts, buttons: 1 }));
             clickTarget.dispatchEvent(new MouseEvent("mousedown", { ...opts, buttons: 1 }));
+            clickTarget.dispatchEvent(new PointerEvent("pointerup", { ...pointerOpts, buttons: 0 }));
             clickTarget.dispatchEvent(new MouseEvent("mouseup", { ...opts, buttons: 0 }));
             clickTarget.dispatchEvent(new MouseEvent("click", { ...opts, buttons: 0 }));
           }
@@ -799,6 +811,11 @@ export function DemoCursor() {
           const toY = toRect.top + toRect.height / 2;
 
           const eventOpts = { bubbles: true, cancelable: true };
+          // dnd-kit's PointerSensor hard-gates activation on isPrimary && button === 0,
+          // and Radix Select reads pointerType/pointerId; without these a synthetic drag
+          // never starts a pointer-first sortable (#10145). `button` is set per-event
+          // (0 on down/up, -1 on move per the Pointer Events spec).
+          const pointerMeta = { pointerId: 1, pointerType: "mouse", isPrimary: true };
 
           // Move cursor to source first
           await animateCursor(fromX, fromY, Math.min(payload.durationMs ?? 500, 300));
@@ -808,6 +825,8 @@ export function DemoCursor() {
           sourceTarget.dispatchEvent(
             new PointerEvent("pointerdown", {
               ...eventOpts,
+              ...pointerMeta,
+              button: 0,
               clientX: fromX,
               clientY: fromY,
               buttons: 1,
@@ -867,6 +886,8 @@ export function DemoCursor() {
                 moveTarget.dispatchEvent(
                   new PointerEvent("pointermove", {
                     ...eventOpts,
+                    ...pointerMeta,
+                    button: -1,
                     clientX: cx,
                     clientY: cy,
                     buttons: 1,
@@ -892,6 +913,8 @@ export function DemoCursor() {
             releaseTarget.dispatchEvent(
               new PointerEvent("pointerup", {
                 ...eventOpts,
+                ...pointerMeta,
+                button: 0,
                 clientX: toX,
                 clientY: toY,
                 buttons: 0,
