@@ -110,7 +110,11 @@ class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer = new TerminalOutputIngestService(
     (id, data) => this.writeToTerminal(id, data),
-    (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED
+    (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED,
+    // Ack chunks dropped by the background queue cap so the host's port
+    // flow-control ledger doesn't leak (#9906). The byte arg is ignored —
+    // acknowledgePortData shifts the original UTF-8 count the host queued.
+    (id) => terminalClient.acknowledgePortData(id, 0)
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -192,6 +196,7 @@ class TerminalInstanceService {
       restoreFromSerialized: (id, state) => this.restoreController.restoreFromSerialized(id, state),
       restoreFromSerializedIncremental: (id, state) =>
         this.restoreController.restoreFromSerializedIncremental(id, state),
+      isBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -204,6 +209,7 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      onBackgrounded: (id) => this.wakeManager.cancelPendingWake(id),
       onTierApplied: (id, tier, managed) => {
         // Enter scheduleHibernation whenever the terminal is BACKGROUND and
         // offscreen, even if it's not eligible right now. scheduleHibernation

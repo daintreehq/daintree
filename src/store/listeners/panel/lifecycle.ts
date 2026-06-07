@@ -414,7 +414,16 @@ export function setupLifecycleListeners(): DisposableStore {
         // a real status again, re-add `|| status === "suspended"` here
         // and remove the early-return guard above.
         if (status === "paused-backpressure") {
-          terminalInstanceService.wake(id);
+          // Don't wake a terminal the user already backgrounded (#9906).
+          // A backpressure pause on a hidden pane is expected — waking it
+          // sends a stale `wake-terminal` IPC that promotes the host tier to
+          // "active" against an offscreen terminal, defeating the background
+          // gate. Primary prevention for the late-wake desync; the renderer
+          // policy's cancelPendingWake and the host's wake correction are the
+          // backstops for wakes already scheduled or in flight.
+          if (!usePanelStore.getState().backgroundedTerminals.has(id)) {
+            terminalInstanceService.wake(id);
+          }
         }
       })
     )

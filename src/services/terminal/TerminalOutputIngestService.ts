@@ -13,6 +13,14 @@ import { logDebug } from "@/utils/logger";
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
+// Hard ceiling on bytes held for a backgrounded panel (#9906). The producer
+// gate normally suppresses background output, but if the host/renderer tier
+// desyncs (a late wake re-promoting the host to "active"), in-flight batches
+// keep arriving uncapped — ~2MB per 10s cycle. 4MB gives two cycles of
+// catch-up headroom before the oldest held bytes are evicted, bounding memory
+// exposure if any desync path survives the tier-reconciliation fixes. On wake,
+// resumeFlush drains what remains through the COALESCE_BATCH_CAP_BYTES path.
+const BACKGROUND_QUEUE_MAX_BYTES = 4 * 1024 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
@@ -34,7 +42,13 @@ export class TerminalOutputIngestService {
 
   constructor(
     private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void,
-    private readonly getTier?: (id: string) => TerminalRefreshTier
+    private readonly getTier?: (id: string) => TerminalRefreshTier,
+    // Invoked once per chunk dropped by the background queue cap (#9906). The
+    // chunk was received over the MessagePort (and counted in the host's
+    // flow-control ledger) but will never be written to xterm, so it must still
+    // be acked or the host queue leaks toward permanent backpressure — same
+    // contract as the hibernated-output drop path in TerminalWriteController.
+    private readonly onEvict?: (id: string) => void
   ) {}
 
   public async initialize(): Promise<void> {
@@ -205,6 +219,7 @@ export class TerminalOutputIngestService {
     // them burns renderer main-thread CPU for a pane the user can't see. The
     // queue is flushed via resumeFlush() when the tier upgrades back to active.
     if (this.isBackgrounded(id)) {
+      this.evictBackgroundOverflow(id, queue);
       return;
     }
 
@@ -227,6 +242,29 @@ export class TerminalOutputIngestService {
 
     if (!queue.drainScheduled) {
       this.tryDrain(id, queue);
+    }
+  }
+
+  /**
+   * Bound the held queue for a backgrounded panel (#9906). Drops oldest chunks
+   * (FIFO, matching coalesceBatch ordering) until the queue is back under the
+   * cap. These bytes were already dequeued from the MessagePort by onData, so
+   * the IPC-layer accounting is settled — no host ack is needed on drop. The
+   * loss is the same tradeoff as the existing background gate, now bounded: on
+   * wake the scrollback is replaced by the host's serialized snapshot anyway.
+   */
+  private evictBackgroundOverflow(id: string, queue: TerminalIngestQueue): void {
+    while (queue.queuedBytes > BACKGROUND_QUEUE_MAX_BYTES && queue.chunks.length > 0) {
+      const dropped = queue.chunks.shift()!;
+      queue.queuedBytes -= this.chunkByteSize(dropped);
+      // Held background chunks map 1:1 (in FIFO order) to the host's pending
+      // port-ack entries — nothing has been coalesced or written yet — so
+      // acking the oldest entry per evicted chunk keeps the ledger balanced.
+      this.onEvict?.(id);
+    }
+    // queuedBytes is the sum of chunk sizes; with chunks empty it is exactly 0.
+    if (queue.chunks.length === 0) {
+      queue.queuedBytes = 0;
     }
   }
 

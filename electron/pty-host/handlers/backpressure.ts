@@ -91,6 +91,13 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
     "wake-terminal": async (msg) => {
       const wakeStartTime = Date.now();
 
+      // Capture the tier before the wake promotes it. A trailing-edge wake that
+      // fires after the renderer already backgrounded the pane (#9906) arrives
+      // here with the host still at "background" — the signal that this wake is
+      // stale and must be undone once the snapshot is served, so the host
+      // doesn't stream at full rate into a hidden terminal forever.
+      const preWakeTier = backpressureManager.getActivityTier(msg.id);
+
       // Wake implies we want a faithful snapshot + resume streaming.
       backpressureManager.setActivityTier(msg.id, "active", "wake-terminal");
       backpressureManager.clearSuspended(msg.id);
@@ -172,6 +179,35 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         state,
         warnings: warnings.length > 0 ? warnings : undefined,
       });
+
+      // Reconcile a stale wake (#9906). If the host was already "background"
+      // when this wake arrived, the renderer had moved the pane offscreen and
+      // this wake is a trailing-edge artifact (a rate-limited timer that fired
+      // after the BACKGROUND transition). The snapshot has been served, so
+      // re-demote the host to "background" and push a tier-changed correction
+      // to reset the renderer's setActivityTier dedup baseline — otherwise its
+      // lastBackendTier stays "background" and it can never re-send the
+      // "background" correction, leaving the host streaming at 50ms into a
+      // hidden pane indefinitely. Posted unconditionally when preWakeTier was
+      // "background" (setActivityTier dedupes same-tier, so the broadcast, not
+      // the set, is what reconciles the renderer). FIFO-ordered after the data
+      // path on the same per-window port, project-filtered exactly like
+      // recomputeActivityTiers.
+      if (preWakeTier === "background") {
+        backpressureManager.setActivityTier(msg.id, "background", "wake-terminal-correction");
+        ptyManager.setActivityMonitorTier(msg.id, "background", 500);
+        const wakeTerminal = ptyManager.getTerminal(msg.id);
+        const termProject = wakeTerminal?.projectId ?? null;
+        for (const [windowId, conn] of ctx.rendererConnections) {
+          const windowProject = ctx.windowProjectMap.get(windowId) ?? null;
+          if (windowProject !== null && termProject !== windowProject) continue;
+          try {
+            conn.port.postMessage({ type: "tier-changed", id: msg.id, tier: "background" });
+          } catch {
+            // Port closing between iteration and post — disconnect handles cleanup.
+          }
+        }
+      }
     },
 
     "force-resume": (msg) => {
