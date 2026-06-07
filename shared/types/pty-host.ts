@@ -414,7 +414,11 @@ export type PtyHostEvent =
   | {
       type: "host-memory-warning";
       isWarning: boolean;
-      /** Combined heap + external utilization against the pty-host process budget. */
+      /**
+       * Utilization of the binding memory budget — the max of V8 heap against
+       * its --max-old-space-size cap and combined heap + external against the
+       * total pty-host process budget.
+       */
       utilizationPercent: number;
       /** V8 heap used, MB. */
       heapMb?: number;

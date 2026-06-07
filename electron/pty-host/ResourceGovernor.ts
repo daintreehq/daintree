@@ -206,7 +206,15 @@ export class ResourceGovernor {
     // this governor actually manages — queued PTY output and xterm backing
     // stores live in external, outside the --max-old-space-size cap (#9905).
     const combinedMb = heapUsedMb + externalMb;
-    const utilizationPercent = (combinedMb / TOTAL_PROCESS_BUDGET_MB) * 100;
+    // Utilization is the binding constraint: heap against its own V8 cap AND
+    // combined against the total process budget. The combined ratio alone can
+    // never reach the engage thresholds on pure heap pressure — heap is capped
+    // at HEAP_BUDGET_MB, only ~67% of the total budget — so a runaway JS heap
+    // must be measured against its own ceiling. max() keeps this a single
+    // continuous signal feeding one EMA, and the disengage hysteresis then
+    // requires BOTH ratios to clear the resume threshold.
+    const utilizationPercent =
+      Math.max(combinedMb / TOTAL_PROCESS_BUDGET_MB, heapUsedMb / HEAP_BUDGET_MB) * 100;
 
     // EMA smoothing — rejects single-tick GC sawtooth spikes. Seeded with the
     // first real reading (not 0) to avoid a warmup ramp that falsely stays

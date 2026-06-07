@@ -44,9 +44,10 @@ function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGove
   };
 }
 
-// Mock process.memoryUsage with MB-denominated values. The governor budgets
-// combined heap + external against TOTAL_PROCESS_BUDGET_MB (768), so e.g.
-// mockMemoryUsage(675) = 87.9% and mockMemoryUsage(300, 276) = 75%.
+// Mock process.memoryUsage with MB-denominated values. Utilization is the
+// binding constraint: max(heap / 512 heap budget, combined / 768 process
+// budget) — so mockMemoryUsage(450) = 87.9% (heap-bound) and
+// mockMemoryUsage(300, 276) = 75% (combined-bound).
 // Re-invoking returns the same spy, so later calls re-mock in place.
 function mockMemoryUsage(heapMb: number, externalMb = 0, arrayBuffersMb = 0) {
   return vi.spyOn(process, "memoryUsage").mockReturnValue({
@@ -184,7 +185,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -221,7 +222,7 @@ describe("ResourceGovernor", () => {
           .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -229,7 +230,7 @@ describe("ResourceGovernor", () => {
 
       // Drop memory below resume threshold — disengage uses raw utilization
       // so a single low tick resumes immediately.
-      mockMemoryUsage(375);
+      mockMemoryUsage(250);
       vi.advanceTimersByTime(2000);
 
       const event = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -256,7 +257,7 @@ describe("ResourceGovernor", () => {
 
     it("disengages on raw utilization even when smoothed is still elevated", () => {
       const { coordinator } = createMockCoordinator();
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
@@ -275,10 +276,10 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
-      // Drop raw to 53.6% (412MB) in a single tick — well below the 60%
+      // Drop raw to 53.7% (275MB) in a single tick — well below the 60%
       // resume threshold. Smoothed will only decay to ~81.7% on this tick,
       // still above 60%. Disengage must still fire because it uses RAW.
-      mockMemoryUsage(412);
+      mockMemoryUsage(275);
       vi.advanceTimersByTime(2000);
 
       expect(coordinator.hasToken("resource-governor")).toBe(false);
@@ -300,7 +301,7 @@ describe("ResourceGovernor", () => {
         getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -331,7 +332,7 @@ describe("ResourceGovernor", () => {
         getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -443,7 +444,7 @@ describe("ResourceGovernor", () => {
           .mockReturnValue([{ id: "t1", lastOutputTime: 100, lastInputTime: 100 }]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1292,7 +1293,7 @@ describe("ResourceGovernor", () => {
   describe("host-memory-warning", () => {
     it("emits host-memory-warning when crossing warning threshold", () => {
       const deps = createMockDeps();
-      mockMemoryUsage(563);
+      mockMemoryUsage(375);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1311,14 +1312,14 @@ describe("ResourceGovernor", () => {
 
     it("clears warning when memory drops below clear threshold", () => {
       const deps = createMockDeps();
-      mockMemoryUsage(563);
+      mockMemoryUsage(375);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
       vi.advanceTimersByTime(2000);
 
       // Drop below clear threshold
-      mockMemoryUsage(450);
+      mockMemoryUsage(300);
       vi.advanceTimersByTime(2000);
 
       expect(deps.sendEvent).toHaveBeenCalledWith(
@@ -1333,7 +1334,7 @@ describe("ResourceGovernor", () => {
 
     it("does not re-emit warning on consecutive ticks above threshold", () => {
       const deps = createMockDeps();
-      mockMemoryUsage(563);
+      mockMemoryUsage(375);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1448,6 +1449,103 @@ describe("ResourceGovernor", () => {
       governor.dispose();
     });
 
+    it("still engages on heap-only pressure near the V8 cap (heap budget is the binding constraint)", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // 440MB heap + 5MB external = 445MB → only 57.9% of the 768MB process
+      // budget, but 440/512 = 85.9% of the heap cap. A combined-only signal
+      // would never see a runaway JS heap (heap maxes out at 67% of 768).
+      mockMemoryUsage(440, 5);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
+
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("routes external-only pressure through warmup and trim, not a raw bypass", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+      });
+
+      // 89.1% from external — above engage, below critical.
+      mockMemoryUsage(64, 620);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 4 ticks — below WARMUP_TICKS=5: no trim, no pause.
+      vi.advanceTimersByTime(8000);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Tick 5: warmup satisfied, one-shot trim fires, still no pause.
+      vi.advanceTimersByTime(2000);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Tick 6: escalates to pause.
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("does not warn just below the external-driven warning boundary", () => {
+      const deps = createMockDeps();
+      // 537/768 = 69.9% — below the 70% warning threshold (strict >).
+      mockMemoryUsage(0, 537);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const warningCalls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "host-memory-warning"
+      );
+      expect(warningCalls).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("warns just above the external-driven warning boundary", () => {
+      const deps = createMockDeps();
+      // 538/768 = 70.05% — crosses the 70% warning threshold.
+      mockMemoryUsage(0, 538);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "host-memory-warning",
+          isWarning: true,
+        })
+      );
+
+      governor.dispose();
+    });
+
     it("does not double-count arrayBuffers (a subset of external)", () => {
       const deps = createMockDeps();
       // 200MB heap + 200MB external (all of it ArrayBuffers) = 400MB → 52%.
@@ -1488,7 +1586,7 @@ describe("ResourceGovernor", () => {
         ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1522,7 +1620,7 @@ describe("ResourceGovernor", () => {
         ]),
       });
 
-      mockMemoryUsage(735);
+      mockMemoryUsage(490);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1552,7 +1650,7 @@ describe("ResourceGovernor", () => {
       governor.start();
 
       // 75% of budget — below default 85% but above efficiency 70%
-      mockMemoryUsage(576);
+      mockMemoryUsage(384);
 
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
 
@@ -1577,7 +1675,7 @@ describe("ResourceGovernor", () => {
       governor.start();
 
       // 75% of budget — above efficiency 70% but below default 85%
-      mockMemoryUsage(576);
+      mockMemoryUsage(384);
 
       // Advance past warmup to verify no throttle ever fires on balanced.
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
@@ -1595,7 +1693,7 @@ describe("ResourceGovernor", () => {
       governor.start();
 
       // 60% of budget — below default warning 70% but above efficiency warning 55%
-      mockMemoryUsage(460);
+      mockMemoryUsage(307);
 
       vi.advanceTimersByTime(2000);
 
@@ -1624,7 +1722,7 @@ describe("ResourceGovernor", () => {
       });
 
       // Baseline at 50% for first 5 ticks (warmup), then a single spike to 90%.
-      mockMemoryUsage(384);
+      mockMemoryUsage(256);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1634,11 +1732,11 @@ describe("ResourceGovernor", () => {
       expect(coordinator.hasToken("resource-governor")).toBe(false);
 
       // Single-tick spike to 90%.
-      mockMemoryUsage(692);
+      mockMemoryUsage(461);
       vi.advanceTimersByTime(2000);
 
       // Drop back. EMA pushes smoothed to ~0.18*90 + 0.82*50 = 57.2 — well below 85.
-      mockMemoryUsage(384);
+      mockMemoryUsage(256);
       vi.advanceTimersByTime(4000);
 
       // No throttle, no trim — smoothed never crossed 85%.
@@ -1660,7 +1758,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1685,7 +1783,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1714,7 +1812,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1742,7 +1840,7 @@ describe("ResourceGovernor", () => {
         trimBuffers,
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1756,7 +1854,7 @@ describe("ResourceGovernor", () => {
 
     it("re-arms trim attempt when pressure clears without ever engaging", () => {
       const { coordinator } = createMockCoordinator();
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
@@ -1778,13 +1876,13 @@ describe("ResourceGovernor", () => {
 
       // Pressure clears. EMA decays so smoothed eventually crosses below the
       // engage threshold and the re-arm branch fires.
-      mockMemoryUsage(192);
+      mockMemoryUsage(128);
       vi.advanceTimersByTime(40000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
 
       // Pressure returns. EMA needs ~16 ticks to climb from ~25% back above
       // the 85% engage threshold; trim must fire again for the new episode.
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
       vi.advanceTimersByTime(40000);
       expect(deps.trimBuffers).toHaveBeenCalledTimes(2);
 
@@ -1803,7 +1901,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(735);
+      mockMemoryUsage(490);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1829,7 +1927,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1868,7 +1966,7 @@ describe("ResourceGovernor", () => {
           ]),
       });
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -1889,7 +1987,7 @@ describe("ResourceGovernor", () => {
 
     it("threshold-based disengage also sets the cooldown gate", () => {
       const { coordinator, raw } = createMockCoordinator();
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1"]),
@@ -1908,12 +2006,12 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
-      mockMemoryUsage(375);
+      mockMemoryUsage(250);
       vi.advanceTimersByTime(2000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
 
       // Pressure returns immediately. Cooldown gate must still block re-engage.
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
       raw.pause.mockClear();
       vi.advanceTimersByTime(10000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
@@ -1934,7 +2032,7 @@ describe("ResourceGovernor", () => {
         t3: c3,
       };
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         getTerminalIds: vi.fn().mockReturnValue(["t1", "t2", "t3"]),
@@ -1953,7 +2051,7 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mockClear();
 
-      mockMemoryUsage(375);
+      mockMemoryUsage(250);
       vi.advanceTimersByTime(2000);
 
       const resumeEmits = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls
@@ -1974,7 +2072,7 @@ describe("ResourceGovernor", () => {
         t2: c2,
       };
 
-      mockMemoryUsage(675);
+      mockMemoryUsage(450);
 
       const deps = createMockDeps({
         // Only t1 is visible to the governor when engage fires.
@@ -1996,7 +2094,7 @@ describe("ResourceGovernor", () => {
       // t2 came online while paused, governed by another pause holder.
       c2.coordinator.pause("backpressure");
 
-      mockMemoryUsage(375);
+      mockMemoryUsage(250);
       c2.raw.resume.mockClear();
       vi.advanceTimersByTime(2000);
 
