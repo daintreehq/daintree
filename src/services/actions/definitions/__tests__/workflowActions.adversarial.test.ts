@@ -458,6 +458,18 @@ describe("worktree.createWithRecipe", () => {
     await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
     expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
   });
+
+  it("treats whitespace-only headRef the same as missing", async () => {
+    forgeClientMock.getPR.mockResolvedValue({
+      number: 42,
+      headRef: "   ",
+      title: "x",
+      url: "u",
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
+  });
 });
 
 describe("workflow.startWorkOnIssue", () => {
@@ -476,7 +488,10 @@ describe("workflow.startWorkOnIssue", () => {
     >;
 
     expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 6609);
-    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalled();
+    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalledWith(
+      "/repo",
+      "feature/issue-6609-add-workflow-macro-tools"
+    );
     expect(worktreeClientMock.create).toHaveBeenCalled();
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "claude",
@@ -502,10 +517,13 @@ describe("workflow.startWorkOnIssue", () => {
 
     await def.run({ issueNumber: 6959, agentId: "claude", spawnedBy: "mcp" }, {} as never);
 
+    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalledWith(
+      "/repo",
+      "feature/issue-6959-assistant-focus-is-stolen"
+    );
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "claude",
       expect.objectContaining({
-        cwd: "/repo/feature/issue-6609-add-tools",
         worktreeId: "wt-new",
         spawnedBy: "mcp",
       })

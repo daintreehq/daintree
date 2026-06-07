@@ -136,7 +136,7 @@ export function registerWorkflowCreationActions(
           if (!pr) {
             throw new Error(`Pull request #${pullRequestNumber} not found in ${rootPath}`);
           }
-          if (!pr.headRef) {
+          if (!pr.headRef?.trim()) {
             throw new Error(
               `Pull request #${pullRequestNumber} has no head branch — cannot create worktree`
             );
