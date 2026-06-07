@@ -1,4 +1,6 @@
 import { terminalClient } from "@/clients";
+import { usePanelStore } from "@/store/panelStore";
+import { logWarn } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 
@@ -72,14 +74,35 @@ export class TerminalWakeManager {
           return false;
         }
 
-        if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-          await this.deps.restoreFromSerializedIncremental(id, state);
-        } else {
-          this.deps.restoreFromSerialized(id, state);
+        const restoreOk =
+          state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes
+            ? await this.deps.restoreFromSerializedIncremental(id, state)
+            : this.deps.restoreFromSerialized(id, state);
+
+        // Surface replay failures (write timeout, parse error) to the same
+        // banner the hydration path uses (#8535). The restore methods swallow
+        // internal errors and stash a classified error on the managed
+        // terminal; the boolean return is the source of truth. Re-read via
+        // getInstance so a mid-wake instance replacement (LRU eviction +
+        // respawn under the same id) is handled — the captured `managed`
+        // reference may be stale.
+        if (!restoreOk) {
+          const current = this.deps.getInstance(id);
+          const restoreError =
+            current?.lastScrollbackRestoreError ?? managed.lastScrollbackRestoreError;
+          if (restoreError) {
+            usePanelStore.getState().setScrollbackRestoreError(id, restoreError);
+            logWarn(`Scrollback restore failed for wake of ${id}`, { error: restoreError });
+          }
+          return false;
         }
 
         if (this.deps.getInstance(id) === managed) {
           managed.terminal.refresh(0, managed.terminal.rows - 1);
+          // A previous failed wake of this terminal may have left a banner
+          // in the panel store. Mirror the hydration retry path's cleanup
+          // (#8535): clear it now that the replay has succeeded.
+          usePanelStore.getState().clearScrollbackRestoreError(id);
         }
         return true;
       } catch (error) {
