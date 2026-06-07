@@ -340,8 +340,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
     filterStore.setManualOrder(merged);
     filterStore.setOrderBy("manual");
-    const name = worktreesRef.current.find((w) => w.id === worktreeId)?.name ?? worktreeId;
-    const message = `Moved '${name}' to position ${targetIdx + 1} of ${visible.length}`;
+    // Resolve the label through issueTitle → branch → name, matching the
+    // drag-cancel announcer below and DndProvider.resolveWorktreeLabel, so a
+    // keyboard reorder reads the same headline the user sees on the card rather
+    // than the bare (rarely-visible) name (issue #10317).
+    const wt = worktreesRef.current.find((w) => w.id === worktreeId);
+    const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? worktreeId;
+    const message = `Moved '${label}' to position ${targetIdx + 1} of ${visible.length}`;
     if (reorderAnnouncementTimerRef.current !== null) {
       clearTimeout(reorderAnnouncementTimerRef.current);
     }
