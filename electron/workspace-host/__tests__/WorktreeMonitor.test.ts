@@ -1987,6 +1987,7 @@ describe("WorktreeMonitor", () => {
         path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
         isWslPath: true,
         wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
         wslGitEligible: true,
         wslGitOptIn: false,
       };
@@ -2012,6 +2013,7 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
+          wslPosixPath: "/home/user/repo",
           wslGitEligible: true,
           wslGitOptIn: true,
         };
@@ -2029,6 +2031,44 @@ describe("WorktreeMonitor", () => {
           posixPath: "/home/user/repo",
         });
 
+        // Snapshot must carry the upstream-provided wslPosixPath verbatim —
+        // if the field round-trips through getSnapshot, renderer-side
+        // consumers can rely on it without re-parsing the UNC.
+        const snapshot = monitor.getSnapshot();
+        expect(snapshot.wslPosixPath).toBe("/home/user/repo");
+
+        monitor.stop();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
+    });
+
+    it("silently disables WSL git routing when wslPosixPath is missing upstream", async () => {
+      // Regression guard: with the regex hoisted upstream, a WorktreeMonitor
+      // constructed without `wslPosixPath` (e.g. bypassing enrichWorktreeWithWsl)
+      // must short-circuit WSL routing rather than route to a fabricated
+      // distro-root path.
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const wsl: Worktree = {
+          ...TEST_WORKTREE,
+          path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          isWslPath: true,
+          wslDistro: "Ubuntu",
+          wslGitEligible: true,
+          wslGitOptIn: true,
+        };
+        const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+        await monitor.start();
+        await flushInitialStatus();
+
+        const lastCall =
+          mockGetWorktreeChangesWithStats.mock.calls[
+            mockGetWorktreeChangesWithStats.mock.calls.length - 1
+          ];
+        expect(lastCall[1]?.wsl).toBeUndefined();
+
         monitor.stop();
       } finally {
         Object.defineProperty(process, "platform", { value: original, configurable: true });
@@ -2044,6 +2084,7 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
+          wslPosixPath: "/home/user/repo",
           wslGitEligible: true,
           wslGitOptIn: false,
         };

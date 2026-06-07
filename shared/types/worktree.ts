@@ -349,6 +349,14 @@ export interface Worktree {
    * hidden until they explicitly enable WSL git from settings (future).
    */
   wslGitDismissed?: boolean;
+
+  /**
+   * POSIX path inside the WSL distro (always starts with `/`); present only
+   * when `isWslPath` is true. Populated upstream by `enrichWorktreeWithWsl`
+   * from `detectWslPath(path).posixPath` so downstream consumers (e.g.
+   * `WorktreeMonitor`) do not re-parse the UNC.
+   */
+  wslPosixPath?: string;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */

@@ -702,6 +702,58 @@ describe("createWslHardenedGit", () => {
     ).toThrow("UNC path");
   });
 
+  it("rejects strings starting with \\\\wsl but missing the WSL UNC shape", () => {
+    // Old `startsWith("\\\\wsl")` gate let this through; tightened check
+    // (detectWslPath) fails closed on the malformed shape.
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wslfoo\\bar",
+        posixPath: "/home/user/proj",
+      })
+    ).toThrow("UNC path");
+  });
+
+  it("rejects bare \\\\wsl$\\ with no distro segment", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\",
+        posixPath: "/",
+      })
+    ).toThrow("UNC path");
+  });
+
+  it("rejects bare \\\\wsl.localhost\\ with no distro segment", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl.localhost\\",
+        posixPath: "/",
+      })
+    ).toThrow("UNC path");
+  });
+
+  it("rejects when supplied distro does not match parsed UNC distro", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Debian\\home\\user\\proj",
+        posixPath: "/home/user/proj",
+      })
+    ).toThrow("distro does not match");
+  });
+
+  it("rejects when supplied posixPath does not match parsed UNC remainder", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "/some/other/path",
+      })
+    ).toThrow("posix path does not match");
+  });
+
   it("uses the UNC path as baseDir so simple-git's statSync succeeds on Windows", () => {
     createWslHardenedGit({
       distro: "Ubuntu",
