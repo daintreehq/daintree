@@ -1,12 +1,137 @@
-import { AlertCircle, History, ShieldAlert, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, Clock, History, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SnapshotInfo } from "@shared/types/ipc/git";
 import type {
+  ActiveGrantState,
+  GrantEndReason,
+  GrantEndedState,
   LaunchErrorKind,
   LaunchErrorState,
   SessionRevokedState,
   TierMismatchState,
 } from "@/controllers/HelpSessionController";
+
+// Body copy keyed off how the grant ended (#10042). The tool id is the
+// sentence subject, prepended by the caller — kept jargon-free per the
+// microcopy rules (no "MCP" / "grant" / "tier").
+const GRANT_ENDED_BODY: Record<GrantEndReason, string> = {
+  expired: "access expired. The next call will ask to approve it again.",
+  "grant-ceiling": "hit its 30-minute limit. The next call will ask to approve it again.",
+};
+
+function formatRemaining(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function computeRemainingSeconds(expiresAt: number): number {
+  return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+}
+
+/**
+ * Ambient countdown for a live "Approve once" grant (#10042). Tier 1 — a
+ * non-blocking pane-chrome state, not a toast. The countdown derives from the
+ * grant's `expiresAt` with a component-local 1s tick; the timestamp is the
+ * source of truth, so a missed tick can't drift the displayed value (and the
+ * interval is keyed on `expiresAt`, restarting cleanly under StrictMode's
+ * double-mount). The grant is sliding-TTL: the countdown is "time left if the
+ * tool isn't used again," matching the issue's "countdown without polling".
+ */
+function GrantActiveBanner({
+  grant,
+  isRevoking,
+  onRevoke,
+}: {
+  grant: ActiveGrantState;
+  isRevoking: boolean;
+  onRevoke: () => void;
+}) {
+  const [remainingSeconds, setRemainingSeconds] = useState(() =>
+    computeRemainingSeconds(grant.expiresAt)
+  );
+  useEffect(() => {
+    setRemainingSeconds(computeRemainingSeconds(grant.expiresAt));
+    const id = setInterval(() => {
+      setRemainingSeconds(computeRemainingSeconds(grant.expiresAt));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [grant.expiresAt]);
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "flex items-center gap-2 px-3 py-2 mx-3 mt-3 mb-1",
+        "rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border",
+        "text-xs text-daintree-text/80"
+      )}
+      data-testid="help-grant-active-banner"
+    >
+      <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-daintree-text/60" aria-hidden="true" />
+      <span className="flex-1 min-w-0 select-text">
+        <span className="font-mono text-daintree-text/90">{grant.toolId}</span> approved ·{" "}
+        <span className="tabular-nums">{formatRemaining(remainingSeconds)}</span> left
+      </span>
+      <button
+        type="button"
+        onClick={onRevoke}
+        disabled={isRevoking}
+        className={cn(
+          "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
+          "text-daintree-text/65 hover:text-daintree-text",
+          "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        )}
+      >
+        Revoke access
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Brief notice that a watched grant lapsed (#10042). Neutral ambient surface,
+ * not an error tint — nothing failed; the user's approval simply timed out and
+ * the next call re-prompts. Auto-dismisses on a controller timer; also
+ * manually dismissible.
+ */
+function GrantEndedBanner({
+  grantEnded,
+  onDismiss,
+}: {
+  grantEnded: GrantEndedState;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
+        "rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border",
+        "text-xs text-daintree-text/80"
+      )}
+      data-testid="help-grant-ended-banner"
+    >
+      <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-daintree-text/60" aria-hidden="true" />
+      <span className="flex-1 min-w-0 select-text">
+        <span className="font-mono text-daintree-text/90">{grantEnded.toolId}</span>{" "}
+        {GRANT_ENDED_BODY[grantEnded.reason]}
+      </span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss approval notice"
+        className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </div>
+  );
+}
 
 // Recovery copy keyed off the failure kind so the banner never leaks the
 // underlying "MCP" / "token" / "bearer" jargon the controller catches.
@@ -56,11 +181,16 @@ interface HelpPanelBannersProps {
   launchError: LaunchErrorState | null;
   sessionRevoked: SessionRevokedState | null;
   isApprovingTier: boolean;
+  activeGrant: ActiveGrantState | null;
+  grantEnded: GrantEndedState | null;
+  isRevokingGrant: boolean;
   onDismissResume: () => void;
   onDismissSnapshot: () => void;
   onDismissTierMismatch: () => void;
   onApproveOnce: () => void;
   onAlwaysAllow: () => void;
+  onRevokeGrant: () => void;
+  onDismissGrantEnded: () => void;
   onRetryLaunch: () => void;
   onDismissLaunchError: () => void;
   onOpenAssistantSettings: () => void;
@@ -77,11 +207,16 @@ export function HelpPanelBanners({
   launchError,
   sessionRevoked,
   isApprovingTier,
+  activeGrant,
+  grantEnded,
+  isRevokingGrant,
   onDismissResume,
   onDismissSnapshot,
   onDismissTierMismatch,
   onApproveOnce,
   onAlwaysAllow,
+  onRevokeGrant,
+  onDismissGrantEnded,
   onRetryLaunch,
   onDismissLaunchError,
   onOpenAssistantSettings,
@@ -142,6 +277,14 @@ export function HelpPanelBanners({
           </button>
         </div>
       )}
+      {activeGrant && (
+        <GrantActiveBanner
+          grant={activeGrant}
+          isRevoking={isRevokingGrant}
+          onRevoke={onRevokeGrant}
+        />
+      )}
+      {grantEnded && <GrantEndedBanner grantEnded={grantEnded} onDismiss={onDismissGrantEnded} />}
       {tierMismatch && (
         <div
           role="alert"

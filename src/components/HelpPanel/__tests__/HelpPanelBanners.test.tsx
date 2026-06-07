@@ -15,11 +15,16 @@ function baseProps() {
     launchError: null,
     sessionRevoked: null,
     isApprovingTier: false,
+    activeGrant: null,
+    grantEnded: null,
+    isRevokingGrant: false,
     onDismissResume: vi.fn(),
     onDismissSnapshot: vi.fn(),
     onDismissTierMismatch: vi.fn(),
     onApproveOnce: vi.fn(),
     onAlwaysAllow: vi.fn(),
+    onRevokeGrant: vi.fn(),
+    onDismissGrantEnded: vi.fn(),
     onRetryLaunch: vi.fn(),
     onDismissLaunchError: vi.fn(),
     onOpenAssistantSettings: vi.fn(),
@@ -271,5 +276,142 @@ describe("HelpPanelBanners — session revoked", () => {
   it("renders nothing for the revoked slot when sessionRevoked is null", () => {
     const { queryByTestId } = render(<HelpPanelBanners {...baseProps()} />);
     expect(queryByTestId("help-session-revoked-banner")).toBeNull();
+  });
+});
+
+describe("HelpPanelBanners — active grant countdown (#10042)", () => {
+  it("renders nothing for the grant slot when activeGrant is null", () => {
+    const { queryByTestId } = render(<HelpPanelBanners {...baseProps()} />);
+    expect(queryByTestId("help-grant-active-banner")).toBeNull();
+  });
+
+  it("renders the tool id and a mm:ss countdown derived from expiresAt", () => {
+    // 2 min 5 s out — ceil keeps it at 2:0x even with a few ms of render lag.
+    const { getByTestId } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        activeGrant={{
+          sessionId: "s1",
+          toolId: "search_docs",
+          ttlMs: 900_000,
+          expiresAt: Date.now() + 125_000,
+        }}
+      />
+    );
+    const banner = getByTestId("help-grant-active-banner");
+    expect(banner.getAttribute("role")).toBe("status");
+    const text = banner.textContent ?? "";
+    expect(text).toContain("search_docs");
+    // The displayed remaining time is derived, not a hardcoded literal.
+    expect(text).toMatch(/2:0\d/);
+  });
+
+  it("shows a smaller remaining time for a nearer expiry (countdown is computed)", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        activeGrant={{
+          sessionId: "s1",
+          toolId: "t1",
+          ttlMs: 900_000,
+          expiresAt: Date.now() + 5_000,
+        }}
+      />
+    );
+    const text = getByTestId("help-grant-active-banner").textContent ?? "";
+    expect(text).toMatch(/0:0[45]/);
+  });
+
+  it("clamps a past expiry to 0:00 rather than rendering a negative timer", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        activeGrant={{
+          sessionId: "s1",
+          toolId: "t1",
+          ttlMs: 900_000,
+          expiresAt: Date.now() - 10_000,
+        }}
+      />
+    );
+    expect(getByTestId("help-grant-active-banner").textContent).toContain("0:00");
+  });
+
+  it("wires Revoke access to onRevokeGrant and disables it while revoking", () => {
+    const onRevokeGrant = vi.fn();
+    const { getByText, rerender } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        activeGrant={{
+          sessionId: "s1",
+          toolId: "t1",
+          ttlMs: 900_000,
+          expiresAt: Date.now() + 60_000,
+        }}
+        onRevokeGrant={onRevokeGrant}
+      />
+    );
+    const button = getByText("Revoke access");
+    fireEvent.click(button);
+    expect(onRevokeGrant).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <HelpPanelBanners
+        {...baseProps()}
+        activeGrant={{
+          sessionId: "s1",
+          toolId: "t1",
+          ttlMs: 900_000,
+          expiresAt: Date.now() + 60_000,
+        }}
+        isRevokingGrant={true}
+        onRevokeGrant={onRevokeGrant}
+      />
+    );
+    expect((getByText("Revoke access") as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("HelpPanelBanners — grant ended notice (#10042)", () => {
+  it("renders nothing for the grant-ended slot when grantEnded is null", () => {
+    const { queryByTestId } = render(<HelpPanelBanners {...baseProps()} />);
+    expect(queryByTestId("help-grant-ended-banner")).toBeNull();
+  });
+
+  it("distinguishes a passive expiry from the 30-minute ceiling in its copy", () => {
+    const { getByTestId, rerender } = render(
+      <HelpPanelBanners {...baseProps()} grantEnded={{ toolId: "t1", reason: "expired" }} />
+    );
+    const expiredText = getByTestId("help-grant-ended-banner").textContent ?? "";
+    expect(expiredText).toContain("t1");
+    expect(expiredText).not.toContain("30-minute");
+
+    rerender(
+      <HelpPanelBanners {...baseProps()} grantEnded={{ toolId: "t1", reason: "grant-ceiling" }} />
+    );
+    expect(getByTestId("help-grant-ended-banner").textContent).toContain("30-minute");
+  });
+
+  it("keeps the notice free of MCP / grant / tier jargon", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners {...baseProps()} grantEnded={{ toolId: "t1", reason: "grant-ceiling" }} />
+    );
+    const text = getByTestId("help-grant-ended-banner").textContent ?? "";
+    expect(text).not.toMatch(/\bMCP\b/i);
+    expect(text).not.toMatch(/\bgrant\b/i);
+    expect(text).not.toMatch(/\btier\b/i);
+  });
+
+  it("wires its dismiss button to onDismissGrantEnded", () => {
+    const onDismissGrantEnded = vi.fn();
+    const { getByLabelText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        grantEnded={{ toolId: "t1", reason: "expired" }}
+        onDismissGrantEnded={onDismissGrantEnded}
+      />
+    );
+    fireEvent.click(getByLabelText("Dismiss approval notice"));
+    expect(onDismissGrantEnded).toHaveBeenCalledTimes(1);
   });
 });

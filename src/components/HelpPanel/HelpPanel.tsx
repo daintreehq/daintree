@@ -593,6 +593,8 @@ export function HelpPanel({
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
+  const revokeGrant = useCallback(() => controller.revokeGrant(), [controller]);
+  const dismissGrantEnded = useCallback(() => controller.dismissGrantEnded(), [controller]);
   const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
   const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
   const dismissLaunchError = useCallback(() => controller.dismissLaunchError(), [controller]);
@@ -714,11 +716,16 @@ export function HelpPanel({
           launchError={session.launchError}
           sessionRevoked={session.sessionRevoked}
           isApprovingTier={session.isApprovingTier}
+          activeGrant={session.activeGrant}
+          grantEnded={session.grantEnded}
+          isRevokingGrant={session.isRevokingGrant}
           onDismissResume={dismissResume}
           onDismissSnapshot={dismissSnapshot}
           onDismissTierMismatch={dismissTierMismatch}
           onApproveOnce={approveTierOnce}
           onAlwaysAllow={alwaysAllowTier}
+          onRevokeGrant={revokeGrant}
+          onDismissGrantEnded={dismissGrantEnded}
           onRetryLaunch={retryLaunch}
           onDismissLaunchError={dismissLaunchError}
           onOpenAssistantSettings={handleOpenSettings}
