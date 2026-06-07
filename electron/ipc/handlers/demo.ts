@@ -29,6 +29,8 @@ import type {
   DemoAnnotateResult,
   DemoDismissAnnotationPayload,
   DemoWaitForIdlePayload,
+  DemoTypeInTerminalPayload,
+  DemoSendKeyToTerminalPayload,
 } from "../../../shared/types/ipc/demo.js";
 
 const CAPTURE_MIME_TYPE = "video/webm;codecs=vp9";
@@ -190,6 +192,18 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
         DEMO_METHOD_CHANNELS.pressKey,
         async (payload: DemoPressKeyPayload): Promise<void> => {
           await sendCommandAndAwait(CHANNELS.DEMO_EXEC_PRESS_KEY, payload);
+        }
+      ),
+      typeInTerminal: op(
+        DEMO_METHOD_CHANNELS.typeInTerminal,
+        async (payload: DemoTypeInTerminalPayload): Promise<void> => {
+          await sendCommandAndAwait(CHANNELS.DEMO_EXEC_TYPE_IN_TERMINAL, payload);
+        }
+      ),
+      sendKeyToTerminal: op(
+        DEMO_METHOD_CHANNELS.sendKeyToTerminal,
+        async (payload: DemoSendKeyToTerminalPayload): Promise<void> => {
+          await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SEND_KEY_TO_TERMINAL, payload);
         }
       ),
       spotlight: op(

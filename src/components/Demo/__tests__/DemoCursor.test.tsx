@@ -20,9 +20,25 @@ const demoMock = {
   sendCommandDone: vi.fn(),
 };
 
+const terminalWriteMock = vi.fn();
+
+// terminalInstanceService is imported at module scope by DemoCursor for
+// reading xterm cursor-key mode; mock it so tests can control the mode.
+const terminalGetMock = vi.fn();
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: {
+    get: (id: string) => terminalGetMock(id),
+  },
+}));
+
 // Set up window.electron.demo before importing the component
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 const originalElectron = (window as unknown as { electron?: unknown }).electron;
-(window as unknown as { electron: unknown }).electron = { demo: demoMock };
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+(window as unknown as { electron: unknown }).electron = {
+  demo: demoMock,
+  terminal: { write: terminalWriteMock },
+};
 
 // Stub Element.prototype.animate (jsdom doesn't support WAAPI)
 function createMockAnimation() {
@@ -35,6 +51,7 @@ function createMockAnimation() {
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const animateSpy = vi.fn((() => createMockAnimation()) as any) as ReturnType<typeof vi.fn>;
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 Element.prototype.animate = animateSpy as unknown as typeof Element.prototype.animate;
 
 import { DemoCursor } from "../DemoCursor";
@@ -100,12 +117,20 @@ describe("DemoCursor", () => {
       "demo:exec-wait-for-idle",
       expect.any(Function)
     );
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith(
+      "demo:exec-type-in-terminal",
+      expect.any(Function)
+    );
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith(
+      "demo:exec-send-key-to-terminal",
+      expect.any(Function)
+    );
   });
 
   it("cleans up listeners on unmount", () => {
     const { unmount } = render(<DemoCursor />);
-    // All 12 onExecCommand calls return cleanup functions (move-to, move-to-selector, click, type, wait-for-selector, sleep, pause, resume, scroll, drag, press-key, wait-for-idle)
-    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(12);
+    // All 14 onExecCommand calls return cleanup functions (move-to, move-to-selector, click, type, wait-for-selector, sleep, pause, resume, scroll, drag, press-key, wait-for-idle, type-in-terminal, send-key-to-terminal)
+    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(14);
     unmount();
     // After unmount, listeners should be removed
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);
@@ -460,6 +485,309 @@ describe("DemoCursor", () => {
     }
   });
 
+  it("typeInTerminal writes each character to the PTY and sends done", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-1");
+    document.body.appendChild(panel);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-type-in-terminal", {
+        selector: '[data-panel-id="term-1"]',
+        text: "hi",
+        cps: 1000,
+        requestId: "req-term-type",
+      });
+
+      await vi.waitFor(
+        () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-term-type", undefined),
+        { timeout: 2000, interval: 20 }
+      );
+
+      const writtenChars = terminalWriteMock.mock.calls.map((c) => c[1]).join("");
+      expect(writtenChars).toBe("hi");
+      expect(terminalWriteMock.mock.calls.every((c) => c[0] === "term-1")).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("typeInTerminal resolves the panel id from a child element", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-child");
+    const child = document.createElement("div");
+    child.className = "xterm-screen";
+    panel.appendChild(child);
+    document.body.appendChild(panel);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-type-in-terminal", {
+        selector: ".xterm-screen",
+        text: "x",
+        cps: 1000,
+        requestId: "req-term-child",
+      });
+
+      await vi.waitFor(
+        () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-term-child", undefined),
+        { timeout: 2000, interval: 20 }
+      );
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-child", "x");
+    } finally {
+      randomSpy.mockRestore();
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("typeInTerminal reports an error when the terminal panel is not found", async () => {
+    render(<DemoCursor />);
+    emit("demo:exec-type-in-terminal", {
+      selector: '[data-panel-id="missing"]',
+      text: "hi",
+      requestId: "req-term-missing",
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+      "req-term-missing",
+      'Terminal panel not found: [data-panel-id="missing"]'
+    );
+    expect(terminalWriteMock).not.toHaveBeenCalled();
+  });
+
+  it("sendKeyToTerminal writes the normal-mode escape sequence for arrows", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-key");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue({
+      terminal: { modes: { applicationCursorKeysMode: false } },
+    });
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-key"]',
+        key: "up",
+        requestId: "req-key-up",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-key", "\x1b[A");
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-key-up", undefined);
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal writes the application-mode escape sequence when DECCKM is on", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-app");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue({
+      terminal: { modes: { applicationCursorKeysMode: true } },
+    });
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-app"]',
+        key: "up",
+        requestId: "req-key-app",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-app", "\x1bOA");
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal sends ctrl-c regardless of cursor mode", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-ctrlc");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue({
+      terminal: { modes: { applicationCursorKeysMode: true } },
+    });
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-ctrlc"]',
+        key: "ctrl-c",
+        requestId: "req-key-ctrlc",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-ctrlc", "\x03");
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal falls back to normal mode when the instance is unavailable", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-noinst");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-noinst"]',
+        key: "left",
+        requestId: "req-key-noinst",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-noinst", "\x1b[D");
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it.each([
+    ["enter", "\r"],
+    ["tab", "\t"],
+    ["escape", "\x1b"],
+    ["backspace", "\x7f"],
+    ["down", "\x1b[B"],
+    ["right", "\x1b[C"],
+    ["left", "\x1b[D"],
+    ["home", "\x1b[H"],
+    ["end", "\x1b[F"],
+    ["pageup", "\x1b[5~"],
+    ["pagedown", "\x1b[6~"],
+    ["ctrl-d", "\x04"],
+    ["ctrl-u", "\x15"],
+  ])("sendKeyToTerminal writes the correct byte sequence for %s", async (key, expected) => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-map");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-map"]',
+        key,
+        requestId: `req-key-${key}`,
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-map", expected);
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(`req-key-${key}`, undefined);
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal rejects an unknown key without writing", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-unknown");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-unknown"]',
+        key: "ctrl-z",
+        requestId: "req-key-unknown",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).not.toHaveBeenCalled();
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+        "req-key-unknown",
+        "Unknown terminal key: ctrl-z"
+      );
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal resolves a selector that targets the panel root directly", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-root");
+    document.body.appendChild(panel);
+    terminalGetMock.mockReturnValue(null);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: '[data-panel-id="term-root"]',
+        key: "enter",
+        requestId: "req-key-root",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).toHaveBeenCalledWith("term-root", "\r");
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
+  it("sendKeyToTerminal reports an error when the element has no panel ancestor", async () => {
+    const orphan = document.createElement("div");
+    orphan.id = "orphan-no-panel";
+    document.body.appendChild(orphan);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-send-key-to-terminal", {
+        selector: "#orphan-no-panel",
+        key: "enter",
+        requestId: "req-key-orphan",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).not.toHaveBeenCalled();
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+        "req-key-orphan",
+        "Terminal panel not found: #orphan-no-panel"
+      );
+    } finally {
+      document.body.removeChild(orphan);
+    }
+  });
+
+  it("typeInTerminal sends done and writes nothing for empty text", async () => {
+    const panel = document.createElement("div");
+    panel.setAttribute("data-panel-id", "term-empty");
+    document.body.appendChild(panel);
+
+    try {
+      render(<DemoCursor />);
+      emit("demo:exec-type-in-terminal", {
+        selector: '[data-panel-id="term-empty"]',
+        text: "",
+        requestId: "req-term-empty",
+      });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(terminalWriteMock).not.toHaveBeenCalled();
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-term-empty", undefined);
+    } finally {
+      document.body.removeChild(panel);
+    }
+  });
+
   it("waitForSelector resolves immediately when element exists", async () => {
     const el = document.createElement("div");
     el.id = "test-target";
@@ -478,8 +806,10 @@ describe("DemoCursor", () => {
 
 afterAll(() => {
   if (originalElectron) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     (window as unknown as { electron: unknown }).electron = originalElectron;
   } else {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     delete (window as unknown as { electron?: unknown }).electron;
   }
 });

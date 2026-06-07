@@ -95,9 +95,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 20 IPC handlers when isDemoMode is true", () => {
+  it("registers 22 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(20);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(22);
     cleanup();
   });
 
@@ -150,10 +150,10 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("cleanup removes all 20 handlers", () => {
+  it("cleanup removes all 22 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(20);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
   });
 
   it("cleanup removes chunk and stop listeners", () => {
