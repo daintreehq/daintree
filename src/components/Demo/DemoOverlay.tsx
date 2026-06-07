@@ -43,6 +43,13 @@ const SIZE_FRACTION: Record<DemoAnnotationSize, number> = {
   xl: 0.066,
 };
 
+// Annotation payloads arrive over an untyped IPC channel, so a malformed `size`
+// could index SIZE_FRACTION as undefined and poison every downstream calc with
+// NaN (silently disabling the clamp). Coerce anything unrecognized to "md".
+function normalizeSize(size: DemoAnnotationSize | undefined): DemoAnnotationSize {
+  return size && size in SIZE_FRACTION ? size : "md";
+}
+
 const SAFE_MARGIN = 0.05; // 5% title-safe margin (SMPTE ST 2046-1).
 const ELEMENT_PLACEMENTS = new Set(["top", "bottom", "left", "right"]);
 const CURSOR_PLACEMENTS = new Set(["above-cursor", "below-cursor"]);
@@ -180,7 +187,7 @@ export function estimateCaptionBox(
   fw: number,
   fh: number
 ): { estW: number; estH: number; lines: number } {
-  const fontPx = Math.round(fh * SIZE_FRACTION[size]);
+  const fontPx = Math.round(fh * SIZE_FRACTION[normalizeSize(size)]);
   const padX = Math.round(fontPx * 0.85);
   const padY = Math.round(fontPx * 0.42);
   const maxBoxW = (screenWide ? 0.7 : 0.34) * fw;
@@ -334,14 +341,19 @@ export function resolveAnnotationPlacement(
   // edge still bleeds half its width off-screen. Estimate the rendered box size
   // (real glyph advance + wrapped line count), derive its span from the
   // translate anchors, and shift it back inside the margins.
-  const { estW, estH } = estimateCaptionBox(payload.text, payload.size ?? "md", screenWide, fw, fh);
+  const { estW, estH } = estimateCaptionBox(payload.text, normalizeSize(payload.size), screenWide, fw, fh);
 
+  // Independent (not else-if) per-edge clamps: a box larger than the safe area on
+  // an axis can violate both edges, and applying both shifts leaves it centered/
+  // symmetric on that axis rather than slammed against one margin with the far
+  // edge flung off-frame. Boxes that fit only ever trip one edge, so this is a
+  // no-op for the common case.
   const spanLeft = tx === "-50%" ? left - estW / 2 : tx === "-100%" ? left - estW : left;
   const spanTop = ty === "-50%" ? top - estH / 2 : ty === "-100%" ? top - estH : top;
   if (spanLeft < mx) left += mx - spanLeft;
-  else if (spanLeft + estW > fw - mx) left -= spanLeft + estW - (fw - mx);
+  if (spanLeft + estW > fw - mx) left -= spanLeft + estW - (fw - mx);
   if (spanTop < my) top += my - spanTop;
-  else if (spanTop + estH > fh - my) top -= spanTop + estH - (fh - my);
+  if (spanTop + estH > fh - my) top -= spanTop + estH - (fh - my);
   return { left, top, tx, ty, textAlign, screenWide };
 }
 
@@ -507,7 +519,7 @@ export function DemoOverlay() {
             next.set(payload.id, {
               id: payload.id,
               text: payload.text,
-              size: payload.size ?? "md",
+              size: normalizeSize(payload.size),
               ...resolved,
             });
             return next;
@@ -602,7 +614,10 @@ export function DemoOverlay() {
           fontFamily: "system-ui, sans-serif",
           textAlign: ann.textAlign,
           maxWidth: ann.screenWide ? "70vw" : "34vw",
-          whiteSpace: "normal",
+          // pre-wrap (not normal) so explicit "\n" renders as a hard line break,
+          // matching how estimateCaptionBox counts paragraphs — otherwise the
+          // estimated and rendered line counts diverge for multi-line captions.
+          whiteSpace: "pre-wrap",
           // Break unbreakable tokens (file paths, URLs) so they wrap inside the
           // box instead of overflowing past max-width and the safe area. Keep
           // word-break: normal so ordinary prose still wraps on spaces only.
