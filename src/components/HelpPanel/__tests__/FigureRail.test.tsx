@@ -152,4 +152,78 @@ describe("FigureRail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
     expect(screen.queryByTestId("figure-lightbox")).toBeNull();
   });
+
+  // Animated WebP (#10278) plays via the native image decoder; the render path
+  // must hand the original URL straight to a plain <img> with no poster/still
+  // swap, in both the thumbnail and the lightbox, so the animation can loop.
+  it("passes an animated WebP url through unmodified to the thumbnail img", () => {
+    const url = "https://daintree.org/demo-loop.webp";
+    render(<FigureRail figures={[makeFigure(1, { url })]} />);
+
+    const img = screen.getByAltText("Alt 1");
+    expect(img.getAttribute("src")).toBe(url);
+    // No still-frame substitution: the rendered element is a plain <img>, not a
+    // <canvas>/<video> poster surface.
+    expect(img.tagName).toBe("IMG");
+  });
+
+  it("opens an animated WebP figure in the lightbox with the same unmodified url, and it becomes visible on load", () => {
+    const url = "https://daintree.org/demo-loop.webp";
+    render(<FigureRail figures={[makeFigure(1, { url })]} />);
+    fireEvent.load(screen.getByAltText("Alt 1"));
+    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
+
+    const lightbox = screen.getByTestId("figure-lightbox");
+    const img = within(lightbox).getByAltText("Alt 1");
+    expect(img.getAttribute("src")).toBe(url);
+    expect(img.tagName).toBe("IMG");
+    // referrerPolicy must carry into the lightbox path too.
+    expect(img.getAttribute("referrerpolicy")).toBe("no-referrer");
+
+    // The lightbox img starts hidden (opacity-0) and reveals on load — a broken
+    // onLoad handler would leave an animated WebP permanently invisible.
+    expect(img.classList.contains("opacity-0")).toBe(true);
+    fireEvent.load(img);
+    expect(img.classList.contains("opacity-100")).toBe(true);
+  });
+
+  it("renders an animated WebP as a plain looping img with no still-frame swap, even under prefers-reduced-motion", () => {
+    // Chromium 148 does not pause native animated images for
+    // prefers-reduced-motion (no shipped CSS image-animation property), so the
+    // component intentionally keeps rendering a plain looping <img> — no canvas,
+    // <video>, or poster still-frame substitution. This guards the documented
+    // design decision: a future reduce-motion still-frame path must arrive with
+    // a server-supplied poster URL, not by silently swapping the render element.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("prefers-reduced-motion"),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }))
+    );
+
+    try {
+      const url = "https://daintree.org/demo-loop.webp";
+      const { container } = render(<FigureRail figures={[makeFigure(1, { url })]} />);
+
+      const img = screen.getByAltText("Alt 1");
+      expect(img.tagName).toBe("IMG");
+      expect(img.getAttribute("src")).toBe(url);
+      // No still-frame substitution surface anywhere in the rail.
+      expect(container.querySelector("canvas")).toBeNull();
+      expect(container.querySelector("video")).toBeNull();
+      expect(img.hasAttribute("poster")).toBe(false);
+    } finally {
+      // Restore only matchMedia — vi.unstubAllGlobals() would also wipe the
+      // module-level ResizeObserver stub other tests rely on. The finally block
+      // ensures cleanup even if an assertion above throws.
+      vi.stubGlobal("matchMedia", undefined);
+    }
+  });
 });

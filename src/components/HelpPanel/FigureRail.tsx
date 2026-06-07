@@ -117,6 +117,15 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
           }
           className="block h-full w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
         >
+          {/* Animated WebP demo loops play natively through the browser image
+              decoder — no decoding hint or poster-swap is needed, and rail
+              thumbnails are intentionally allowed to loop (source is the
+              URL-validated daintree.org host). Note: prefers-reduced-motion does
+              not pause native animated images in Chromium 148 — the CSS
+              `image-animation` property is not yet shipped — so the reduce-motion
+              variant in index.css (which targets CSS @keyframes) has no effect
+              here. A still-frame fallback would need a server-supplied poster
+              URL; tracked as a separate enhancement. */}
           <img
             key={retryNonce}
             src={figure.url}
