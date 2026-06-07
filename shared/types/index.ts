@@ -258,6 +258,8 @@ export type {
   HelpAssistantSettings,
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,
+  HelpSessionLiveStatus,
+  HelpSessionActiveGrant,
   MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,

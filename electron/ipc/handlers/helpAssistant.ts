@@ -1,11 +1,14 @@
 // eager-import-allow: reads help-assistant settings via store.get synchronously in the IPC handler
 import { store } from "../../store.js";
-import { defineIpcNamespace, op } from "../define.js";
+import { z } from "zod";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
+import type { IpcContext } from "../types.js";
 import { HELP_ASSISTANT_METHOD_CHANNELS } from "./helpAssistant.preload.js";
 import type {
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
+  HelpSessionLiveStatus,
 } from "../../../shared/types/ipc/api.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
@@ -100,6 +103,21 @@ export function getHelpAssistantSettings(): HelpAssistantSettings {
   return { ...HELP_ASSISTANT_DEFAULTS, ...sanitizeStored(stored) };
 }
 
+// Safe "no live session" snapshot returned when the caller has no pinned help
+// session — the renderer renders this as a quiet idle state, never a spinner.
+const DISCONNECTED_LIVE_STATUS: HelpSessionLiveStatus = {
+  connected: false,
+  tier: "workbench",
+  activeGrants: [],
+};
+
+// The session-store tier is an `McpTier` which also admits `"external"` for
+// api-key/loopback sessions. Help-session bearers are never external, but
+// narrow defensively so the IPC surface only ever exposes a HelpAssistantTier.
+function narrowToHelpAssistantTier(tier: string): HelpAssistantTier {
+  return isValidHelpAssistantTier(tier) ? tier : "workbench";
+}
+
 export const helpAssistantNamespace = defineIpcNamespace({
   name: "helpAssistant",
   ops: {
@@ -164,6 +182,24 @@ export const helpAssistantNamespace = defineIpcNamespace({
           }
         }
       }
+    ),
+    getLiveSessionStatus: opValidated(
+      HELP_ASSISTANT_METHOD_CHANNELS.getLiveSessionStatus,
+      z.object({ sessionId: z.string().min(1) }),
+      async (
+        ctx: IpcContext,
+        { sessionId }: { sessionId: string }
+      ): Promise<HelpSessionLiveStatus> => {
+        const svc = await getMcpServerService();
+        const live = svc.getHelpSessionLiveStatus(sessionId, ctx.webContentsId);
+        if (!live) return DISCONNECTED_LIVE_STATUS;
+        return {
+          connected: true,
+          tier: narrowToHelpAssistantTier(live.tier),
+          activeGrants: live.activeGrants,
+        };
+      },
+      { withContext: true }
     ),
   },
 });

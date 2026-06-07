@@ -722,6 +722,7 @@ export const CHANNELS = {
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
   HELP_ASSISTANT_SET_SETTINGS: "help-assistant:set-settings",
+  HELP_ASSISTANT_GET_LIVE_SESSION_STATUS: "help-assistant:get-live-session-status",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",

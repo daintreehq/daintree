@@ -361,6 +361,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "help-assistant:get-live-session-status": {
+    args: [__1: { sessionId: string }];
+    result: import("./api.js").HelpSessionLiveStatus;
+  };
   "help-assistant:get-settings": {
     args: [];
     result: import("./api.js").HelpAssistantSettings;

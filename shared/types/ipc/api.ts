@@ -1819,3 +1819,30 @@ export interface HelpAssistantSettings {
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
 }
+
+/** One per-tool grant currently active for the pinned help session. */
+export interface HelpSessionActiveGrant {
+  /** Dotted `BuiltInActionId` the grant authorizes (e.g. `terminal.kill`). */
+  toolId: string;
+  /** Absolute epoch millis when the grant expires without refresh. */
+  expiresAt: number;
+  /** TTL the grant was minted with, in milliseconds. */
+  ttlMs: number;
+}
+
+/**
+ * Live status snapshot of the currently pinned help session — the effective
+ * tier the session is *running at right now* (which a renderer-approved
+ * "Always allow" elevation can raise above the configured
+ * {@link HelpAssistantSettings.tier} default) plus the per-tool grants
+ * currently in effect. Distinct from the persisted settings: those describe
+ * the default for new sessions, this describes the live one. `connected` is
+ * false when there is no pinned help session for the caller's WebContents (no
+ * session, or the caller isn't the pinned renderer) — the tier/grants fields
+ * then carry safe defaults the UI renders as a quiet "no live session" state.
+ */
+export interface HelpSessionLiveStatus {
+  connected: boolean;
+  tier: HelpAssistantTier;
+  activeGrants: HelpSessionActiveGrant[];
+}

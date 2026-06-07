@@ -30,14 +30,37 @@ const utilsMock = vi.hoisted(() => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
+  // Mirrors the real wrapper: parse the first arg with the Zod schema, then
+  // invoke the handler with (ctx, parsedPayload). Tests pass a ctx-like object
+  // (carrying webContentsId) as the first stored-handler argument.
+  typedHandleWithContextValidated: (
+    channel: string,
+    schema: { parse: (v: unknown) => unknown },
+    handler: unknown
+  ) => {
+    // async so a synchronous schema.parse throw surfaces as a rejected promise
+    // (matching the real wrapper / ipcMain.handle behaviour the handler relies on).
+    ipcMainMock.handle(channel, async (ctx: unknown, payload: unknown) => {
+      const parsed = schema.parse(payload);
+      return (handler as (c: unknown, p: unknown) => unknown)(ctx, parsed);
+    });
+    return () => ipcMainMock.removeHandler(channel);
+  },
 }));
 
 vi.mock("../../utils.js", () => utilsMock);
+
+const mcpServiceMock = vi.hoisted(() => ({
+  getHelpSessionLiveStatus: vi.fn(),
+}));
+
+vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: mcpServiceMock }));
 
 import { registerHelpAssistantHandlers } from "../helpAssistant.js";
 
 const GET_CHANNEL = "help-assistant:get-settings";
 const SET_CHANNEL = "help-assistant:set-settings";
+const LIVE_STATUS_CHANNEL = "help-assistant:get-live-session-status";
 
 describe("registerHelpAssistantHandlers", () => {
   beforeEach(() => {
@@ -435,5 +458,67 @@ describe("registerHelpAssistantHandlers", () => {
 
     const result = await handler(null);
     expect(result).toMatchObject({ customArgs: "--model sonnet" });
+  });
+});
+
+describe("registerHelpAssistantHandlers — getLiveSessionStatus (#10032)", () => {
+  const CTX = { webContentsId: 4242 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcMainMock._handlers.clear();
+  });
+
+  it("returns a connected snapshot shaped from the service result", async () => {
+    mcpServiceMock.getHelpSessionLiveStatus.mockReturnValue({
+      tier: "system",
+      activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(LIVE_STATUS_CHANNEL)!;
+
+    const result = await handler(CTX, { sessionId: "help-1" });
+
+    expect(result).toEqual({
+      connected: true,
+      tier: "system",
+      activeGrants: [{ toolId: "terminal.kill", expiresAt: 1000, ttlMs: 500 }],
+    });
+    // The public help id and the caller's webContentsId are threaded through.
+    expect(mcpServiceMock.getHelpSessionLiveStatus).toHaveBeenCalledWith("help-1", 4242);
+  });
+
+  it("returns safe disconnected defaults when the service finds no live session", async () => {
+    mcpServiceMock.getHelpSessionLiveStatus.mockReturnValue(null);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(LIVE_STATUS_CHANNEL)!;
+
+    const result = await handler(CTX, { sessionId: "help-1" });
+
+    expect(result).toEqual({ connected: false, tier: "workbench", activeGrants: [] });
+  });
+
+  it("narrows an unexpected external tier down to a safe HelpAssistantTier", async () => {
+    // Help sessions are never "external", but the service tier is an McpTier
+    // which admits it — the handler must never surface it on the IPC contract.
+    mcpServiceMock.getHelpSessionLiveStatus.mockReturnValue({
+      tier: "external",
+      activeGrants: [],
+    });
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(LIVE_STATUS_CHANNEL)!;
+
+    const result = await handler(CTX, { sessionId: "help-1" });
+
+    expect(result).toMatchObject({ connected: true, tier: "workbench" });
+  });
+
+  it("rejects a payload with a missing/empty sessionId before reaching the service", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(LIVE_STATUS_CHANNEL)!;
+
+    await expect(handler(CTX, { sessionId: "" })).rejects.toThrow();
+    await expect(handler(CTX, {})).rejects.toThrow();
+    expect(mcpServiceMock.getHelpSessionLiveStatus).not.toHaveBeenCalled();
   });
 });
