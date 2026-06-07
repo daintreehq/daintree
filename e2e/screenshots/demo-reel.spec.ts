@@ -273,7 +273,7 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       expect(existsSync(outputPath)).toBe(true);
       const bytes = statSync(outputPath).size;
       console.log(`[demo-reel] wrote ${outputPath} (${(bytes / 1_000_000).toFixed(1)} MB)`);
-      expect(result.stop.frameCount).toBeGreaterThan(3);
+      expect(result.stop.chunkCount).toBeGreaterThan(3);
       expect(bytes).toBeGreaterThan(10_000);
     } finally {
       if (app) await closeApp(app).catch(() => {});

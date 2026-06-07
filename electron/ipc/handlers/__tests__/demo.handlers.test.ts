@@ -240,6 +240,35 @@ describe("registerDemoHandlers", () => {
       cleanup();
     });
 
+    it("getCaptureStatus reports live chunkCount as chunks arrive during capture", async () => {
+      autoResolveCommandDone();
+      const deps = makeDeps(true);
+      const cleanup = registerDemoHandlers(deps);
+      await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
+        {},
+        defaultPayload
+      );
+
+      const statusHandler = getHandler("demo:get-capture-status") as (
+        ev: unknown
+      ) => Promise<{ active: boolean; chunkCount: number; outputPath: string | null }>;
+      const chunkListener = getIpcListener("demo:capture-chunk");
+
+      expect((await statusHandler({})).chunkCount).toBe(0);
+
+      chunkListener!({}, { captureId: "test-request-id", data: new Uint8Array([1]) });
+      chunkListener!({}, { captureId: "test-request-id", data: new Uint8Array([2]) });
+      let status = await statusHandler({});
+      expect(status.active).toBe(true);
+      expect(status.chunkCount).toBe(2);
+
+      // Stale-captureId chunks must not advance the live counter.
+      chunkListener!({}, { captureId: "bogus", data: new Uint8Array([3]) });
+      status = await statusHandler({});
+      expect(status.chunkCount).toBe(2);
+      cleanup();
+    });
+
     it("stale captureId chunks are ignored", async () => {
       autoResolveCommandDone();
       const cleanup = registerDemoHandlers(makeDeps(true));
@@ -263,19 +292,19 @@ describe("registerDemoHandlers", () => {
       const stopPromise = (
         getHandler("demo:stop-capture") as (...a: unknown[]) => Promise<{
           outputPath: string;
-          frameCount: number;
+          chunkCount: number;
         }>
       )({});
 
       setTimeout(() => {
         const stopListener = getIpcListener("demo:capture-stop");
-        stopListener!({}, { captureId: "test-request-id", frameCount: 7 });
+        stopListener!({}, { captureId: "test-request-id", chunkCount: 7 });
       }, 10);
 
       const result = await stopPromise;
       expect(mockWriteStream.end).toHaveBeenCalled();
       expect(result.outputPath).toBe("/tmp/capture/out.webm");
-      expect(result.frameCount).toBe(7);
+      expect(result.chunkCount).toBe(7);
       cleanup();
     });
 
@@ -292,7 +321,7 @@ describe("registerDemoHandlers", () => {
         getHandler("demo:get-capture-status") as (ev: unknown) => Promise<unknown>
       )({})) as {
         active: boolean;
-        frameCount: number;
+        chunkCount: number;
         outputPath: string | null;
       };
       expect(status.active).toBe(false);
@@ -330,7 +359,7 @@ describe("registerDemoHandlers", () => {
       )({});
       setTimeout(() => {
         const stopListener = getIpcListener("demo:capture-stop");
-        stopListener!({}, { captureId: "test-request-id", frameCount: 0, error: "boom" });
+        stopListener!({}, { captureId: "test-request-id", chunkCount: 0, error: "boom" });
       }, 10);
       await expect(stopPromise).rejects.toThrow("Capture failed: boom");
       cleanup();

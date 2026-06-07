@@ -54,7 +54,7 @@ export interface DemoCaptureChunkPayload {
 
 export interface DemoCaptureStopPayload {
   captureId: string;
-  frameCount: number;
+  chunkCount: number;
   error?: string;
 }
 
@@ -79,12 +79,13 @@ export interface DemoStartCaptureResult {
 
 export interface DemoStopCaptureResult {
   outputPath: string;
-  frameCount: number;
+  chunkCount: number;
 }
 
 export interface DemoCaptureStatus {
   active: boolean;
-  frameCount: number;
+  /** Number of MediaRecorder timeslice chunks received so far (not video frames). */
+  chunkCount: number;
   outputPath: string | null;
 }
 

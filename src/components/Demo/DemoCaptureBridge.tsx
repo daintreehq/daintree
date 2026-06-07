@@ -5,7 +5,7 @@ interface ActiveRecording {
   captureId: string;
   recorder: MediaRecorder;
   stream: MediaStream;
-  frameCount: number;
+  chunkCount: number;
   pendingChunks: number;
   stopped: boolean;
   stopSignalSent: boolean;
@@ -29,7 +29,7 @@ export function DemoCaptureBridge() {
     const maybeSendStop = (active: ActiveRecording) => {
       if (!active.stopped || active.stopSignalSent || active.pendingChunks > 0) return;
       active.stopSignalSent = true;
-      api.sendCaptureStop(active.captureId, active.frameCount, active.stopError ?? undefined);
+      api.sendCaptureStop(active.captureId, active.chunkCount, active.stopError ?? undefined);
       if (active.stopRequestId) {
         api.sendCommandDone(active.stopRequestId, active.stopError ?? undefined);
         active.stopRequestId = null;
@@ -120,7 +120,7 @@ export function DemoCaptureBridge() {
           captureId,
           recorder,
           stream,
-          frameCount: 0,
+          chunkCount: 0,
           pendingChunks: 0,
           stopped: false,
           stopSignalSent: false,
@@ -132,7 +132,7 @@ export function DemoCaptureBridge() {
         recorder.ondataavailable = async (e: BlobEvent) => {
           if (!e.data || e.data.size === 0) return;
           active.pendingChunks += 1;
-          active.frameCount += 1;
+          active.chunkCount += 1;
           try {
             const ab = await e.data.arrayBuffer();
             api.sendCaptureChunk(active.captureId, new Uint8Array(ab));

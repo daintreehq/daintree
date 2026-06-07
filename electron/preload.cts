@@ -2675,8 +2675,8 @@ const api: ElectronAPI = {
           sendCaptureChunk: (captureId: string, data: Uint8Array) => {
             ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
           },
-          sendCaptureStop: (captureId: string, frameCount: number, error?: string) => {
-            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, frameCount, error });
+          sendCaptureStop: (captureId: string, chunkCount: number, error?: string) => {
+            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, chunkCount, error });
           },
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
