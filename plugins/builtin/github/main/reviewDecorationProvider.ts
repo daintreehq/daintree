@@ -1,4 +1,8 @@
-import type { FileDecoration, FileDecorationProviderImpl } from "../../../../shared/types/forge.js";
+import type {
+  FileDecoration,
+  FileDecorationProviderImpl,
+  ForgeProviderImpl,
+} from "../../../../shared/types/forge.js";
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { getPRReviewThreads } from "./GitHubPRs.js";
 
@@ -12,9 +16,13 @@ const SCOPE_PREFIX = "worktree-diff:";
  * learns what a review thread is. The scope string carries the worktree path
  * (`worktree-diff:/abs/path`); the provider resolves that worktree's linked
  * PR number from the host's worktree snapshots, fetches unresolved review
- * thread counts, and maps each to a badge/tooltip/color decoration.
+ * thread counts, and maps each to a badge/tooltip/color decoration plus an
+ * optional `url` deep-link authored by the active forge provider.
  */
-export function createReviewDecorationProvider(host: PluginHostApi): FileDecorationProviderImpl {
+export function createReviewDecorationProvider(
+  host: PluginHostApi,
+  provider: ForgeProviderImpl
+): FileDecorationProviderImpl {
   return {
     async provideDecorations(scope, paths) {
       if (!scope.startsWith(SCOPE_PREFIX)) return {};
@@ -23,7 +31,8 @@ export function createReviewDecorationProvider(host: PluginHostApi): FileDecorat
 
       const worktrees = await host.getWorktrees();
       const worktree = worktrees.find((w) => w.path === worktreePath);
-      const prNumber = worktree?.linked?.pr?.ref.number;
+      const prRef = worktree?.linked?.pr?.ref;
+      const prNumber = prRef?.number;
       if (typeof prNumber !== "number") return {};
 
       const counts = await getPRReviewThreads(worktreePath, prNumber);
@@ -32,15 +41,28 @@ export function createReviewDecorationProvider(host: PluginHostApi): FileDecorat
       };
       const isClamped = typeof _clamped === "number";
       const wanted = new Set(paths);
+      // Capability guard: only set `url` when the provider implements the
+      // builder. `in` would falsely report it for a property explicitly set
+      // to `undefined` (forge.ts:463-466). The renderer mirrors this guard
+      // so unloaded providers don't throw at click time.
+      const buildFileUrl = provider.buildPRFileUrl;
       const out: Record<string, FileDecoration> = {};
       for (const [path, count] of Object.entries(pathCounts)) {
         if (count > 0 && wanted.has(path)) {
           const base = `${count} unresolved review comment${count !== 1 ? "s" : ""}`;
-          out[path] = {
+          const decoration: FileDecoration = {
             badge: String(count),
             tooltip: isClamped ? `${base} (partial count)` : base,
             color: "text-status-warning",
           };
+          if (buildFileUrl) {
+            decoration.url = buildFileUrl(
+              { host: "github.com", owner: prRef.owner, repo: prRef.repo, rawData: prRef.rawData },
+              prNumber,
+              path
+            );
+          }
+          out[path] = decoration;
         }
       }
       return out;
@@ -53,10 +75,13 @@ export function createReviewDecorationProvider(host: PluginHostApi): FileDecorat
  * affected scopes so an open Review Hub re-pulls when PR linkage changes.
  * Returns a disposer covering both.
  */
-export function registerReviewDecorationProvider(host: PluginHostApi): () => void {
+export function registerReviewDecorationProvider(
+  host: PluginHostApi,
+  provider: ForgeProviderImpl
+): () => void {
   const disposeProvider = host.registerFileDecorationProvider(
     { id: "worktree-diff-review" },
-    createReviewDecorationProvider(host)
+    createReviewDecorationProvider(host, provider)
   );
 
   // `onDidChangeWorktrees` fires after `activate()` resolves; that is exactly
