@@ -1871,6 +1871,8 @@ const api: ElectronAPI = {
         defaultValue: string;
       }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
+    onDialogDismiss: (callback: (payload: { panelId: string }) => void): (() => void) =>
+      _typedOn(CHANNELS.WEBVIEW_DIALOG_DISMISS, callback),
     onFindShortcut: (
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),

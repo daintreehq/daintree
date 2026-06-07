@@ -1806,6 +1806,12 @@ export interface IpcEventMap {
     defaultValue: string;
   };
 
+  // Webview dialogs dismissed — guest navigated away or its renderer crashed,
+  // invalidating any pending dialog overlays for the panel
+  "webview:dialog-dismiss": {
+    panelId: string;
+  };
+
   // Webview find-in-page shortcut forwarded from guest
   "webview:find-shortcut": {
     panelId: string;

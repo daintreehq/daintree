@@ -365,6 +365,7 @@ export const CHANNELS = {
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
+  WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
   WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",

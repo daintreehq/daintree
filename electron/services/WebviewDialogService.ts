@@ -124,7 +124,7 @@ class WebviewDialogService {
     }
   }
 
-  private cancelPendingForGuest(webContentsId: number): void {
+  cancelPendingForGuest(webContentsId: number): void {
     for (const [dialogId, pending] of this.pendingDialogs) {
       if (pending.webContentsId === webContentsId) {
         this.pendingDialogs.delete(dialogId);

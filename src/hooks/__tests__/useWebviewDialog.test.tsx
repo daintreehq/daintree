@@ -23,12 +23,18 @@ interface DialogRequestPayload {
 }
 
 let dialogListener: ((payload: DialogRequestPayload) => void) | null = null;
+let dismissListener: ((payload: { panelId: string }) => void) | null = null;
+let dismissCleanup: ReturnType<typeof vi.fn>;
 let respondToDialog: ReturnType<typeof vi.fn>;
 let registerPanel: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   dialogListener = null;
+  dismissListener = null;
+  dismissCleanup = vi.fn(() => {
+    dismissListener = null;
+  });
   respondToDialog = vi.fn();
   registerPanel = vi.fn().mockResolvedValue(undefined);
 
@@ -43,6 +49,10 @@ beforeEach(() => {
             dialogListener = null;
           };
         },
+        onDialogDismiss: (cb: (payload: { panelId: string }) => void) => {
+          dismissListener = cb;
+          return dismissCleanup;
+        },
       },
     },
     writable: true,
@@ -53,6 +63,11 @@ beforeEach(() => {
 function emitDialog(panelId: string, dialogId: string): void {
   if (!dialogListener) throw new Error("dialog listener not registered");
   dialogListener({ panelId, dialogId });
+}
+
+function emitDismiss(panelId: string): void {
+  if (!dismissListener) throw new Error("dismiss listener not registered");
+  dismissListener({ panelId });
 }
 
 describe("useWebviewDialog", () => {
@@ -128,5 +143,58 @@ describe("useWebviewDialog", () => {
 
     expect(notify).not.toHaveBeenCalled();
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("clears the dialog queue on dismiss for the matching panel", async () => {
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+      emitDialog("panel-1", "dialog-2");
+    });
+
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    // Guest navigated away / crashed — main sends a dismiss for this panel.
+    act(() => {
+      emitDismiss("panel-1");
+    });
+
+    await waitFor(() => {
+      expect(result.current.currentDialog).toBeNull();
+    });
+
+    // No response was sent for the stale dialogs.
+    expect(respondToDialog).not.toHaveBeenCalled();
+  });
+
+  it("ignores a dismiss for a different panel", async () => {
+    const { result } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    act(() => {
+      emitDialog("panel-1", "dialog-1");
+    });
+
+    await waitFor(() => {
+      expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+    });
+
+    act(() => {
+      emitDismiss("panel-other");
+    });
+
+    // This panel's dialog is untouched.
+    expect(result.current.currentDialog?.dialogId).toBe("dialog-1");
+  });
+
+  it("unsubscribes from dismiss events on unmount", () => {
+    const { unmount } = renderHook(() => useWebviewDialog("panel-1", null, false));
+
+    expect(dismissListener).not.toBeNull();
+    unmount();
+    expect(dismissCleanup).toHaveBeenCalled();
+    expect(dismissListener).toBeNull();
   });
 });

@@ -847,6 +847,27 @@ export function setupWebviewCSP(): void {
       contents.on("unresponsive", notifyUnresponsive);
       contents.on("responsive", notifyResponsive);
 
+      // Dismiss any pending JS dialogs when the guest navigates to a new document
+      // or its renderer crashes. Chromium discards the native dialog state in both
+      // cases, so the stored callback would otherwise leak and the renderer overlay
+      // would survive a page that no longer exists. did-navigate fires only for
+      // cross-document main-frame navigations (same-document hash/pushState changes
+      // emit did-navigate-in-page and are correctly ignored).
+      const dismissPendingDialogs = () => {
+        if (contents.isDestroyed()) return;
+        const dialogService = getWebviewDialogService();
+        const panelId = dialogService.getPanelId(contents.id);
+        dialogService.cancelPendingForGuest(contents.id);
+        if (!panelId) return;
+        const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+        if (parentWindow && !parentWindow.isDestroyed()) {
+          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
+        }
+      };
+
+      contents.on("did-navigate", dismissPendingDialogs);
+      contents.on("render-process-gone", dismissPendingDialogs);
+
       // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) and reload
       // (Cmd/Ctrl+R) shortcuts from webview guests. When the guest has focus
       // Chromium routes keystrokes directly to it, so the outer renderer's
