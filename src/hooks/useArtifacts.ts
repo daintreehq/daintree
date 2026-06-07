@@ -320,7 +320,13 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   );
 
   const clearArtifacts = useCallback(() => {
-    removeArtifactsForTerminal(terminalId);
+    // User-initiated "Clear all" on a LIVE mounted terminal. Unlike teardown,
+    // this must NOT tombstone the id — the terminal is still running and must
+    // keep detecting new artifacts. (The mount effect only clears the
+    // tombstone on `[terminalId]` change, which a button click does not
+    // trigger, so tombstoning here would blackhole the rest of the session.)
+    artifactStore.delete(terminalId);
+    notifyListeners(terminalId, []);
     setArtifacts([]);
   }, [terminalId]);
 

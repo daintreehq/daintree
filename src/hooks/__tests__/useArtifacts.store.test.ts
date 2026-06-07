@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import {
   removeArtifactsForTerminal,
+  useArtifacts,
   __test_resetArtifactStore,
   __test_seedArtifactStore,
   __test_getArtifactStoreSize,
@@ -102,6 +105,34 @@ describe("useArtifacts module-level store teardown", () => {
     expect(__test_isTombstoned("t1")).toBe(true);
 
     unsubscribe();
+  });
+
+  it("does not tombstone the live terminal on user-initiated clearArtifacts, so newly detected artifacts still appear (#10023 regression)", () => {
+    const { result } = renderHook(() => useArtifacts("live-1"));
+
+    // Seed a detection so there is something to clear, mirroring a running agent.
+    act(() => {
+      __test_simulateArtifactDetected("live-1", [makeArtifact({ id: "a1" })]);
+    });
+    expect(result.current.artifacts).toHaveLength(1);
+
+    // User clicks "Clear all" on the LIVE mounted terminal.
+    act(() => {
+      result.current.clearArtifacts();
+    });
+    expect(result.current.artifacts).toHaveLength(0);
+    expect(__test_getArtifactsFor("live-1")).toBeUndefined();
+    // The terminal must NOT be tombstoned — it is still mounted and running.
+    expect(__test_isTombstoned("live-1")).toBe(false);
+
+    // A new artifact detected after the clear must land, not be silently dropped.
+    let accepted = false;
+    act(() => {
+      accepted = __test_simulateArtifactDetected("live-1", [makeArtifact({ id: "a-new" })]);
+    });
+    expect(accepted).toBe(true);
+    expect(result.current.artifacts).toHaveLength(1);
+    expect(result.current.artifacts[0]!.id).toBe("a-new");
   });
 
   it("emits a fresh empty array reference on each call (callers can rely on !==)", () => {
