@@ -5736,4 +5736,162 @@ describe("ActivityMonitor", () => {
       expect(() => monitor.onOscProgressIdle(7000)).not.toThrow();
     });
   });
+
+  describe("notifyExternalPromotion (#9875)", () => {
+    it("arms the idle machinery without emitting busy, so the idle path can fire later", () => {
+      vi.setSystemTime(20000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("ext-promo", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["hello world"],
+        getCursorLine: () => "hello world",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+        idleDebounceMs: 8000,
+      });
+      monitor.startPolling();
+      vi.advanceTimersByTime(100);
+      onStateChange.mockClear();
+
+      monitor.notifyExternalPromotion();
+
+      // Private state shadows the FSM promotion, but no state change is
+      // emitted — the caller already transitioned the FSM directly.
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      // After the working hold (1500ms) and idle debounce (8000ms) of
+      // silence, the monitor's own idle path fires — the working→waiting
+      // transition that was previously unreachable because the private
+      // state was stranded at "idle".
+      vi.advanceTimersByTime(9700);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith("ext-promo", 100, "idle", {
+        trigger: "timeout",
+      });
+
+      monitor.dispose();
+    });
+
+    it("is a no-op after dispose", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("ext-promo-disposed", 100, onStateChange, {
+        agentId: "claude",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+      monitor.dispose();
+
+      expect(() => monitor.notifyExternalPromotion()).not.toThrow();
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+
+    it("does not arm while focus suppression is active (#8865)", () => {
+      vi.setSystemTime(30000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("ext-promo-focus", 100, onStateChange, {
+        agentId: "claude",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.notifyFocus(2000);
+      monitor.notifyExternalPromotion();
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("does not bounce straight back to idle when promoted after a long quiet spell", () => {
+      vi.setSystemTime(40000);
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("ext-promo-quiet", 100, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["hello world"],
+        getCursorLine: () => "hello world",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        pollingIntervalMs: 50,
+        idleDebounceMs: 8000,
+      });
+      monitor.startPolling();
+
+      // Let the agent sit quiet long past the temperature's 6s waiting dwell
+      // so its quiet clock is stale when the external promotion arrives.
+      vi.advanceTimersByTime(10000);
+      onStateChange.mockClear();
+
+      monitor.notifyExternalPromotion();
+      expect(monitor.getState()).toBe("busy");
+
+      // The stale quiet clock must not flip the monitor back to idle right
+      // after the 1.5s working hold expires.
+      vi.advanceTimersByTime(2000);
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      // With continued silence the idle path still fires eventually.
+      vi.advanceTimersByTime(7700);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith("ext-promo-quiet", 100, "idle", {
+        trigger: "timeout",
+      });
+
+      monitor.dispose();
+    });
+
+    it("repeated promotions extend the idle deadline", () => {
+      vi.setSystemTime(50000);
+      const onStateChange = vi.fn();
+      // No polling sources: the debounce timer is the only idle driver, so
+      // the test isolates the lastActivityTimestamp refresh.
+      const monitor = new ActivityMonitor("ext-promo-extend", 100, onStateChange, {
+        agentId: "claude",
+        initialState: "idle",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 8000,
+      });
+
+      monitor.notifyExternalPromotion();
+      vi.advanceTimersByTime(6000);
+      expect(monitor.getState()).toBe("busy");
+
+      // A second promotion refreshes lastActivityTimestamp and re-arms the
+      // 8s debounce window from now.
+      monitor.notifyExternalPromotion();
+      vi.advanceTimersByTime(7900);
+      expect(monitor.getState()).toBe("busy");
+
+      vi.advanceTimersByTime(200);
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith("ext-promo-extend", 100, "idle", {
+        trigger: "timeout",
+      });
+
+      monitor.dispose();
+    });
+
+    it("never emits busy from this path, even when called repeatedly while already busy", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("ext-promo-busy", 100, onStateChange, {
+        agentId: "claude",
+        initialState: "busy",
+        skipInitialStateEmit: true,
+      });
+      onStateChange.mockClear();
+
+      monitor.notifyExternalPromotion();
+      monitor.notifyExternalPromotion();
+
+      expect(monitor.getState()).toBe("busy");
+      const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
+      expect(busyCalls.length).toBe(0);
+
+      monitor.dispose();
+    });
+  });
 });

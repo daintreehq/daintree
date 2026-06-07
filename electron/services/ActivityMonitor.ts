@@ -875,6 +875,40 @@ export class ActivityMonitor {
     if (this.isDisposed) return;
   }
 
+  // Called by `TerminalProcess.noteAgentOutputActivity` immediately after it
+  // promotes the agent FSM to working via its direct
+  // `agentStateService.handleActivityState("busy")` path (#9875). That path
+  // bypasses this monitor entirely, leaving the private `state` at "idle" —
+  // and every idle path that can transition the FSM working→waiting gates on
+  // `state === "busy"`, so the FSM would otherwise strand in working with the
+  // watchdog (which only fires from waiting) never arming. Mirrors
+  // `becomeBusy`'s bookkeeping but deliberately skips `onStateChange`: the FSM
+  // transition already happened at the call site, and re-emitting "busy" here
+  // would double-fire the transition.
+  notifyExternalPromotion(now: number = Date.now()): void {
+    if (this.isDisposed) return;
+    // Defense-in-depth: the call site already gates on focus suppression, but
+    // keep the guard so any future caller inherits it (#8865).
+    if (this.isFocusSuppressed(now)) return;
+    this.lastActivityTimestamp = now;
+    this.lastDataTimestamp = now;
+    this.recordWorkingSignal(now);
+    this.resetDebounceTimer();
+    this.waitingWatchdog.reset();
+    this.cosmeticRecoveryDebouncer.reset();
+    this.structuralRecoveryDebouncer.reset();
+    this.completionTimer.reset();
+    // Discard the temperature snapshot so its quiet clock restarts from the
+    // promotion (same rationale as `notifyFocus`). A stale `quietStartedAt`
+    // from the pre-promotion lull would otherwise hint "idle" at the first
+    // poll after the 1.5s working hold and bounce the FSM straight back.
+    this.simpleOutputTemperature.reset();
+    if (this.state !== "busy") {
+      this.state = "busy";
+      this.idleSince = now;
+    }
+  }
+
   notifyResize(suppressionMs = 500): void {
     this.resizeSuppressUntil = Date.now() + suppressionMs;
     this.highOutputDetector.resetWindow();
