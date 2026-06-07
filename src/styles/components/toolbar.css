@@ -323,11 +323,14 @@
  *    McpRuntimeSnapshot.state and surface as MCP health; `working`,
  *    `directing`, `waiting` come from AgentStateMachine and surface as the
  *    agent activity pip, which is suppressed when the panel is open or the
- *    state has been acknowledged. NotificationCenterToolbarButton owns the
- *    `unread` dot on its own surface — it doesn't compete with the assistant
- *    pips, so the ordering reads:
+ *    state has been acknowledged. Below those, the audit-anomaly pip
+ *    (mcpAnomalyStore.hasAnomaly, bg-status-warning) is the lowest-precedence
+ *    ambient signal — it only shows when no health or agent pip is competing,
+ *    and unlike the agent pip it stays visible while the panel is open (#10022).
+ *    NotificationCenterToolbarButton owns the `unread` dot on its own surface —
+ *    it doesn't compete with the assistant pips, so the ordering reads:
  *
- *      MCP failed > MCP starting > agent working / directing / waiting
+ *      MCP failed > MCP starting > agent working / directing / waiting > MCP anomaly
  *      notification unread (independent surface)
  *
  *    DND dimming (.toolbar-badge[data-dnd-active]) is a cross-tier overlay

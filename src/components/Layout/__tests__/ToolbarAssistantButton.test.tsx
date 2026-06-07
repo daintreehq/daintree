@@ -4,6 +4,7 @@ import { render, act, fireEvent } from "@testing-library/react";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
+import { __resetMcpAnomalyStoreForTesting, useMcpAnomalyStore } from "@/store/mcpAnomalyStore";
 import type { McpRuntimeSnapshot } from "@shared/types";
 
 const mcpReadiness: () => McpRuntimeSnapshot = vi.fn(
@@ -110,6 +111,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
     clearAssistantGestureMock.mockClear();
+    __resetMcpAnomalyStoreForTesting();
   });
 
   it("does not render the pip when the assistant is idle", () => {
@@ -428,6 +430,92 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       setPanel("t-5", "idle");
     });
 
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+  });
+});
+
+describe("ToolbarAssistantButton — MCP anomaly pip (#10022)", () => {
+  beforeEach(() => {
+    mcpReadinessMock.mockReturnValue({ enabled: true, state: "ready", port: 0, lastError: null });
+    useHelpPanelStore.setState({ isOpen: false, terminalId: null, agentId: null, sessionId: null });
+    usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
+    mockGestureAssistantHidden = false;
+    __resetMcpAnomalyStoreForTesting();
+  });
+
+  it("shows a warning pip when an anomaly is set and no other pip applies", () => {
+    setHelpPanel({ isOpen: false, terminalId: null });
+    act(() => {
+      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 2 });
+    });
+
+    const { container, queryByTestId } = render(<ToolbarAssistantButton />);
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip?.getAttribute("data-visible")).toBe("true");
+    expect(pip!.className).toMatch(/bg-status-warning/);
+    expect(pip!.className).not.toMatch(/animate-pulse/);
+    expect(pip!.className).not.toMatch(/accent/);
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Daintree Assistant — MCP anomaly signals detected"
+    );
+  });
+
+  it("stays visible even when the panel is open (unlike the agent pip)", () => {
+    setHelpPanel({ isOpen: true, terminalId: null });
+    act(() => {
+      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+    });
+
+    const { queryByTestId } = render(<ToolbarAssistantButton />);
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip?.getAttribute("data-visible")).toBe("true");
+    expect(pip!.className).toMatch(/bg-status-warning/);
+  });
+
+  it("is suppressed by the MCP-failed pip", () => {
+    mcpReadinessMock.mockReturnValue({ state: "failed", port: 0, lastError: "oops" } as never);
+    setHelpPanel({ isOpen: false, terminalId: null });
+    act(() => {
+      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+    });
+
+    const { queryByTestId } = render(<ToolbarAssistantButton />);
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip!.className).toMatch(/bg-status-danger/);
+    expect(pip!.className).not.toMatch(/bg-status-warning/);
+  });
+
+  it("is suppressed by the MCP-starting pip", () => {
+    mcpReadinessMock.mockReturnValue({ state: "starting", port: 0, lastError: null } as never);
+    setHelpPanel({ isOpen: false, terminalId: null });
+    act(() => {
+      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+    });
+
+    const { queryByTestId } = render(<ToolbarAssistantButton />);
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip!.className).toMatch(/bg-status-warning/);
+    // The starting pip pulses; the anomaly pip never does — proves which one won.
+    expect(pip!.className).toMatch(/animate-pulse-delayed/);
+  });
+
+  it("is suppressed by an active agent pip", () => {
+    setHelpPanel({ isOpen: false, terminalId: "t-anom" });
+    setPanel("t-anom", "working");
+    act(() => {
+      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+    });
+
+    const { queryByTestId } = render(<ToolbarAssistantButton />);
+    const pip = queryByTestId("assistant-working-pip");
+    expect(pip!.className).toMatch(/bg-state-working/);
+    expect(pip!.className).not.toMatch(/bg-status-warning/);
+  });
+
+  it("does not show a pip when there is no anomaly", () => {
+    setHelpPanel({ isOpen: false, terminalId: null });
+
+    const { queryByTestId } = render(<ToolbarAssistantButton />);
     expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
   });
 });

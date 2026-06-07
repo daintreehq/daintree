@@ -11,8 +11,14 @@ import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
+import { useMcpAnomalyStore } from "@/store/mcpAnomalyStore";
 import type { McpRuntimeSnapshot } from "@shared/types";
 import type { AgentState } from "@/types";
+
+// Tooltip/aria copy for the lowest-precedence anomaly pip (#10022). Surfaced
+// only when neither an MCP-health pip nor an agent pip is competing for the
+// corner — anomaly signals are background diagnostics, not live state.
+const ANOMALY_PIP_TOOLTIP = "MCP anomaly signals detected";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 
@@ -92,6 +98,7 @@ export function ToolbarAssistantButton({
     return p && isPtyPanel(p) ? (p.agentState ?? null) : null;
   });
   const mcp = useMcpReadiness();
+  const hasAnomaly = useMcpAnomalyStore((s) => s.hasAnomaly);
   const shortcut = useKeybindingDisplay("help.togglePanel");
   const ariaShortcut = useAriaKeyshortcuts("help.togglePanel");
   const hintHover = useShortcutHintHover("help.togglePanel");
@@ -140,12 +147,19 @@ export function ToolbarAssistantButton({
     lastSeenMarker.terminalId === assistantTerminalId &&
     lastSeenMarker.state === agentState;
   const showAgentPip = !pip && agentPip !== null && !isVisible && !isAcknowledged;
+  // Lowest-precedence ambient signal: an MCP audit anomaly fired (#10022). Only
+  // surfaces when no MCP-health pip and no agent pip are already claiming the
+  // corner, so it never masks a more urgent state. Stays visible whether or not
+  // the panel is open — the actionable detail link lives in the panel footer.
+  const showAnomalyPip = !pip && !showAgentPip && hasAnomaly;
   const baseTooltip = isVisible ? "Close Daintree Assistant" : "Open Daintree Assistant";
   const ariaLabel = pip
     ? `Daintree Assistant — ${pip.tooltip}`
     : showAgentPip
       ? `Daintree Assistant — ${agentPip!.tooltip}`
-      : "Daintree Assistant";
+      : showAnomalyPip
+        ? `Daintree Assistant — ${ANOMALY_PIP_TOOLTIP}`
+        : "Daintree Assistant";
 
   return (
     <Tooltip>
@@ -172,10 +186,15 @@ export function ToolbarAssistantButton({
               aria-hidden="true"
               data-testid="assistant-working-pip"
               data-agent-state={agentState ?? ""}
-              data-visible={pip !== null || showAgentPip}
+              data-visible={pip !== null || showAgentPip || showAnomalyPip}
               className={cn(
                 "toolbar-pip toolbar-badge",
-                pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
+                pip?.className ??
+                  (showAgentPip
+                    ? agentPip?.className
+                    : showAnomalyPip
+                      ? "bg-status-warning"
+                      : undefined),
                 pip?.delayed && "animate-pulse-delayed"
               )}
             />
@@ -188,7 +207,9 @@ export function ToolbarAssistantButton({
             ? `${baseTooltip} — ${pip.tooltip}`
             : showAgentPip
               ? `${baseTooltip} — ${agentPip!.tooltip}`
-              : baseTooltip,
+              : showAnomalyPip
+                ? `${baseTooltip} — ${ANOMALY_PIP_TOOLTIP}`
+                : baseTooltip,
           shortcut
         )}
       </TooltipContent>
