@@ -191,7 +191,78 @@ export type PtyHostRequest =
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
-  | { type: "set-process-tree-poll-interval"; ms: number };
+  | { type: "set-process-tree-poll-interval"; ms: number }
+  | { type: "get-flow-control-snapshot"; requestId: string };
+
+/** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */
+export interface FlowControlTerminalSnapshot {
+  terminalId: string;
+  /** Current flow status, or null when the terminal has no recorded status. */
+  flowStatus: TerminalFlowStatus | null;
+  /**
+   * Pause-coordinator hold tokens currently keeping this terminal paused
+   * (sorted, possibly empty). Stringified `PauseToken`s — kept as plain
+   * strings here so the shared protocol stays free of pty-host-only types.
+   */
+  heldTokens: string[];
+  /** Whether the visual stream is suspended (FUTURE_SAB stall path). */
+  isSuspended: boolean;
+  /** Activity tier (streaming policy). */
+  activityTier: PtyHostActivityTier;
+  /** Wall-clock ms the terminal has been paused, or null when not paused. */
+  pausedDurationMs: number | null;
+}
+
+/** Per-transport queue-depth entry in a {@link FlowControlSnapshot}. */
+export interface FlowControlQueueEntry {
+  terminalId: string;
+  layer: "ipc" | "port";
+  pendingBytes: number;
+}
+
+/**
+ * Backpressure lifecycle counters captured in a {@link FlowControlSnapshot}.
+ * Mirrors the pty-host's `BackpressureStats` (serializable subset).
+ */
+export interface BackpressureStatsSnapshot {
+  pauseCount: number;
+  resumeCount: number;
+  suspendCount: number;
+  forceResumeCount: number;
+}
+
+/** Resource-governor runtime state in a {@link FlowControlSnapshot}. */
+export interface ResourceGovernorSnapshot {
+  isThrottling: boolean;
+  isWarning: boolean;
+  activeProfile: ResourceProfile;
+  /**
+   * EMA-smoothed heap utilization percent, or null during warmup (the first
+   * ~5 ticks, before the smoothed signal has stabilized). Null is distinct
+   * from 0% so consumers can tell "not yet warmed up" from "0% heap used".
+   */
+  smoothedUtilizationPercent: number | null;
+  /** Ms since throttle engaged, or 0 when not throttling. */
+  throttleDurationMs: number;
+}
+
+/**
+ * On-demand structured flow-control snapshot from the pty-host. Assembled from
+ * live backpressure / pause-coordinator / resource-governor state at request
+ * time and NOT gated by the streaming-metrics flag (that gate governs the
+ * periodic reliability-metric push, not this diagnostic pull). Captured by
+ * `DiagnosticsCollector` for support bundles.
+ */
+export interface FlowControlSnapshot {
+  timestamp: number;
+  terminals: FlowControlTerminalSnapshot[];
+  /** Live IPC + per-window MessagePort queue depths (FUTURE_SAB path excluded). */
+  queueDepth: FlowControlQueueEntry[];
+  /** Sum of pending bytes across the live IPC + port paths. */
+  totalPendingBytes: number;
+  stats: BackpressureStatsSnapshot;
+  resourceGovernor: ResourceGovernorSnapshot;
+}
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -386,6 +457,11 @@ export type PtyHostEvent =
   | {
       type: "broadcast-write-result";
       results: BroadcastWriteTargetResult[];
+    }
+  | {
+      type: "flow-control-snapshot";
+      requestId: string;
+      snapshot: FlowControlSnapshot;
     };
 
 export interface FdLeakWarningPayload {

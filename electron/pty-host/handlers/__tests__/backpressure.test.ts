@@ -50,6 +50,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
       emitTerminalStatus: vi.fn(),
       emitReliabilityMetric: vi.fn(),
       getActivityTier: vi.fn(() => "active"),
+      stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
     } as unknown as HostContext["backpressureManager"],
     ipcQueueManager: {
       removeBytes: vi.fn(),
@@ -74,6 +75,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     tryReplayAndResume: vi.fn(),
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
+    getPausedDurationsSnapshot: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -232,6 +234,32 @@ describe("force-resume handler", () => {
     handlers["force-resume"]({ type: "force-resume", id: "untracked-terminal" });
 
     expect(conn.portQueueManager.clearQueue).toHaveBeenCalledWith("untracked-terminal");
+  });
+
+  it("increments forceResumeCount once per successful force-resume (the counter was previously dead)", () => {
+    const coord = makeCoordinator();
+    const ctx = makeCtx({
+      rendererConnections: new Map([[1, makeRendererConnection()]]),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    const handlers = createBackpressureHandlers(ctx);
+
+    handlers["force-resume"]({ type: "force-resume", id: "term-1" });
+    handlers["force-resume"]({ type: "force-resume", id: "term-2" });
+
+    expect(ctx.backpressureManager.stats.forceResumeCount).toBe(2);
+  });
+
+  it("does not increment forceResumeCount when the pause coordinator is missing (early return)", () => {
+    const ctx = makeCtx({
+      rendererConnections: new Map([[1, makeRendererConnection()]]),
+      getPauseCoordinator: vi.fn(() => undefined),
+    });
+    const handlers = createBackpressureHandlers(ctx);
+
+    handlers["force-resume"]({ type: "force-resume", id: "term-1" });
+
+    expect(ctx.backpressureManager.stats.forceResumeCount).toBe(0);
   });
 
   it("returns early when the pause coordinator is missing", () => {

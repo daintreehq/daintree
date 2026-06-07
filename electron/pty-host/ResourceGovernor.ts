@@ -1,6 +1,10 @@
 import v8 from "node:v8";
 import type { AgentState } from "../../shared/types/agent.js";
-import type { PtyHostEvent, TerminalFlowStatus } from "../../shared/types/pty-host.js";
+import type {
+  PtyHostEvent,
+  ResourceGovernorSnapshot,
+  TerminalFlowStatus,
+} from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
@@ -128,6 +132,22 @@ export class ResourceGovernor {
 
   trackKilledPid(pid: number): void {
     this.killedPids.set(pid, Date.now());
+  }
+
+  /**
+   * Point-in-time governor state for the on-demand flow-control diagnostics
+   * snapshot. `smoothedUtilizationPercent` is passed through as null during EMA
+   * warmup (it starts undefined for ~5 ticks; see #8660) rather than coerced to
+   * 0, so consumers can distinguish "not yet warmed up" from "0% heap used".
+   */
+  getSnapshot(): ResourceGovernorSnapshot {
+    return {
+      isThrottling: this.isThrottling,
+      isWarning: this.isWarning,
+      activeProfile: this.profileOverride ?? "balanced",
+      smoothedUtilizationPercent: this.smoothedUtilizationPercent ?? null,
+      throttleDurationMs: this.isThrottling ? Date.now() - this.throttleStartTime : 0,
+    };
   }
 
   setResourceProfile(profile: ResourceProfile): void {

@@ -217,6 +217,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         return;
       }
       coordinator.forceReleaseAll();
+      backpressureManager.stats.forceResumeCount++;
       console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
 
       // Clean up any pending backpressure monitoring

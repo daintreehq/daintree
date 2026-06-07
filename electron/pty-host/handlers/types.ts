@@ -53,6 +53,13 @@ export interface HostContext {
   tryReplayAndResume: (id: string) => void;
   resumePausedTerminal: (id: string) => void;
   createPortQueueManager: (windowId: number) => PortQueueManager;
+  /**
+   * Per-paused-terminal held duration aggregated across SAB, IPC, and
+   * per-window MessagePort pause sources (oldest still-held start wins).
+   * Authoritative for "how long has this been paused?" — the live IPC/port
+   * paths keep their start times outside `backpressureManager.pauseStartTimes`.
+   */
+  getPausedDurationsSnapshot: () => Array<{ terminalId: string; heldDurationMs: number }>;
 }
 
 export type PtyHostHandler = (msg: any, ports?: MessagePort[]) => void | Promise<void>;
