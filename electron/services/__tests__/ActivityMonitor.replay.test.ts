@@ -34,6 +34,7 @@ const REPLAY_CASES: ReplayCase[] = [
   { name: "aider-working-to-idle", agentId: "aider" },
   { name: "mistral-working-to-idle", agentId: "mistral" },
   { name: "goose-working-to-completed", agentId: "goose" },
+  { name: "claude-osc94-progress-keeps-working", agentId: "claude" },
 ];
 
 describe("ActivityMonitor replay harness", () => {
@@ -121,6 +122,45 @@ describe("ActivityMonitor replay harness", () => {
     // changed in a way that affects the dispose contract.
     const completedCount = recorded.filter((r) => r.state === "completed").length;
     expect(completedCount, formatRecorded(recorded)).toBe(0);
+  });
+
+  it("OSC 9;4 working heartbeats hold the agent busy past visible-content silence", async () => {
+    // The cast emits a short burst of visible output (silent on the viewport
+    // after ~0.3s), then keeps pulsing OSC 9;4 working sequences through ~8s.
+    // Production routes those pulses into onOscProgressWorking, which refreshes
+    // lastActivityTimestamp — so idle is anchored to the last OSC pulse (~9.5s),
+    // not the stale visible content. With routing suppressed, the monitor idles
+    // off the viewport-quiet path ~3s earlier (~6.4s). The DELTA between the two
+    // runs is the load-bearing assertion: it proves the OSC routing (not some
+    // incidental output) is what extends the busy window. Without the routing
+    // wired in the harness, the heartbeats are invisible to the monitor and the
+    // delta collapses to 0, failing this test.
+    const { cast } = fixture("claude-osc94-progress-keeps-working");
+    const lastIdleMs = (recorded: RecordedTransition[]): number => {
+      const idle = [...recorded].reverse().find((r) => r.state === "idle");
+      if (!idle) throw new Error(`no idle transition recorded: ${formatRecorded(recorded)}`);
+      return idle.replayMs;
+    };
+
+    const withRouting = await replayCast(cast, { agentId: "claude", settleMs: 13000 });
+    vi.setSystemTime(0);
+    const withoutRouting = await replayCast(cast, {
+      agentId: "claude",
+      settleMs: 13000,
+      routeOsc94: false,
+    });
+
+    const routedIdle = lastIdleMs(withRouting);
+    const unroutedIdle = lastIdleMs(withoutRouting);
+    // Both runs eventually idle via the debounce decay; only the anchor differs.
+    expect(withRouting.find((r) => r.state === "idle")?.trigger).toBe("timeout");
+    // Routing pushes idle by ~3s (≈9.5s vs ≈6.4s). A generous floor (2500ms)
+    // keeps the test robust to polling-tick jitter while still failing hard if
+    // the routing is absent (delta would be 0).
+    expect(
+      routedIdle - unroutedIdle,
+      `routed idle=${routedIdle}ms, unrouted idle=${unroutedIdle}ms`
+    ).toBeGreaterThanOrEqual(2500);
   });
 
   it("input cast events drive monitor.onInput and trigger busy", async () => {
