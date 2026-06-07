@@ -551,8 +551,6 @@ export class WorkspaceService {
 
       this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
-      this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
-
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
         const [prResult, refreshResult] = results;
         if (prResult?.status === "rejected") {
