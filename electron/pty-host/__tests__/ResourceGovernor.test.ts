@@ -418,8 +418,8 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS);
       expect(coordinator.hasToken("resource-governor")).toBe(true);
 
-      // Simulate backpressure manager also holding a pause
-      coordinator.pause("backpressure");
+      // Simulate the IPC queue manager also holding a pause
+      coordinator.pause("ipc-queue");
 
       // Now lower memory to trigger disengage
       vi.spyOn(process, "memoryUsage").mockReturnValue({
@@ -435,15 +435,22 @@ describe("ResourceGovernor", () => {
 
       // Governor released its hold, but backpressure still holds — PTY must stay paused
       expect(coordinator.hasToken("resource-governor")).toBe(false);
-      expect(coordinator.hasToken("backpressure")).toBe(true);
+      expect(coordinator.hasToken("ipc-queue")).toBe(true);
       expect(coordinator.isPaused).toBe(true);
       expect(raw.resume).not.toHaveBeenCalled();
 
       // Should NOT emit "running" because backpressure still holds
-      const terminalStatusCalls = (
-        deps.emitTerminalStatus as ReturnType<typeof vi.fn>
-      ).mock.calls.filter((c: unknown[]) => (c as string[])[1] === "running");
-      expect(terminalStatusCalls).toHaveLength(0);
+      const statusCalls = (deps.emitTerminalStatus as ReturnType<typeof vi.fn>).mock.calls;
+      const runningCalls = statusCalls.filter((c: unknown[]) => (c as string[])[1] === "running");
+      expect(runningCalls).toHaveLength(0);
+
+      // Should re-emit "paused-backpressure" so the renderer pill isn't stuck
+      // on the governor's stale "Paused (memory)" status
+      const backpressureCalls = statusCalls.filter(
+        (c: unknown[]) => (c as string[])[1] === "paused-backpressure"
+      );
+      expect(backpressureCalls).toHaveLength(1);
+      expect(backpressureCalls[0][0]).toBe("t1");
 
       governor.dispose();
     });

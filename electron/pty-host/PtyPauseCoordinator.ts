@@ -60,4 +60,16 @@ export class PtyPauseCoordinator {
   hasToken(token: PauseToken): boolean {
     return this.holds.has(token);
   }
+
+  // True when any backpressure-class hold is active: the live queue tokens
+  // ("ipc-queue", "port-queue", "port-queue-${windowId}") or the FUTURE_SAB
+  // "backpressure" token.
+  hasAnyBackpressureToken(): boolean {
+    for (const token of this.holds) {
+      if (token === "ipc-queue" || token === "backpressure" || token.startsWith("port-queue")) {
+        return true;
+      }
+    }
+    return false;
+  }
 }

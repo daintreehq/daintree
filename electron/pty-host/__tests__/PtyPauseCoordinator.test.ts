@@ -163,6 +163,45 @@ describe("PtyPauseCoordinator", () => {
     expect(coord.hasToken("ipc-queue")).toBe(false);
   });
 
+  describe("hasAnyBackpressureToken", () => {
+    it.each(["ipc-queue", "port-queue", "port-queue-5", "backpressure"] as const)(
+      "returns true when %s is held",
+      (token) => {
+        const coord = new PtyPauseCoordinator(createMockRaw());
+        coord.pause(token);
+        expect(coord.hasAnyBackpressureToken()).toBe(true);
+      }
+    );
+
+    it("returns false when no tokens are held", () => {
+      const coord = new PtyPauseCoordinator(createMockRaw());
+      expect(coord.hasAnyBackpressureToken()).toBe(false);
+    });
+
+    it("returns false when only non-backpressure tokens are held", () => {
+      const coord = new PtyPauseCoordinator(createMockRaw());
+      coord.pause("resource-governor");
+      coord.pause("system-sleep");
+      expect(coord.hasAnyBackpressureToken()).toBe(false);
+    });
+
+    it("returns true when a backpressure token is held among others", () => {
+      const coord = new PtyPauseCoordinator(createMockRaw());
+      coord.pause("resource-governor");
+      coord.pause("port-queue-3");
+      coord.pause("system-sleep");
+      expect(coord.hasAnyBackpressureToken()).toBe(true);
+    });
+
+    it("returns false after the backpressure token is released", () => {
+      const coord = new PtyPauseCoordinator(createMockRaw());
+      coord.pause("ipc-queue");
+      coord.pause("resource-governor");
+      coord.resume("ipc-queue");
+      expect(coord.hasAnyBackpressureToken()).toBe(false);
+    });
+  });
+
   it("duplicate pause with same token does not double-count", () => {
     const raw = createMockRaw();
     const coord = new PtyPauseCoordinator(raw);
