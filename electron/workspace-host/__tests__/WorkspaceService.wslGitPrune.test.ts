@@ -7,12 +7,10 @@ import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
 
 const TEST_WORKTREE_PATH = pathResolve("/test/worktree");
-const TEST_WORKTREE_PATH_2 = pathResolve("/test/worktree-2");
 
-const { parcelWatcherCallbacks, mockGetGitCommonDir, mockParcelSubscribe } = vi.hoisted(() => {
+const { mockGetGitCommonDir, mockParcelSubscribe } = vi.hoisted(() => {
   const callbacks: Array<(err: Error | null, events: unknown[]) => void> = [];
   return {
-    parcelWatcherCallbacks: callbacks,
     mockGetGitCommonDir: vi.fn<(arg: string) => string | null>().mockReturnValue(null),
     mockParcelSubscribe: vi.fn(
       (_dir: string, cb: (err: Error | null, events: unknown[]) => void) => {
