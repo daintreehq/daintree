@@ -472,8 +472,8 @@ describe("deferredInitQueue", () => {
     consoleWarn.mockRestore();
   });
 
-  it("halt does not break a later fresh cycle when reset is not part of a quit", async () => {
-    // macOS re-open regression guard: a cycle that never saw haltDeferredQueue
+  it("non-quit reset still allows a fresh cycle to drain (macOS re-open)", async () => {
+    // Regression guard: a cycle that never saw haltDeferredQueue
     // (reset on last-window-close, new window, new drain) works normally.
     const t1 = vi.fn();
     registerDeferredTask({ name: "t1", run: t1 });
@@ -489,6 +489,39 @@ describe("deferredInitQueue", () => {
     signalFirstInteractive(2);
     await waitForDrain();
     expect(t2).toHaveBeenCalledTimes(1);
+  });
+
+  it("halt between a sync task and its queued setImmediate stops the chain", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    registerDeferredTask({ name: "sync-a", run: first });
+    registerDeferredTask({ name: "sync-b", run: second });
+    finalizeDeferredRegistration(10_000);
+    // doDrain runs synchronously from the signal: task A executes, task B's
+    // setImmediate is queued but has not fired yet when control returns here.
+    signalFirstInteractive(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+
+    haltDeferredQueue();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(second).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("draining");
+  });
+
+  it("halt on a virgin queue drops registrations without queueing them", async () => {
+    haltDeferredQueue();
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+
+    expect(task).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalled();
+    expect(getDeferredQueueState().taskCount).toBe(0);
+    expect(getDeferredQueueState().drainState).toBe("idle");
+    consoleWarn.mockRestore();
   });
 
   it("resetDeferredQueue does not undo a halt", async () => {
