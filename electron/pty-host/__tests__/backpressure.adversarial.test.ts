@@ -7,6 +7,7 @@ import {
   FUTURE_SAB_MAX_TOTAL_PENDING_BYTES,
 } from "../backpressure.js";
 import { isLoadBearingReliabilityMetric } from "../loadBearingMetrics.js";
+import type { TerminalReliabilityMetricPayload } from "../../../shared/types/pty-host.js";
 
 type CoordinatorLike = Pick<PtyPauseCoordinator, "pause" | "resume" | "isPaused">;
 
@@ -524,7 +525,7 @@ describe("BackpressureManager adversarial", () => {
       // `pty-host/loadBearingMetrics.js` so a misconfigured set would fail
       // this suite (rather than a copy of the set that would silently drift).
       function makeFunnel(opts: { metricsEnabled: () => boolean }) {
-        return (payload: { metricType: string; [k: string]: unknown }, forceEmit = false) => {
+        return (payload: TerminalReliabilityMetricPayload, forceEmit = false) => {
           if (
             !forceEmit &&
             !isLoadBearingReliabilityMetric(payload.metricType) &&
