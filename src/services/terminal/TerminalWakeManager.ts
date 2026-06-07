@@ -115,14 +115,31 @@ export class TerminalWakeManager {
           return { ok: false, replayedMainBuffer: false };
         }
 
-        // No serialized snapshot to replay. The host discarded the buffered
-        // output on suspend, so the pane is now stale — surface the gap and
-        // retry in case the snapshot becomes available. Alternate-screen TUIs
-        // fall through here too: addon-serialize includes the alt-buffer frame
-        // (\x1b[?1049h + content), so a present snapshot correctly repaints the
-        // TUI rather than being silently treated as a no-op resync (#9894).
+        // No serialized snapshot to replay. Distinguish two cases that both
+        // satisfy `!state` at the renderer: PtyEventRouter coerces an absent
+        // host snapshot (null/undefined) to null, and a fresh terminal's
+        // empty-string serialize() output is falsy — both fall into this branch.
+        //
+        //  - A fresh terminal that has never successfully restored (#10309).
+        //    There is no prior content to have lost, so this is a clean no-op
+        //    wake, not a data-loss event. Return without a marker or retry.
+        //    needsWake stays armed via TerminalRendererPolicy, so the terminal
+        //    re-attempts on its next tier transition once the host has a
+        //    snapshot.
+        //  - A terminal that previously restored and now wakes with no snapshot:
+        //    the host discarded its buffered output, so the pane is stale.
+        //    Retry in case the snapshot becomes available, but draw no marker —
+        //    genuine host-side drops surface through the OSC 57301 path (#8375),
+        //    not the wake-decline path.
+        //
+        // Alternate-screen TUIs fall through here too: addon-serialize includes
+        // the alt-buffer frame (\x1b[?1049h + content), so a present snapshot
+        // correctly repaints the TUI rather than being silently treated as a
+        // no-op resync (#9894).
         if (!state) {
-          this.noteDecline(id, true);
+          if (managed.everWoken) {
+            this.noteDecline(id, false);
+          }
           return { ok: false, replayedMainBuffer: false };
         }
 
@@ -157,6 +174,12 @@ export class TerminalWakeManager {
         this.clearDeclineRetry(id);
 
         if (this.deps.getInstance(id) === managed) {
+          // Mark the instance as having successfully restored at least once
+          // (#10309). Set inside the identity guard so a mid-wake LRU eviction
+          // + respawn under the same id doesn't stamp the flag on a stale
+          // reference. Gates the wake-decline marker on subsequent null-state
+          // wakes — see the `!state` branch above.
+          managed.everWoken = true;
           managed.terminal.refresh(0, managed.terminal.rows - 1);
           // A previous failed wake of this terminal may have left a banner
           // in the panel store. Mirror the hydration retry path's cleanup

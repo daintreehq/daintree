@@ -28,7 +28,10 @@ import { TerminalRefreshTier } from "@/types";
 import { TerminalWakeManager, type WakeManagerDeps } from "../TerminalWakeManager";
 import type { ManagedTerminal } from "../types";
 
-type MockManagedTerminal = Pick<ManagedTerminal, "terminal" | "isAltBuffer" | "lastAppliedTier"> & {
+type MockManagedTerminal = Pick<
+  ManagedTerminal,
+  "terminal" | "isAltBuffer" | "lastAppliedTier" | "everWoken"
+> & {
   isOpened?: boolean;
   isAttaching?: boolean;
   isHibernated?: boolean;
@@ -144,10 +147,13 @@ describe("TerminalWakeManager", () => {
     expect(deps.restoreFromSerialized).toHaveBeenCalledWith("term-alt", "serialized-state");
   });
 
-  it("declines (does not falsely succeed) an alt-screen wake with no serialized state (#9894)", async () => {
+  it("does not falsely succeed an alt-screen wake with no serialized state (#9894)", async () => {
     // The dangerous pre-#9894 path: alt-screen + null state returned `true`,
-    // permanently clearing needsWake and suppressing future wakes. It must now
-    // decline like any other null-state wake so the stale pane is retried.
+    // permanently clearing needsWake and suppressing future wakes. It must still
+    // decline (return false) so the pane re-wakes on the next tier transition.
+    // #10309: a fresh terminal (everWoken absent) that has never restored draws
+    // no marker and schedules no retry — a null snapshot here is a clean no-op
+    // wake, not a data-loss event.
     wakeMock.mockResolvedValueOnce({ state: null });
     const onDeclined = vi.fn();
     const managed: MockManagedTerminal = {
@@ -170,8 +176,9 @@ describe("TerminalWakeManager", () => {
     expect(result).toEqual({ ok: false, replayedMainBuffer: false });
     expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
     expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
-    // A null snapshot is a user-visible gap — the marker is drawn once.
-    expect(onDeclined).toHaveBeenCalledTimes(1);
+    // No marker and no retry for a fresh terminal's null-snapshot wake (#10309).
+    expect(onDeclined).not.toHaveBeenCalled();
+    expect(manager.hasPendingWake("term-alt-null-state")).toBe(false);
 
     manager.dispose();
   });
@@ -200,6 +207,7 @@ describe("TerminalWakeManager", () => {
 
   it("fails wake for non-alt-screen terminals when serialized state is missing", async () => {
     wakeMock.mockResolvedValueOnce({ state: null });
+    const onDeclined = vi.fn();
     const managed: MockManagedTerminal = {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
       terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
@@ -211,6 +219,7 @@ describe("TerminalWakeManager", () => {
       hasInstance: vi.fn(() => true),
       restoreFromSerialized: vi.fn(() => true),
       restoreFromSerializedIncremental: vi.fn(async () => true),
+      onDeclined,
     };
     const manager = new TerminalWakeManager(deps);
 
@@ -219,9 +228,11 @@ describe("TerminalWakeManager", () => {
     expect(result).toEqual({ ok: false, replayedMainBuffer: false });
     expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
     expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
+    // #10309: a never-restored terminal (everWoken absent) draws no marker and
+    // schedules no retry — the null snapshot is a clean no-op, not a data gap.
+    expect(onDeclined).not.toHaveBeenCalled();
+    expect(manager.hasPendingWake("term-normal-null-state")).toBe(false);
 
-    // A null-state decline schedules a retry timer; clear it so it doesn't
-    // fire into a later test.
     manager.dispose();
   });
 
@@ -928,6 +939,11 @@ describe("TerminalWakeManager", () => {
         terminal: { rows: 24, refresh: vi.fn(), hasSelection } as any,
         isAltBuffer: false,
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        // #10309: these tests exercise the genuine "previously restored, now
+        // woke with no snapshot" path (retry without marker). everWoken marks
+        // the terminal as having successfully restored before. A fresh terminal
+        // (everWoken absent) would instead short-circuit to a silent no-op.
+        everWoken: true,
       };
     }
 
@@ -964,7 +980,7 @@ describe("TerminalWakeManager", () => {
       }
     });
 
-    it("draws the data-loss marker once and retries a null-state decline up to the cap", async () => {
+    it("retries a previously-restored terminal's null-state decline up to the cap without a marker (#10309)", async () => {
       vi.useFakeTimers();
       try {
         wakeMock.mockResolvedValue({ state: null });
@@ -974,7 +990,9 @@ describe("TerminalWakeManager", () => {
 
         const first = await manager.wakeAndRestore("term-decline-null");
         expect(first).toEqual({ ok: false, replayedMainBuffer: false });
-        expect(onDeclined).toHaveBeenCalledTimes(1);
+        // #10309: the wake-decline path never draws the data-loss marker — a
+        // genuine host-side drop surfaces through the OSC 57301 path instead.
+        expect(onDeclined).not.toHaveBeenCalled();
         expect(wakeMock).toHaveBeenCalledTimes(1);
 
         // Three bounded retries, each 300ms apart, then the sequence stops.
@@ -986,8 +1004,7 @@ describe("TerminalWakeManager", () => {
         // No further retries after the cap.
         await vi.advanceTimersByTimeAsync(900);
         expect(wakeMock).toHaveBeenCalledTimes(4);
-        // The marker is drawn only at the start of the sequence, never restacked.
-        expect(onDeclined).toHaveBeenCalledTimes(1);
+        expect(onDeclined).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -1005,7 +1022,8 @@ describe("TerminalWakeManager", () => {
         const manager = new TerminalWakeManager(makeDeclineDeps(managed, onDeclined));
 
         await manager.wakeAndRestore("term-decline-recover");
-        expect(onDeclined).toHaveBeenCalledTimes(1);
+        // #10309: no marker drawn from the wake-decline path.
+        expect(onDeclined).not.toHaveBeenCalled();
 
         await vi.advanceTimersByTimeAsync(300);
         expect(wakeMock).toHaveBeenCalledTimes(2); // initial + 1 retry that succeeded
@@ -1013,7 +1031,7 @@ describe("TerminalWakeManager", () => {
         // The successful retry ends the sequence — no further attempts.
         await vi.advanceTimersByTimeAsync(900);
         expect(wakeMock).toHaveBeenCalledTimes(2);
-        expect(onDeclined).toHaveBeenCalledTimes(1);
+        expect(onDeclined).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -1152,6 +1170,118 @@ describe("TerminalWakeManager", () => {
         expect(wakeMock).not.toHaveBeenCalled();
         expect(onDeclined).not.toHaveBeenCalled();
         expect(manager.hasPendingWake("term-decline-stuck")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("fresh vs. restored null-state wake (#10309)", () => {
+    function makeDeps(
+      managed: MockManagedTerminal,
+      onDeclined: (id: string) => void,
+      restoreOk = true
+    ): WakeManagerDeps {
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+        hasInstance: vi.fn(() => true),
+        restoreFromSerialized: vi.fn(() => restoreOk),
+        restoreFromSerializedIncremental: vi.fn(async () => restoreOk),
+        onDeclined,
+      };
+    }
+
+    it("treats a fresh terminal's null-state wake as a clean no-op (no marker, no retry)", async () => {
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValue({ state: null });
+        const onDeclined = vi.fn();
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+          isAltBuffer: false,
+          // everWoken absent — this terminal has never successfully restored.
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed, onDeclined));
+
+        const result = await manager.wakeAndRestore("term-fresh");
+
+        expect(result).toEqual({ ok: false, replayedMainBuffer: false });
+        expect(onDeclined).not.toHaveBeenCalled();
+        expect(manager.hasPendingWake("term-fresh")).toBe(false);
+
+        // No retry ever fires for the fresh no-op path.
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(wakeMock).toHaveBeenCalledTimes(1);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retries (no marker) once a terminal that previously restored later wakes with no snapshot", async () => {
+      vi.useFakeTimers();
+      try {
+        // First wake returns a snapshot and restores successfully → everWoken set.
+        // Second wake returns null → genuine lost snapshot for a restored pane.
+        wakeMock
+          .mockResolvedValueOnce({ state: "serialized-state" })
+          .mockResolvedValue({ state: null });
+        const onDeclined = vi.fn();
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+          isAltBuffer: false,
+          lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed, onDeclined));
+
+        const firstResult = await manager.wakeAndRestore("term-restored");
+        expect(firstResult).toEqual({ ok: true, replayedMainBuffer: true });
+        expect(managed.everWoken).toBe(true);
+
+        const secondResult = await manager.wakeAndRestore("term-restored");
+        expect(secondResult).toEqual({ ok: false, replayedMainBuffer: false });
+        // A restored pane that loses its snapshot retries, but draws no marker.
+        expect(onDeclined).not.toHaveBeenCalled();
+        expect(manager.hasPendingWake("term-restored")).toBe(true);
+
+        manager.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("sets everWoken only on a successful restore, not merely on a non-null wake return", async () => {
+      // A wake that returns a snapshot but fails to replay it must NOT mark the
+      // terminal as restored — the gate keys on a landed restore, not the IPC
+      // return. A later null-state wake then stays a silent no-op.
+      vi.useFakeTimers();
+      try {
+        wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+        const onDeclined = vi.fn();
+        const managed: MockManagedTerminal = {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+          terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+          isAltBuffer: false,
+          lastScrollbackRestoreError: { type: "parse", message: "boom", timestamp: 1 },
+        };
+        const manager = new TerminalWakeManager(makeDeps(managed, onDeclined, false));
+
+        const result = await manager.wakeAndRestore("term-restore-failed");
+        expect(result).toEqual({ ok: false, replayedMainBuffer: false });
+        expect(managed.everWoken).toBeFalsy();
+
+        // A subsequent null-state wake is treated as fresh: no marker, no retry.
+        wakeMock.mockResolvedValue({ state: null });
+        const second = await manager.wakeAndRestore("term-restore-failed");
+        expect(second).toEqual({ ok: false, replayedMainBuffer: false });
+        expect(onDeclined).not.toHaveBeenCalled();
+        expect(manager.hasPendingWake("term-restore-failed")).toBe(false);
+
+        manager.dispose();
       } finally {
         vi.useRealTimers();
       }
