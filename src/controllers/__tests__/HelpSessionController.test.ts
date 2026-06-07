@@ -7,9 +7,11 @@ const {
   mockMcpOnToolCallSettled,
   mockMcpOnDisplayImage,
   mockMcpOnSessionRevoked,
+  mockMcpOnGrantLifecycle,
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockMcpResetDenialCounts,
+  mockMcpRevokeSessionGrants,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -18,6 +20,7 @@ const {
   toolSettledListeners,
   displayImageListeners,
   sessionRevokedListeners,
+  grantLifecycleListeners,
   helpPanelState,
   panelStoreState,
   projectStoreState,
@@ -27,6 +30,7 @@ const {
   mockMcpOnToolCallSettled: vi.fn(),
   mockMcpOnDisplayImage: vi.fn(),
   mockMcpOnSessionRevoked: vi.fn(),
+  mockMcpOnGrantLifecycle: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
   mockMcpIssueGrant: vi.fn().mockResolvedValue({
     sessionId: "",
@@ -35,6 +39,7 @@ const {
     expiresAt: Date.now() + 900_000,
   }),
   mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
+  mockMcpRevokeSessionGrants: vi.fn().mockResolvedValue({ sessionId: "", revokedCount: 0 }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -46,6 +51,7 @@ const {
   toolSettledListeners: [] as Array<(payload: unknown) => void>,
   displayImageListeners: [] as Array<(payload: unknown) => void>,
   sessionRevokedListeners: [] as Array<(payload: unknown) => void>,
+  grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
     isOpen: false,
     terminalId: null as string | null,
@@ -142,6 +148,7 @@ beforeEach(() => {
   toolSettledListeners.length = 0;
   displayImageListeners.length = 0;
   sessionRevokedListeners.length = 0;
+  grantLifecycleListeners.length = 0;
 
   mockMcpOnTierNotPermitted.mockReset();
   mockMcpOnTierNotPermitted.mockImplementation((cb: (payload: unknown) => void) => {
@@ -185,6 +192,14 @@ beforeEach(() => {
   });
   mockMcpResetDenialCounts.mockReset();
   mockMcpResetDenialCounts.mockResolvedValue(undefined);
+  mockMcpOnGrantLifecycle.mockReset();
+  mockMcpOnGrantLifecycle.mockImplementation((cb: (payload: unknown) => void) => {
+    grantLifecycleListeners.push(cb);
+    return () => {
+      const idx = grantLifecycleListeners.indexOf(cb);
+      if (idx >= 0) grantLifecycleListeners.splice(idx, 1);
+    };
+  });
   mockMcpSetSessionTier.mockReset();
   mockMcpSetSessionTier.mockResolvedValue(undefined);
   mockMcpIssueGrant.mockReset();
@@ -194,6 +209,8 @@ beforeEach(() => {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   });
+  mockMcpRevokeSessionGrants.mockReset();
+  mockMcpRevokeSessionGrants.mockResolvedValue({ sessionId: "", revokedCount: 1 });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -239,9 +256,11 @@ beforeEach(() => {
           onToolCallSettled: mockMcpOnToolCallSettled,
           onDisplayImage: mockMcpOnDisplayImage,
           onSessionRevoked: mockMcpOnSessionRevoked,
+          onGrantLifecycle: mockMcpOnGrantLifecycle,
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
           resetDenialCounts: mockMcpResetDenialCounts,
+          revokeSessionGrants: mockMcpRevokeSessionGrants,
         },
         git: { snapshotGet: vi.fn().mockResolvedValue(null) },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
@@ -284,6 +303,7 @@ describe("HelpSessionController — lifecycle", () => {
     expect(toolSettledListeners).toHaveLength(1);
     expect(displayImageListeners).toHaveLength(1);
     expect(sessionRevokedListeners).toHaveLength(1);
+    expect(grantLifecycleListeners).toHaveLength(1);
     expect(systemSleepListeners.suspend).toHaveLength(1);
     expect(systemSleepListeners.wake).toHaveLength(1);
     ctrl.stop();
@@ -292,6 +312,7 @@ describe("HelpSessionController — lifecycle", () => {
     expect(toolSettledListeners).toHaveLength(0);
     expect(displayImageListeners).toHaveLength(0);
     expect(sessionRevokedListeners).toHaveLength(0);
+    expect(grantLifecycleListeners).toHaveLength(0);
     expect(systemSleepListeners.suspend).toHaveLength(0);
     expect(systemSleepListeners.wake).toHaveLength(0);
   });
@@ -732,6 +753,339 @@ describe("HelpSessionController — session revoked (#10017)", () => {
 
     ctrl.launch({ agentId: "claude" });
     expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — grant lifecycle (#10042)", () => {
+  function armMismatch() {
+    tierListeners[0]?.({
+      sessionId: "s1",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+  }
+
+  it("start() arms the grant lifecycle subscription", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    expect(mockMcpOnGrantLifecycle).toHaveBeenCalledTimes(1);
+    expect(grantLifecycleListeners).toHaveLength(1);
+    ctrl.stop();
+  });
+
+  it("grant.issued sets the active countdown and clears the prompting mismatch", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    armMismatch();
+    expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
+
+    const expiresAt = Date.now() + 900_000;
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt,
+    });
+
+    expect(ctrl.getSnapshot().activeGrant).toEqual({
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt,
+    });
+    expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    ctrl.stop();
+  });
+
+  it("grant.issued without expiresAt is ignored rather than seeding a NaN countdown", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    ctrl.stop();
+  });
+
+  it("grant.expired retires the active grant and surfaces an 'expired' notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "expired" });
+    ctrl.stop();
+  });
+
+  it("grant.revoked with grant-ceiling surfaces a ceiling notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.revoked",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      revokedReason: "grant-ceiling",
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "grant-ceiling" });
+    ctrl.stop();
+  });
+
+  it.each(["user", "session-ended", "session-idle"] as const)(
+    "grant.revoked with reason %s clears the grant silently (no notice)",
+    (revokedReason) => {
+      const ctrl = new HelpSessionController();
+      ctrl.start();
+      grantLifecycleListeners[0]?.({
+        type: "grant.issued",
+        sessionId: "s1",
+        toolId: "t1",
+        ttlMs: 900_000,
+        expiresAt: Date.now() + 900_000,
+      });
+      grantLifecycleListeners[0]?.({
+        type: "grant.revoked",
+        sessionId: "s1",
+        toolId: "t1",
+        ttlMs: 900_000,
+        revokedReason,
+      });
+      expect(ctrl.getSnapshot().activeGrant).toBeNull();
+      expect(ctrl.getSnapshot().grantEnded).toBeNull();
+      ctrl.stop();
+    }
+  );
+
+  it("a lapse for a different tool leaves the on-screen countdown intact", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    // A stale expiry for a tool we're not counting down must not clear t1.
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "other-tool",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    ctrl.stop();
+  });
+
+  it("tier.elevated / tier.decayed do not disturb the per-tool countdown", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "tier.elevated",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    grantLifecycleListeners[0]?.({
+      type: "tier.decayed",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    ctrl.stop();
+  });
+
+  it("a fresh tier denial supersedes a lingering 'approval ended' notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().grantEnded).not.toBeNull();
+    armMismatch();
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
+    ctrl.stop();
+  });
+
+  function issueGrant() {
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+  }
+
+  it("revokeGrant() revokes the session's grants and clears the countdown once the IPC settles", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    ctrl.revokeGrant();
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
+    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledWith({ sessionId: "s1" });
+    // Authoritative renderer-side fallback: even with no `grant.revoked`
+    // lifecycle event echoed back, the countdown clears when the IPC settles.
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+      expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    });
+    ctrl.stop();
+  });
+
+  it("revokeGrant() is a no-op while a revoke is already in flight", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
+      })
+    );
+    ctrl.revokeGrant();
+    ctrl.revokeGrant();
+    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledTimes(1);
+    resolveRevoke?.();
+    ctrl.stop();
+  });
+
+  it("revokeGrant() does not wipe a newer grant that arrived before the IPC settled", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
+      })
+    );
+    ctrl.revokeGrant();
+    // A new grant for a different tool lands while the revoke is in flight.
+    const newerExpiry = Date.now() + 900_000;
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t2",
+      ttlMs: 900_000,
+      expiresAt: newerExpiry,
+    });
+    resolveRevoke?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    });
+    // The settle must not clear the newer t2 grant — only the one we revoked.
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t2");
+    ctrl.stop();
+  });
+
+  it("a failed revoke keeps the countdown banner up as the retry surface", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    mockMcpRevokeSessionGrants.mockRejectedValueOnce(new Error("ipc boom"));
+    ctrl.revokeGrant();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    });
+    // Revoke failed → the grant is still live, so the banner must stay put.
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    ctrl.stop();
+  });
+
+  it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>(() => {
+        // never resolves — the teardown happens first
+      })
+    );
+    ctrl.revokeGrant();
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.sessionId = "sess-1";
+    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    ctrl.stop();
+  });
+
+  it("revokeGrant() is a no-op when there is no active grant", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl.revokeGrant();
+    expect(mockMcpRevokeSessionGrants).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("dismissGrantEnded() clears the notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().grantEnded).not.toBeNull();
+    ctrl.dismissGrantEnded();
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
     ctrl.stop();
   });
 });

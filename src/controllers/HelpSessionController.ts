@@ -33,6 +33,10 @@ const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 
 const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
 const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
+// The "approval ended" notice (#10042) lingers a touch longer than the
+// snapshot banner — it tells the user their per-tool grant lapsed and the
+// next call will prompt again, which is worth a beat to read.
+const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
 
 // Minimum disabled period after a manual "Check again" click — keeps the
 // button from being hammered while a fresh (cache-bypassing) probe runs.
@@ -151,6 +155,36 @@ export interface McpToolActivityState {
   isError: boolean;
 }
 
+/**
+ * The live per-`(sessionId, toolId)` grant minted by "Approve once" (#10042).
+ * Drives the ambient countdown banner in the Help Panel. `expiresAt` is the
+ * absolute epoch-ms the grant would lapse without further use — the renderer
+ * counts down against it without polling (the `issueGrant` result and the
+ * `grant.issued` lifecycle event both carry it). Single-slot: the most
+ * recently issued grant is the one shown.
+ */
+export interface ActiveGrantState {
+  sessionId: string;
+  toolId: string;
+  expiresAt: number;
+  ttlMs: number;
+}
+
+/**
+ * How a watched grant ended, for the brief "approval ended" notice (#10042).
+ * Only the two reasons the user can act on are surfaced:
+ * - `expired`: the sliding TTL lapsed with no recent use.
+ * - `grant-ceiling`: the 30-minute hard ceiling tripped mid-use.
+ * A user-initiated revoke and session teardown/idle clear the banner silently
+ * — there's nothing for the user to do, and the session is already gone.
+ */
+export type GrantEndReason = "expired" | "grant-ceiling";
+
+export interface GrantEndedState {
+  toolId: string;
+  reason: GrantEndReason;
+}
+
 export interface HelpSessionSnapshot {
   phase: HelpSessionPhase;
   showResumeBanner: boolean;
@@ -169,6 +203,12 @@ export interface HelpSessionSnapshot {
   mcpActivity: McpToolActivityState | null;
   /** Set when the abuse policy revoked the active session (#10017); null otherwise. */
   sessionRevoked: SessionRevokedState | null;
+  /** The live "Approve once" grant being counted down (#10042); null when none. */
+  activeGrant: ActiveGrantState | null;
+  /** Brief notice that the watched grant lapsed (#10042); null when none. */
+  grantEnded: GrantEndedState | null;
+  /** True while a user-initiated grant revoke is in flight (#10042). */
+  isRevokingGrant: boolean;
 }
 
 export interface HelpProjectRef {
@@ -477,6 +517,9 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   launchError: null,
   mcpActivity: null,
   sessionRevoked: null,
+  activeGrant: null,
+  grantEnded: null,
+  isRevokingGrant: false,
 });
 
 /**
@@ -533,6 +576,7 @@ export class HelpSessionController {
   private _hibernateTimer: ReturnType<typeof setTimeout> | null = null;
   private _resumeBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _snapshotBannerTimer: ReturnType<typeof setTimeout> | null = null;
+  private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _disposers: Array<() => void> = [];
   private _lastInputs: HelpSessionInputs | null = null;
   private _hibernateArmedFor: {
@@ -562,6 +606,9 @@ export class HelpSessionController {
 
     const disposeTier = window.electron.mcpServer.onTierNotPermitted((payload) => {
       const projectId = useProjectStore.getState().currentProject?.id ?? null;
+      // A fresh denial supersedes any lingering "approval ended" notice — the
+      // banner the user is about to re-approve from carries the same signal.
+      this._clearGrantEndedTimer();
       this._patch({
         tierMismatch: {
           sessionId: payload.sessionId,
@@ -570,6 +617,7 @@ export class HelpSessionController {
           targetTier: payload.targetTier,
           projectId,
         },
+        grantEnded: null,
       });
     });
     this._disposers.push(disposeTier);
@@ -588,6 +636,11 @@ export class HelpSessionController {
       });
     });
     this._disposers.push(disposeRevoked);
+
+    const disposeGrant = window.electron.mcpServer.onGrantLifecycle((payload) => {
+      this._onGrantLifecycle(payload);
+    });
+    this._disposers.push(disposeGrant);
 
     const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
       this._onToolCallStarted(payload);
@@ -634,6 +687,7 @@ export class HelpSessionController {
     this._clearHibernateTimer();
     this._clearResumeBannerTimer();
     this._clearSnapshotBannerTimer();
+    this._clearGrantEndedTimer();
     this._clearCheckAgainCooldownTimer();
     // Bumping the gen invalidates any in-flight launch so its post-await
     // checkpoints bail. Live store state is left intact so a StrictMode
@@ -702,8 +756,10 @@ export class HelpSessionController {
     this._hasAutoLaunched = false;
     store.clearTerminal();
     // The bound session is gone — drop any lingering activity row so the strip
-    // doesn't show stale tool calls for a dead session (#9759).
+    // doesn't show stale tool calls for a dead session (#9759), and clear the
+    // grant countdown/notice so they don't outlive the session (#10042).
     this.clearMcpActivity();
+    this._clearGrantState();
   }
 
   /**
@@ -853,6 +909,7 @@ export class HelpSessionController {
         // counter at 1 in the main process (#9828).
         useHelpPanelStore.getState().clearFigures();
         this.clearMcpActivity();
+        this._clearGrantState();
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -917,6 +974,55 @@ export class HelpSessionController {
 
   dismissSessionRevoked(): void {
     this._patch({ sessionRevoked: null });
+  }
+
+  dismissGrantEnded(): void {
+    this._clearGrantEndedTimer();
+    this._patch({ grantEnded: null });
+  }
+
+  /**
+   * End the live "Approve once" grant early (#10042). Revokes every grant on
+   * the session — the help session only ever holds one per-tool grant at a
+   * time, so this maps to the single banner the user sees. Normally the
+   * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
+   * the `.then` clears `activeGrant` as a renderer-authoritative fallback so a
+   * dropped event (WebContents torn down before it fired) can't leave a zombie
+   * countdown. The fallback runs only on success and is scoped to the exact
+   * `(session, toolId)` we revoked, so a failed revoke leaves the banner up as
+   * its own retry surface and a newer grant that arrived meanwhile survives.
+   * No `ConfirmDialog` — this is a D1 action whose inverse (re-approve) is one
+   * tool call away.
+   */
+  revokeGrant(): void {
+    const active = this._snapshot.activeGrant;
+    if (!active || this._snapshot.isRevokingGrant) return;
+    const { sessionId, toolId } = active;
+    this._patch({ isRevokingGrant: true });
+    safeFireAndForget(
+      window.electron.mcpServer
+        .revokeSessionGrants({ sessionId })
+        .then(() => {
+          // Renderer-authoritative clear on success: normally the
+          // `grant.revoked` (reason `user`) lifecycle event already cleared the
+          // banner; this covers a dropped event (WebContents torn down before
+          // it fired). Scoped to the exact `(session, toolId)` we revoked so a
+          // newer grant that arrived in the meantime survives.
+          const current = this._snapshot.activeGrant;
+          if (current?.sessionId === sessionId && current?.toolId === toolId) {
+            this._patch({ activeGrant: null });
+          }
+        })
+        .catch((err) => {
+          // The grant is still live and its countdown banner stays put, so the
+          // banner itself is the retry surface — diagnostic only, no toast.
+          logError("HelpPanel: revokeSessionGrants failed", err);
+        })
+        .finally(() => {
+          this._patch({ isRevokingGrant: false });
+        }),
+      { context: "HelpPanel:revokeGrant" }
+    );
   }
 
   approveTierOnce(): void {
@@ -1221,7 +1327,10 @@ export class HelpSessionController {
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
       next.launchError === this._snapshot.launchError &&
       next.mcpActivity === this._snapshot.mcpActivity &&
-      next.sessionRevoked === this._snapshot.sessionRevoked
+      next.sessionRevoked === this._snapshot.sessionRevoked &&
+      next.activeGrant === this._snapshot.activeGrant &&
+      next.grantEnded === this._snapshot.grantEnded &&
+      next.isRevokingGrant === this._snapshot.isRevokingGrant
     ) {
       return;
     }
@@ -1270,6 +1379,88 @@ export class HelpSessionController {
       this._snapshotBannerTimer = null;
       this._patch({ preflightSnapshot: null });
     }, SNAPSHOT_BANNER_AUTO_DISMISS_MS);
+  }
+
+  /**
+   * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
+   * countdown banner and dismisses the mismatch that prompted it;
+   * `grant.expired`/`grant.revoked` retire the banner and, for the two
+   * user-actionable reasons, surface a brief "approval ended" notice. The
+   * `expired`/`revoked` cases are scoped to the grant currently on screen so a
+   * stale lapse for a different tool can't wipe the active countdown.
+   * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
+   * grants — they leave the countdown untouched (the audit viewer records
+   * them).
+   */
+  private _onGrantLifecycle(
+    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
+  ): void {
+    if (payload.type === "grant.issued") {
+      // `expiresAt` is always set on `grant.issued`; bail defensively if a
+      // malformed payload omits it rather than seed a NaN countdown.
+      if (payload.expiresAt === undefined) return;
+      this._clearGrantEndedTimer();
+      this._patch({
+        activeGrant: {
+          sessionId: payload.sessionId,
+          toolId: payload.toolId,
+          expiresAt: payload.expiresAt,
+          ttlMs: payload.ttlMs,
+        },
+        grantEnded: null,
+      });
+      // The mint resolves the mismatch that triggered it. Idempotent with the
+      // fallback clear in `approveTierOnce`'s `.then` — whichever runs first.
+      this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
+      return;
+    }
+    if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
+      const active = this._snapshot.activeGrant;
+      if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
+        return;
+      }
+      const reason = this._grantEndReason(payload);
+      this._clearGrantEndedTimer();
+      this._patch({
+        activeGrant: null,
+        grantEnded: reason ? { toolId: payload.toolId, reason } : null,
+      });
+      if (reason) this._armGrantEndedAutoDismiss();
+    }
+  }
+
+  /**
+   * The user-actionable subset of how a grant ended. Passive expiry and the
+   * 30-minute ceiling are worth a notice; a user-initiated revoke and session
+   * teardown/idle are not (the user did it, or the session is already gone).
+   */
+  private _grantEndReason(
+    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
+  ): GrantEndReason | null {
+    if (payload.type === "grant.expired") return "expired";
+    return payload.revokedReason === "grant-ceiling" ? "grant-ceiling" : null;
+  }
+
+  private _clearGrantState(): void {
+    this._clearGrantEndedTimer();
+    // Clear `isRevokingGrant` too: a teardown mid-revoke would otherwise leak
+    // a stuck-disabled "Revoke access" button into the next session's grant.
+    this._patch({ activeGrant: null, grantEnded: null, isRevokingGrant: false });
+  }
+
+  private _clearGrantEndedTimer(): void {
+    if (this._grantEndedBannerTimer) {
+      clearTimeout(this._grantEndedBannerTimer);
+      this._grantEndedBannerTimer = null;
+    }
+  }
+
+  private _armGrantEndedAutoDismiss(): void {
+    this._clearGrantEndedTimer();
+    this._grantEndedBannerTimer = setTimeout(() => {
+      this._grantEndedBannerTimer = null;
+      this._patch({ grantEnded: null });
+    }, GRANT_ENDED_BANNER_AUTO_DISMISS_MS);
   }
 
   private _revokePendingSession(): void {
