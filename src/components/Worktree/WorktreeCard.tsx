@@ -197,6 +197,19 @@ export function WorktreeCard({
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (!canCollapse) return;
+    // Interactive children stop `click` propagation but `click` and `dblclick`
+    // are separate events, so a double-click on a control (More actions,
+    // Delete, the git-status Refresh button, the drag handle, issue/PR badges,
+    // the lifecycle "Show details" <summary>) still bubbles here and would
+    // toggle collapse. Only collapse when the double-click originates on the
+    // inert card body — the full-card select overlay or non-interactive
+    // content — not on a nested control (#10319).
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const interactive = target.closest(
+      'button, a, summary, [role="button"], [role="menuitem"], input, select, textarea, [data-worktree-row-drag-handle]'
+    );
+    if (interactive && !interactive.hasAttribute("data-card-select-overlay")) return;
     e.stopPropagation();
     toggleWorktreeCollapsed(worktree.id);
   };
@@ -721,6 +734,7 @@ export function WorktreeCard({
         >
           <button
             type="button"
+            data-card-select-overlay=""
             tabIndex={variant === "grid" ? -1 : undefined}
             // Grid variant: suppress focus shift on click so the role="grid"
             // container retains the keyboard tab stop after a modifier-click.

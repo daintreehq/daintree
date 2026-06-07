@@ -56,6 +56,7 @@ function FilterSection({
             )}
           </span>
           <ChevronDown
+            data-animated-chevron
             className={cn("w-3.5 h-3.5 transition-transform", isOpen ? "transform rotate-180" : "")}
           />
         </button>
