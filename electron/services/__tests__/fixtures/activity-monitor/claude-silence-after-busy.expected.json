@@ -1,9 +1,10 @@
 {
   "agentId": "claude",
-  "settleMs": 4000,
+  "settleMs": 7500,
   "maxWorkingSilenceMs": 1500,
+  "simpleOutputState": true,
   "transitions": [
     { "atMs": 0, "state": "busy", "trigger": "pattern" },
-    { "atMs": 2800, "state": "idle", "trigger": "timeout" }
+    { "atMs": 7400, "state": "idle", "trigger": "timeout" }
   ]
 }

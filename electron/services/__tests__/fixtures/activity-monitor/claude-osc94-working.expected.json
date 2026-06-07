@@ -1,0 +1,10 @@
+{
+  "agentId": "claude",
+  "settleMs": 6500,
+  "simpleOutputState": true,
+  "_comment": "OSC 9;4 state=1 sequences are emitted by Claude Code v2.0.56+ to signal tool progress. The harness's per-replay Osc94Parser routes each state=1 to `monitor.onOscProgressWorking(now)`, which refreshes `lastActivityTimestamp`. The polling-based idle gate therefore stays latched `busy` until visible content quiesces (state=0 is advisory no-op per #8753, so it does NOT trigger idle — that gate is still driven by visible-content quiescence + the 6s temperature dwell). Settle is set so the temperature-driven idle DOES fire (last visible change at 2.70s + 6.0s dwell = 8.70s). The test consumer also asserts no `completed` event fires during the OSC-sustained busy period, since production's simpleOutputState path does not emit completion on Claude.",
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 8800, "state": "idle", "trigger": "timeout" }
+  ]
+}

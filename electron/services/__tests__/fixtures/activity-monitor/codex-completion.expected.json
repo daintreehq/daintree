@@ -1,15 +1,10 @@
 {
   "agentId": "codex",
-  "settleMs": 4000,
+  "settleMs": 7000,
+  "simpleOutputState": true,
+  "_comment": "Per the issue body and #9869's deferred direction, the production simpleOutputState path does not emit a `completed` event — the `busy @ 0ms → idle @ 8050ms` sequence is the canonical production behavior. The pre-#9869 closure fixture (with `completed @ 2950ms` + `idle @ 3450ms`) remains recoverable via `simpleOutputState: false` once #9869 closes a direction; the harness preserves that opt-in.",
   "transitions": [
     { "atMs": 0, "state": "busy", "trigger": "pattern" },
-    {
-      "atMs": 2950,
-      "state": "completed",
-      "trigger": "pattern",
-      "sessionCost": 0.005,
-      "sessionTokens": 1234
-    },
-    { "atMs": 3450, "state": "idle", "trigger": "pattern" }
+    { "atMs": 8050, "state": "idle", "trigger": "timeout" }
   ]
 }

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { vi } from "vitest";
-import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
+import type { Terminal as HeadlessTerminalType, IBufferCell } from "@xterm/headless";
 import headless from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
 
@@ -10,6 +10,19 @@ import {
   type ProcessStateValidator,
 } from "../../ActivityMonitor.js";
 import { buildActivityMonitorOptions } from "../../pty/terminalActivityPatterns.js";
+import { Osc94Parser } from "../../pty/Osc94Parser.js";
+import { AgentStateService } from "../../pty/AgentStateService.js";
+import { events } from "../../events.js";
+import {
+  createVisibleCellContentSnapshot,
+  createVisibleContentSnapshot,
+  type VisibleContentCell,
+  type VisibleContentSnapshot,
+} from "../../pty/SustainedChangeTracker.js";
+import type { AgentStateChanged, AgentStateChangeTrigger } from "../../../schemas/agent.js";
+import type { TerminalInfo } from "../../pty/types.js";
+import type { AgentState } from "../../../../shared/types/agent.js";
+import type { BuiltInAgentId } from "../../../../shared/config/agentIds.js";
 
 export interface RecordedTransition {
   replayMs: number;
@@ -63,6 +76,16 @@ export interface ExpectedFile {
    * that don't change the load-bearing state-sequence invariant.
    */
   allowExtraTransitions?: boolean;
+  /**
+   * When `false`, replay applies the legacy 6000ms debounce floor and
+   * `simpleOutputState: false` — the calibration captured before the
+   * `buildActivityMonitorOptions` 8000ms floor landed (#9869 deferred the
+   * direction). Default is `true` (production: harness lets `baseOptions`
+   * drive both timing knobs and the simpleOutputState flag). New fixtures
+   * SHOULD omit this key; legacy fixtures SHOULD set it explicitly to `false`
+   * so the intent is visible and a follow-up issue can sweep them.
+   */
+  simpleOutputState?: boolean;
   transitions: ExpectedTransition[];
 }
 
@@ -234,6 +257,104 @@ function makeGetCursorLine(term: HeadlessTerminalType): () => string | null {
   };
 }
 
+// Mirror TerminalProcess.getVisibleActivityCells() / getVisibleActivitySnapshot().
+// The cell-priority path is load-bearing: production wires the snapshot into the
+// `AgentActivityTemperature` detector, which compares consecutive frames at the
+// cell level (attributes bitmask). A lines-only snapshot would silently bypass
+// the temperature path and let the harness pass while production regresses.
+
+type CursorBufferLine = {
+  getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
+};
+
+type CursorBuffer = {
+  baseY: number;
+  cursorY: number;
+  getLine: (index: number) => CursorBufferLine | undefined;
+  getNullCell?: () => IBufferCell;
+};
+
+function makeCreateVisibleContentCell(): (cell: IBufferCell) => VisibleContentCell {
+  return (cell) => {
+    const attributes =
+      (cell.isBold() ? 1 : 0) |
+      (cell.isItalic() ? 1 << 1 : 0) |
+      (cell.isDim() ? 1 << 2 : 0) |
+      (cell.isUnderline() ? 1 << 3 : 0) |
+      (cell.isBlink() ? 1 << 4 : 0) |
+      (cell.isInverse() ? 1 << 5 : 0) |
+      (cell.isInvisible() ? 1 << 6 : 0) |
+      (cell.isStrikethrough() ? 1 << 7 : 0) |
+      (cell.isOverline() ? 1 << 8 : 0);
+
+    return {
+      chars: cell.getChars(),
+      code: cell.getCode(),
+      width: cell.getWidth(),
+      fgColorMode: cell.getFgColorMode(),
+      fgColor: cell.getFgColor(),
+      bgColorMode: cell.getBgColorMode(),
+      bgColor: cell.getBgColor(),
+      attributes,
+      defaultVisual: cell.isFgDefault() && cell.isBgDefault() && attributes === 0,
+    };
+  };
+}
+
+function getVisibleActivityCells(
+  term: HeadlessTerminalType,
+  createCell: (cell: IBufferCell) => VisibleContentCell
+): VisibleContentCell[][] | undefined {
+  const buffer = term.buffer.active as CursorBuffer | undefined;
+  if (!buffer || typeof buffer.getLine !== "function" || typeof buffer.getNullCell !== "function") {
+    return undefined;
+  }
+
+  const viewportTop = buffer.baseY;
+  const viewportBottom = buffer.baseY + term.rows;
+  const reusableCell = buffer.getNullCell();
+
+  const rows: VisibleContentCell[][] = [];
+  for (let y = viewportTop; y < viewportBottom; y += 1) {
+    const line = buffer.getLine(y);
+    if (!line || typeof line.getCell !== "function") continue;
+
+    const row: VisibleContentCell[] = [];
+    for (let x = 0; x < term.cols; x += 1) {
+      const cell = line.getCell(x, reusableCell);
+      if (cell) row.push(createCell(cell));
+    }
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function makeGetVisibleContentSnapshot(
+  term: HeadlessTerminalType
+): (n: number) => VisibleContentSnapshot | undefined {
+  const createCell = makeCreateVisibleContentCell();
+  return (_n: number) => {
+    const cells = getVisibleActivityCells(term, createCell);
+    if (cells && cells.length > 0) {
+      return createVisibleCellContentSnapshot(cells);
+    }
+    // Cell path unavailable (e.g. xterm version without getNullCell) — fall
+    // back to the lines-only snapshot so the harness still exercises the
+    // ActivityMonitor's `getVisibleContentSnapshot` wiring, just without the
+    // cell-level attributes.
+    const buffer = term.buffer.active as CursorBuffer | undefined;
+    if (!buffer) return undefined;
+    const lines: string[] = [];
+    const viewportBottom = buffer.baseY + term.rows;
+    for (let i = buffer.baseY; i < viewportBottom; i += 1) {
+      const line = buffer.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    return createVisibleContentSnapshot(lines);
+  };
+}
+
 interface InputHandlerLike {
   parse(data: string | Uint8Array, promiseResult?: boolean): void | Promise<boolean>;
 }
@@ -280,15 +401,42 @@ export async function replayCast(
   const term = createHeadlessTerminal(cast.cols, cast.rows);
   const getVisibleLines = makeGetVisibleLines(term);
   const getCursorLine = makeGetCursorLine(term);
+  const getVisibleContentSnapshot = makeGetVisibleContentSnapshot(term);
 
   const baseOptions = buildActivityMonitorOptions(opts.agentId, {
     getVisibleLines,
+    getVisibleContentSnapshot,
     getCursorLine,
   });
 
   const pollingIntervalMs = opts.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS;
   const recorded: RecordedTransition[] = [];
   const startedAt = Date.now();
+
+  // Legacy fixture mode (#9869 deferred). The production 8000ms debounce floor
+  // is the wrong calibration for fixtures captured against the 6000ms era — the
+  // `simpleOutputState: false` flag is the legacy detection path that the issue
+  // calls out. Opt in per-fixture via `expected.json.simpleOutputState: false`
+  // to keep the legacy suite runnable while #9869 is open. Default behavior is
+  // production: `baseOptions` drives `simpleOutputState`, `idleDebounceMs`, and
+  // `promptFastPathMinQuietMs` without override.
+  const legacyMode = opts.simpleOutputState === false;
+  const overrides: Partial<typeof baseOptions> = {
+    processStateValidator: opts.processStateValidator ?? NULL_PROCESS_STATE_VALIDATOR,
+    pollingIntervalMs,
+    pollingMaxBootMs: opts.pollingMaxBootMs ?? baseOptions.pollingMaxBootMs,
+    maxWorkingSilenceMs: opts.maxWorkingSilenceMs ?? baseOptions.maxWorkingSilenceMs,
+  };
+  if (legacyMode) {
+    overrides.idleDebounceMs = opts.idleDebounceMs ?? 6000;
+    overrides.promptFastPathMinQuietMs = opts.promptFastPathMinQuietMs ?? 6000;
+    overrides.simpleOutputState = false;
+  } else {
+    overrides.idleDebounceMs = opts.idleDebounceMs ?? baseOptions.idleDebounceMs;
+    overrides.promptFastPathMinQuietMs =
+      opts.promptFastPathMinQuietMs ?? baseOptions.promptFastPathMinQuietMs;
+    overrides.simpleOutputState = opts.simpleOutputState ?? baseOptions.simpleOutputState;
+  }
 
   const monitor = new ActivityMonitor(
     "replay-terminal",
@@ -307,23 +455,22 @@ export async function replayCast(
     },
     {
       ...baseOptions,
-      processStateValidator: opts.processStateValidator ?? NULL_PROCESS_STATE_VALIDATOR,
-      pollingIntervalMs,
-      pollingMaxBootMs: opts.pollingMaxBootMs ?? baseOptions.pollingMaxBootMs,
-      maxWorkingSilenceMs: opts.maxWorkingSilenceMs ?? baseOptions.maxWorkingSilenceMs,
-      // Replay fixtures were calibrated against the legacy 6000ms agent
-      // debounce floor; the production floor is now 8000ms (set by
-      // buildActivityMonitorOptions). Pin both timing knobs to the legacy
-      // value so fixture timestamps remain meaningful — the replay harness
-      // exercises pattern/prompt detection logic, not the production floor.
-      idleDebounceMs: opts.idleDebounceMs ?? 6000,
-      promptFastPathMinQuietMs: opts.promptFastPathMinQuietMs ?? 6000,
-      // Replay fixtures encode pattern/prompt-driven transitions
-      // (completed/pattern, idle/pattern). simpleOutputState short-circuits
-      // those paths, so opt out unless the caller explicitly requests it.
-      simpleOutputState: opts.simpleOutputState ?? false,
+      ...overrides,
     }
   );
+
+  // Tap OSC 9;4 progress sequences through a per-replay parser, mirroring
+  // TerminalProcess.handlePtyData (line 1601): feed the parser BEFORE
+  // `monitor.onData` so the OSC-driven `lastActivityTimestamp` refresh lands
+  // in the same polling cycle as the bytes themselves, exactly as production
+  // interleaves them. The parser is a read-only side channel — it never
+  // consumes bytes, so the rest of the byte-volume / pattern paths see
+  // the same stream as they would in production. Per-replay instance (not
+  // shared) prevents carry-state leakage between fixtures in vitest --watch.
+  const osc94Parser = new Osc94Parser({
+    onWorking: (now) => monitor.onOscProgressWorking(now),
+    onIdle: (now) => monitor.onOscProgressIdle(now),
+  });
 
   // Boot phase clock starts here. Tests must call vi.setSystemTime(startedAt)
   // before invoking replayCast so the boot deadline is anchored to a known origin.
@@ -352,6 +499,12 @@ export async function replayCast(
         if (fragment.length === 0) continue;
         writeBytesToTerminal(term, fragment);
       }
+      // OSC 9;4 tap must run on the FULL reconstructed string so split
+      // introducers (chunked bytes) and BEL/ST terminators across chunk
+      // boundaries resolve correctly. The parser keeps its own carry buffer;
+      // passing the per-event string is equivalent to passing each fragment
+      // because the parser's matching logic is byte-stream oriented.
+      osc94Parser.feed(event.data, Date.now());
       // Production calls `monitor.onData(chunk)` with the fully-decoded string
       // from node-pty (which buffers partial UTF-8). Replay mirrors that
       // contract: the monitor sees the whole event as one string, not the
@@ -372,7 +525,9 @@ export async function replayCast(
         monitor.notifyResize();
       }
     }
-    // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
+    // Ignore "m" (markers) — they don't drive state. "x" (exit) is consumed by
+    // the FSM replay path (replayCastFsm) which drives synthetic exit/respawn
+    // events into AgentStateService — production wires these from PTY onExit.
   }
 
   const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
@@ -380,6 +535,7 @@ export async function replayCast(
     vi.advanceTimersByTime(settleMs);
   }
 
+  osc94Parser.reset();
   monitor.dispose();
   term.dispose();
   return recorded;
@@ -467,6 +623,335 @@ export function matchTransitions(
         index: j,
         actual: recorded[j],
         detail: `unmatched recorded transition: ${recorded[j].state}/${recorded[j].trigger ?? "-"} at ${recorded[j].replayMs}ms`,
+      });
+    }
+  }
+
+  return failures;
+}
+
+// ---------------------------------------------------------------------------
+// FSM-driven replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Recorded `agent:state-changed` payload after the cast was replayed through
+ * the full chain: ActivityMonitor → AgentStateService → events bus.
+ * Captures FSM-level state names (working/waiting/idle/completed/exited),
+ * not ActivityMonitor's internal busy/idle/completed states.
+ */
+export interface RecordedFsmTransition {
+  replayMs: number;
+  state: AgentState;
+  previousState: AgentState;
+  trigger: AgentStateChangeTrigger;
+  confidence: number;
+}
+
+export interface ExpectedFsmTransition {
+  state: AgentState;
+  /** Optional invariant on the source state of the transition. */
+  previousState?: AgentState;
+  trigger?: AgentStateChangeTrigger;
+  /** Allowed delta when matched: |actual - expected| ≤ 0.01. */
+  confidence?: number;
+}
+
+export interface ExpectedFsmFile {
+  agentId?: string;
+  pollingMaxBootMs?: number;
+  settleMs?: number;
+  maxWorkingSilenceMs?: number;
+  maxWaitingSilenceMs?: number;
+  idleDebounceMs?: number;
+  promptFastPathMinQuietMs?: number;
+  /**
+   * Override `waitingWatchdogFailThreshold` from `buildActivityMonitorOptions`
+   * (default 3). See `ReplayCastFsmOpts.waitingWatchdogFailThreshold` for the
+   * rationale — a 1-strike variant is the canonical test calibration; a
+   * 3-strike variant can be added to the fragmented suite separately.
+   */
+  waitingWatchdogFailThreshold?: number;
+  /**
+   * Default false (strict). When true, recorded FSM transitions that don't
+   * map to an expected entry are tolerated. Used by fragmented variants
+   * where intentional chunk-boundary noise can introduce extra transitions
+   * (e.g., a brief working→completed→waiting pulse) that don't change the
+   * load-bearing state-sequence invariant.
+   */
+  allowExtraTransitions?: boolean;
+  transitions: ExpectedFsmTransition[];
+}
+
+export interface ReplayCastFsmOpts {
+  agentId?: string;
+  fragmentation?: FragmentationOpts;
+  processStateValidator?: ProcessStateValidator;
+  settleMs?: number;
+  pollingIntervalMs?: number;
+  pollingMaxBootMs?: number;
+  maxWorkingSilenceMs?: number;
+  maxWaitingSilenceMs?: number;
+  idleDebounceMs?: number;
+  promptFastPathMinQuietMs?: number;
+  /**
+   * Override `waitingWatchdogFailThreshold` from `buildActivityMonitorOptions`
+   * (default 3). Fixtures that exercise the watchdog path set this to 1 so
+   * the watchdog fires on the first 5s check after `maxWaitingSilenceMs` is
+   * reached — the production 3-confirmation consensus would otherwise need
+   * ~20s of settle window, which is too slow for a unit suite. The actual
+   * confirmation semantics are still exercised: the watchdog still runs on
+   * the dedicated 5s interval and applies the same alive-veto probes.
+   */
+  waitingWatchdogFailThreshold?: number;
+  /**
+   * When true (default), each cast `x` event drives a synthetic
+   * `exit` → `respawn` pair so a fresh agent restarting in the same PTY can
+   * re-enter `working` via the natural busy path. Set false to exercise the
+   * pure `exited` terminal state (no respawn) — the FSM stays in `exited`
+   * and subsequent output cannot advance it.
+   */
+  injectRespawnOnExit?: boolean;
+}
+
+const FSM_REPLAY_TERMINAL_ID = "fsm-replay-terminal";
+
+/**
+ * Replay an asciicast through the full ActivityMonitor → AgentStateService →
+ * events bus chain and record the resulting `agent:state-changed` payloads.
+ *
+ * Handles the cast's `x` (exit) events by driving a synthetic exit→respawn
+ * sequence into the FSM — production wires these from the PTY's `onExit`
+ * callback and from agent re-detection, neither of which run in the replay
+ * environment. The harness owns the events-bus subscription (subscribes
+ * before `monitor.startPolling()`, unsubscribes after dispose) so callers
+ * never need to clean up listener state.
+ */
+export async function replayCastFsm(
+  castPath: string,
+  opts: ReplayCastFsmOpts = {}
+): Promise<RecordedFsmTransition[]> {
+  const cast = parseCast(castPath);
+  const term = createHeadlessTerminal(cast.cols, cast.rows);
+  const getVisibleLines = makeGetVisibleLines(term);
+  const getCursorLine = makeGetCursorLine(term);
+  const getVisibleContentSnapshot = makeGetVisibleContentSnapshot(term);
+
+  const baseOptions = buildActivityMonitorOptions(opts.agentId, {
+    getVisibleLines,
+    getVisibleContentSnapshot,
+    getCursorLine,
+  });
+
+  const pollingIntervalMs = opts.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS;
+  const recorded: RecordedFsmTransition[] = [];
+  const startedAt = Date.now();
+
+  // Stub TerminalInfo with the minimal fields AgentStateService and the
+  // AgentStateChangedSchema actually consume. The runtime fields are typed
+  // as never/empty so the schema validates without touching them.
+  const terminal: TerminalInfo = {
+    id: FSM_REPLAY_TERMINAL_ID,
+    cwd: "/tmp/fsm-replay",
+    shell: "/bin/sh",
+    spawnedAt: startedAt,
+    launchAgentId: opts.agentId as BuiltInAgentId | undefined,
+    agentState: "idle",
+    analysisEnabled: false,
+    lastInputTime: 0,
+    lastOutputTime: 0,
+    lastCheckTime: 0,
+    restartCount: 0,
+    ptyProcess: {} as never,
+    outputBuffer: "",
+    semanticBuffer: [],
+  };
+
+  const agentStateService = new AgentStateService();
+
+  // Filter by terminalId so events from other tests/services running on the
+  // shared singleton bus don't pollute the recorded sequence.
+  const listener = (payload: AgentStateChanged): void => {
+    if (payload.terminalId !== FSM_REPLAY_TERMINAL_ID) return;
+    recorded.push({
+      replayMs: Date.now() - startedAt,
+      state: payload.state,
+      previousState: payload.previousState,
+      trigger: payload.trigger,
+      confidence: payload.confidence,
+    });
+  };
+  const unsubscribe = events.on("agent:state-changed", listener);
+
+  const monitor = new ActivityMonitor(
+    FSM_REPLAY_TERMINAL_ID,
+    startedAt,
+    (_id, _spawnedAt, state, metadata) => {
+      agentStateService.handleActivityState(terminal, state, metadata);
+    },
+    {
+      ...baseOptions,
+      processStateValidator: opts.processStateValidator ?? NULL_PROCESS_STATE_VALIDATOR,
+      pollingIntervalMs,
+      pollingMaxBootMs: opts.pollingMaxBootMs ?? baseOptions.pollingMaxBootMs,
+      maxWorkingSilenceMs: opts.maxWorkingSilenceMs ?? baseOptions.maxWorkingSilenceMs,
+      maxWaitingSilenceMs: opts.maxWaitingSilenceMs ?? baseOptions.maxWaitingSilenceMs,
+      idleDebounceMs: opts.idleDebounceMs ?? baseOptions.idleDebounceMs,
+      promptFastPathMinQuietMs:
+        opts.promptFastPathMinQuietMs ?? baseOptions.promptFastPathMinQuietMs,
+      waitingWatchdogFailThreshold: opts.waitingWatchdogFailThreshold,
+      onWaitingTimeout: () => {
+        agentStateService.updateAgentState(terminal, { type: "watchdog-timeout" }, "timeout", 0.6);
+      },
+    }
+  );
+
+  // OSC 9;4 tap on the FSM path too — Claude Code's progress sequences are
+  // the load-bearing "still working" signal in small grid tiles (#8701).
+  const osc94Parser = new Osc94Parser({
+    onWorking: (now) => monitor.onOscProgressWorking(now),
+    onIdle: (now) => monitor.onOscProgressIdle(now),
+  });
+
+  try {
+    monitor.startPolling();
+
+    const rng = opts.fragmentation ? mulberry32(opts.fragmentation.seed) : null;
+    const maxSplits = opts.fragmentation?.maxSplits ?? DEFAULT_FRAGMENT_MAX_SPLITS;
+
+    let currentMs = 0;
+    for (const event of cast.events) {
+      const delta = Math.max(0, event.absoluteMs - currentMs);
+      if (delta > 0) {
+        vi.advanceTimersByTime(delta);
+        currentMs = event.absoluteMs;
+      }
+
+      if (event.kind === "o") {
+        const bytes = Buffer.from(event.data, "utf8");
+        const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
+        for (const fragment of fragments) {
+          if (fragment.length === 0) continue;
+          writeBytesToTerminal(term, fragment);
+        }
+        osc94Parser.feed(event.data, Date.now());
+        monitor.onData(event.data);
+      } else if (event.kind === "i") {
+        monitor.onInput(event.data);
+      } else if (event.kind === "r") {
+        const match = /^(\d+)x(\d+)$/.exec(event.data);
+        if (match) {
+          const newCols = Number(match[1]);
+          const newRows = Number(match[2]);
+          try {
+            term.resize(Math.max(1, newCols), Math.max(1, newRows));
+          } catch {
+            // Some xterm builds throw if dims unchanged — ignore.
+          }
+          monitor.notifyResize();
+        }
+      } else if (event.kind === "x") {
+        // Drive exit so the FSM reaches `exited`. Production wires this from
+        // the PTY's onExit callback. The optional respawn injection (default
+        // on) lets a fresh agent restarting in the same PTY re-enter
+        // `working` via the natural busy → working path; production fires
+        // respawn from agent re-detection. Set injectRespawnOnExit=false to
+        // exercise the pure `exited` terminal state.
+        const parsedCode = Number.parseInt(event.data, 10);
+        const code = Number.isFinite(parsedCode) ? parsedCode : 0;
+        agentStateService.updateAgentState(terminal, { type: "exit", code }, "exit", 1.0);
+        if (opts.injectRespawnOnExit ?? true) {
+          agentStateService.updateAgentState(terminal, { type: "respawn" }, "activity", 1.0);
+        }
+      }
+      // Ignore "m" (markers) — they don't drive state.
+    }
+
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
+    if (settleMs > 0) {
+      vi.advanceTimersByTime(settleMs);
+    }
+  } finally {
+    osc94Parser.reset();
+    monitor.dispose();
+    term.dispose();
+    unsubscribe();
+  }
+
+  return recorded;
+}
+
+export function loadExpectedFsm(expectedPath: string): ExpectedFsmFile {
+  const raw = readFileSync(expectedPath, "utf8");
+  const parsed = JSON.parse(raw) as ExpectedFsmFile;
+  if (!Array.isArray(parsed.transitions)) {
+    throw new Error(`Expected file missing 'transitions' array: ${expectedPath}`);
+  }
+  return parsed;
+}
+
+export interface FsmMatchOpts {
+  /**
+   * When true, recorded transitions that don't map to an expected entry are
+   * tolerated. Default is strict — any unmatched recorded transition fails.
+   */
+  allowExtraTransitions?: boolean;
+}
+
+export interface FsmMatchFailure {
+  kind: "missing" | "extra";
+  index: number;
+  expected?: ExpectedFsmTransition;
+  actual?: RecordedFsmTransition;
+  detail?: string;
+}
+
+/**
+ * Strict in-order match for FSM transitions. Each expected entry must match
+ * a recorded transition by `state` (required); `previousState`, `trigger`,
+ * and `confidence` are asserted only when the expected entry names them.
+ * Recorded transitions that don't map to an expected entry produce `extra`
+ * failures unless `allowExtraTransitions` is true.
+ */
+export function matchFsmTransitions(
+  recorded: RecordedFsmTransition[],
+  expected: ExpectedFsmTransition[],
+  opts: FsmMatchOpts = {}
+): FsmMatchFailure[] {
+  const failures: FsmMatchFailure[] = [];
+  const matched = new Set<number>();
+  let cursor = 0;
+
+  for (let i = 0; i < expected.length; i++) {
+    const want = expected[i];
+    let foundIndex = -1;
+    for (let j = cursor; j < recorded.length; j++) {
+      if (matched.has(j)) continue;
+      const got = recorded[j];
+      if (got.state !== want.state) continue;
+      if (want.previousState !== undefined && got.previousState !== want.previousState) continue;
+      if (want.trigger !== undefined && got.trigger !== want.trigger) continue;
+      if (want.confidence !== undefined && Math.abs(got.confidence - want.confidence) > 0.01)
+        continue;
+      foundIndex = j;
+      break;
+    }
+    if (foundIndex === -1) {
+      failures.push({ kind: "missing", index: i, expected: want });
+      continue;
+    }
+    matched.add(foundIndex);
+    cursor = foundIndex + 1;
+  }
+
+  if (!opts.allowExtraTransitions) {
+    for (let j = 0; j < recorded.length; j++) {
+      if (matched.has(j)) continue;
+      failures.push({
+        kind: "extra",
+        index: j,
+        actual: recorded[j],
+        detail: `unmatched recorded transition: ${recorded[j].previousState}→${recorded[j].state}/${recorded[j].trigger} at ${recorded[j].replayMs}ms`,
       });
     }
   }

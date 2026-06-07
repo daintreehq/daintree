@@ -31,6 +31,7 @@ const REPLAY_CASES: ReplayCase[] = [
   { name: "gemini-working-to-idle", agentId: "gemini" },
   { name: "codex-completion", agentId: "codex" },
   { name: "claude-silence-after-busy", agentId: "claude" },
+  { name: "claude-osc94-working", agentId: "claude" },
 ];
 
 describe("ActivityMonitor replay harness", () => {
@@ -55,6 +56,7 @@ describe("ActivityMonitor replay harness", () => {
         maxWorkingSilenceMs: expectedFile.maxWorkingSilenceMs,
         idleDebounceMs: expectedFile.idleDebounceMs,
         promptFastPathMinQuietMs: expectedFile.promptFastPathMinQuietMs,
+        simpleOutputState: expectedFile.simpleOutputState,
       };
       const recorded = await replayCast(cast, opts);
       const failures = matchTransitions(recorded, expectedFile.transitions, {
@@ -131,7 +133,39 @@ describe("ActivityMonitor replay harness", () => {
       settleMs: expectedFile.settleMs,
       pollingMaxBootMs: expectedFile.pollingMaxBootMs,
       maxWorkingSilenceMs: expectedFile.maxWorkingSilenceMs,
+      simpleOutputState: expectedFile.simpleOutputState,
     });
+    const failures = matchTransitions(recorded, expectedFile.transitions, {
+      toleranceMs: expectedFile.toleranceMs ?? 200,
+    });
+    expect(failures, formatFailures(failures, recorded)).toHaveLength(0);
+  });
+
+  it("OSC 9;4 working sequences keep the monitor in busy without firing completed", async () => {
+    // Regression guard for #8753: Claude Code emits OSC 9;4 state=1 between
+    // tool calls to signal "still working" — the harness's per-replay
+    // Osc94Parser must route each state=1 into `monitor.onOscProgressWorking`,
+    // which refreshes `lastActivityTimestamp` and latches the polling-based
+    // idle gate. The state=0 advisory at the end is a no-op (does NOT
+    // trigger idle or completed). The cast has a long enough tool span that
+    // production options (8000ms floor) would normally fire idle if the OSC
+    // tap were broken — the assertion below checks the OSC-driven busy is
+    // sustained through the full tool span.
+    const { cast, expected } = fixture("claude-osc94-working");
+    const expectedFile = loadExpected(expected);
+    const recorded = await replayCast(cast, {
+      agentId: expectedFile.agentId,
+      settleMs: expectedFile.settleMs,
+      simpleOutputState: expectedFile.simpleOutputState,
+    });
+    // No `completed` should have fired during the OSC-sustained busy period
+    // — production's simpleOutputState path does not emit completion on
+    // Claude, and the OSC working tap prevents the polling-driven idle
+    // gate from firing mid-tool. If a completed ever leaks through, the
+    // simpleOutputState path or the Osc94Parser tap is broken.
+    const completedCount = recorded.filter((r) => r.state === "completed").length;
+    expect(completedCount, formatRecorded(recorded)).toBe(0);
+    // Match the full expected sequence (0ms busy → 8800ms idle).
     const failures = matchTransitions(recorded, expectedFile.transitions, {
       toleranceMs: expectedFile.toleranceMs ?? 200,
     });

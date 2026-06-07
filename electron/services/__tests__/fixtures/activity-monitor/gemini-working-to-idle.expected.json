@@ -1,8 +1,9 @@
 {
   "agentId": "gemini",
   "settleMs": 6500,
+  "simpleOutputState": true,
   "transitions": [
     { "atMs": 0, "state": "busy", "trigger": "pattern" },
-    { "atMs": 8400, "state": "idle", "trigger": "pattern", "waitingReason": "prompt" }
+    { "atMs": 8500, "state": "idle", "trigger": "timeout" }
   ]
 }

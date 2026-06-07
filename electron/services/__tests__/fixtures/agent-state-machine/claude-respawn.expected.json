@@ -1,0 +1,19 @@
+{
+  "agentId": "claude",
+  "settleMs": 6000,
+  "maxWorkingSilenceMs": 1500,
+  "_comment": "Recalibrated for the production simpleOutputState path: the cast's 2.9s working→exit gap is shorter than the temperature-driven waitingDwellMs (6000ms), so the `working → waiting (timeout)` transition no longer fires between boot and exit. The load-bearing invariant is the exit/respawn lifecycle: `working → exited → idle`. The post-respawn boot is at 4.0–4.05s and the settle ends at 10.05s — the temperature-driven `idle` would not fire there either, so the post-respawn `idle → working` cycle is omitted from the assertion. The pre-#6664 prototype (with `waiting` between working and exited) is preserved as `_legacy` below for reference; it would re-appear if #9869 closes the direction to keep the legacy `simpleOutputState: false` path. allowExtraTransitions stays on to tolerate fragmented variant chunk-boundary pulses.",
+  "transitions": [
+    { "state": "working", "previousState": "idle", "trigger": "heuristic" },
+    { "state": "exited", "previousState": "working", "trigger": "exit", "confidence": 1 },
+    { "state": "idle", "previousState": "exited", "trigger": "activity" }
+  ],
+  "allowExtraTransitions": true,
+  "_legacy_transitions": [
+    { "state": "working", "previousState": "idle", "trigger": "heuristic" },
+    { "state": "waiting", "previousState": "working", "trigger": "timeout" },
+    { "state": "exited", "previousState": "waiting", "trigger": "exit", "confidence": 1 },
+    { "state": "idle", "previousState": "exited", "trigger": "activity" },
+    { "state": "working", "previousState": "idle", "trigger": "output" }
+  ]
+}

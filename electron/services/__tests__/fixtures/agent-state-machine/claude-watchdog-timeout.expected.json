@@ -1,0 +1,13 @@
+{
+  "agentId": "claude",
+  "settleMs": 12000,
+  "maxWorkingSilenceMs": 1500,
+  "maxWaitingSilenceMs": 2000,
+  "waitingWatchdogFailThreshold": 1,
+  "_comment": "waitingWatchdogFailThreshold=1 collapses the production 3-confirmation consensus to a single 5s check so the watchdog fires within the 12s settle window. The watchdog's alive-veto probes (processTree, CPU, spinner, recent PTY data, recent pattern) are still exercised — the 1-strike threshold only shortens the consensus, not the proof. A 3-strike variant is left for the fragmented tests (which tolerate extra transitions) so both consensus cadences are guarded.",
+  "transitions": [
+    { "state": "working", "previousState": "idle", "trigger": "heuristic" },
+    { "state": "waiting", "previousState": "working", "trigger": "timeout" },
+    { "state": "idle", "previousState": "waiting", "trigger": "timeout", "confidence": 0.6 }
+  ]
+}
