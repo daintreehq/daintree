@@ -31,7 +31,8 @@ function makeForgeProvider(opts: { withBuildPRFileUrl: boolean }): ForgeProvider
     return {} as ForgeProviderImpl;
   }
   return {
-    buildPRFileUrl: (repo, number, path) => mockBuildPRFileUrl(repo, number, path),
+    buildPRFileUrl: (repo: { owner: string; repo: string }, number: number, path: string) =>
+      mockBuildPRFileUrl(repo, number, path),
   } as unknown as ForgeProviderImpl;
 }
 
