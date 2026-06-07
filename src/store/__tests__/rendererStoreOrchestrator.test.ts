@@ -1446,4 +1446,67 @@ describe("rendererStoreOrchestrator", () => {
       expect([...useFleetArmingStore.getState().armedIds]).toEqual([]);
     });
   });
+
+  describe("fleet failure auto-clear (issue #9923)", () => {
+    it("halts auto-clear after destroy and resumes after re-init", async () => {
+      const { useFleetArmingStore } = await import("../fleetArmingStore");
+      const { useFleetFailureStore } = await import("../fleetFailureStore");
+
+      useFleetArmingStore.setState({
+        armedIds: new Set<string>(),
+        armOrder: [],
+        armOrderById: {},
+        lastArmedId: null,
+        broadcastSignal: 0,
+        previewArmedIds: new Set<string>(),
+      });
+      useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
+
+      // Seed panels + arm the fleet + record a broadcast failure.
+      usePanelStore.setState({
+        panelsById: {
+          "agent-a": {
+            id: "agent-a",
+            kind: "terminal",
+            title: "A",
+            location: "grid",
+            worktreeId: "wt-1",
+            detectedAgentId: "claude",
+            everDetectedAgent: true,
+            agentState: "idle",
+            hasPty: true,
+          } as PtyPanelData,
+          "agent-b": {
+            id: "agent-b",
+            kind: "terminal",
+            title: "B",
+            location: "grid",
+            worktreeId: "wt-1",
+            detectedAgentId: "claude",
+            everDetectedAgent: true,
+            agentState: "idle",
+            hasPty: true,
+          } as PtyPanelData,
+        },
+        panelIds: ["agent-a", "agent-b"],
+      });
+      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Orchestrator already init'd by the top-level beforeEach. Tear it
+      // down and verify auto-clear no longer fires on a fleet drain.
+      destroyStoreOrchestrator();
+      useFleetArmingStore.getState().clear();
+      expect(useFleetFailureStore.getState().failedIds).toEqual(new Set(["agent-a", "agent-b"]));
+      expect(useFleetFailureStore.getState().payload).toBe("p");
+
+      // Re-init — the subscription is back, and the next drain must clear.
+      initStoreOrchestrator();
+      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+      useFleetArmingStore.getState().clear();
+      expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(useFleetFailureStore.getState().payload).toBeNull();
+    });
+  });
 });

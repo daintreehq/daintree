@@ -7,6 +7,7 @@ import {
 } from "./worktreeStore";
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
 import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
+import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
 import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
@@ -339,6 +340,13 @@ export function initStoreOrchestrator(): () => void {
   //     callbacks firing against orphaned store instances after a module
   //     reset (issue #9967).
   disposables.add(toDisposable(subscribeFleetBroadcastResult()));
+
+  // 5d. Fleet-failure auto-clear: drop failure pills when the armed set drains
+  //     or a single pane is disarmed. Lives in the orchestrator for the same
+  //     HMR/test-teardown reason as 5a — the module-scope subscription in
+  //     `fleetFailureStore.ts` was never torn down and the `globalThis`
+  //     registration guard mishandled re-registration under HMR (#9923).
+  disposables.add(toDisposable(subscribeFleetFailureAutoClear()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any
