@@ -6,6 +6,7 @@ import type {
 } from "../types/plugin.js";
 import type { NormalizedPRState, ResourceRef } from "../types/forge.js";
 import type { WorktreeSnapshot } from "../types/workspace-host.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "./forgeProviderIds.js";
 
 /**
  * Project an internal `WorktreeSnapshot` down to the read-only
@@ -38,9 +39,10 @@ export function toPluginWorktreeSnapshot(snapshot: WorktreeSnapshot): PluginWork
  * is the source of truth (#8452): when present it is passed through verbatim
  * (deep-cloned then frozen so the host's live `_linked` reference is never
  * mutated). Only legacy snapshots that never populated `linked` fall back to
- * synthesizing it from the flat GitHub-shaped fields, where the provider id is
- * hardcoded to `"github"` and `owner`/`repo` are empty because those snapshots
- * predate canonical repo identity on the payload.
+ * synthesizing it from the flat GitHub-shaped fields, stamping the canonical
+ * built-in GitHub provider id (see `forgeProviderIds.ts`) and leaving
+ * `owner`/`repo` empty because those snapshots predate canonical repo identity
+ * on the payload.
  */
 function buildLinkedProjection(snapshot: WorktreeSnapshot): PluginWorktreeLinked | null {
   if (snapshot.linked != null) {
@@ -51,7 +53,7 @@ function buildLinkedProjection(snapshot: WorktreeSnapshot): PluginWorktreeLinked
   const hasIssue = typeof snapshot.issueNumber === "number";
   if (!hasPR && !hasIssue) return null;
 
-  const providerId = "github";
+  const providerId = BUILTIN_GITHUB_PROVIDER_ID;
   const linked: {
     providerId: string;
     issue?: PluginWorktreeLinkedIssue;
