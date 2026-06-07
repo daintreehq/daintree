@@ -761,6 +761,64 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       vi.setSystemTime(new Date());
     });
+
+    it("should detach the host element from the shared hidden container (#9909)", () => {
+      // A hibernated terminal's host may have been parked in the shared
+      // offscreen container by detach()/detachForProjectSwitch() — a raw
+      // child of hiddenContainer, not a per-id slot. Destroy must still
+      // remove it, otherwise long multi-project sessions accumulate empty
+      // host divs in the shared container.
+      const managed = makeMockManaged({ isHibernated: true });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      const offscreen = (
+        service as unknown as {
+          offscreenManager: { ensureHiddenContainer: () => HTMLElement | null };
+        }
+      ).offscreenManager.ensureHiddenContainer();
+      expect(offscreen).not.toBeNull();
+      offscreen!.appendChild(managed.hostElement);
+      expect(offscreen!.contains(managed.hostElement)).toBe(true);
+
+      service.destroy("t1");
+
+      expect(managed.hostElement.parentElement).toBeNull();
+      expect(offscreen!.contains(managed.hostElement)).toBe(false);
+    });
+
+    it("should still detach the host for a non-hibernated terminal parked in the hidden container", () => {
+      // Locks in that moving the host removal out of the !isHibernated guard
+      // didn't break the pre-existing non-hibernated path: a terminal that
+      // is destroyed mid-detach (e.g. via detachForProjectSwitch()) also
+      // gets its host cleaned up.
+      const managed = makeMockManaged({ isHibernated: false });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      const offscreen = (
+        service as unknown as {
+          offscreenManager: { ensureHiddenContainer: () => HTMLElement | null };
+        }
+      ).offscreenManager.ensureHiddenContainer();
+      expect(offscreen).not.toBeNull();
+      offscreen!.appendChild(managed.hostElement);
+
+      service.destroy("t1");
+
+      expect(managed.hostElement.parentElement).toBeNull();
+      expect(offscreen!.contains(managed.hostElement)).toBe(false);
+    });
+
+    it("should be a safe no-op when the host has no parent", () => {
+      // Locks in the `if (managed.hostElement.parentElement)` guard so a
+      // future refactor that drops it doesn't start throwing NotFoundError
+      // on already-detached hosts.
+      const managed = makeMockManaged();
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+      expect(managed.hostElement.parentElement).toBeNull();
+
+      expect(() => service.destroy("t1")).not.toThrow();
+      expect(managed.hostElement.parentElement).toBeNull();
+    });
   });
 
   describe("Listener leak prevention", () => {

@@ -2938,10 +2938,14 @@ class TerminalInstanceService {
 
       this.webGLManager.onTerminalDestroyed(id);
       managed.terminal.dispose();
+    }
 
-      if (managed.hostElement.parentElement) {
-        managed.hostElement.parentElement.removeChild(managed.hostElement);
-      }
+    // Detach the host element regardless of hibernation state: a hibernated
+    // terminal's host may have been parked in the shared offscreen container
+    // by detach()/detachForProjectSwitch() (raw child, not a registered slot),
+    // and the gated branch above doesn't reach it (#9909).
+    if (managed.hostElement.parentElement) {
+      managed.hostElement.parentElement.removeChild(managed.hostElement);
     }
 
     this.offscreenManager.removeOffscreenSlot(id);
