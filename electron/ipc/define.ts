@@ -32,12 +32,12 @@ type ContextHandler<K extends Channel> = (
 
 type ValidatedPayloadHandler<K extends Channel, S extends z.ZodTypeAny> = (
   payload: z.output<S>
-) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"];
+) => Promise<SafeResult<K>> | SafeResult<K>;
 
 type ValidatedContextPayloadHandler<K extends Channel, S extends z.ZodTypeAny> = (
   ctx: IpcContext,
   payload: z.output<S>
-) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"];
+) => Promise<SafeResult<K>> | SafeResult<K>;
 
 export interface PlainOpSpec<K extends Channel> {
   channel: K;

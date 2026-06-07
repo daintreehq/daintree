@@ -428,19 +428,23 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
 export function typedHandleValidated<K extends keyof IpcInvokeMap, S extends z.ZodTypeAny>(
   channel: K,
   schema: S,
-  handler: (payload: z.output<S>) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+  handler: (
+    payload: z.output<S>
+  ) =>
+    | Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>
+    | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
   // Wrap as async so a synchronous throw from `parseIpcPayload` always
   // surfaces as a rejected promise. `ipcMain.handle` accepts both forms in
   // production, but normalising here keeps test mocks consistent and makes
   // the contract explicit.
-  const wrapped = (async (...args: unknown[]) => {
+  const wrapped = async (
+    ...args: IpcInvokeMap[K]["args"]
+  ): Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>> => {
     const parsed = parseIpcPayload(channel as string, schema, args[0]);
     return handler(parsed);
-  }) as unknown as (
-    ...args: IpcInvokeMap[K]["args"]
-  ) => Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>;
+  };
   return typedHandle(channel, wrapped);
 }
 
@@ -525,17 +529,19 @@ export function typedHandleWithContextValidated<
   handler: (
     ctx: IpcContext,
     payload: z.output<S>
-  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+  ) =>
+    | Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>
+    | ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>
 ): () => void {
   assertIpcSecurityReady(channel as string);
   // Wrap as async so synchronous parse throws become rejected promises.
-  const wrapped = (async (ctx: IpcContext, ...args: unknown[]) => {
-    const parsed = parseIpcPayload(channel as string, schema, args[0]);
-    return handler(ctx, parsed);
-  }) as unknown as (
+  const wrapped = async (
     ctx: IpcContext,
     ...args: IpcInvokeMap[K]["args"]
-  ) => Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>>;
+  ): Promise<ForbidIpcEnvelopeKeys<IpcInvokeMap[K]["result"]>> => {
+    const parsed = parseIpcPayload(channel as string, schema, args[0]);
+    return handler(ctx, parsed);
+  };
   return typedHandleWithContext(channel, wrapped);
 }
 
