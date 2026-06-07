@@ -125,6 +125,20 @@ describe("ScrollIndicator", () => {
     expect(button.parentElement!.hasAttribute("aria-hidden")).toBe(false);
   });
 
+  it("keeps showing the last positive count while fading out at count 0 (issue #10316)", () => {
+    // Exit state: shouldRender stays true through the close animation while the
+    // live count has already dropped to 0. The pill must render the latched
+    // count, not "0 more below".
+    mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+    const { rerender } = render(<ScrollIndicator direction="below" count={4} onClick={onClick} />);
+    expect(screen.getByText("4")).toBeTruthy();
+
+    rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+    expect(screen.getByText("4")).toBeTruthy();
+    expect(screen.queryByText("0")).toBeNull();
+    expect(screen.getByLabelText("Scroll down, 4 more below")).toBeTruthy();
+  });
+
   it("uses scoped transition-[opacity,transform] instead of bare transition", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
     const button = screen.getByRole("button");
