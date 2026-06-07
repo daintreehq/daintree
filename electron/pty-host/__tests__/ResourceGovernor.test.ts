@@ -1919,6 +1919,388 @@ describe("ResourceGovernor", () => {
     });
   });
 
+  describe("buffer-memory gauge", () => {
+    // mockMemoryUsage(300, 276) ≈ 75% combined utilization — above the 70%
+    // warning threshold but below the 85% engage threshold, so the governor
+    // is in the warning band on every tick without ever pausing or trimming.
+    // That's the band where the gauge is meant to emit.
+    const WARNING_BAND_HEAP_MB = 300;
+    const WARNING_BAND_EXTERNAL_MB = 276;
+
+    function bufferMemoryGaugeCalls(deps: ResourceGovernorDeps) {
+      return (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) =>
+          (c[0] as Record<string, unknown>)?.type === "terminal-reliability-metric" &&
+          ((c[0] as Record<string, unknown>)?.payload as Record<string, unknown>)?.metricType ===
+            "buffer-memory-gauge"
+      );
+    }
+
+    it("emits per-terminal ranking (heaviest first) and aggregate on a warning-band tick", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+      mockMemoryUsage(WARNING_BAND_HEAP_MB, WARNING_BAND_EXTERNAL_MB);
+
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          // Lighter contributor listed first to prove the gauge re-sorts.
+          { id: "t2", scrollbackLines: 500, cols: 100 }, // 500*100*12 = 600_000
+          { id: "t1", scrollbackLines: 1000, cols: 80 }, // 1000*80*12 = 960_000
+        ]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      const gaugeCalls = bufferMemoryGaugeCalls(deps);
+      expect(gaugeCalls.length).toBeGreaterThanOrEqual(1);
+      const payload = (gaugeCalls[0][0] as Record<string, unknown>).payload as Record<
+        string,
+        unknown
+      >;
+      expect(payload.estimatedBufferMemoryBytes).toBe(960_000 + 600_000);
+      expect(payload.perTerminalBufferMemory).toEqual([
+        { terminalId: "t1", scrollbackEstimateBytes: 960_000, scrollbackLines: 1000, cols: 80 },
+        { terminalId: "t2", scrollbackEstimateBytes: 600_000, scrollbackLines: 500, cols: 100 },
+      ]);
+
+      governor.dispose();
+    });
+
+    it("does not emit outside the warning band", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+      // 50% utilization (256 / 512 heap budget) — below the warning threshold.
+      mockMemoryUsage(256);
+
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 1000, cols: 80 }]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(bufferMemoryGaugeCalls(deps)).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("does not emit when metrics are disabled", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(false);
+      mockMemoryUsage(WARNING_BAND_HEAP_MB, WARNING_BAND_EXTERNAL_MB);
+
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 1000, cols: 80 }]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(bufferMemoryGaugeCalls(deps)).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("does not emit when there are no terminals", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+      mockMemoryUsage(WARNING_BAND_HEAP_MB, WARNING_BAND_EXTERNAL_MB);
+
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi.fn().mockReturnValue([]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(bufferMemoryGaugeCalls(deps)).toHaveLength(0);
+
+      governor.dispose();
+    });
+
+    it("is pure observability — emitting the gauge never trims in the warning band", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+      mockMemoryUsage(WARNING_BAND_HEAP_MB, WARNING_BAND_EXTERNAL_MB);
+
+      const deps = createMockDeps({
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 1000, cols: 80 }]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      // Several warning-band ticks: gauge emits each tick, no trim ever fires.
+      vi.advanceTimersByTime(20000);
+
+      expect(bufferMemoryGaugeCalls(deps).length).toBeGreaterThan(1);
+      expect(deps.trimBuffersTargeted).not.toHaveBeenCalled();
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("gracefully handles a missing getTerminalBufferSizes dep", () => {
+      vi.mocked(metricsEnabled).mockReturnValue(true);
+      mockMemoryUsage(WARNING_BAND_HEAP_MB, WARNING_BAND_EXTERNAL_MB);
+
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+      expect(bufferMemoryGaugeCalls(deps)).toHaveLength(0);
+
+      governor.dispose();
+    });
+  });
+
+  describe("targeted pre-pause trim", () => {
+    it("trims only contributors above SCROLLBACK_MIN, heaviest first, leaving light terminals untouched", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1", "t2", "t3"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          { id: "t2", scrollbackLines: 400, cols: 80 }, // 384_000 — above min
+          { id: "t1", scrollbackLines: 2000, cols: 80 }, // 1_920_000 — heaviest
+          { id: "t3", scrollbackLines: 50, cols: 80 }, // below SCROLLBACK_MIN (100)
+        ]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // 5 ticks → warmup complete; the 5th tick fires the one-shot targeted trim.
+      vi.advanceTimersByTime(10000);
+
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+      const targets = (deps.trimBuffersTargeted as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as Map<string, number>;
+      // t3 (below SCROLLBACK_MIN) excluded; t1 and t2 trimmed to the minimum.
+      expect([...targets.entries()]).toEqual([
+        ["t1", 100],
+        ["t2", 100],
+      ]);
+
+      governor.dispose();
+    });
+
+    it("does not call trimBuffersTargeted when every terminal is already at the minimum", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 100, cols: 80 }]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Trim tick (5) attempts but finds nothing above the minimum; the next
+      // tick escalates to pause since the one-shot flag was still consumed.
+      vi.advanceTimersByTime(10000);
+      expect(deps.trimBuffersTargeted).not.toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("falls back to uniform trimBuffers when trimBuffersTargeted is not wired", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80 }]),
+        // trimBuffersTargeted intentionally absent.
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+
+      governor.dispose();
+    });
+
+    it("falls back to uniform trimBuffers when the targeted trim throws", () => {
+      const { coordinator } = createMockCoordinator();
+      const trimBuffersTargeted = vi.fn().mockImplementation(() => {
+        throw new Error("targeted trim failed");
+      });
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80 }]),
+        trimBuffersTargeted,
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      expect(trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      expect(deps.trimBuffers).toHaveBeenCalledTimes(1);
+      // And it still escalates to pause on the following tick.
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      governor.dispose();
+    });
+
+    it("does not run the targeted trim at critical pressure (≥95%)", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80 }]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(490);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+      expect(deps.trimBuffersTargeted).not.toHaveBeenCalled();
+      expect(deps.trimBuffers).not.toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("excludes a terminal sitting exactly at SCROLLBACK_MIN (strict >, not >=)", () => {
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1", "t2"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          { id: "t1", scrollbackLines: 101, cols: 80 }, // one line above the minimum → trimmed
+          { id: "t2", scrollbackLines: 100, cols: 80 }, // exactly at the minimum → preserved
+        ]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(10000);
+
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      const targets = (deps.trimBuffersTargeted as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as Map<string, number>;
+      expect([...targets.keys()]).toEqual(["t1"]);
+
+      governor.dispose();
+    });
+
+    it("re-arms the one-shot so a fresh pressure episode trims again (targeted path)", () => {
+      const { coordinator } = createMockCoordinator();
+      // mockMemoryUsage re-mocks the same spy in place, so re-invoking it later
+      // swaps the reading without a fresh spyOn.
+      mockMemoryUsage(450);
+
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80 }]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // First episode: trim fires on the warmup-complete tick (5).
+      vi.advanceTimersByTime(10000);
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Pressure clears before pause — the re-arm branch resets the one-shot.
+      mockMemoryUsage(128);
+      vi.advanceTimersByTime(40000);
+
+      // Pressure returns — targeted trim must fire again for the new episode.
+      mockMemoryUsage(450);
+      vi.advanceTimersByTime(40000);
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(2);
+
+      governor.dispose();
+    });
+
+    it("silently skips a terminal removed between snapshot and trim (wiring no-op)", () => {
+      // Exercises the production adapter: trimBuffersTargeted iterates the map and
+      // calls trimTerminalScrollback per id, swallowing per-terminal failures so a
+      // stale id (terminal disposed mid-episode) can't break the reclaim for peers.
+      const live = new Set(["t1"]); // t2 already gone by trim time
+      const trimTerminalScrollback = vi.fn((id: string, _targetLines: number) => live.has(id));
+      const trimBuffersTargeted = vi.fn((targets: Map<string, number>) => {
+        for (const [id, targetLines] of targets) {
+          try {
+            trimTerminalScrollback(id, targetLines);
+          } catch {
+            /* best-effort */
+          }
+        }
+      });
+
+      const { coordinator } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1", "t2"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi.fn().mockReturnValue([
+          { id: "t1", scrollbackLines: 2000, cols: 80 },
+          { id: "t2", scrollbackLines: 1500, cols: 80 },
+        ]),
+        trimBuffersTargeted,
+      });
+
+      mockMemoryUsage(450);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      expect(() => vi.advanceTimersByTime(10000)).not.toThrow();
+
+      // Both ids were attempted; the live one trimmed, the stale one no-op'd.
+      expect(trimTerminalScrollback).toHaveBeenCalledWith("t1", 100);
+      expect(trimTerminalScrollback).toHaveBeenCalledWith("t2", 100);
+
+      governor.dispose();
+    });
+  });
+
   describe("re-engage cooldown", () => {
     it("does not re-engage immediately after a force-resume even at high pressure", () => {
       const { coordinator, raw } = createMockCoordinator();

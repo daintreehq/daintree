@@ -5,6 +5,7 @@ import type {
   TerminalFlowStatus,
 } from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
@@ -31,6 +32,20 @@ export interface ResourceGovernorDeps {
   ) => void;
   getTerminalActivity: () => TerminalActivityInfo[];
   trimBuffers?: () => void;
+  /**
+   * Per-terminal scrollback dimensions for memory-aware ranking and targeted
+   * trimming. `scrollbackLines × cols × 12` is the cheap closed-form estimate of
+   * each terminal's headless-buffer footprint (3 uint32s per cell). Read at the
+   * metric tick; never serializes a buffer.
+   */
+  getTerminalBufferSizes?: () => Array<{ id: string; scrollbackLines: number; cols: number }>;
+  /**
+   * Targeted pre-pause reclaim: trim each listed terminal's scrollback to its
+   * mapped target-line count (heaviest contributors trimmed hardest). Replaces the
+   * uniform `trimBuffers` flatten in the non-critical pre-pause path so lighter
+   * terminals keep their history. Best-effort per terminal; never throws to caller.
+   */
+  trimBuffersTargeted?: (targetsByTerminalId: Map<string, number>) => void;
   getPendingBytesSnapshot?: () => {
     totalPendingBytes: number;
     perTerminal: Array<{ terminalId: string; pendingBytes: number }>;
@@ -108,6 +123,10 @@ export class ResourceGovernor {
   // flap that issue #8616 reports — terminals keep running (possibly slowly
   // under OS-level backpressure) rather than getting repeatedly hard-paused.
   private readonly REENGAGE_COOLDOWN_MS = 30000;
+  // Bytes per headless-buffer cell: xterm stores 3 uint32s per cell (codepoint +
+  // fg attr + bg attr). `scrollbackLines × cols × BYTES_PER_CELL` is the cheap
+  // closed-form estimate used to rank per-terminal buffer-memory contribution.
+  private readonly BYTES_PER_CELL = 12;
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private throttleStartTime = 0;
@@ -280,22 +299,19 @@ export class ResourceGovernor {
       const aboveThreshold = smoothedPercent > limitPercent;
 
       if (isCritical || (aboveThreshold && warmedUp && cooledDown)) {
-        if (!isCritical && !this.trimAttemptedForCurrentPressure && this.deps.trimBuffers) {
+        const canTrim =
+          !isCritical &&
+          !this.trimAttemptedForCurrentPressure &&
+          (this.deps.trimBuffersTargeted != null || this.deps.trimBuffers != null);
+        if (canTrim) {
           // Trim first as a one-shot reclaim — drops JS references synchronously
           // so the next GC can collect old-gen scrollback strings and ArrayBuffer
           // backing stores. Neither heapUsed nor external drops in this tick (GC
-          // hasn't run yet) so we wait one tick before
-          // escalating to pause. Wrapped in try/catch because trim is best-effort:
-          // a failure shouldn't block the eventual pause path.
-          try {
-            this.deps.trimBuffers();
-            console.log(
-              `[ResourceGovernor] Trimmed buffers as pre-pause reclaim ` +
-                `(${utilizationPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
-            );
-          } catch (err) {
-            console.warn("[ResourceGovernor] trimBuffers failed:", err);
-          }
+          // hasn't run yet) so we wait one tick before escalating to pause.
+          // Best-effort: a failure shouldn't block the eventual pause path. At
+          // critical pressure (≥95%) this branch is skipped entirely — the global
+          // pause runs immediately.
+          this.performPrePauseTrim(utilizationPercent, smoothedPercent);
           this.trimAttemptedForCurrentPressure = true;
         } else {
           this.engageThrottle(combinedMb, utilizationPercent);
@@ -326,6 +342,99 @@ export class ResourceGovernor {
     this.emitPausedDurationGauge();
     this.emitQueueDepthGauge();
     this.emitDataLossCount();
+    this.emitBufferMemoryGauge();
+  }
+
+  /**
+   * Pre-pause buffer reclaim. Prefers the targeted path — trims only terminals
+   * whose scrollback exceeds SCROLLBACK_MIN, heaviest contributor first — so a
+   * single chatty agent's history is reclaimed without flattening every quiet
+   * terminal to 100 lines. Falls back to the uniform flatten when buffer-size
+   * attribution isn't wired (or the targeted call throws). Pure reclaim: no pause,
+   * no governor state mutation. Caller owns the one-shot `trimAttemptedForCurrentPressure`.
+   */
+  private performPrePauseTrim(rawPercent: number, smoothedPercent: number): void {
+    if (this.deps.trimBuffersTargeted && this.deps.getTerminalBufferSizes) {
+      try {
+        const sizes = this.deps.getTerminalBufferSizes();
+        // Heaviest-first so the Map's insertion order (and the log) leads with the
+        // biggest contributor. All targets are SCROLLBACK_MIN today; the Map shape
+        // keeps per-terminal targets future-proof.
+        const targets = new Map<string, number>();
+        for (const t of sizes
+          .filter((s) => s.scrollbackLines > SCROLLBACK_MIN)
+          .sort(
+            (a, b) =>
+              b.scrollbackLines * b.cols * this.BYTES_PER_CELL -
+              a.scrollbackLines * a.cols * this.BYTES_PER_CELL
+          )) {
+          targets.set(t.id, SCROLLBACK_MIN);
+        }
+        if (targets.size > 0) {
+          this.deps.trimBuffersTargeted(targets);
+          console.log(
+            `[ResourceGovernor] Targeted pre-pause trim of ${targets.size} heaviest buffer(s) ` +
+              `(${rawPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
+          );
+        }
+        return;
+      } catch (err) {
+        console.warn("[ResourceGovernor] targeted trim failed, falling back to uniform trim:", err);
+      }
+    }
+
+    if (this.deps.trimBuffers) {
+      try {
+        this.deps.trimBuffers();
+        console.log(
+          `[ResourceGovernor] Trimmed buffers as pre-pause reclaim ` +
+            `(${rawPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
+        );
+      } catch (err) {
+        console.warn("[ResourceGovernor] trimBuffers failed:", err);
+      }
+    }
+  }
+
+  /**
+   * Advisory per-terminal buffer-memory attribution. Emits every warning-band
+   * tick (matching the other persistent-state gauges) so operators can see which
+   * terminals drive scrollback memory under sustained pressure. PURE observability
+   * — it must never trim or mutate governor state; all reclaim lives in
+   * `performPrePauseTrim`, gated by the one-shot flag.
+   */
+  private emitBufferMemoryGauge(): void {
+    if (!metricsEnabled()) return;
+    if (!this.isWarning) return;
+    if (!this.deps.getTerminalBufferSizes) return;
+
+    const sizes = this.deps.getTerminalBufferSizes();
+    if (sizes.length === 0) return;
+
+    const perTerminalBufferMemory = sizes
+      .map((t) => ({
+        terminalId: t.id,
+        scrollbackEstimateBytes: t.scrollbackLines * t.cols * this.BYTES_PER_CELL,
+        scrollbackLines: t.scrollbackLines,
+        cols: t.cols,
+      }))
+      .sort((a, b) => b.scrollbackEstimateBytes - a.scrollbackEstimateBytes);
+
+    const estimatedBufferMemoryBytes = perTerminalBufferMemory.reduce(
+      (sum, t) => sum + t.scrollbackEstimateBytes,
+      0
+    );
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "buffer-memory-gauge",
+        timestamp: Date.now(),
+        estimatedBufferMemoryBytes,
+        perTerminalBufferMemory,
+      },
+    });
   }
 
   private checkFdUsage(): void {
