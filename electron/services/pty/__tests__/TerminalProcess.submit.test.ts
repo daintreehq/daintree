@@ -347,9 +347,12 @@ describe("TerminalProcess.submit", () => {
     const promoteSpy = vi.spyOn(internals.activityMonitor, "notifyExternalPromotion");
 
     internals.activityMonitor.notifyFocus(2000);
+    handleActivityState.mockClear();
     internals.noteAgentOutputActivity({ lines: ["before"] });
 
     expect(promoteSpy).not.toHaveBeenCalled();
+    const busyCalls = handleActivityState.mock.calls.filter((call) => call[1] === "busy");
+    expect(busyCalls.length).toBe(0);
   });
 
   it("delays Enter for Copilot (submitEnterDelayMs: 200) so Ink TUI registers input", async () => {

@@ -898,6 +898,11 @@ export class ActivityMonitor {
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
     this.completionTimer.reset();
+    // Discard the temperature snapshot so its quiet clock restarts from the
+    // promotion (same rationale as `notifyFocus`). A stale `quietStartedAt`
+    // from the pre-promotion lull would otherwise hint "idle" at the first
+    // poll after the 1.5s working hold and bounce the FSM straight back.
+    this.simpleOutputTemperature.reset();
     if (this.state !== "busy") {
       this.state = "busy";
       this.idleSince = now;
