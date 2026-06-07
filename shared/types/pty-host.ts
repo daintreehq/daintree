@@ -627,6 +627,14 @@ export type RendererToPtyHostMessage =
  * MessagePort as `data`, so it is FIFO-ordered ahead of any subsequently
  * suppressed/emitted chunk — routing it through the Main process instead would
  * race the direct data path and lose that ordering guarantee.
+ *
+ * `terminal-status` carries a per-window `data-loss` pulse for the multi-window
+ * fan-out case: when one window's batcher accepts a chunk but another window's
+ * is saturated, the loss is local to the saturated window. The Main-process
+ * `terminal-status` event is a broadcast to every window, so it can't signal a
+ * single window without falsely alerting the ones that received the data. This
+ * variant rides the saturated window's own MessagePort instead, FIFO-ordered
+ * with its data so the discontinuity marker lands in the right place.
  */
 export type PtyHostToRendererMessage =
   | {
@@ -639,6 +647,15 @@ export type PtyHostToRendererMessage =
       type: "tier-changed";
       id: string;
       tier: "active" | "background";
+    }
+  | {
+      type: "terminal-status";
+      id: string;
+      status: TerminalFlowStatus;
+      bufferUtilization?: number;
+      /** Byte count discarded — only set when status is "data-loss". */
+      droppedBytes?: number;
+      timestamp: number;
     };
 
 /** Per-process resource breakdown entry */

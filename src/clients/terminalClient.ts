@@ -33,6 +33,13 @@ const MAX_EARLY_BUFFER_CHUNKS = 500;
 // control messages carry no byte count and must never enter pendingPortAckBytes.
 const tierChangedCallbacks = new Set<(id: string, tier: "active" | "background") => void>();
 
+// Per-window terminal-status pulses delivered on the MessagePort (currently the
+// `data-loss` signal for a saturated window in the multi-window fan-out case,
+// issue #9891). The Main-process `onStatus` broadcast can't target one window,
+// so these ride the saturated window's own port and are dispatched to the same
+// `onStatus` subscribers as the IPC path. No ACK, no byte accounting — pulses.
+const terminalStatusCallbacks = new Set<(data: TerminalStatusPayload) => void>();
+
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data as PtyHostToRendererMessage;
@@ -40,6 +47,20 @@ function installPortDataHandler(port: MessagePort): void {
       // Host-pushed tier reconciliation — no ACK, no byte accounting.
       for (const cb of tierChangedCallbacks) {
         cb(msg.id, msg.tier);
+      }
+      return;
+    }
+    if (msg?.type === "terminal-status" && typeof msg.id === "string") {
+      // Per-window flow-status pulse (e.g. data-loss for a saturated window).
+      // Routed to the same subscribers as the IPC broadcast path.
+      for (const cb of terminalStatusCallbacks) {
+        cb({
+          id: msg.id,
+          status: msg.status,
+          bufferUtilization: msg.bufferUtilization,
+          droppedBytes: msg.droppedBytes,
+          timestamp: msg.timestamp,
+        });
       }
       return;
     }
@@ -452,9 +473,19 @@ export const terminalClient = {
 
   /**
    * Listen for terminal status changes (flow control state).
+   *
+   * Subscribes to both delivery paths: the Main-process IPC broadcast and the
+   * per-window MessagePort pulses (data-loss for a saturated window in the
+   * multi-window fan-out, issue #9891). A window only receives port pulses meant
+   * for it, so the discontinuity marker lands in the right place.
    */
   onStatus: (callback: (data: TerminalStatusPayload) => void): (() => void) => {
-    return window.electron.terminal.onStatus(callback);
+    terminalStatusCallbacks.add(callback);
+    const ipcCleanup = window.electron.terminal.onStatus(callback);
+    return () => {
+      terminalStatusCallbacks.delete(callback);
+      ipcCleanup();
+    };
   },
 
   /**

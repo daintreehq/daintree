@@ -609,9 +609,48 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     // timing is independent, so with 2+ targets any flush would neuter the chunk
     // out from under siblings still waiting to copy it. Sole target → owned.
     const owned = targets.length === 1;
+    const saturated: RendererConnection[] = [];
     for (const conn of targets) {
       if (conn.batcher.write(id, chunk, byteCount, owned)) {
         visualWritten = true;
+      } else {
+        saturated.push(conn);
+      }
+    }
+
+    // A window whose batcher rejected this chunk only truly loses it when a
+    // SIBLING window's batcher accepted it — i.e. `visualWritten` is now true,
+    // which suppresses the shared SAB/IPC fallback below. If NO window accepted,
+    // `visualWritten` stays false and the IPC fallback broadcasts the chunk to
+    // every window (the renderer's onData subscribes to both the MessagePort and
+    // the IPC path), so nothing is actually lost — no pulse needed there.
+    //
+    // For the genuinely-starved windows we can't lean on the IPC fallback:
+    // `sendEvent` broadcasts to every window and would falsely flag the ones
+    // that received the data on their own port (issue #9891). So account the
+    // loss and deliver a `data-loss` pulse on each starved window's own port,
+    // FIFO-ordered with its data, letting the next wake snapshot resync it.
+    //
+    // Skip mirrored terminals: the IPC data mirror below broadcasts the chunk to
+    // every window (the renderer's onData also listens on IPC), so a starved
+    // window still receives it — a pulse here would be a spurious discontinuity.
+    if (visualWritten && saturated.length > 0 && !ipcDataMirrorTerminals.has(id)) {
+      for (const conn of saturated) {
+        // Counter is unconditional — regression detection must work even when
+        // metrics are gated off (mirrors the IPC at-capacity path).
+        dropAccumulator.droppedBytes += byteCount;
+        dropAccumulator.dataLossCount += 1;
+        try {
+          conn.port.postMessage({
+            type: "terminal-status",
+            id,
+            status: "data-loss",
+            droppedBytes: byteCount,
+            timestamp: Date.now(),
+          });
+        } catch {
+          // Port closing between iteration and post — disconnect handles cleanup.
+        }
       }
     }
     // If at capacity on all ports, fall through to SAB or IPC fallback
