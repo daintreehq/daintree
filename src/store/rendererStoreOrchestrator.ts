@@ -347,6 +347,27 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
+  // 7. Flush the MRU debounce before the view is torn down. The 150ms debounce
+  //    above strands the latest MRU write if the user switches projects, closes
+  //    the window, or quits within the debounce window. `visibilitychange`
+  //    fires on WebContentsView detach while the renderer is still alive and
+  //    IPC channels are open, so the async persist completes (#9914). Mirrors
+  //    the `pagehide` flush in `optimisticPanelClose.ts`, but uses
+  //    `visibilitychange` because `persistMruList` is async IPC, which would
+  //    not complete in the late `pagehide` teardown window.
+  if (typeof document !== "undefined") {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) return;
+      void debouncedPersistMruList.flush();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    disposables.add(
+      toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
+    );
+    // Cover the race where the document is already hidden at init time.
+    if (document.hidden) void debouncedPersistMruList.flush();
+  }
+
   cleanupFn = () => {
     disposables.dispose();
     cleanupFn = null;
