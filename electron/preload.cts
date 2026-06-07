@@ -2473,6 +2473,8 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
     onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
       _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
+    onSessionRevoked: (callback: (payload: { sessionId: string; denialKind: string }) => void) =>
+      _typedOn(CHANNELS.MCP_SESSION_REVOKED, callback),
     onToolCallStarted: (callback: (payload: McpToolCallStartedPayload) => void) =>
       _typedOn(CHANNELS.MCP_TOOL_CALL_STARTED, callback),
     onToolCallSettled: (callback: (payload: McpToolCallSettledPayload) => void) =>

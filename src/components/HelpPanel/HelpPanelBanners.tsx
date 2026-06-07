@@ -4,6 +4,7 @@ import type { SnapshotInfo } from "@shared/types/ipc/git";
 import type {
   LaunchErrorKind,
   LaunchErrorState,
+  SessionRevokedState,
   TierMismatchState,
 } from "@/controllers/HelpSessionController";
 
@@ -53,6 +54,7 @@ interface HelpPanelBannersProps {
   preflightSnapshot: SnapshotInfo | null;
   tierMismatch: TierMismatchState | null;
   launchError: LaunchErrorState | null;
+  sessionRevoked: SessionRevokedState | null;
   isApprovingTier: boolean;
   onDismissResume: () => void;
   onDismissSnapshot: () => void;
@@ -64,6 +66,8 @@ interface HelpPanelBannersProps {
   onOpenAssistantSettings: () => void;
   onOpenLogs: () => void;
   onOpenInstallerPage: () => void;
+  onStartNewSession: () => void;
+  onDismissSessionRevoked: () => void;
 }
 
 export function HelpPanelBanners({
@@ -71,6 +75,7 @@ export function HelpPanelBanners({
   preflightSnapshot,
   tierMismatch,
   launchError,
+  sessionRevoked,
   isApprovingTier,
   onDismissResume,
   onDismissSnapshot,
@@ -82,6 +87,8 @@ export function HelpPanelBanners({
   onOpenAssistantSettings,
   onOpenLogs,
   onOpenInstallerPage,
+  onStartNewSession,
+  onDismissSessionRevoked,
 }: HelpPanelBannersProps) {
   return (
     <>
@@ -270,6 +277,54 @@ export function HelpPanelBanners({
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+      {sessionRevoked && (
+        <div
+          role="alert"
+          className={cn(
+            "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
+            "rounded-[var(--radius-md)]",
+            "bg-status-error/10 border border-status-error/40",
+            "text-xs text-daintree-text/85"
+          )}
+          data-testid="help-session-revoked-banner"
+        >
+          <div className="flex items-start gap-2">
+            <ShieldAlert
+              className="w-3.5 h-3.5 shrink-0 mt-0.5 text-status-error"
+              aria-hidden="true"
+            />
+            <div className="flex-1 select-text">
+              <p className="font-medium text-daintree-text">Session ended</p>
+              <p className="mt-0.5 text-daintree-text/70">
+                This assistant session was stopped after too many blocked requests. Start a new
+                session to continue.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onDismissSessionRevoked}
+              aria-label="Dismiss session ended notice"
+              className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap pl-5">
+            <button
+              type="button"
+              onClick={onStartNewSession}
+              className={cn(
+                "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
+                "bg-daintree-text/10 hover:bg-daintree-text/15 text-daintree-text",
+                "transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              )}
+            >
+              Start new session
+            </button>
           </div>
         </div>
       )}

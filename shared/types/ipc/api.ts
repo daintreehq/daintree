@@ -1445,6 +1445,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
     ): () => void;
     /**
+     * Subscribe to session-revoked pushes for the pinned help-session in this
+     * WebContents. Fires when the abuse policy revokes the session after the
+     * denial threshold is exceeded so the renderer can explain why it ended
+     * and offer a new-session recovery action (#10017).
+     */
+    onSessionRevoked(
+      callback: (payload: { sessionId: string; denialKind: string }) => void
+    ): () => void;
+    /**
      * Subscribe to live tool-call-started pushes for the pinned help-session
      * in this WebContents. Drives the Assistant panel's activity strip (#9759).
      */

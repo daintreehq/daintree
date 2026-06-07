@@ -647,6 +647,13 @@ export const CHANNELS = {
    */
   MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
   /**
+   * Reset the per-`(sessionId, toolId)` denial counters for a session without
+   * touching its grants. Fired when the user dismisses the tier-mismatch
+   * banner so the next out-of-tier call re-arms the banner instead of being
+   * silently suppressed by the abuse policy. Caller-pin checked.
+   */
+  MCP_SERVER_RESET_DENIAL_COUNTS: "mcp-server:reset-denial-counts",
+  /**
    * List the external bearers currently connected to the local MCP server.
    * Returns only the display suffix and token hash — never the raw token.
    * Backs the "External clients" row on the MCP Server settings tab (#8778).

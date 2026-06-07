@@ -1675,6 +1675,18 @@ export interface IpcEventMap {
   };
 
   /**
+   * Targeted push: a help-session was revoked by the abuse policy after
+   * exceeding the denial threshold. Sent to the pinned WebContents so the
+   * renderer can surface why the session ended and offer a new-session
+   * recovery action. `denialKind` records what tripped the policy
+   * (`"auth401"`, `"tierMismatch"`, …).
+   */
+  "mcp-server:session-revoked": {
+    sessionId: string;
+    denialKind: string;
+  };
+
+  /**
    * Targeted push: a grant lifecycle event for an MCP tool approval.
    * Sent to the pinned WebContents so the renderer can track grant state.
    */

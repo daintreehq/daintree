@@ -13,6 +13,7 @@ function baseProps() {
     preflightSnapshot: null,
     tierMismatch: null,
     launchError: null,
+    sessionRevoked: null,
     isApprovingTier: false,
     onDismissResume: vi.fn(),
     onDismissSnapshot: vi.fn(),
@@ -24,6 +25,8 @@ function baseProps() {
     onOpenAssistantSettings: vi.fn(),
     onOpenLogs: vi.fn(),
     onOpenInstallerPage: vi.fn(),
+    onStartNewSession: vi.fn(),
+    onDismissSessionRevoked: vi.fn(),
   };
 }
 
@@ -215,5 +218,58 @@ describe("HelpPanelBanners — resume banner (#10057)", () => {
     );
     fireEvent.click(getByLabelText("Dismiss resume notice"));
     expect(onDismissResume).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HelpPanelBanners — session revoked", () => {
+  it("renders an alert with a recovery action when a session is revoked", () => {
+    const { getByTestId, getByText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        sessionRevoked={{ sessionId: "sess-1", denialKind: "tierMismatch" }}
+      />
+    );
+
+    const banner = getByTestId("help-session-revoked-banner");
+    expect(banner.getAttribute("role")).toBe("alert");
+    expect(getByText("Start new session")).toBeTruthy();
+  });
+
+  it("keeps the copy free of MCP / token / bearer jargon and the raw denial kind", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        sessionRevoked={{ sessionId: "sess-1", denialKind: "auth401" }}
+      />
+    );
+    const text = getByTestId("help-session-revoked-banner").textContent ?? "";
+    expect(text).not.toMatch(/\bMCP\b/i);
+    expect(text).not.toMatch(/\btoken\b/i);
+    expect(text).not.toMatch(/\bbearer\b/i);
+    expect(text).not.toMatch(/auth401/i);
+  });
+
+  it("wires the recovery and dismiss buttons to their handlers", () => {
+    const onStartNewSession = vi.fn();
+    const onDismissSessionRevoked = vi.fn();
+    const { getByText, getByLabelText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        sessionRevoked={{ sessionId: "sess-1", denialKind: "tierMismatch" }}
+        onStartNewSession={onStartNewSession}
+        onDismissSessionRevoked={onDismissSessionRevoked}
+      />
+    );
+
+    fireEvent.click(getByText("Start new session"));
+    expect(onStartNewSession).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(getByLabelText("Dismiss session ended notice"));
+    expect(onDismissSessionRevoked).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders nothing for the revoked slot when sessionRevoked is null", () => {
+    const { queryByTestId } = render(<HelpPanelBanners {...baseProps()} />);
+    expect(queryByTestId("help-session-revoked-banner")).toBeNull();
   });
 });

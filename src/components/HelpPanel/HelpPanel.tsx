@@ -203,6 +203,7 @@ export function HelpPanel({
   }, [sessionId]);
 
   const focusedWorktreeId = useWorktreeSelectionStore((s) => s.focusedWorktreeId);
+  const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const pinnedTerminalPanel = usePanelStore((s) =>
     pinnedContext?.terminalId ? s.panelsById[pinnedContext.terminalId] : undefined
   );
@@ -594,6 +595,7 @@ export function HelpPanel({
   const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
   const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
   const dismissLaunchError = useCallback(() => controller.dismissLaunchError(), [controller]);
+  const dismissSessionRevoked = useCallback(() => controller.dismissSessionRevoked(), [controller]);
   const retryLaunch = useCallback(() => {
     const agentId = session.launchError?.agentId;
     if (agentId) controller.launch({ agentId });
@@ -709,6 +711,7 @@ export function HelpPanel({
           preflightSnapshot={session.preflightSnapshot}
           tierMismatch={session.tierMismatch}
           launchError={session.launchError}
+          sessionRevoked={session.sessionRevoked}
           isApprovingTier={session.isApprovingTier}
           onDismissResume={dismissResume}
           onDismissSnapshot={dismissSnapshot}
@@ -720,6 +723,8 @@ export function HelpPanel({
           onOpenAssistantSettings={handleOpenSettings}
           onOpenLogs={handleOpenLogs}
           onOpenInstallerPage={handleOpenInstallerPage}
+          onStartNewSession={handleNewSession}
+          onDismissSessionRevoked={dismissSessionRevoked}
         />
         {showTerminal ? (
           isMissingCli && agentId ? (
@@ -865,41 +870,76 @@ export function HelpPanel({
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
           </span>
           <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
-            {pinnedContext && (
-              <span
-                className={cn(
-                  "flex items-center gap-1.5 min-w-0",
-                  isPinnedTerminalDead
-                    ? "text-status-danger"
-                    : isPinnedWorktreeDiverged
-                      ? "text-status-warning"
-                      : undefined
-                )}
-                title={
-                  isPinnedTerminalDead
-                    ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
-                    : isPinnedWorktreeDiverged
-                      ? "This assistant is pinned to a different worktree than the one you have focused."
-                      : "Assistant tool calls are pinned to this worktree and terminal."
-                }
-              >
-                <span
-                  aria-hidden
+            {pinnedContext &&
+              // A diverged worktree is recoverable in one click — switch focus
+              // back to the worktree the session is pinned to. A dead terminal
+              // can't be fixed by switching, so it stays a passive indicator and
+              // surfaces a "Start new session" button beside it (#10017).
+              (isPinnedWorktreeDiverged && !isPinnedTerminalDead ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (pinnedContext.worktreeId) {
+                      selectWorktree(pinnedContext.worktreeId, { source: "user" });
+                    }
+                  }}
                   className={cn(
-                    "w-1.5 h-1.5 rounded-full shrink-0",
-                    isPinnedTerminalDead
-                      ? "bg-status-danger"
-                      : isPinnedWorktreeDiverged
-                        ? "bg-status-warning"
-                        : "bg-daintree-text/30"
+                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-[11px]",
+                    "text-status-warning hover:text-status-warning/80 transition-colors duration-150",
+                    "rounded-[var(--radius-sm)]",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                   )}
-                />
-                <span className="truncate">
-                  {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
-                    .filter(Boolean)
-                    .join(" · ") || "Pinned session"}
+                  title="Switch to the worktree this assistant is pinned to."
+                >
+                  <span
+                    aria-hidden
+                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
+                  />
+                  <span className="truncate">
+                    {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
+                      .filter(Boolean)
+                      .join(" · ") || "Pinned session"}
+                  </span>
+                </button>
+              ) : (
+                <span
+                  className={cn(
+                    "flex items-center gap-1.5 min-w-0",
+                    isPinnedTerminalDead ? "text-status-danger" : undefined
+                  )}
+                  title={
+                    isPinnedTerminalDead
+                      ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
+                      : "Assistant tool calls are pinned to this worktree and terminal."
+                  }
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "w-1.5 h-1.5 rounded-full shrink-0",
+                      isPinnedTerminalDead ? "bg-status-danger" : "bg-daintree-text/30"
+                    )}
+                  />
+                  <span className="truncate">
+                    {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
+                      .filter(Boolean)
+                      .join(" · ") || "Pinned session"}
+                  </span>
                 </span>
-              </span>
+              ))}
+            {isPinnedTerminalDead && (
+              <button
+                type="button"
+                onClick={handleNewSession}
+                className={cn(
+                  "flex items-center shrink-0 px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[11px] font-medium",
+                  "bg-status-danger/10 text-status-danger hover:bg-status-danger/15 transition-colors duration-150",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                )}
+                title="The pinned terminal has closed — start a new session."
+              >
+                Start new session
+              </button>
             )}
             <span
               className="flex items-center gap-1 shrink-0"
