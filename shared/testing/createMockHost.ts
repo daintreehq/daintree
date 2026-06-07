@@ -112,6 +112,18 @@ export interface CreateMockHostOptions {
   dispatch?: (actionId: string, args?: unknown) => Promise<ActionDispatchResult>;
 }
 
+/**
+ * Mirrors the action-id regex and kind/danger sets in
+ * `electron/services/PluginService.ts` `PLUGIN_ACTION_ID_RE` /
+ * `PLUGIN_ACTION_KINDS` / `PLUGIN_ACTION_DANGERS`. The mock can't import
+ * those (cross-process boundary), so the values are duplicated here and the
+ * production constants are the source of truth. If the production regex or
+ * sets change, mirror the change here.
+ */
+const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
+const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
+
 export function createMockHost(options: CreateMockHostOptions = {}): PluginHostApi & MockHostState {
   const pluginId = options.pluginId ?? "test.mock";
   let activeWorktree: PluginWorktreeSnapshot | null = options.activeWorktree ?? null;
@@ -195,10 +207,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registerAction(descriptor, handler) {
       // Mirrors PluginService.createHost L1577-L1631. Validation order matches
       // production: non-object descriptor, non-function handler, non-empty
-      // string id, plugin-prefix not already in id. Re-registering the same id
-      // replaces the prior descriptor + handler (replace-by-id, see
-      // host-api.md). A plugin test that calls registerAction with the same id
-      // twice should see the second call win, not accumulate two entries.
+      // string id, plugin-prefix not already in id, then the
+      // validateAndBuildActionDescriptor checks (L2686-L2723) applied to the
+      // namespaced id (since production namespaces before that step).
+      // Re-registering the same id replaces the prior descriptor + handler
+      // (replace-by-id, see host-api.md). A plugin test that calls
+      // registerAction with the same id twice should see the second call win,
+      // not accumulate two entries.
       if (!descriptor || typeof descriptor !== "object") {
         throw new Error("registerAction: descriptor must be an object");
       }
@@ -211,6 +226,40 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       if (descriptor.id.startsWith(`${pluginId}.`)) {
         throw new Error(
           `registerAction: descriptor.id "${descriptor.id}" must not include the plugin prefix`
+        );
+      }
+      // Mirrors validateAndBuildActionDescriptor (L2697-L2723). The mock
+      // namespaces the id the same way production does and runs the same
+      // checks against the namespaced form, so a plugin test that registers
+      // an action the production host would reject fails the mock in the
+      // same way — no "passes the mock, throws at activation" gap.
+      const namespacedId = `${pluginId}.${descriptor.id}`;
+      if (!PLUGIN_ACTION_ID_RE.test(namespacedId)) {
+        throw new Error(
+          `registerAction: descriptor.id "${descriptor.id}" (namespaced to "${namespacedId}") is invalid. Expected "{pluginId}.{actionId}" (lowercase start, alphanumerics, dot/dash/underscore).`
+        );
+      }
+      if (typeof descriptor.title !== "string" || !descriptor.title.trim()) {
+        throw new Error("registerAction: descriptor.title must be a non-empty string");
+      }
+      if (typeof descriptor.description !== "string") {
+        throw new Error("registerAction: descriptor.description must be a string");
+      }
+      if (typeof descriptor.category !== "string" || !descriptor.category.trim()) {
+        throw new Error("registerAction: descriptor.category must be a non-empty string");
+      }
+      if (!PLUGIN_ACTION_KINDS.has(descriptor.kind)) {
+        throw new Error(
+          `registerAction: descriptor.kind "${descriptor.kind}" is invalid (must be one of: ${[
+            ...PLUGIN_ACTION_KINDS,
+          ].join(", ")})`
+        );
+      }
+      if (!PLUGIN_ACTION_DANGERS.has(descriptor.danger)) {
+        throw new Error(
+          `registerAction: descriptor.danger "${descriptor.danger}" is invalid (must be one of: ${[
+            ...PLUGIN_ACTION_DANGERS,
+          ].join(", ")})`
         );
       }
       const existing = registeredActions.findIndex((r) => r.descriptor.id === descriptor.id);
