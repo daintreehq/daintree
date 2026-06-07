@@ -49,11 +49,22 @@ describe("rankSavedFleets", () => {
     expect(stale.map((s) => s.id)).toEqual(["b", "c", "a"]);
   });
 
-  it("places new scopes (no usageHistory) at the bottom of usable", () => {
+  it("places new scopes (no usageHistory, no lastUsedAt) at the bottom of usable", () => {
     const fresh = snap("fresh", { usageHistory: [NOW] });
-    const newScope = snap("new"); // no usageHistory, no lastUsedAt
+    const newScope = snap("new"); // no usageHistory, no lastUsedAt → frecency 0
     const { usable } = rankSavedFleets([newScope, fresh], NOW, new Map());
     expect(usable.map((s) => s.id)).toEqual(["fresh", "new"]);
+  });
+
+  it("seeds frecency from lastUsedAt when usageHistory is empty", () => {
+    // A scope with lastUsedAt=NOW but no usageHistory should still rank
+    // above a scope with one ancient usageHistory entry — otherwise a
+    // brand-new save would sink below any fleet that has ever been
+    // recalled (frecency decay bottoms out near zero for old timestamps).
+    const freshStamp = snap("stamp", { lastUsedAt: NOW });
+    const ancientRecall = snap("ancient", { usageHistory: [NOW - 365 * DAY] });
+    const { usable } = rankSavedFleets([ancientRecall, freshStamp], NOW, new Map());
+    expect(usable.map((s) => s.id)).toEqual(["stamp", "ancient"]);
   });
 
   it("breaks frecency ties by lastUsedAt desc", () => {

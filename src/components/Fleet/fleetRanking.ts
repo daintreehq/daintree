@@ -8,11 +8,26 @@ export interface RankedFleetScopes {
   stale: FleetSavedScope[];
 }
 
+/**
+ * Effective frecency input for a fleet scope. If `usageHistory` is empty
+ * but the scope has a `lastUsedAt`, treat the single timestamp as a
+ * 1-entry history. This keeps a brand-new save (which hasn't been
+ * recalled yet, so no history) from sinking below any fleet that has
+ * ever been recalled — otherwise a one-day-old recall would beat a
+ * fresh save for ~365 days (frecency decay bottoms out near zero).
+ */
+function effectiveHistory(scope: FleetSavedScope): number[] {
+  const history = scope.usageHistory ?? [];
+  if (history.length > 0) return history;
+  if (scope.lastUsedAt != null) return [scope.lastUsedAt];
+  return [];
+}
+
 const comparator =
   (now: number) =>
   (a: FleetSavedScope, b: FleetSavedScope): number => {
     const scoreDiff =
-      computeFrecency(b.usageHistory ?? [], now) - computeFrecency(a.usageHistory ?? [], now);
+      computeFrecency(effectiveHistory(b), now) - computeFrecency(effectiveHistory(a), now);
     if (scoreDiff !== 0) return scoreDiff;
     const lastUsedDiff = (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0);
     if (lastUsedDiff !== 0) return lastUsedDiff;
@@ -32,9 +47,11 @@ const comparator =
  * depends on `usePanelStore` and `useWorktreeSelectionStore` state; this
  * helper stays pure for testability.
  *
- * New scopes (empty `usageHistory`, no `lastUsedAt`) have frecency 0 and
- * sort to the bottom of `usable` — they appear, but don't leap to the
- * top until the user has recalled them at least once.
+ * Scopes with no `usageHistory` and no `lastUsedAt` (never recalled)
+ * have frecency 0 and sort to the bottom of `usable`. Scopes with
+ * `lastUsedAt` but no `usageHistory` (a future case — currently the
+ * recall action appends to `usageHistory` immediately) seed frecency
+ * from `lastUsedAt` so they don't sink below ancient fleets.
  */
 export function rankSavedFleets(
   scopes: readonly FleetSavedScope[],

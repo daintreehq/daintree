@@ -415,3 +415,66 @@ describe("SavedFleetsSection ranking", () => {
     expect(allSeps).toHaveLength(1);
   });
 });
+
+describe("SavedFleetsSection integration (real computeSavedScopePaneCount)", () => {
+  // Import the mocked module so we can swap the implementation in this
+  // describe block. The default mock returns `terminalIds.length`; we
+  // replace it with a function that reads live panel-store state so the
+  // test exercises the actual panel-eligibility check.
+  beforeEach(async () => {
+    const mod = (await import("@/services/actions/definitions/fleetActions")) as unknown as {
+      computeSavedScopePaneCount: ReturnType<typeof vi.fn>;
+    };
+    mod.computeSavedScopePaneCount.mockImplementation((scope: { terminalIds?: string[] }) => {
+      if (!scope.terminalIds) return 3;
+      const { panelsById } = usePanelStore.getState();
+      let n = 0;
+      for (const id of scope.terminalIds) {
+        const panel = panelsById[id];
+        if (panel && panel.kind === "terminal" && panel.hasPty !== false) n += 1;
+      }
+      return n;
+    });
+  });
+
+  it("demotes a snapshot whose terminalIds are all gone to the stale sub-group", () => {
+    setSavedScopes([
+      {
+        kind: "snapshot",
+        id: "gone",
+        name: "Gone",
+        terminalIds: ["missing-1", "missing-2"],
+        createdAt: 0,
+      },
+    ]);
+    // Empty panel store — all terminalIds are missing.
+    render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
+    const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
+    expect(rowNames(snapGroup)).toEqual(["Gone"]);
+    const staleRow = within(snapGroup).getByRole("menuitem");
+    expect(staleRow.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("promotes a snapshot back to usable when its terminalIds become eligible", () => {
+    setSavedScopes([
+      {
+        kind: "snapshot",
+        id: "fresh",
+        name: "fresh",
+        terminalIds: ["t-real"],
+        createdAt: 0,
+      },
+    ]);
+    usePanelStore.setState({
+      panelsById: {
+        "t-real": { id: "t-real", kind: "terminal", hasPty: true } as never,
+      },
+      panelIds: ["t-real"],
+    });
+    render(<SavedFleetsSection onRequestDelete={vi.fn()} />);
+    const [snapGroup] = screen.getAllByTestId("dropdown-group") as [HTMLElement];
+    expect(rowNames(snapGroup)).toEqual(["fresh"]);
+    const liveRow = within(snapGroup).getByRole("menuitem");
+    expect(liveRow.getAttribute("aria-disabled")).toBeNull();
+  });
+});

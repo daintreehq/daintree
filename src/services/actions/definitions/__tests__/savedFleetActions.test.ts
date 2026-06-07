@@ -750,7 +750,10 @@ describe("fleet.recallNamedFleet race recovery (in-memory atomic)", () => {
     expect(stampedB?.usageHistory).toHaveLength(1);
   });
 
-  it("a recall that races a save preserves both the new scope and the recall's stamp", async () => {
+  it("a recall followed by a save preserves both the new scope and the recall's stamp", async () => {
+    // Sequential (not Promise.all) — verifies the in-memory atomic pattern
+    // when recall lands first and a later save reads the freshest snapshot.
+    // Truly concurrent recall+save is covered by the test below.
     const target: FleetSavedScope = {
       kind: "snapshot",
       id: "target",
@@ -764,9 +767,6 @@ describe("fleet.recallNamedFleet race recovery (in-memory atomic)", () => {
     getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [target] });
 
     const registry = await buildRegistry();
-    // Fire recall first so it lands in the in-memory store; the save then
-    // appends without clobbering the stamp because it reads the freshest
-    // in-memory snapshot.
     await run(registry, "fleet.recallNamedFleet", { id: "target" });
     await run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "New Fleet" });
 
@@ -778,6 +778,34 @@ describe("fleet.recallNamedFleet race recovery (in-memory atomic)", () => {
     expect(stampedTarget.usageHistory).toHaveLength(1);
     expect(newScope.name).toBe("New Fleet");
     expect(newScope.lastUsedAt).toBeUndefined();
+  });
+
+  it("a recall and a save fired concurrently both land in the in-memory store", async () => {
+    const target: FleetSavedScope = {
+      kind: "snapshot",
+      id: "target",
+      name: "Target",
+      terminalIds: ["p-target"],
+      createdAt: 1,
+    };
+    seedPanels([makeAgent("p-target")]);
+    seedInMemory([target]);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [target] });
+
+    const registry = await buildRegistry();
+    await Promise.all([
+      run(registry, "fleet.recallNamedFleet", { id: "target" }),
+      run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "New Fleet" }),
+    ]);
+
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    expect(inMemory).toHaveLength(2);
+    const stampedTarget = inMemory.find((s) => s.id === "target") as FleetSavedScope;
+    const newScope = inMemory.find((s) => s.id !== "target") as FleetSavedScope;
+    expect(stampedTarget.lastUsedAt).toBeGreaterThan(0);
+    expect(stampedTarget.usageHistory).toHaveLength(1);
+    expect(newScope.name).toBe("New Fleet");
   });
 
   it("uses the in-memory store when hydrated, never invoking getSettings", async () => {
@@ -831,5 +859,24 @@ describe("fleet.saveNamedFleet race recovery (in-memory atomic)", () => {
     expect(inMemory).toHaveLength(2);
     const names = inMemory.map((s) => s.name).sort();
     expect(names).toEqual(["First", "Second"]);
+  });
+
+  it("rolls back the in-memory append when saveSettings rejects (no phantom fleet)", async () => {
+    seedPanels([makeAgent("p1")]);
+    useFleetArmingStore.getState().armIds(["p1"]);
+    seedInMemory([]);
+    saveSettingsMock.mockRejectedValue(new Error("disk full"));
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [] });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "Will fail" });
+
+    // The in-memory store must not retain the failed append — otherwise the
+    // user sees a row that won't be on disk after a reload.
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    expect(inMemory).toHaveLength(0);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Couldn't save fleet" })
+    );
   });
 });

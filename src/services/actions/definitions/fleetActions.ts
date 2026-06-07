@@ -455,6 +455,13 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const newScope = buildSavedScope(parsed);
       if (!newScope) return;
       try {
+        // Capture the pre-append snapshot so a failed save can roll the
+        // in-memory append back — otherwise the dropdown would show a
+        // phantom fleet the user can't recall across restarts.
+        const previousSettings =
+          useProjectSettingsStore.getState().projectId === projectId
+            ? useProjectSettingsStore.getState().settings
+            : null;
         // Append atomically against the in-memory store so a near-simultaneous
         // recall's lastUsedAt stamp is not clobbered. The naive
         // getSettings-read-then-save pattern dropped concurrent stamps when
@@ -463,11 +470,21 @@ export function registerFleetActions(actions: ActionRegistry): void {
         // this project (cold-start case).
         const nextSettings = await appendFleetScopeInMemory(projectId, newScope);
         if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        await projectClient.saveSettings(projectId, nextSettings);
-        if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        if (useProjectSettingsStore.getState().projectId === projectId) {
-          useProjectSettingsStore.getState().setSettings(nextSettings);
+        try {
+          await projectClient.saveSettings(projectId, nextSettings);
+        } catch (saveError) {
+          // Roll back the in-memory append so the user doesn't see a row
+          // that won't be on disk after a reload.
+          if (previousSettings && useProjectSettingsStore.getState().projectId === projectId) {
+            useProjectSettingsStore.setState({ settings: previousSettings });
+          }
+          throw saveError;
         }
+        // In-memory was already updated by `appendFleetScopeInMemory` (which
+        // also runs the detectedRunners filter inside `setSettings`). Do NOT
+        // call `setSettings(nextSettings)` here — that would overwrite a
+        // concurrent recall's stamp that landed on the in-memory store
+        // between the append and the await above.
         notify({
           type: "success",
           message: `Saved fleet "${newScope.name}"`,
