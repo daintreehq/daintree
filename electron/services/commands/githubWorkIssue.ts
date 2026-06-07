@@ -1,14 +1,13 @@
 /**
- * github:work-issue command - Creates a worktree for a GitHub issue.
+ * github:work-issue command - Creates a worktree for a forge issue.
  *
  * Automates the workflow of:
- * 1. Fetching issue details from GitHub
+ * 1. Fetching issue details from the active forge provider
  * 2. Generating a branch name from the issue
  * 3. Creating a new worktree
  * 4. Switching to the new worktree
  */
 
-import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -17,8 +16,10 @@ import type {
   CommandContext,
   CommandResult,
 } from "../../../shared/types/commands.js";
-import { hasGitHubToken, getRepoContext, getIssueUrl } from "../GitHubService.js";
-import { GitHubAuth, GET_ISSUE_QUERY } from "../github/index.js";
+import type { NormalizedIssueState } from "../../../shared/types/forge.js";
+import { hasGitHubToken } from "../GitHubService.js";
+import { resolveForCwd } from "../../ipc/handlers/forgeResolution.js";
+import { auditForgeCall, summarizeForgeArgs } from "../forge/forgeAuditService.js";
 import { getWorkspaceClient } from "../WorkspaceClient.js";
 import { GitService } from "../GitService.js";
 import { generateWorktreePath, validatePathPattern } from "../../../shared/utils/pathPattern.js";
@@ -32,12 +33,12 @@ export interface GitHubWorkIssueArgs {
   baseBranch?: string;
 }
 
-/** Issue details fetched from GitHub */
+/** Issue details fetched from the active forge provider */
 interface IssueDetails {
   number: number;
   title: string;
   url: string;
-  state: "OPEN" | "CLOSED";
+  state: NormalizedIssueState;
 }
 
 /** Result data returned on success */
@@ -95,64 +96,6 @@ function slugifyTitle(title: string): string {
 function generateBranchName(issueNumber: number, issueTitle: string): string {
   const slug = slugifyTitle(issueTitle);
   return slug ? `issue-${issueNumber}-${slug}` : `issue-${issueNumber}`;
-}
-
-/**
- * Fetch issue details from GitHub API.
- */
-async function fetchIssueDetails(cwd: string, issueNumber: number): Promise<IssueDetails> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    throw new Error("Not a GitHub repository");
-  }
-
-  let response: GraphQlQueryResponseData;
-  try {
-    response = (await client(GET_ISSUE_QUERY, {
-      owner: context.owner,
-      repo: context.repo,
-      number: issueNumber,
-    })) as GraphQlQueryResponseData;
-  } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new Error("Timed out reaching GitHub. Try again.");
-    }
-
-    const causeCode = (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
-    if (typeof causeCode === "string" && NETWORK_ERROR_CODES.has(causeCode)) {
-      throw new Error("Network error connecting to GitHub.");
-    }
-
-    // Handle GraphQL errors (auth, rate limit, network)
-    const message = formatErrorMessage(error, "Failed to fetch GitHub issue");
-    if (message.includes("401") || message.includes("Unauthorized")) {
-      throw new Error("GitHub authentication failed. Check your token.");
-    }
-    if (message.includes("403") || message.includes("rate limit")) {
-      throw new Error("GitHub API rate limit exceeded. Try again later.");
-    }
-    if (message.includes("ENOTFOUND") || message.includes("network")) {
-      throw new Error("Network error connecting to GitHub.");
-    }
-    throw new Error(`GitHub API error: ${message}`);
-  }
-
-  const issue = response?.repository?.issue;
-  if (!issue) {
-    throw new Error(`Issue #${issueNumber} not found`);
-  }
-
-  return {
-    number: issue.number as number,
-    title: issue.title as string,
-    url: issue.url as string,
-    state: issue.state as "OPEN" | "CLOSED",
-  };
 }
 
 /**
@@ -321,25 +264,39 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       };
     }
 
-    // Check GitHub token
-    if (!hasGitHubToken()) {
+    // Resolve the active forge provider for this repo. Routing through the
+    // contract (rather than a raw GitHub fetch) lets any registered provider
+    // answer, matching the other forge command surfaces.
+    let resolved;
+    try {
+      resolved = await resolveForCwd(rootPath);
+    } catch (error) {
+      const message = formatErrorMessage(error, "Failed to determine repository context");
       return {
         success: false,
         error: {
-          code: "NO_GITHUB_TOKEN",
-          message: "GitHub token not configured. Set it in Settings.",
+          code: "NOT_GIT_REPO",
+          message: `Failed to determine repository context: ${message}`,
         },
       };
     }
 
-    // Fetch issue details
+    // Fetch issue details through the forge contract.
     let issue: IssueDetails;
     try {
-      issue = await fetchIssueDetails(rootPath, issueNumber);
-    } catch (error) {
-      const message = formatErrorMessage(error, "Failed to fetch issue");
+      const forgeIssue = await auditForgeCall(
+        {
+          providerId: resolved.namespaceId,
+          methodName: "getIssue",
+          repoOwner: resolved.repoRef.owner,
+          repoName: resolved.repoRef.repo,
+          argsSummary: summarizeForgeArgs("getIssue", issueNumber),
+        },
+        () => resolved.impl.getIssue(resolved.repoRef, issueNumber),
+        (value) => (value === null ? "not-found" : "success")
+      );
 
-      if (message.includes("not found")) {
+      if (!forgeIssue) {
         return {
           success: false,
           error: {
@@ -349,16 +306,35 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
         };
       }
 
-      if (message.includes("Not a GitHub repository")) {
+      issue = {
+        number: forgeIssue.number,
+        title: forgeIssue.title,
+        url: forgeIssue.url,
+        state: forgeIssue.state,
+      };
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
         return {
           success: false,
           error: {
-            code: "NOT_GITHUB_REPO",
-            message: "Not a GitHub repository",
+            code: "GITHUB_ERROR",
+            message: "Timed out reaching GitHub. Try again.",
           },
         };
       }
 
+      const causeCode = (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
+      if (typeof causeCode === "string" && NETWORK_ERROR_CODES.has(causeCode)) {
+        return {
+          success: false,
+          error: {
+            code: "GITHUB_ERROR",
+            message: "Network error connecting to GitHub.",
+          },
+        };
+      }
+
+      const message = formatErrorMessage(error, "Failed to fetch issue");
       return {
         success: false,
         error: {
@@ -513,17 +489,8 @@ export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHub
       console.warn("Failed to switch to new worktree:", errorMessage);
     }
 
-    // Get issue URL (using rootPath)
-    let issueUrl = issue.url;
-    try {
-      const resolvedIssueUrl = await getIssueUrl(rootPath, issueNumber);
-      if (resolvedIssueUrl) {
-        issueUrl = resolvedIssueUrl;
-      }
-    } catch (error) {
-      const message = formatErrorMessage(error, "Failed to resolve issue URL");
-      console.warn(`Failed to resolve issue URL for #${issueNumber}: ${message}`);
-    }
+    // The forge provider returns a canonical issue URL in its response.
+    const issueUrl = issue.url;
 
     // Build success message with warning if switch failed
     const successMessage = switchWarning
