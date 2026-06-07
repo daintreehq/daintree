@@ -62,9 +62,18 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-// Mock computeSavedScopePaneCount so we control staleness deterministically:
-// scopes whose terminalIds array is empty count as 0 → stale; everything
-// else counts as terminalIds.length (positive → usable).
+// Mock isSnapshotStale so we control staleness deterministically: scopes
+// whose terminalIds array is empty are stale; everything else is usable.
+// The default mock keeps the existing tests stable without seeding panels.
+vi.mock("@/components/Fleet/fleetStaleness", () => ({
+  isSnapshotStale: vi.fn((scope: { terminalIds?: string[] }) => {
+    return !scope.terminalIds || scope.terminalIds.length === 0;
+  }),
+}));
+
+// SavedFleetRow uses computeSavedScopePaneCount directly to render the live
+// count and decide aria-disabled. Mock it with the same terminalIds-length
+// heuristic so the row's staleness check agrees with the section's.
 vi.mock("@/services/actions/definitions/fleetActions", () => ({
   computeSavedScopePaneCount: vi.fn((scope: { terminalIds?: string[]; stateFilter?: string }) => {
     if (scope.terminalIds) return scope.terminalIds.length;
@@ -416,24 +425,22 @@ describe("SavedFleetsSection ranking", () => {
   });
 });
 
-describe("SavedFleetsSection integration (real computeSavedScopePaneCount)", () => {
-  // Import the mocked module so we can swap the implementation in this
-  // describe block. The default mock returns `terminalIds.length`; we
-  // replace it with a function that reads live panel-store state so the
-  // test exercises the actual panel-eligibility check.
+describe("SavedFleetsSection integration (real isSnapshotStale)", () => {
+  // Swap the mocked `isSnapshotStale` for one that reads live panel-store
+  // state so this block exercises the actual panel-eligibility check that
+  // the production component runs.
   beforeEach(async () => {
-    const mod = (await import("@/services/actions/definitions/fleetActions")) as unknown as {
-      computeSavedScopePaneCount: ReturnType<typeof vi.fn>;
+    const mod = (await import("@/components/Fleet/fleetStaleness")) as unknown as {
+      isSnapshotStale: ReturnType<typeof vi.fn>;
     };
-    mod.computeSavedScopePaneCount.mockImplementation((scope: { terminalIds?: string[] }) => {
-      if (!scope.terminalIds) return 3;
+    mod.isSnapshotStale.mockImplementation((scope: { kind: string; terminalIds?: string[] }) => {
+      if (scope.kind !== "snapshot" || !scope.terminalIds) return false;
       const { panelsById } = usePanelStore.getState();
-      let n = 0;
       for (const id of scope.terminalIds) {
         const panel = panelsById[id];
-        if (panel && panel.kind === "terminal" && panel.hasPty !== false) n += 1;
+        if (panel && (panel as { kind?: string }).kind === "terminal") return false;
       }
-      return n;
+      return true;
     });
   });
 

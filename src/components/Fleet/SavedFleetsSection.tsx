@@ -10,8 +10,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SavedFleetRow } from "./SavedFleetRow";
 import { SaveFleetForm } from "./SaveFleetForm";
-import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import { rankSavedFleets, rankPredicateFleets } from "./fleetRanking";
+import { isSnapshotStale } from "./fleetStaleness";
+import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import type { FleetSavedScope } from "@shared/types";
 
 interface SavedFleetsSectionProps {
@@ -37,11 +38,10 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
   // Subscribe so the stale sub-group re-derives when panes open/close. The
-  // value itself feeds the memo's dep array; the per-row aria-disabled check
-  // in SavedFleetRow reads panel state directly so it stays in sync too.
+  // value is read by `isSnapshotStale` inside the memo below.
   const panelsById = usePanelStore(useShallow((s) => s.panelsById));
 
-  const { snapshotUsable, snapshotStale, predicateRanked } = useMemo(() => {
+  const { snapshotUsable, snapshotStale, predicateRanked, countById, isStaleById } = useMemo(() => {
     const snapshots: FleetSavedScope[] = [];
     const predicates: FleetSavedScope[] = [];
     for (const scope of savedScopes) {
@@ -52,19 +52,20 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
       }
     }
     const now = Date.now();
-    const isStaleById = new Map<string, boolean>();
-    for (const scope of snapshots) {
-      isStaleById.set(scope.id, computeSavedScopePaneCount(scope) === 0);
+    const isStaleByIdLocal = new Map<string, boolean>();
+    const countByIdLocal = new Map<string, number>();
+    for (const scope of [...snapshots, ...predicates]) {
+      isStaleByIdLocal.set(scope.id, isSnapshotStale(scope, panelsById));
+      countByIdLocal.set(scope.id, computeSavedScopePaneCount(scope));
     }
-    const { usable, stale } = rankSavedFleets(snapshots, now, isStaleById);
+    const { usable, stale } = rankSavedFleets(snapshots, now, isStaleByIdLocal);
     return {
       snapshotUsable: usable,
       snapshotStale: stale,
       predicateRanked: rankPredicateFleets(predicates, now),
+      isStaleById: isStaleByIdLocal,
+      countById: countByIdLocal,
     };
-    // panelsById is in the dep list to re-rank when the panel set changes;
-    // savedScopes is the primary driver of re-rank.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- panelsById is a render-trigger
   }, [savedScopes, panelsById]);
 
   const hasSnapshots = snapshotUsable.length + snapshotStale.length > 0;
@@ -77,11 +78,23 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
         <DropdownMenuGroup>
           <DropdownMenuLabel>Snapshots</DropdownMenuLabel>
           {snapshotUsable.map((scope) => (
-            <SavedFleetRow key={scope.id} scope={scope} onRequestDelete={onRequestDelete} />
+            <SavedFleetRow
+              key={scope.id}
+              scope={scope}
+              onRequestDelete={onRequestDelete}
+              count={countById.get(scope.id) ?? 0}
+              isStale={isStaleById.get(scope.id) ?? false}
+            />
           ))}
           {showStaleSeparator && <DropdownMenuSeparator />}
           {snapshotStale.map((scope) => (
-            <SavedFleetRow key={scope.id} scope={scope} onRequestDelete={onRequestDelete} />
+            <SavedFleetRow
+              key={scope.id}
+              scope={scope}
+              onRequestDelete={onRequestDelete}
+              count={countById.get(scope.id) ?? 0}
+              isStale={isStaleById.get(scope.id) ?? false}
+            />
           ))}
         </DropdownMenuGroup>
       )}
@@ -89,7 +102,13 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
         <DropdownMenuGroup>
           <DropdownMenuLabel>Smart-Sets</DropdownMenuLabel>
           {predicateRanked.map((scope) => (
-            <SavedFleetRow key={scope.id} scope={scope} onRequestDelete={onRequestDelete} />
+            <SavedFleetRow
+              key={scope.id}
+              scope={scope}
+              onRequestDelete={onRequestDelete}
+              count={countById.get(scope.id) ?? 0}
+              isStale={false}
+            />
           ))}
         </DropdownMenuGroup>
       )}
