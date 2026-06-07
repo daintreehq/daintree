@@ -506,6 +506,7 @@ beforeEach(() => {
           onDisplayImage: vi.fn(() => () => {}),
           onSessionRevoked: vi.fn(() => () => {}),
           onGrantLifecycle: vi.fn(() => () => {}),
+          onTurnOutcomeAlert: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
           resetDenialCounts: vi.fn().mockResolvedValue(undefined),
           issueGrant: vi.fn().mockResolvedValue({

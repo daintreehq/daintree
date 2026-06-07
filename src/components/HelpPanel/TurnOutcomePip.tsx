@@ -33,7 +33,9 @@ interface TurnOutcomePipProps {
  * (the label differentiates), keeping the accent budget intact.
  */
 export function TurnOutcomePip({ outcome, onDismiss }: TurnOutcomePipProps) {
-  if (outcome === null) return null;
+  // Guard nullish (not just `null`): a snapshot that predates this field would
+  // pass `undefined`, and indexing OUTCOME_COPY with it would throw.
+  if (!outcome) return null;
   const { label, title } = OUTCOME_COPY[outcome];
   return (
     <button
