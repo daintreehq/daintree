@@ -208,6 +208,50 @@ function computeOvershootKeyframes(
   ];
 }
 
+// Absolute {x, y} sample of the same arced path used by computeBezierKeyframes,
+// evaluated at a single parameter t. Control points are derived deterministically
+// from `seed` (not Math.random) so repeated per-frame samples trace one stable arc.
+// Used by the drag handler to drive the visible glyph and synthetic move events
+// from identical coordinates each animation frame.
+function computeBezierPoint(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  seed: number,
+  t: number
+): { x: number; y: number } {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  const perpX = dist > 0 ? -dy / dist : 0;
+  const perpY = dist > 0 ? dx / dist : 0;
+
+  const offset = dist * (0.05 + noise1D(seed) * 0.25);
+  const sign = noise1D(seed + 100) > 0.5 ? 1 : -1;
+
+  const p1x = fromX + dx * 0.33 + perpX * offset * sign;
+  const p1y = fromY + dy * 0.33 + perpY * offset * sign;
+  const p2x = fromX + dx * 0.8 + perpX * offset * 0.3 * sign + dx * 0.05;
+  const p2y = fromY + dy * 0.8 + perpY * offset * 0.3 * sign + dy * 0.05;
+
+  // Ease-out on the timeline so the drag decelerates onto the target,
+  // matching the perceived feel of animateCursor's WAAPI easing.
+  const easedT = 1 - Math.pow(1 - t, 3);
+  let x = cubicBezier(easedT, fromX, p1x, p2x, toX);
+  let y = cubicBezier(easedT, fromY, p1y, p2y, toY);
+
+  const jitterAmplitude = Math.min(2, dist * 0.003);
+  if (t > 0 && t < 1 && jitterAmplitude > 0) {
+    const noiseVal = (noise1D(t * 10 + seed) * 2 - 1) * jitterAmplitude;
+    x += perpX * noiseVal;
+    y += perpY * noiseVal;
+  }
+
+  return { x, y };
+}
+
 export function DemoCursor() {
   const cursorRef = useRef<HTMLDivElement>(null);
   const svgWrapperRef = useRef<HTMLDivElement>(null);
@@ -779,30 +823,69 @@ export function DemoCursor() {
           );
 
           try {
-            // Animate cursor to target, dispatching intermediate move events
-            const steps = 10;
+            // Drive the visible glyph and the synthetic move events from the
+            // same arced coordinates each frame, paced by wall-clock elapsed
+            // time, so the cursor travels with the drag instead of teleporting.
             const duration = payload.durationMs ?? 500;
-            for (let i = 1; i <= steps; i++) {
-              const t = i / steps;
-              const cx = fromX + (toX - fromX) * t;
-              const cy = fromY + (toY - fromY) * t;
-              await pauseAwareDelay(duration / steps);
-              const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
-              moveTarget.dispatchEvent(
-                new PointerEvent("pointermove", {
-                  ...eventOpts,
-                  clientX: cx,
-                  clientY: cy,
-                  buttons: 1,
-                })
-              );
-              moveTarget.dispatchEvent(
-                new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
-              );
-            }
+            const seed = Math.random() * 1000;
 
-            // Visual cursor follows
-            await animateCursor(toX, toY, 50);
+            await new Promise<void>((resolve) => {
+              let startTs: number | null = null;
+              let pauseStartedAt: number | null = null;
+              let pausedTotal = 0;
+
+              function frame(timestamp: number) {
+                const el = cursorRef.current;
+                // Component unmounted mid-drag — stop the loop (also breaks the
+                // reschedule-forever path when unmounted while paused).
+                if (!el) {
+                  resolve();
+                  return;
+                }
+                if (startTs === null) startTs = timestamp;
+
+                if (pausedRef.current) {
+                  // Freeze progress: remember when the pause began, keep ticking.
+                  if (pauseStartedAt === null) pauseStartedAt = timestamp;
+                  requestAnimationFrame(frame);
+                  return;
+                }
+                if (pauseStartedAt !== null) {
+                  pausedTotal += timestamp - pauseStartedAt;
+                  pauseStartedAt = null;
+                }
+
+                const elapsed = timestamp - startTs - pausedTotal;
+                const t = duration > 0 ? Math.min(elapsed / duration, 1) : 1;
+                const { x: cx, y: cy } = computeBezierPoint(fromX, fromY, toX, toY, seed, t);
+
+                el.style.left = `${cx}px`;
+                el.style.top = `${cy}px`;
+                el.style.transform = "";
+
+                const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
+                moveTarget.dispatchEvent(
+                  new PointerEvent("pointermove", {
+                    ...eventOpts,
+                    clientX: cx,
+                    clientY: cy,
+                    buttons: 1,
+                  })
+                );
+                moveTarget.dispatchEvent(
+                  new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
+                );
+
+                if (t >= 1) {
+                  posRef.current = { x: toX, y: toY };
+                  resolve();
+                  return;
+                }
+                requestAnimationFrame(frame);
+              }
+
+              requestAnimationFrame(frame);
+            });
           } finally {
             // Release at target (guaranteed even on error)
             const releaseTarget = document.elementFromPoint(toX, toY) ?? toEl;
