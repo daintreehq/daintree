@@ -14,7 +14,6 @@ import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PortalCloseConfirmDialog } from "@/components/Portal/PortalCloseConfirmDialog";
 import { ChordIndicator } from "./ChordIndicator";
-import { DemoCaptureBridge, DemoCursor, DemoOverlay } from "../Demo";
 
 import { AllClearOverlay } from "../AllClearOverlay";
 import {
@@ -49,6 +48,30 @@ const LazyGlobalBannerCoordinator = lazy(() =>
 // Fetch eagerly: `safeMode` is set synchronously during hydration, so the
 // first post-hydration render can suspend before the idle preload fires.
 void preloadGlobalBannerCoordinator();
+
+// Demo-mode tooling is dev/recording-only and never reachable in production
+// (the `window.electron?.demo` gate is undefined unless launched with
+// `--demo-mode`). Lazy-load each component from its own file so ~1.5k lines of
+// demo source stay out of the production first-paint chunk. Direct file imports
+// (not the `../Demo` barrel) keep them as three independent async chunks.
+const LazyDemoOverlay = lazy(() =>
+  import("../Demo/DemoOverlay").then((m) => ({ default: m.DemoOverlay }))
+);
+const LazyDemoCursor = lazy(() =>
+  import("../Demo/DemoCursor").then((m) => ({ default: m.DemoCursor }))
+);
+const LazyDemoCaptureBridge = lazy(() =>
+  import("../Demo/DemoCaptureBridge").then((m) => ({ default: m.DemoCaptureBridge }))
+);
+// Preload only in demo mode so the chunks resolve before first mount (no
+// Suspense flash). In production the gate is false, so this block never runs and
+// the (still-emitted) demo chunks are never fetched. The `typeof window` guard
+// keeps module evaluation safe under a non-DOM test environment.
+if (typeof window !== "undefined" && window.electron?.demo) {
+  void import("../Demo/DemoOverlay");
+  void import("../Demo/DemoCursor");
+  void import("../Demo/DemoCaptureBridge");
+}
 
 interface AppLayoutProps {
   children?: ReactNode;
@@ -702,11 +725,11 @@ export function AppLayout({
           document.body
         )}
       {window.electron?.demo && (
-        <>
-          <DemoOverlay />
-          <DemoCursor />
-          <DemoCaptureBridge />
-        </>
+        <Suspense fallback={null}>
+          <LazyDemoOverlay />
+          <LazyDemoCursor />
+          <LazyDemoCaptureBridge />
+        </Suspense>
       )}
     </div>
   );
