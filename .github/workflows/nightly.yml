@@ -436,7 +436,6 @@ jobs:
       suite: core
       platform: ${{ inputs.platform || 'all' }}
       json_report: true
-      emit_classification: true
 
   # Seven domain buckets, each a reusable-workflow call expanded across the OS
   # matrix inside e2e.yml. e2e.yml auto-shards every full-* suite 4 ways
@@ -464,7 +463,6 @@ jobs:
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
       enable_blob_report: true
-      emit_classification: true
 
   e2e-online:
     needs: [check, test]
@@ -473,7 +471,6 @@ jobs:
       suite: online
       platform: ${{ inputs.platform || 'all' }}
       json_report: true
-      emit_classification: true
     secrets: inherit
 
   # Memory-leak detection — runs the `nightly` E2E suite. e2e.yml forces
@@ -488,7 +485,6 @@ jobs:
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
       enable_blob_report: true
-      emit_classification: true
 
   # Merges Playwright blob reports from every nightly e2e shard into a single
   # unified HTML report. Runs independently of publish — a broken merge must
