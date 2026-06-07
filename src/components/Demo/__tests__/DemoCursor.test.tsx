@@ -31,6 +31,14 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+// waitForIdle enumerates terminals via usePanelStore.getState().panelIds.
+const mockPanelIds: { current: string[] } = { current: [] };
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
+    getState: () => ({ panelIds: mockPanelIds.current }),
+  },
+}));
+
 // Set up window.electron.demo before importing the component
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 const originalElectron = (window as unknown as { electron?: unknown }).electron;
@@ -54,6 +62,12 @@ const animateSpy = vi.fn((() => createMockAnimation()) as any) as ReturnType<typ
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 Element.prototype.animate = animateSpy as unknown as typeof Element.prototype.animate;
 
+// jsdom does not implement document.getAnimations(); waitForIdle calls it.
+if (typeof document.getAnimations !== "function") {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (document as any).getAnimations = () => [];
+}
+
 import { DemoCursor, computeBezierKeyframes } from "../DemoCursor";
 
 function emit(channel: string, payload: Record<string, unknown> = {}) {
@@ -67,6 +81,8 @@ describe("DemoCursor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listenerMap.clear();
+    mockPanelIds.current = [];
+    terminalGetMock.mockReturnValue(null);
     // Set window dimensions for % to px conversion
     Object.defineProperty(window, "innerWidth", {
       value: 1000,
@@ -1299,6 +1315,233 @@ describe("DemoCursor", () => {
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-6", undefined);
 
     document.body.removeChild(el);
+  });
+
+  describe("waitForIdle", () => {
+    type FakeTerminal = {
+      managed: {
+        isHibernated: boolean;
+        terminal: { onWriteParsed: ReturnType<typeof vi.fn> };
+      };
+      fireWrite: () => void;
+      dispose: ReturnType<typeof vi.fn>;
+    };
+
+    function makeTerminal(hibernated = false): FakeTerminal {
+      const listeners: Array<() => void> = [];
+      const dispose = vi.fn();
+      return {
+        managed: {
+          isHibernated: hibernated,
+          terminal: {
+            onWriteParsed: vi.fn((cb: () => void) => {
+              listeners.push(cb);
+              return { dispose };
+            }),
+          },
+        },
+        fireWrite: () => listeners.forEach((l) => l()),
+        dispose,
+      };
+    }
+
+    function registerTerminals(byId: Record<string, FakeTerminal>) {
+      mockPanelIds.current = Object.keys(byId);
+      terminalGetMock.mockImplementation((id: string) => byId[id]?.managed ?? null);
+    }
+
+    function makeVideo({ playing }: { playing: boolean }): HTMLVideoElement {
+      const video = document.createElement("video");
+      Object.defineProperty(video, "paused", { value: !playing, configurable: true });
+      Object.defineProperty(video, "ended", { value: false, configurable: true });
+      Object.defineProperty(video, "readyState", { value: 4, configurable: true });
+      document.body.appendChild(video);
+      return video;
+    }
+
+    it("resolves when nothing is active", async () => {
+      render(<DemoCursor />);
+      emit("demo:exec-wait-for-idle", { requestId: "req-idle-empty", settleMs: 30, timeoutMs: 2000 });
+
+      await new Promise((r) => setTimeout(r, 150));
+
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-empty", undefined);
+    });
+
+    it("delays idle while a terminal is still writing, then resolves once it stops", async () => {
+      const term = makeTerminal();
+      registerTerminals({ "panel-1": term });
+
+      render(<DemoCursor />);
+      emit("demo:exec-wait-for-idle", { requestId: "req-idle-term", settleMs: 80, timeoutMs: 3000 });
+
+      // The handler subscribes onWriteParsed on the live terminal.
+      expect(term.managed.terminal.onWriteParsed).toHaveBeenCalledTimes(1);
+
+      // Keep the terminal busy past one settle window — must NOT resolve yet.
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setTimeout(r, 40));
+        term.fireWrite();
+      }
+      expect(demoMock.sendCommandDone).not.toHaveBeenCalledWith("req-idle-term", undefined);
+
+      // Stop writing and let it settle.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-term", undefined);
+      // Subscription torn down on resolve.
+      expect(term.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips hibernated terminals", async () => {
+      const live = makeTerminal();
+      const hibernated = makeTerminal(true);
+      registerTerminals({ "panel-live": live, "panel-hib": hibernated });
+
+      render(<DemoCursor />);
+      emit("demo:exec-wait-for-idle", { requestId: "req-idle-hib", settleMs: 30, timeoutMs: 2000 });
+
+      expect(live.managed.terminal.onWriteParsed).toHaveBeenCalledTimes(1);
+      expect(hibernated.managed.terminal.onWriteParsed).not.toHaveBeenCalled();
+
+      await new Promise((r) => setTimeout(r, 150));
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-hib", undefined);
+    });
+
+    it("skips panel ids with no terminal instance", async () => {
+      mockPanelIds.current = ["panel-missing"];
+      terminalGetMock.mockReturnValue(null);
+
+      render(<DemoCursor />);
+      emit("demo:exec-wait-for-idle", { requestId: "req-idle-null", settleMs: 30, timeoutMs: 2000 });
+
+      await new Promise((r) => setTimeout(r, 150));
+      expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-null", undefined);
+    });
+
+    it("does not report idle while a video is playing", async () => {
+      const video = makeVideo({ playing: true });
+      try {
+        render(<DemoCursor />);
+        emit("demo:exec-wait-for-idle", {
+          requestId: "req-idle-video",
+          settleMs: 40,
+          timeoutMs: 400,
+        });
+
+        // Seeded as active → settle never completes → handler times out.
+        await new Promise((r) => setTimeout(r, 600));
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+          "req-idle-video",
+          "Error: waitForIdle timed out"
+        );
+      } finally {
+        document.body.removeChild(video);
+      }
+    });
+
+    it("resolves after a playing video pauses", async () => {
+      const video = makeVideo({ playing: true });
+      try {
+        render(<DemoCursor />);
+        emit("demo:exec-wait-for-idle", {
+          requestId: "req-idle-video-pause",
+          settleMs: 40,
+          timeoutMs: 3000,
+        });
+
+        await new Promise((r) => setTimeout(r, 100));
+        expect(demoMock.sendCommandDone).not.toHaveBeenCalledWith(
+          "req-idle-video-pause",
+          undefined
+        );
+
+        // Pause fires a capture-phase 'pause' event → removed from active set.
+        video.dispatchEvent(new Event("pause"));
+        await new Promise((r) => setTimeout(r, 150));
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-video-pause", undefined);
+      } finally {
+        document.body.removeChild(video);
+      }
+    });
+
+    it("does not falsely resolve if a terminal writes during the double-rAF gap", async () => {
+      const term = makeTerminal();
+      registerTerminals({ "panel-1": term });
+
+      // Intercept rAF so activity can be injected between the two frames; hand
+      // control back to the real loop afterwards so the next cycle completes.
+      const rafQueue: FrameRequestCallback[] = [];
+      const realRaf = globalThis.requestAnimationFrame.bind(globalThis);
+      let intercept = true;
+      const rafSpy = vi
+        .spyOn(globalThis, "requestAnimationFrame")
+        .mockImplementation((cb: FrameRequestCallback) => {
+          if (!intercept) return realRaf(cb);
+          rafQueue.push(cb);
+          return rafQueue.length;
+        });
+      try {
+        render(<DemoCursor />);
+        emit("demo:exec-wait-for-idle", {
+          requestId: "req-raf-race",
+          settleMs: 20,
+          timeoutMs: 3000,
+        });
+
+        // Let the settle timer fire check() → it schedules the first rAF.
+        await new Promise((r) => setTimeout(r, 40));
+        expect(rafQueue.length).toBe(1);
+
+        // Run the first frame → schedules the inner frame.
+        rafQueue.shift()!(0);
+        expect(rafQueue.length).toBe(1);
+
+        // Activity lands inside the gap (the exact class of bug being fixed).
+        term.fireWrite();
+
+        // Run the inner frame → must abort instead of resolving.
+        rafQueue.shift()!(0);
+        expect(demoMock.sendCommandDone).not.toHaveBeenCalledWith("req-raf-race", undefined);
+
+        // Hand control back to the real loop; the next quiet cycle resolves.
+        intercept = false;
+        await new Promise((r) => setTimeout(r, 150));
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-raf-race", undefined);
+      } finally {
+        rafSpy.mockRestore();
+      }
+    });
+
+    it("tears down terminal and video listeners on timeout", async () => {
+      const term = makeTerminal();
+      registerTerminals({ "panel-1": term });
+      const video = makeVideo({ playing: true });
+      const removeSpy = vi.spyOn(document, "removeEventListener");
+      try {
+        render(<DemoCursor />);
+        emit("demo:exec-wait-for-idle", {
+          requestId: "req-idle-timeout",
+          settleMs: 40,
+          timeoutMs: 300,
+        });
+
+        await new Promise((r) => setTimeout(r, 500));
+        expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+          "req-idle-timeout",
+          "Error: waitForIdle timed out"
+        );
+
+        // Terminal subscription disposed.
+        expect(term.dispose).toHaveBeenCalledTimes(1);
+        // All four video listeners removed in the capture phase.
+        for (const evt of ["playing", "pause", "ended", "waiting"]) {
+          expect(removeSpy).toHaveBeenCalledWith(evt, expect.any(Function), true);
+        }
+      } finally {
+        removeSpy.mockRestore();
+        document.body.removeChild(video);
+      }
+    });
   });
 });
 
