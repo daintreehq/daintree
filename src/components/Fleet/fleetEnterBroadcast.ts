@@ -3,7 +3,10 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { usePanelStore } from "@/store/panelStore";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
 import {
   executeFleetBroadcast,
@@ -90,6 +93,42 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
     return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
   }
   return `Broadcast sent to ${plural(result.successCount, "terminal", "terminals")}`;
+}
+
+/**
+ * Record a completed fleet broadcast in the durable run history (#9949).
+ * Fire-and-forget: a thrown IPC error must never disrupt the broadcast UX, so
+ * we `void` + `.catch`. Pane titles are snapshotted from the live registry so
+ * the record stays legible after a terminal closes. Only resolved results are
+ * recorded — `runManagedFleetBroadcast` always resolves (cancellation surfaces
+ * as `cancelled: true`), so a throw here would be an unexpected crash, not an
+ * automation outcome.
+ */
+function recordFleetRunHistory(
+  draft: string,
+  targetCount: number,
+  result: FleetExecutionResult,
+  durationMs: number
+): void {
+  const panelsById = usePanelStore.getState().panelsById;
+  safeFireAndForget(
+    window.electron.runHistory.append({
+      kind: "fleet",
+      draftPreview: draft,
+      targetCount,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      cancelled: result.cancelled,
+      durationMs,
+      perTarget: result.perTarget.map((t) => ({
+        terminalId: t.terminalId,
+        title: getNarrowPanel(panelsById, t.terminalId)?.title,
+        status: t.status,
+        reason: t.reason,
+      })),
+    }),
+    { context: "Failed to record fleet run history" }
+  );
 }
 
 /**
@@ -186,10 +225,12 @@ export function tryFleetBroadcastFromEditor(
     // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
     // filter so disposed PTYs are dropped too.
     const eligibleTargets = filterEligibleIds(effectiveTargets);
+    const startedAt = Date.now();
     try {
       // A second Enter while a broadcast is in-flight pre-empts the first;
       // the shared controller lets the ribbon Cancel button abort it too.
       const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
+      recordFleetRunHistory(text, eligibleTargets.length, result, Date.now() - startedAt);
       if (result.failureCount > 0) {
         logWarn("[fleetEnterBroadcast] broadcast had rejections", {
           failureCount: result.failureCount,

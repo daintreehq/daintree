@@ -92,6 +92,15 @@ vi.mock("../panelStore", () => ({
   },
 }));
 
+// runRecipeWithResults records the run via window.electron.runHistory.append
+// (fire-and-forget). Stub it so the call resolves cleanly in tests.
+const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
+(globalThis as { window?: unknown }).window = {
+  electron: {
+    runHistory: { append: runHistoryAppendMock },
+  },
+};
+
 import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
 

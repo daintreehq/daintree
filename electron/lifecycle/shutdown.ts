@@ -243,6 +243,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           import("../services/forge/forgeAuditService.js")
             .then(({ forgeAuditService }) => forgeAuditService.flushNow())
             .catch(() => {}),
+          // Mirror for the durable run-history ring (#9949). Same unref'd 2s
+          // debounce, same loss-on-quit if not drained explicitly.
+          import("../services/runHistory/runHistoryService.js")
+            .then(({ runHistoryLog }) => runHistoryLog.flushNow())
+            .catch(() => {}),
           // Mirror for the plugin-MCP inbound audit ring (#9234). Same unref'd
           // 2s debounce, same loss-on-quit if not drained explicitly.
           import("../services/plugin-mcp/instances.js")

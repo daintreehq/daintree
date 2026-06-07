@@ -21,6 +21,7 @@ import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilena
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientAppError } from "@/utils/clientAppError";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 
@@ -890,6 +891,31 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!suppressFocus && results.spawned.length > 0) {
       terminalStore.setFocused(results.spawned[results.spawned.length - 1]!.terminalId);
     }
+
+    // Record this run in the durable history (#9949). Fire-and-forget AFTER the
+    // spawn batch has flushed (above) so the IPC write can't interleave with the
+    // deferred `panelIds` commit (#9345); a thrown IPC error must never fail the
+    // run, so we `void` + `.catch`. Pane titles are snapshotted from the live
+    // registry so the record stays legible after a terminal closes.
+    const panelsForTitles = usePanelStore.getState().panelsById;
+    safeFireAndForget(
+      window.electron.runHistory.append({
+        kind: "recipe",
+        recipeId: resolvedId,
+        recipeName: recipe.name,
+        worktreeId,
+        worktreeName: context?.branchName,
+        totalTerminals: recipe.terminals.length,
+        durationMs: Date.now() - now,
+        spawned: results.spawned.map((s) => ({
+          index: s.index,
+          terminalId: s.terminalId,
+          title: panelsForTitles[s.terminalId]?.title,
+        })),
+        failed: results.failed,
+      }),
+      { context: "Failed to record recipe run history" }
+    );
 
     return results;
   },

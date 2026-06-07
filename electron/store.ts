@@ -22,6 +22,7 @@ import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/plugin
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
+import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
@@ -378,6 +379,17 @@ export interface StoreSchema {
     auditLog?: ForgeAuditRecord[];
   };
   /**
+   * Durable run-history ring buffer for recipe and fleet automation outcomes
+   * (#9949). `records` is the persisted oldest-first ring, trimmed to
+   * {@link RUN_HISTORY_DEFAULT_MAX_RECORDS} by `RunHistoryLog`. Lives in the
+   * Main-process store (not renderer localStorage) so it survives reloads and
+   * the multi-window LRU eviction. Read defensively (`?? {}` applied by
+   * electron-store) — the on-disk shape is owned by `RunHistoryLog`.
+   */
+  runHistory: {
+    records?: RunHistoryRecord[];
+  };
+  /**
    * Inbound plugin-MCP `tools/call` audit ring buffer (#9234). Parallel to
    * `plugins.auditLog` but scoped to *inbound* MCP tool calls — i.e. calls a
    * plugin's stdio MCP server makes back into the host. Records never store
@@ -574,6 +586,9 @@ const storeOptions = {
     forgeAudit: {
       auditEnabled: true,
       auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
+    },
+    runHistory: {
+      records: [],
     },
     pluginMcpAudit: {
       auditEnabled: true,

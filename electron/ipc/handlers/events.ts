@@ -65,6 +65,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:agents-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:provenance-changed": "external",
+  "run-history:update": "external",
   "plugin:deep-link": "external",
   "terminal:exit": "external",
   "terminal:spawn-result": "external",

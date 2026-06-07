@@ -522,6 +522,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["privacy:set-telemetry-level"]["args"]
     ): Promise<IpcInvokeMap["privacy:set-telemetry-level"]["result"]>;
   };
+  runHistory: {
+    append(
+      ...args: IpcInvokeMap["run-history:append"]["args"]
+    ): Promise<IpcInvokeMap["run-history:append"]["result"]>;
+    clear(
+      ...args: IpcInvokeMap["run-history:clear"]["args"]
+    ): Promise<IpcInvokeMap["run-history:clear"]["result"]>;
+    getRecords(
+      ...args: IpcInvokeMap["run-history:get-records"]["args"]
+    ): Promise<IpcInvokeMap["run-history:get-records"]["result"]>;
+  };
   sentry: {
     getConsentState(
       ...args: IpcInvokeMap["sentry:get-consent-state"]["args"]

@@ -82,6 +82,10 @@ beforeEach(() => {
       notification: {
         playUiEvent: vi.fn().mockResolvedValue(undefined),
       },
+      // The broadcast path records the run via runHistory.append (fire-and-forget).
+      runHistory: {
+        append: vi.fn().mockResolvedValue(undefined),
+      },
     },
   });
 });

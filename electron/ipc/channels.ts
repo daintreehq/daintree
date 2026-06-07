@@ -847,6 +847,13 @@ export const CHANNELS = {
   FORGE_AUDIT_EXPORT_LOG: "forge-audit:export-log",
   FORGE_AUDIT_SET_ENABLED: "forge-audit:set-enabled",
 
+  // Run history channels — durable recipe/fleet automation outcomes (#9949).
+  // Dedicated `run-history:*` prefix so codegen produces a `runHistory`
+  // renderer namespace.
+  RUN_HISTORY_GET_RECORDS: "run-history:get-records",
+  RUN_HISTORY_APPEND: "run-history:append",
+  RUN_HISTORY_CLEAR: "run-history:clear",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INSTALL: "plugin:install",

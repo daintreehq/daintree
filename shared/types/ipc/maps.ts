@@ -1965,6 +1965,11 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // Run history changed (main → renderer, #9949). Carries the full newest-first
+  // snapshot so every live window updates without a reload after a recipe/fleet
+  // run is recorded or the log is cleared.
+  "run-history:update": import("./runHistory.js").RunHistoryRecord[];
+
   // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
   // primary window once it has painted; the renderer opens the Plugin Manager
   // (URL pre-filled for install, or scrolled to the plugin for open). Routing
@@ -2059,6 +2064,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Run history changed (global broadcast)
+  | "run-history:update"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready
