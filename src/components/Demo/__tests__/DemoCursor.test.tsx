@@ -54,7 +54,7 @@ const animateSpy = vi.fn((() => createMockAnimation()) as any) as ReturnType<typ
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 Element.prototype.animate = animateSpy as unknown as typeof Element.prototype.animate;
 
-import { DemoCursor } from "../DemoCursor";
+import { DemoCursor, computeBezierKeyframes } from "../DemoCursor";
 
 function emit(channel: string, payload: Record<string, unknown> = {}) {
   const handlers = listenerMap.get(channel) ?? [];
@@ -1199,6 +1199,80 @@ describe("DemoCursor", () => {
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-6", undefined);
 
     document.body.removeChild(el);
+  });
+});
+
+// Signed perpendicular deviation of each keyframe from the straight chord
+// running from the origin to (toX, toY). Frames translate relative to the start
+// point, so with from = (0, 0) the translate values are the absolute positions.
+// Positive vs negative tells you which side of the chord the path is on.
+function signedPerpDeviations(
+  frames: Array<{ transform: string }>,
+  toX: number,
+  toY: number
+): number[] {
+  const len = Math.hypot(toX, toY);
+  const out: number[] = [];
+  for (const f of frames) {
+    const m = /translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\s*\)/.exec(f.transform);
+    if (!m) continue;
+    const x = parseFloat(m[1]!);
+    const y = parseFloat(m[2]!);
+    // 2D cross product of the chord and the point vector, normalised by chord
+    // length → signed distance from the point to the chord line.
+    out.push((toX * y - toY * x) / len);
+  }
+  return out;
+}
+
+describe("computeBezierKeyframes geometry", () => {
+  let randomSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  afterEach(() => {
+    randomSpy?.mockRestore();
+    randomSpy = undefined;
+  });
+
+  it("scales arc deviation sub-linearly with distance", () => {
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    const short = signedPerpDeviations(computeBezierKeyframes(0, 0, 30, 0, 40, 0), 30, 0);
+    const long = signedPerpDeviations(computeBezierKeyframes(0, 0, 600, 0, 40, 0), 600, 0);
+
+    const shortMax = Math.max(...short.map(Math.abs));
+    const longMax = Math.max(...long.map(Math.abs));
+
+    // Longer moves bow more in absolute terms...
+    expect(longMax).toBeGreaterThan(shortMax);
+    // ...but sub-linearly: a 20x longer move must not produce a 20x bigger arc,
+    // otherwise short nudges read just as dramatically curved as long sweeps.
+    const distanceRatio = 600 / 30;
+    expect(longMax / shortMax).toBeLessThan(distanceRatio);
+  });
+
+  it("never inflects below the two-phase threshold", () => {
+    // 0.1 < 0.2 would arm the S-curve, but the distance gate must veto it.
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.1);
+
+    const dev = signedPerpDeviations(computeBezierKeyframes(0, 0, 299, 0, 60, 0), 299, 0);
+
+    // A single-bow C-curve stays on one side of the chord. With sign = -1 every
+    // non-trivial deviation is negative; the only positive values would be small
+    // jitter (capped at min(2, 299 * 0.003) ≈ 0.9px), so nothing crosses +2.
+    expect(Math.max(...dev)).toBeLessThan(2);
+    expect(Math.min(...dev)).toBeLessThan(-2);
+  });
+
+  it("can inflect into an S-curve above the threshold", () => {
+    // Same draws as above, but now the distance gate allows the inflection.
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.1);
+
+    const dev = signedPerpDeviations(computeBezierKeyframes(0, 0, 400, 0, 60, 0), 400, 0);
+
+    // The path leaves on one side and returns on the other, both lobes clearing
+    // the jitter band (min(2, 400 * 0.003) = 1.2px) by a comfortable margin.
+    expect(Math.min(...dev)).toBeLessThan(-2);
+    expect(Math.max(...dev)).toBeGreaterThan(2);
   });
 });
 
