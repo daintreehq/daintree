@@ -5,7 +5,8 @@
  * Same root cause and fix as DockedTerminalItem: Radix's DismissableLayer fires
  * a focus-outside dismissal while a just-opened tab group's active terminal is
  * still migrating into the portal. The fix blocks that at onFocusOutside and
- * focuses the active tab once its node lands in the portal.
+ * focuses the active tab once its stable wrapper has been moved in — a
+ * synchronous step, no MutationObserver.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
@@ -354,7 +355,7 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses Radix auto-focus and focuses the active tab once it migrates into the portal", async () => {
+  it("suppresses Radix auto-focus and focuses the active tab once its wrapper is moved in", () => {
     mockActiveDockTerminalId = "t-1";
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
     render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />);
@@ -365,21 +366,13 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
       capturedOnOpenAutoFocus?.({ preventDefault });
     });
     expect(preventDefault).toHaveBeenCalledOnce();
-    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
 
-    const portal = document.querySelector('[data-dock-portal-target="t-1"]');
-    expect(portal).not.toBeNull();
-    await act(async () => {
-      const child = document.createElement("div");
-      child.setAttribute("data-dock-panel-id", "t-1");
-      portal!.appendChild(child);
-      await Promise.resolve();
-    });
-
+    // The popover container ref settles synchronously on mount, so the active
+    // tab's wrapper is moved in and focused — no MutationObserver.
     expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-1");
   });
 
-  it("does not focus an MCP-created active dock tab even after it migrates", async () => {
+  it("does not focus an MCP-created active dock tab", () => {
     mockActiveDockTerminalId = "t-1";
     const panels = [
       makePanel({ id: "t-1", spawnedBy: "mcp", focusPolicy: "preserve" }),
@@ -394,14 +387,8 @@ describe("DockedTabGroup mount-time close guard (#6602)", () => {
     });
     expect(preventDefault).toHaveBeenCalledOnce();
 
-    const portal = document.querySelector('[data-dock-portal-target="t-1"]');
-    await act(async () => {
-      const child = document.createElement("div");
-      child.setAttribute("data-dock-panel-id", "t-1");
-      portal!.appendChild(child);
-      await Promise.resolve();
-    });
-
+    // focusPolicy "preserve" short-circuits the focus effect even though the
+    // wrapper is moved into the popover.
     expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 
