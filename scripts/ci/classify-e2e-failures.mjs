@@ -17,7 +17,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-// Ordered from most-specific to least-specific. The first matching rule wins.
+// Ordered by priority as well as specificity. The first matching rule wins,
+// so Product-Logic (crashes) precedes Test-Logic (stale refs / timing) —
+// a crash is more actionable than the stale-ref noise it often drags along.
 // Specific patterns (e.g. "spawn EPERM") must precede broad ones (e.g. bare
 // "EPERM") so the more actionable bucket is chosen.
 const CLASSIFICATION_RULES = [
@@ -27,6 +29,32 @@ const CLASSIFICATION_RULES = [
   { regex: /EPERM[:,\s]/i, bucket: "Infrastructure", label: "EPERM (permission denied)" },
   { regex: /EACCES[:,\s]/i, bucket: "Infrastructure", label: "EACCES (permission denied)" },
   { regex: /ENOSPC/i, bucket: "Infrastructure", label: "ENOSPC (disk full)" },
+  // Playwright worker process death (runner/index.js _failTestWithErrors) —
+  // runner-level, carries no app-specific signal.
+  {
+    regex: /worker process exited unexpectedly/i,
+    bucket: "Infrastructure",
+    label: "Playwright worker exited (runner-level)",
+  },
+
+  // --- Product-Logic (renderer crashes, actual bugs) ---
+  // Strings Playwright 1.x actually surfaces in error.message on a renderer
+  // crash (playwright-core coreBundle.js: _didCrash openScope close, navigation
+  // waiter, protocol "crashed" error type):
+  {
+    regex: /Navigation failed because page crashed/i,
+    bucket: "Product-Logic",
+    label: "Navigation failed (page crashed)",
+  },
+  { regex: /Page crashed/i, bucket: "Product-Logic", label: "Page crashed" },
+  { regex: /Target crashed/i, bucket: "Product-Logic", label: "Target crashed" },
+  // Electron-internal phrasings, kept as secondary catches for errors that
+  // reach the report via IPC/main-process paths rather than Playwright:
+  { regex: /WebContents crashed/i, bucket: "Product-Logic", label: "WebContents crashed" },
+  { regex: /renderer process.*crashed/i, bucket: "Product-Logic", label: "Renderer process crash" },
+  { regex: /renderer.*killed/i, bucket: "Product-Logic", label: "Renderer killed" },
+  { regex: /GPU process.*crash/i, bucket: "Product-Logic", label: "GPU process crash" },
+  { regex: /utility process.*crash/i, bucket: "Product-Logic", label: "Utility process crash" },
 
   // --- Test-Logic (handshake / timing / stale references) ---
   {
@@ -49,13 +77,6 @@ const CLASSIFICATION_RULES = [
   },
   { regex: /waiting for selector.*timed out/i, bucket: "Test-Logic", label: "Selector timeout" },
   { regex: /Test timeout of \d+ms exceeded/i, bucket: "Test-Logic", label: "Test timeout" },
-
-  // --- Product-Logic (renderer crashes, actual bugs) ---
-  { regex: /WebContents crashed/i, bucket: "Product-Logic", label: "WebContents crashed" },
-  { regex: /renderer process.*crashed/i, bucket: "Product-Logic", label: "Renderer process crash" },
-  { regex: /renderer.*killed/i, bucket: "Product-Logic", label: "Renderer killed" },
-  { regex: /GPU process.*crash/i, bucket: "Product-Logic", label: "GPU process crash" },
-  { regex: /utility process.*crash/i, bucket: "Product-Logic", label: "Utility process crash" },
 ];
 
 /**
@@ -95,7 +116,12 @@ export function extractFailures(report) {
           const pName = test.projectName ?? projectName;
           if (!test.results) continue;
           for (const result of test.results) {
-            if (result.status !== "failed" && result.status !== "timedOut") continue;
+            if (
+              result.status !== "failed" &&
+              result.status !== "timedOut" &&
+              result.status !== "interrupted"
+            )
+              continue;
             const error = result.error;
             const errorText = error
               ? [error.message, error.stack].filter(Boolean).join("\n")
