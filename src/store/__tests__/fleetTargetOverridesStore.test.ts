@@ -13,6 +13,7 @@ function resetArmingStore(): void {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    broadcastSignal: 0,
     previewArmedIds: new Set<string>(),
   });
 }

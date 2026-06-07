@@ -37,7 +37,7 @@ export const useFleetTargetOverridesStore = create<FleetTargetOverridesState>((s
 
   clearPayloadOverride: (terminalId) => {
     set((state) => {
-      if (!(terminalId in state.payloadOverrides)) return state;
+      if (!Object.hasOwn(state.payloadOverrides, terminalId)) return state;
       const next = { ...state.payloadOverrides };
       delete next[terminalId];
       return { payloadOverrides: next };
