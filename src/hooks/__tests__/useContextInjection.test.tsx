@@ -65,6 +65,14 @@ vi.mock("@/clients", () => ({
     injectToTerminal: injectMock,
     cancel: cancelMock,
   },
+  // usePanelStore (pulled in transitively) constructs panelPersistence with
+  // projectClient at module load.
+  projectClient: {
+    getTerminals: vi.fn().mockResolvedValue([]),
+    setTerminals: vi.fn().mockResolvedValue(undefined),
+    setTabGroups: vi.fn().mockResolvedValue(undefined),
+    getSettings: vi.fn().mockResolvedValue(null),
+  },
 }));
 
 import { useContextInjection, cancelContextInjection } from "../useContextInjection";
