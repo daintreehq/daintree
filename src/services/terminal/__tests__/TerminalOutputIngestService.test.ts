@@ -633,6 +633,105 @@ describe("TerminalOutputIngestService", () => {
     });
   });
 
+  describe("background queue cap (#9906)", () => {
+    const BACKGROUND_QUEUE_MAX_BYTES = 4 * 1024 * 1024;
+    const CHUNK = "a".repeat(512 * 1024); // 512 KB
+
+    it("bounds the held queue at 4 MB, evicting oldest chunks as new ones arrive", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => TerminalRefreshTier.BACKGROUND
+      );
+
+      // Stream 20 × 512 KB = 10 MB while backgrounded — far past the cap. The
+      // desync this guards against keeps in-flight batches arriving uncapped;
+      // queuedBytes must never exceed the ceiling.
+      for (let i = 0; i < 20; i++) {
+        service.bufferData("term-1", CHUNK);
+        expect(service.getQueuedBytes("term-1")).toBeLessThanOrEqual(BACKGROUND_QUEUE_MAX_BYTES);
+      }
+
+      // 8 × 512 KB = exactly 4 MB is retained (the 9th onward each evict one).
+      expect(service.getQueuedBytes("term-1")).toBe(BACKGROUND_QUEUE_MAX_BYTES);
+      expect(writeToTerminal).not.toHaveBeenCalled();
+    });
+
+    it("drops a single chunk larger than the cap entirely", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => TerminalRefreshTier.BACKGROUND
+      );
+
+      const oversized = "z".repeat(5 * 1024 * 1024); // 5 MB > 4 MB cap
+      service.bufferData("term-1", oversized);
+
+      // The lone chunk exceeds the cap, so eviction empties the queue rather
+      // than holding a chunk it can never get under the ceiling.
+      expect(service.getQueuedBytes("term-1")).toBe(0);
+    });
+
+    it("evicts oldest-first (FIFO), preserving the most recent bytes", () => {
+      const writeToTerminal = vi.fn();
+      const tiers = new Map<string, TerminalRefreshTier>([
+        ["term-1", TerminalRefreshTier.BACKGROUND],
+      ]);
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        (id) => tiers.get(id) ?? TerminalRefreshTier.FOCUSED
+      );
+
+      // Fill to exactly the cap with 8 distinguishable head chunks, then add a
+      // newest marker chunk that forces eviction of the oldest.
+      const oldest = "OLDEST" + "0".repeat(512 * 1024 - 6);
+      service.bufferData("term-1", oldest);
+      for (let i = 0; i < 7; i++) {
+        service.bufferData("term-1", CHUNK);
+      }
+      expect(service.getQueuedBytes("term-1")).toBe(BACKGROUND_QUEUE_MAX_BYTES);
+
+      const newest = "NEWEST";
+      service.bufferData("term-1", newest);
+
+      // The oldest 512 KB chunk was evicted; the small newest chunk survives.
+      expect(service.getQueuedBytes("term-1")).toBe(
+        BACKGROUND_QUEUE_MAX_BYTES - 512 * 1024 + newest.length
+      );
+
+      // Drain everything and confirm the OLDEST head bytes are gone while the
+      // NEWEST tail bytes remain.
+      tiers.set("term-1", TerminalRefreshTier.FOCUSED);
+      service.flushForTerminal("term-1");
+      const flushed = writeToTerminal.mock.calls.map((c) => c[1] as string).join("");
+      expect(flushed.startsWith("OLDEST")).toBe(false);
+      expect(flushed.endsWith("NEWEST")).toBe(true);
+    });
+
+    it("does not cap or evict for active (non-background) terminals", () => {
+      const writeToTerminal = vi.fn();
+      const service = new TerminalOutputIngestService(
+        writeToTerminal,
+        () => TerminalRefreshTier.FOCUSED
+      );
+
+      // The background cap must not apply to active terminals. Without acks,
+      // normal backpressure queues the bytes the high-watermark won't let drain
+      // yet — but nothing is DROPPED. written + still-queued accounts for every
+      // byte, even though the held total is well past the 4 MB background cap.
+      for (let i = 0; i < 20; i++) {
+        service.bufferData("term-1", CHUNK);
+      }
+      const totalWritten = writeToTerminal.mock.calls.reduce(
+        (sum, c) => sum + (c[1] as string).length,
+        0
+      );
+      expect(totalWritten + service.getQueuedBytes("term-1")).toBe(20 * 512 * 1024);
+      // Proof the cap is background-only: the active queue blew past 4 MB.
+      expect(service.getQueuedBytes("term-1")).toBeGreaterThan(BACKGROUND_QUEUE_MAX_BYTES);
+    });
+  });
+
   describe("watchdog accessors", () => {
     it("getQueuedBytes tracks held bytes and returns 0 for unknown ids", () => {
       let tier = TerminalRefreshTier.BACKGROUND;

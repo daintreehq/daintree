@@ -10,6 +10,7 @@ export interface RendererPolicyDeps {
   onResumeFlush?: (id: string) => void;
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
   applyDeferredResize?: (id: string) => void;
+  onBackgrounded?: (id: string) => void;
 }
 
 // Backend cadence hint sent to the PTY host alongside the binary
@@ -167,6 +168,13 @@ export class TerminalRendererPolicy {
       // generation.
       this.bumpWakeGeneration(id);
       managed.needsWake = true;
+
+      // Cancel any scheduled-but-not-started wake (#9906). bumpWakeGeneration
+      // above only neutralizes the resolved callback of an in-flight wake — a
+      // trailing-edge rate-limited wake still queued behind the 1s window would
+      // fire its `wake-terminal` IPC and promote the host tier to "active"
+      // against this now-hidden pane. Cancel it before the IPC leaves.
+      this.deps.onBackgrounded?.(id);
     }
 
     if (backendTier === "active" && prevBackendTier !== "active") {

@@ -204,6 +204,7 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      onBackgrounded: (id) => this.wakeManager.cancelPendingWake(id),
       onTierApplied: (id, tier, managed) => {
         // Enter scheduleHibernation whenever the terminal is BACKGROUND and
         // offscreen, even if it's not eligible right now. scheduleHibernation

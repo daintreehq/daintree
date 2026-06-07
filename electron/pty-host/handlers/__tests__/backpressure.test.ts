@@ -14,7 +14,9 @@ function makeCoordinator() {
 
 function makeRendererConnection(): RendererConnection {
   return {
-    port: {} as RendererConnection["port"],
+    port: {
+      postMessage: vi.fn(),
+    } as unknown as RendererConnection["port"],
     handler: vi.fn(),
     portQueueManager: {
       clearQueue: vi.fn(),
@@ -47,6 +49,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
       deletePauseStartTime: vi.fn(),
       emitTerminalStatus: vi.fn(),
       emitReliabilityMetric: vi.fn(),
+      getActivityTier: vi.fn(() => "active"),
     } as unknown as HostContext["backpressureManager"],
     ipcQueueManager: {
       removeBytes: vi.fn(),
@@ -269,5 +272,126 @@ describe("force-resume handler", () => {
     // nor indirectly via a recompute, both of which would desync the tier state.
     expect(ctx.backpressureManager.setActivityTier).not.toHaveBeenCalled();
     expect(ctx.recomputeActivityTiers).not.toHaveBeenCalled();
+  });
+});
+
+describe("wake-terminal handler — late-wake tier reconciliation (#9906)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("re-demotes the host and broadcasts a tier-changed correction when a stale wake lands on a backgrounded terminal", async () => {
+    // The renderer backgrounded the pane, but a trailing-edge rate-limited wake
+    // fired afterwards and reached the host. Without reconciliation the host
+    // stays at "active" (50ms polling) streaming into a hidden terminal, and the
+    // renderer's setActivityTier dedup (lastBackendTier === "background") can
+    // never re-send the correction. The handler must detect preWakeTier ===
+    // "background" and push the host + renderer back to background.
+    const coord = makeCoordinator();
+    const conn = makeRendererConnection();
+    const ctx = makeCtx({
+      rendererConnections: new Map([[1, conn]]),
+      windowProjectMap: new Map([[1, "proj-a"]]),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    (ctx.backpressureManager.getActivityTier as ReturnType<typeof vi.fn>).mockReturnValue(
+      "background"
+    );
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "term-1",
+      projectId: "proj-a",
+    });
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "r1" });
+
+    // The wake promoted to active first (snapshot path), then the correction
+    // re-demoted with the dedicated reason.
+    expect(ctx.backpressureManager.setActivityTier).toHaveBeenCalledWith(
+      "term-1",
+      "active",
+      "wake-terminal"
+    );
+    expect(ctx.backpressureManager.setActivityTier).toHaveBeenCalledWith(
+      "term-1",
+      "background",
+      "wake-terminal-correction"
+    );
+    // ActivityMonitor returned to the 500ms background cadence.
+    expect(ctx.ptyManager.setActivityMonitorTier).toHaveBeenCalledWith("term-1", 500);
+    // The renderer's dedup baseline is reset via the tier-changed broadcast.
+    expect(conn.port.postMessage).toHaveBeenCalledWith({
+      type: "tier-changed",
+      id: "term-1",
+      tier: "background",
+    });
+  });
+
+  it("does not post a correction when the wake lands on an already-active terminal", async () => {
+    // A normal wake of a visible/active terminal must not be re-demoted — the
+    // correction is strictly for the stale background-desync case.
+    const coord = makeCoordinator();
+    const conn = makeRendererConnection();
+    const ctx = makeCtx({
+      rendererConnections: new Map([[1, conn]]),
+      windowProjectMap: new Map([[1, "proj-a"]]),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    (ctx.backpressureManager.getActivityTier as ReturnType<typeof vi.fn>).mockReturnValue("active");
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "term-1",
+      projectId: "proj-a",
+    });
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "r2" });
+
+    expect(ctx.backpressureManager.setActivityTier).not.toHaveBeenCalledWith(
+      "term-1",
+      "background",
+      "wake-terminal-correction"
+    );
+    expect(conn.port.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("project-filters the correction broadcast to windows that own the terminal", async () => {
+    // The tier-changed broadcast must follow the same project filter as the data
+    // path: a window viewing a different project never receives the correction.
+    const coord = makeCoordinator();
+    const ownerConn = makeRendererConnection();
+    const otherConn = makeRendererConnection();
+    const ctx = makeCtx({
+      rendererConnections: new Map([
+        [1, ownerConn],
+        [2, otherConn],
+      ]),
+      windowProjectMap: new Map([
+        [1, "proj-a"],
+        [2, "proj-b"],
+      ]),
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    (ctx.backpressureManager.getActivityTier as ReturnType<typeof vi.fn>).mockReturnValue(
+      "background"
+    );
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "term-1",
+      projectId: "proj-a",
+    });
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "r3" });
+
+    expect(ownerConn.port.postMessage).toHaveBeenCalledWith({
+      type: "tier-changed",
+      id: "term-1",
+      tier: "background",
+    });
+    expect(otherConn.port.postMessage).not.toHaveBeenCalled();
   });
 });

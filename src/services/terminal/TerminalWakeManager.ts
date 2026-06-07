@@ -197,6 +197,30 @@ export class TerminalWakeManager {
     this.pendingWakes.set(id, { retries: retryCount, timeoutId });
   }
 
+  /**
+   * Cancel scheduled-but-not-started wakes when a terminal is backgrounded
+   * (#9906). A trailing-edge rate-limited wake (or an instance-retry) that
+   * fires after the BACKGROUND transition sends a stale `wake-terminal` IPC,
+   * promoting the host tier to "active" against a hidden pane. Cancelling here
+   * stops the IPC before it leaves the renderer. Unlike clearWakeState this
+   * preserves lastWakeTime (so the rate-limit window survives a quick
+   * background/foreground) and inFlightWakes (an already-started wake completes
+   * and is neutralized by the policy's wake-generation guard).
+   */
+  cancelPendingWake(id: string): void {
+    const pending = this.pendingWakes.get(id);
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      this.pendingWakes.delete(id);
+    }
+
+    const rateLimited = this.pendingRateLimitedWakes.get(id);
+    if (rateLimited) {
+      clearTimeout(rateLimited);
+      this.pendingRateLimitedWakes.delete(id);
+    }
+  }
+
   clearWakeState(id: string): void {
     this.lastWakeTime.delete(id);
     this.inFlightWakes.delete(id);
