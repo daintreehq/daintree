@@ -15,6 +15,7 @@ export { IpcQueueManager, type IpcQueueDeps } from "./ipcQueue.js";
 export { PortQueueManager, type PortQueueDeps } from "./portQueue.js";
 export { PortBatcher, type PortBatcherDeps, type PortBatcherFailedBatch } from "./portBatcher.js";
 export { FdMonitor, isProcessAlive, type FdCheckResult } from "./FdMonitor.js";
+export { isLoadBearingReliabilityMetric } from "./loadBearingMetrics.js";
 export { metricsEnabled } from "./metrics.js";
 export { parseSpawnError } from "./spawnErrors.js";
 export { toHostSnapshot, type SnapshotProvider } from "./snapshots.js";

@@ -235,15 +235,7 @@ function getPausedDurationsSnapshot(): Array<{ terminalId: string; heldDurationM
  * Add new metric types here only when the renderer needs them to surface
  * a recovery affordance. Diagnostic-only metrics stay gated.
  */
-const LOAD_BEARING_RELIABILITY_METRICS = new Set<string>([
-  "pause-start",
-  "pause-end",
-  "suspend",
-  "pause-duration-gauge",
-]);
-function isLoadBearingReliabilityMetric(metricType: string): boolean {
-  return LOAD_BEARING_RELIABILITY_METRICS.has(metricType);
-}
+import { isLoadBearingReliabilityMetric } from "./pty-host/loadBearingMetrics.js";
 
 // Data-loss counter: closure-scoped accumulator of dropped-bytes and
 // drop-event counts since the last snapshot. The counter is incremented

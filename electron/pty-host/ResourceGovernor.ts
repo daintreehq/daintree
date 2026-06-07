@@ -455,6 +455,13 @@ export class ResourceGovernor {
     // bypasses the `DAINTREE_TERMINAL_METRICS` opt-in gate. Other ResourceGovernor
     // gauges (pending-bytes-gauge, throughput-rate, queue-depth-gauge,
     // data-loss-count) stay gated as diagnostic-only telemetry.
+    //
+    // Emits directly via `this.deps.sendEvent` rather than routing through
+    // the host funnel (`emitReliabilityMetricWithTracking`) because the
+    // gauge has no per-source pause attribution to track — the snapshot is
+    // already aggregated by `getPausedDurationsSnapshot` from the closure
+    // `pausedTerminals` map. Routing through the funnel would re-do the
+    // same aggregation the snapshot already performed.
     if (!this.deps.getPausedDurationsSnapshot) return;
 
     const snapshot = this.deps.getPausedDurationsSnapshot();

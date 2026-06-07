@@ -6,6 +6,7 @@ import {
   FUTURE_SAB_MAX_PENDING_BYTES_PER_TERMINAL,
   FUTURE_SAB_MAX_TOTAL_PENDING_BYTES,
 } from "../backpressure.js";
+import { isLoadBearingReliabilityMetric } from "../loadBearingMetrics.js";
 
 type CoordinatorLike = Pick<PtyPauseCoordinator, "pause" | "resume" | "isPaused">;
 
@@ -514,17 +515,21 @@ describe("BackpressureManager adversarial", () => {
     });
 
     describe("load-bearing metrics bypass the DAINTREE_TERMINAL_METRICS gate (#9898)", () => {
-      // Mirrors the production funnel at `electron/pty-host.ts:emitReliabilityMetricWithTracking`.
-      // The split at the funnel is what unblocks the Tier-3 stall-escalation
-      // banner (`useForceResumeCycleWatchdog`) and the held-duration tooltip —
-      // they were dead in production because every reliability-metric wire
-      // emission was filtered out by `metricsEnabled()`. Pin the contract: a
-      // load-bearing metric type emits unconditionally; diagnostic gauges
-      // remain gated.
-      const LOAD_BEARING = new Set(["pause-start", "pause-end", "suspend", "pause-duration-gauge"]);
+      // Pins the contract at the production funnel. The split at the funnel
+      // is what unblocks the Tier-3 stall-escalation banner
+      // (`useForceResumeCycleWatchdog`) and the held-duration tooltip — they
+      // were dead in production because every reliability-metric wire
+      // emission was filtered out by `metricsEnabled()`. The test imports
+      // the real `isLoadBearingReliabilityMetric` predicate from
+      // `pty-host/loadBearingMetrics.js` so a misconfigured set would fail
+      // this suite (rather than a copy of the set that would silently drift).
       function makeFunnel(opts: { metricsEnabled: () => boolean }) {
         return (payload: { metricType: string; [k: string]: unknown }, forceEmit = false) => {
-          if (!forceEmit && !LOAD_BEARING.has(payload.metricType) && !opts.metricsEnabled()) {
+          if (
+            !forceEmit &&
+            !isLoadBearingReliabilityMetric(payload.metricType) &&
+            !opts.metricsEnabled()
+          ) {
             return;
           }
           sendEvent({ type: "terminal-reliability-metric", payload });
