@@ -741,8 +741,9 @@ describe("AgentStateService", () => {
         dropped.push(payload as unknown as Record<string, unknown>);
       });
 
-      // working + output → working (no-op)
-      const changed = service.updateAgentState(terminal, { type: "output" });
+      // working + output → working (no-op). `data` is required on the output
+      // event shape; the no-op branch doesn't read it, so an empty string is fine.
+      const changed = service.updateAgentState(terminal, { type: "output", data: "" });
 
       expect(changed).toBe(false);
       expect(dropped).toHaveLength(1);
