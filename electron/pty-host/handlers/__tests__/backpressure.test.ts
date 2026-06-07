@@ -137,6 +137,30 @@ describe("wake-terminal handler", () => {
     );
   });
 
+  it("resumes the hold and sends wake-result when the serializer resolves null", async () => {
+    // TerminalSerializerService catches internally and resolves null rather
+    // than rejecting — the production failure path is a null resolve.
+    const coord = makeCoordinator();
+    const ptyManager = makeWakePtyManager([]);
+    vi.mocked(ptyManager.getSerializedStateAsync).mockResolvedValue(null);
+    const ctx = makeCtx({
+      ptyManager,
+      getPauseCoordinator: vi.fn(() => coord as never),
+    });
+    vi.mocked(ctx.backpressureManager.getPausedInterval).mockReturnValue(
+      setTimeout(() => {}, 60_000) as never,
+    );
+
+    const handlers = createBackpressureHandlers(ctx);
+    await handlers["wake-terminal"]({ type: "wake-terminal", id: "term-1", requestId: "req-1" });
+
+    expect(coord.resume).toHaveBeenCalledExactlyOnceWith("backpressure");
+    expect(ctx.ptyManager.getSerializedState).not.toHaveBeenCalled();
+    expect(ctx.sendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "wake-result", id: "term-1", state: null }),
+    );
+  });
+
   it("does not resume the coordinator when no backpressure pause was active", async () => {
     const coord = makeCoordinator();
     const ctx = makeCtx({

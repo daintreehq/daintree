@@ -117,20 +117,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         ptyManager.setActivityMonitorTier(msg.id, 50);
       }
 
-      // Best-effort warning: cwd missing
-      const warnings: string[] = [];
-      try {
-        const t = ptyManager.getTerminal(msg.id);
-        if (t?.cwd && typeof t.cwd === "string") {
-          const fs = await import("node:fs");
-          if (!fs.existsSync(t.cwd)) {
-            warnings.push("cwd-missing");
-          }
-        }
-      } catch {
-        // ignore
-      }
-
       let state: string | null;
       try {
         state = await ptyManager.getSerializedStateAsync(msg.id);
@@ -146,6 +132,21 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       }
 
       const wakeLatencyMs = Date.now() - wakeStartTime;
+
+      // Best-effort warning: cwd missing. Runs after the resume so a slow
+      // stat (stale network mount) can't extend the pause window.
+      const warnings: string[] = [];
+      try {
+        const t = ptyManager.getTerminal(msg.id);
+        if (t?.cwd && typeof t.cwd === "string") {
+          const fs = await import("node:fs");
+          if (!fs.existsSync(t.cwd)) {
+            warnings.push("cwd-missing");
+          }
+        }
+      } catch {
+        // ignore
+      }
 
       if (!wakeCoordinator?.isPaused) {
         backpressureManager.emitTerminalStatus(msg.id, "running");
