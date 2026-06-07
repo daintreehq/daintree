@@ -260,6 +260,7 @@ export function DemoCursor() {
   const posRef = useRef({ x: 0, y: 0 });
   const pauseResolversRef = useRef<Array<() => void>>([]);
   const pausedRef = useRef(false);
+  const scrollAnimRef = useRef<{ cancel: () => void } | null>(null);
 
   useEffect(() => {
     posRef.current = {
@@ -753,7 +754,7 @@ export function DemoCursor() {
 
           // Frame-rate-independent spring glide (see src/lib/demoSpring.ts).
           await new Promise<void>((resolve) => {
-            runSpringLoop(
+            scrollAnimRef.current = runSpringLoop(
               { scroll: { current: container!.scrollTop, velocity: 0 } },
               { scroll: clampedTarget },
               (axes) => {
@@ -761,6 +762,7 @@ export function DemoCursor() {
               },
               () => {
                 container!.scrollTop = clampedTarget;
+                scrollAnimRef.current = null;
                 resolve();
               }
             );
@@ -1060,6 +1062,8 @@ export function DemoCursor() {
 
     return () => {
       for (const cleanup of cleanups) cleanup();
+      scrollAnimRef.current?.cancel();
+      scrollAnimRef.current = null;
     };
   }, []);
 

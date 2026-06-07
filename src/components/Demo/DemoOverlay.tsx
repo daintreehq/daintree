@@ -425,6 +425,12 @@ export function DemoOverlay() {
 
     return () => {
       for (const cleanup of cleanups) cleanup();
+      spotlightAnimRef.current?.cancel();
+      spotlightAnimRef.current = null;
+      if (spotlightExitTimerRef.current) {
+        clearTimeout(spotlightExitTimerRef.current);
+        spotlightExitTimerRef.current = null;
+      }
     };
   }, [animateSpotlightRect]);
 
