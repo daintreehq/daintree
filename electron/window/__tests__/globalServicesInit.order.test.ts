@@ -252,7 +252,7 @@ describe("initGlobalServices task ordering", () => {
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
     vi.mocked(GitHubAuth.hasToken).mockReturnValue(false);
-    vi.mocked(GitHubAuth.getToken).mockReturnValue(null);
+    vi.mocked(GitHubAuth.getToken).mockReturnValue(undefined);
     vi.mocked(GitHubAuth.getTokenVersion).mockReturnValue(0);
     vi.mocked(GitHubAuth.validate).mockReset();
     vi.mocked(GitHubAuth.setValidatedUserInfo).mockReset();
@@ -518,12 +518,10 @@ describe("initGlobalServices task ordering", () => {
     vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
     vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
     // A validate() that never resolves models a slow/offline network. The task
-    // must not return this promise, otherwise drainNext would await it.
-    let resolveValidate: ((value: unknown) => void) | undefined;
+    // must not return this promise, otherwise drainNext would await it. The
+    // pending promise has no backing timer/IO, so it won't keep the loop alive.
     vi.mocked(GitHubAuth.validate).mockReturnValue(
-      new Promise((resolve) => {
-        resolveValidate = resolve;
-      }) as ReturnType<typeof GitHubAuth.validate>
+      new Promise<never>(() => {}) as ReturnType<typeof GitHubAuth.validate>
     );
 
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
@@ -534,9 +532,6 @@ describe("initGlobalServices task ordering", () => {
     // run() must complete (return a non-thenable) even while validate hangs.
     const result = run?.();
     expect(result).toBeUndefined();
-
-    // Cleanup: let the floated validation settle to avoid an open handle.
-    resolveValidate?.({ valid: false });
   });
 
   it("github-auth-validate contains a rejected validate() so it can't surface as an unhandled rejection (#10325)", async () => {
