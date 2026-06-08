@@ -117,23 +117,19 @@ export function useDevServer({
   turbopackEnabled,
 }: UseDevServerOptions): UseDevServerReturn {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
-  // Non-null once the user has switched projects in this session (#9859). A
-  // restored-stopped panel must keep its restart CTA on cold launch (#9094), but
-  // auto-start on the first live switch to a project. `lastSwitchId` is the
-  // provenance signal: null = cold launch, UUID = reached via an explicit switch.
-  const lastSwitchId = useProjectStore((state) => state.lastSwitchId);
   const [status, setStatus] = useState<DevPreviewStatus>("stopped");
   const [url, setUrl] = useState<string | null>(null);
   const [terminalId, setTerminalId] = useState<string | null>(null);
   const [error, setError] = useState<DevServerError | null>(null);
   const [phaseLabel, setPhaseLabel] = useState<"Compiling" | undefined>(undefined);
   const [isRestarting, setIsRestarting] = useState(false);
-  // Gates the auto-ensure effect until the first getState() resolves. The
-  // auto-ensure effect fires synchronously on mount — before getState() can
-  // report a "restored-stopped" status — so without this gate it would
-  // immediately spawn a dev server that the user closed Daintree with running,
-  // violating the no-auto-spawn-on-launch contract (#9094). Sticky: once true
-  // it stays true (restored-stopped only ever surfaces on the initial launch).
+  // Gates the auto-ensure effect until the first getState() resolves so it acts
+  // on the panel's real status rather than the synchronous-mount "stopped"
+  // default. A "restored-stopped" panel then auto-starts intentionally (the dev
+  // server comes back when the project reopens); the gate only guards against
+  // ensuring twice — once on the stale default, once on the hydrated status.
+  // Sticky: once true it stays true (restored-stopped only ever surfaces on the
+  // initial launch).
   const [initialStateResolved, setInitialStateResolved] = useState(false);
   const [stuckTier, setStuckTier] = useState<DevServerStuckTier>(0);
   const [forceKilled, setForceKilled] = useState<boolean | undefined>(undefined);
@@ -459,15 +455,13 @@ export function useDevServer({
   useEffect(() => {
     if (!currentProjectId) return;
     if (!devCommand.trim()) return;
-    // Wait for the first getState() to resolve before auto-spawning. A
-    // "restored-stopped" panel must surface its restart CTA, not silently
-    // relaunch the dev server the user closed Daintree with (#9094).
+    // Wait for the first getState() to resolve before auto-spawning so this
+    // effect reconciles to the panel's real status before deciding to ensure(),
+    // rather than firing on the synchronous mount with the stale "stopped"
+    // default. A "restored-stopped" panel (dev server was running when Daintree
+    // closed) then auto-starts like any other dev preview — reopening a project,
+    // whether by cold launch or live switch, brings its dev server back.
     if (!initialStateResolved) return;
-    // A restored-stopped panel surfaces its restart CTA on cold launch
-    // (lastSwitchId === null), but auto-starts on the first live switch to the
-    // project (#9859) — the user reactivating a project expects its dev server
-    // back, unlike a fresh app launch where silent respawn is wrong (#9094).
-    if (status === "restored-stopped" && lastSwitchId === null) return;
 
     const configKey = buildEnsureConfigKey({
       projectId: currentProjectId,
@@ -503,8 +497,6 @@ export function useDevServer({
     turbopackEnabled,
     ensureLatestConfig,
     initialStateResolved,
-    status,
-    lastSwitchId,
   ]);
 
   // Staged stuck-start escalation (#8276, retuned #9099). Replaces the

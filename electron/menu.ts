@@ -604,12 +604,10 @@ export async function handleDirectoryOpen(
       // fresh; otherwise the next `Cmd+Alt+=` targets the wrong project.
       broadcastProjectSwitchUpdates(previousProjectId, project.id);
 
-      // Mark the activated view as reached via an explicit in-session switch
-      // (#9859), mirroring activateProjectView. Opening a returning project's
-      // folder is a first-activation path too, so its restored-stopped dev
-      // preview should auto-start rather than stall on the restart CTA. Targeted
-      // send to the activated view only; the initial app-launch view never flows
-      // through here, so the #9094 no-respawn-on-launch contract is preserved.
+      // Notify the activated view of the switch so it refreshes its cache, MRU,
+      // and polling, mirroring activateProjectView. Targeted send to the
+      // activated view only (LRU-cached other-project views must not be marked
+      // switched).
       if (!view.webContents.isDestroyed()) {
         view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
           project: projectStore.getProjectById(project.id) ?? project,
