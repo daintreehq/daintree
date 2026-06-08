@@ -619,18 +619,29 @@ function resolveConfigPath(cwd: string | undefined): string | null {
   return path.join(dir, "config.json");
 }
 
-function preflightValidateConfig(configPath: string): "valid" | "missing" | "corrupt" {
-  if (!fs.existsSync(configPath)) return "missing";
+// On the valid path, `rawBuffer` carries the bytes already read here so the
+// caller can use them as the pre-construction wipe-detection snapshot instead
+// of reading config.json a second time. It is absent only on the fail-open
+// branch below, where no usable bytes were obtained.
+type ConfigPreflightResult =
+  | { status: "valid"; rawBuffer?: Buffer }
+  | { status: "missing" }
+  | { status: "corrupt" };
+
+function preflightValidateConfig(configPath: string): ConfigPreflightResult {
+  if (!fs.existsSync(configPath)) return { status: "missing" };
   try {
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return "corrupt";
+      return { status: "corrupt" };
     }
-    return "valid";
+    // A valid parse guarantees a BOM-free string (a BOM throws SyntaxError),
+    // so re-encoding is byte-identical to fs.readFileSync(configPath) raw.
+    return { status: "valid", rawBuffer: Buffer.from(raw, "utf8") };
   } catch (err) {
-    if (err instanceof SyntaxError) return "corrupt";
-    return "valid";
+    if (err instanceof SyntaxError) return { status: "corrupt" };
+    return { status: "valid" };
   }
 }
 
@@ -775,20 +786,26 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
 
   const configPath = resolveConfigPath(options.cwd);
 
-  if (configPath) {
-    const status = preflightValidateConfig(configPath);
-    if (status === "corrupt") {
-      console.warn("[Store] Detected corrupt config.json");
-      const quarantinedPath = quarantineCorruptConfig(configPath) ?? undefined;
-      const restored = restoreFromBackup(configPath);
-      pendingSettingsRecovery = restored
-        ? { kind: "restored-from-backup", quarantinedPath }
-        : { kind: "reset-to-defaults", quarantinedPath };
-    }
+  const preflight = configPath ? preflightValidateConfig(configPath) : null;
+  if (preflight?.status === "corrupt") {
+    console.warn("[Store] Detected corrupt config.json");
+    const quarantinedPath = quarantineCorruptConfig(configPath!) ?? undefined;
+    const restored = restoreFromBackup(configPath!);
+    pendingSettingsRecovery = restored
+      ? { kind: "restored-from-backup", quarantinedPath }
+      : { kind: "reset-to-defaults", quarantinedPath };
   }
 
   try {
-    const preSnapshot = configPath ? readRawSnapshot(configPath) : null;
+    // Reuse the bytes preflight already read on the valid path; the corrupt
+    // branch mutated the file (quarantine + restore), so fall through to a
+    // fresh read there so the snapshot reflects the post-recovery bytes.
+    const preSnapshot =
+      preflight?.status === "valid" && preflight.rawBuffer
+        ? preflight.rawBuffer
+        : configPath
+          ? readRawSnapshot(configPath)
+          : null;
     const created = new Store<StoreSchema>({
       ...options,
       clearInvalidConfig: true,

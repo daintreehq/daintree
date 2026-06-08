@@ -48,44 +48,67 @@ describe("Store backup/restore helpers", () => {
 
   describe("preflightValidateConfig", () => {
     it("returns 'missing' when file does not exist", () => {
-      expect(preflightValidateConfig(configPath)).toBe("missing");
+      expect(preflightValidateConfig(configPath).status).toBe("missing");
     });
 
     it("returns 'valid' for valid JSON", () => {
       fs.writeFileSync(configPath, JSON.stringify({ foo: "bar" }), "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("valid");
+      expect(preflightValidateConfig(configPath).status).toBe("valid");
+    });
+
+    it("carries the raw bytes it read so the caller can skip a second read", () => {
+      fs.writeFileSync(configPath, JSON.stringify({ foo: "bar", n: 42 }), "utf8");
+      const result = preflightValidateConfig(configPath);
+      expect(result.status).toBe("valid");
+      expect(result.status === "valid" && Buffer.isBuffer(result.rawBuffer)).toBe(true);
+      // The reused buffer must be byte-identical to a fresh raw read so it can
+      // serve as the pre-construction wipe-detection snapshot.
+      expect(
+        result.status === "valid" && result.rawBuffer?.equals(fs.readFileSync(configPath))
+      ).toBe(true);
+    });
+
+    it("carries byte-identical bytes for non-ASCII (CJK + emoji) content", () => {
+      fs.writeFileSync(configPath, JSON.stringify({ greeting: "你好", emoji: "🚀" }), "utf8");
+      const result = preflightValidateConfig(configPath);
+      expect(
+        result.status === "valid" && result.rawBuffer?.equals(fs.readFileSync(configPath))
+      ).toBe(true);
     });
 
     it("returns 'corrupt' for invalid JSON", () => {
       fs.writeFileSync(configPath, "{invalid json", "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
     });
 
     it("returns 'corrupt' for empty file", () => {
       fs.writeFileSync(configPath, "", "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
     });
 
     it("returns 'corrupt' for partial JSON", () => {
       fs.writeFileSync(configPath, "{", "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
     });
 
     it("returns 'corrupt' for non-object JSON values", () => {
       fs.writeFileSync(configPath, '"a string"', "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
       fs.writeFileSync(configPath, "42", "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
       fs.writeFileSync(configPath, "[]", "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
       fs.writeFileSync(configPath, "null", "utf8");
-      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      expect(preflightValidateConfig(configPath).status).toBe("corrupt");
     });
 
-    it("returns 'valid' on non-SyntaxError read failures", () => {
+    it("returns 'valid' with no raw bytes on non-SyntaxError read failures", () => {
       const dirPath = path.join(tempDir, "not-a-file");
       fs.mkdirSync(dirPath);
-      expect(preflightValidateConfig(dirPath)).toBe("valid");
+      const result = preflightValidateConfig(dirPath);
+      expect(result.status).toBe("valid");
+      // Fail-open: no usable bytes, so the caller must fall back to a fresh read.
+      expect(result.status === "valid" && result.rawBuffer).toBeUndefined();
     });
   });
 
