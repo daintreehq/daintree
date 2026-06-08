@@ -337,6 +337,14 @@ export async function initGlobalServices(
   // Plugin service — IPC handlers are registered eagerly in windowServices.ts
   // and return empty lists from internal Maps until initialize() populates them.
   // Plugin contributions broadcast on registration, so late init is renderer-safe.
+  //
+  // Timing note (#10322): `initialize()` registers panel-kind contributions
+  // mid-chain, so the `plugin:panel-kinds-changed` broadcast can reach the
+  // renderer a microtask before `setPluginDirResolver()` below swaps the
+  // `plugin://` handler off its placeholder. A plugin panel restored from
+  // persisted state could therefore 404 its first asset fetch. That window is
+  // self-healing: `PluginViewHost`'s `ErrorBoundary` offers a "Try again" that
+  // re-imports once the live resolver is in place.
   registerDeferredTask({
     name: "plugin-service",
     run: async () => {

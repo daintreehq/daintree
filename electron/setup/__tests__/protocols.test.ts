@@ -1296,6 +1296,45 @@ describe("protocol registration", () => {
     const after = await handler(new Request("plugin://live-plugin/dist/index.js") as GlobalRequest);
     expect(after.status).toBe(200);
   });
+
+  it("setPluginDirResolver swap reaches a per-session handler wired before init (#10322)", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.open).mockResolvedValue({
+      readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<typeof fs.open>>);
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+
+    const PLUGIN_ROOT = path.resolve("/plugins/installed/session-plugin");
+
+    // Placeholder registered before first paint flips the gate true, so the
+    // per-session handler is wired during createWindow → registerProtocolsForSession.
+    registerPluginProtocol(() => undefined);
+
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+
+    const call = handle.mock.calls.find((c) => c[0] === "plugin");
+    expect(call).toBeDefined();
+    const handler = call![1] as (req: GlobalRequest) => Promise<Response>;
+
+    const before = await handler(
+      new Request("plugin://session-plugin/dist/index.js") as GlobalRequest
+    );
+    expect(before.status).toBe(404);
+
+    setPluginDirResolver((id) => (id === "session-plugin" ? PLUGIN_ROOT : undefined));
+
+    // The per-session handler — created before the resolver existed — now serves
+    // via the resolvePluginDir indirection, not just the default-session handler.
+    const after = await handler(
+      new Request("plugin://session-plugin/dist/index.js") as GlobalRequest
+    );
+    expect(after.status).toBe(200);
+  });
 });
 
 describe("createDaintreeFileProtocolHandler — symlink containment", () => {

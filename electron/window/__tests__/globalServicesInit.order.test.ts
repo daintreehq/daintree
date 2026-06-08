@@ -442,6 +442,24 @@ describe("initGlobalServices task ordering", () => {
     expect(activateOpenFileInstaller.mock.calls[0]![0]).toBeDefined();
   });
 
+  it("plugin-service task still wires resolver + installer when initialize() rejects (#10322)", async () => {
+    // initialize() failure is non-fatal: the resolver must still go live so any
+    // plugins that did load serve assets, and the installer must still drain
+    // queued .dntr paths. This locks the intentional partial-failure posture.
+    pluginInitialize.mockRejectedValueOnce(new Error("init boom"));
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("plugin-service");
+    expect(run).toBeDefined();
+
+    await run!();
+
+    expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
+    expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+  });
+
   it("does not touch plugin-MCP audit/consent services eagerly during initGlobalServices() (#10073)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
