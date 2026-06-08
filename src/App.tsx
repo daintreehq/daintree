@@ -419,9 +419,11 @@ function AppInner() {
       // stays out of the production first-paint chunk. Fire-and-forget: the helper
       // side in e2e/helpers/notifications.ts waits for __daintreeNotificationsE2E
       // before use, so the async resolve doesn't need to block the effect.
-      void import("./lib/e2eNotificationBackdoor").then(({ installE2ENotificationBackdoor }) => {
-        installE2ENotificationBackdoor();
-      });
+      void import("./lib/e2eNotificationBackdoor")
+        .then(({ installE2ENotificationBackdoor }) => {
+          installE2ENotificationBackdoor();
+        })
+        .catch(() => {});
     }
 
     return () => {

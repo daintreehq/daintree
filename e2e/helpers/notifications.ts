@@ -85,6 +85,7 @@ export async function injectGridNotification(
 
 /** Backdates a notification's firstShownAt by `ms` so the grid-bar dwell floor is already expired. */
 export async function backdateNotification(page: Page, id: string, ms: number): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate(
     ({ id, ms }) => {
       const a = (
@@ -121,6 +122,7 @@ export async function injectHistoryEntry(
 }
 
 export async function archiveHistoryEntry(page: Page, id: string): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate((id) => {
     (
       window as unknown as {
@@ -135,6 +137,7 @@ export async function snoozeThread(
   correlationId: string,
   durationMs: number
 ): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate(
     ({ correlationId, durationMs }) => {
       (
@@ -174,6 +177,7 @@ export async function resetNotifications(page: Page): Promise<void> {
 }
 
 export async function setBackendStatus(page: Page, status: BackendStatus): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate((status) => {
     (
       window as unknown as {
@@ -184,6 +188,7 @@ export async function setBackendStatus(page: Page, status: BackendStatus): Promi
 }
 
 export async function setWatchdogStatus(page: Page, status: WatchdogStatus): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate((status) => {
     (
       window as unknown as {
@@ -194,6 +199,7 @@ export async function setWatchdogStatus(page: Page, status: WatchdogStatus): Pro
 }
 
 export async function setSafeMode(page: Page, safeMode: boolean, dismissed = false): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate(
     ({ safeMode, dismissed }) => {
       (
@@ -207,6 +213,7 @@ export async function setSafeMode(page: Page, safeMode: boolean, dismissed = fal
 }
 
 export async function setRestoreConfirmation(page: Page, visible: boolean): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate((visible) => {
     (
       window as unknown as {
