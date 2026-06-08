@@ -830,29 +830,13 @@ describe("NotificationThread — dismiss removes entire thread", () => {
 });
 
 describe("NotificationCenter empty state — zero data", () => {
-  it("renders a description that explains where notifications appear", () => {
+  it("renders a compact zero-data empty state without inline guidance or a settings link", () => {
     render(<NotificationCenter open onClose={vi.fn()} />);
-    expect(screen.getByText(/Notifications appear here/)).toBeTruthy();
-  });
-
-  it("renders 'Notification settings' as a clickable link inline in the description", async () => {
-    const onClose = vi.fn();
-    render(<NotificationCenter open onClose={onClose} />);
-
-    const link = screen.getByRole("button", { name: "Notification settings" });
-    expect(link).toBeTruthy();
-    expect(link.tagName).toBe("BUTTON");
-
-    await act(async () => {
-      fireEvent.click(link);
-    });
-
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "notifications" },
-      { source: "user" }
-    );
+    expect(screen.getByText("No notifications yet")).toBeTruthy();
+    // Settings live in the header pause menu, so the empty state stays compact —
+    // no inline guidance or duplicate "Notification settings" link.
+    expect(screen.queryByText(/Notifications appear here/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Notification settings" })).toBeNull();
   });
 
   it("does not render the description on the user-cleared empty state", async () => {
@@ -960,7 +944,6 @@ describe("NotificationCenter empty state — muted", () => {
 
       expect(screen.queryByTestId("notification-muted-empty-state")).toBeNull();
       expect(screen.getByText("No notifications yet")).toBeTruthy();
-      expect(screen.getByText(/Notifications appear here/)).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

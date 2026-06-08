@@ -1021,7 +1021,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             filter === "snoozed" && entries.length > 0 ? (
               <EmptyState
                 variant="user-cleared"
-                scale="canvas"
+                scale="sidebar"
                 title="Nothing snoozed"
                 icon={<Clock />}
                 className="py-10"
@@ -1029,20 +1029,15 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             ) : filter === "archived" && entries.length > 0 ? (
               <EmptyState
                 variant="user-cleared"
-                scale="canvas"
+                scale="sidebar"
                 title="No archived notifications"
                 icon={<Archive />}
                 className="py-10"
               />
             ) : filter === "unread" && entries.length > 0 ? (
-              // Canvas scale: the bell dropdown is a 360px panel-style surface that
-              // mirrors GitHubResourceList ("connection-gated panel" example in
-              // CLAUDE.md). The "Notifications appear here" guidance and the
-              // "Adjust at Notification settings" inline link are intentional and
-              // load-bearing — popover scale would forbid them at compile time.
               <EmptyState
                 variant="user-cleared"
-                scale="canvas"
+                scale="sidebar"
                 title="You're all caught up"
                 icon={<Bell />}
                 className="py-10"
@@ -1064,22 +1059,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             ) : (
               <EmptyState
                 variant="zero-data"
-                scale="canvas"
+                scale="popover"
                 title="No notifications yet"
                 icon={<Bell />}
-                description={
-                  <>
-                    Notifications appear here. Adjust which ones at{" "}
-                    <button
-                      type="button"
-                      onClick={openNotificationSettings}
-                      className="underline text-daintree-text/70 hover:text-daintree-text transition-colors"
-                    >
-                      Notification settings
-                    </button>
-                    .
-                  </>
-                }
                 className="py-10"
               />
             )
