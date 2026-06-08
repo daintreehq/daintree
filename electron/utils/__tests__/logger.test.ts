@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "path";
-import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from "fs";
+import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, utimesSync } from "fs";
 import {
   initializeLogger,
   getLogFilePath,
+  pruneOldLogsAsync,
   logInfo,
   logWarn,
   logError,
@@ -393,6 +394,58 @@ describe("logger", () => {
       const content = readFileSync(getLogFilePath(), "utf8");
       expect(content).toContain("[REDACTED]");
       expect(content).not.toContain(ANTHROPIC_KEY);
+    });
+  });
+
+  describe("pruneOldLogsAsync", () => {
+    const logsDir = join(TEST_LOG_DIR, "logs");
+    const debugDir = join(TEST_LOG_DIR, "debug");
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    function seedFile(dir: string, name: string, ageDays: number): string {
+      mkdirSync(dir, { recursive: true });
+      const filePath = join(dir, name);
+      writeFileSync(filePath, "x");
+      const mtimeSeconds = (Date.now() - ageDays * DAY_MS) / 1000;
+      utimesSync(filePath, mtimeSeconds, mtimeSeconds);
+      return filePath;
+    }
+
+    it("deletes files older than the retention window and keeps newer ones", async () => {
+      const stale = seedFile(logsDir, "stale.log", 40);
+      const fresh = seedFile(logsDir, "fresh.log", 1);
+      const staleDebug = seedFile(debugDir, "stale-debug.log", 40);
+
+      await pruneOldLogsAsync(TEST_LOG_DIR, 30);
+
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(staleDebug)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+    });
+
+    it("is a no-op when retentionDays is 0 (retention disabled)", async () => {
+      const stale = seedFile(logsDir, "stale.log", 999);
+
+      await pruneOldLogsAsync(TEST_LOG_DIR, 0);
+
+      expect(existsSync(stale)).toBe(true);
+    });
+
+    it("resolves without throwing when the log directories don't exist", async () => {
+      const missingBase = join(TEST_LOG_DIR, "does-not-exist");
+      await expect(pruneOldLogsAsync(missingBase, 30)).resolves.toBeUndefined();
+    });
+
+    it("skips non-file entries (subdirectories) without deleting them", async () => {
+      const nestedDir = join(logsDir, "archive");
+      mkdirSync(nestedDir, { recursive: true });
+      // Backdate the directory so an age-only check would target it.
+      const oldSeconds = (Date.now() - 40 * DAY_MS) / 1000;
+      utimesSync(nestedDir, oldSeconds, oldSeconds);
+
+      await expect(pruneOldLogsAsync(TEST_LOG_DIR, 30)).resolves.toBeUndefined();
+
+      expect(existsSync(nestedDir)).toBe(true);
     });
   });
 });

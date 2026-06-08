@@ -41,7 +41,7 @@ import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
-import { pruneOldLogs, logError } from "../utils/logger.js";
+import { pruneOldLogs, pruneOldLogsAsync, logError } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -192,21 +192,30 @@ export async function initGlobalServices(
       const versionAtStart = GitHubAuth.getTokenVersion();
       registerDeferredTask({
         name: "github-auth-validate",
-        run: async () => {
-          try {
-            const validation = await GitHubAuth.validate(token);
-            if (validation.valid && validation.username) {
-              GitHubAuth.setValidatedUserInfo(
-                validation.username,
-                validation.avatarUrl,
-                validation.scopes,
-                versionAtStart
-              );
-              console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
+        // Floated, not awaited: GitHubAuth.validate has an internal 10s
+        // AbortSignal.timeout, and no later task depends on the validated user
+        // info. Returning void lets drainNext advance immediately instead of
+        // stalling the whole queue on a slow/offline network. The versionAtStart
+        // guard makes setValidatedUserInfo a safe no-op if the token rotates
+        // mid-flight, and the shutdown hard-timeout budget (#4287) bounds any
+        // in-flight fetch still pending at quit.
+        run: () => {
+          void (async () => {
+            try {
+              const validation = await GitHubAuth.validate(token);
+              if (validation.valid && validation.username) {
+                GitHubAuth.setValidatedUserInfo(
+                  validation.username,
+                  validation.avatarUrl,
+                  validation.scopes,
+                  versionAtStart
+                );
+                console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
+              }
+            } catch (err) {
+              console.warn("[MAIN] Failed to validate stored GitHub token:", err);
             }
-          } catch (err) {
-            console.warn("[MAIN] Failed to validate stored GitHub token:", err);
-          }
+          })();
         },
       });
     }
@@ -825,17 +834,16 @@ export async function initGlobalServices(
 
   registerDeferredTask({
     name: "prune-old-logs",
-    run: () => {
-      // Deferred (post first-interactive) so the synchronous fs scan doesn't
-      // block cold start. Note: `userData/debug/*.log` files have their mtimes
-      // refreshed by `clearDebugLogs` during `initializeLogger` (pre-deferral),
-      // so debug stubs effectively survive each prune cycle. They're empty
-      // (0 bytes) so the accumulation is harmless; `userData/logs/` is still
-      // pruned correctly because its files are appended-to, not truncated.
+    run: async () => {
+      // Deferred (post first-interactive) and async (pruneOldLogsAsync yields to
+      // the event loop between files) so the fs scan doesn't block the main
+      // process. Note: `userData/debug/*.log` files have their mtimes refreshed
+      // by `clearDebugLogs` during `initializeLogger` (pre-deferral), so debug
+      // stubs effectively survive each prune cycle. They're empty (0 bytes) so
+      // the accumulation is harmless; `userData/logs/` is still pruned correctly
+      // because its files are appended-to, not truncated.
       const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
-      if (retentionDays > 0) {
-        pruneOldLogs(app.getPath("userData"), retentionDays);
-      }
+      await pruneOldLogsAsync(app.getPath("userData"), retentionDays);
     },
   });
 
