@@ -69,9 +69,11 @@ describe("SidebarContent header reveal — issue #6964", () => {
     expect(source).toContain("motion-reduce:transition-none");
   });
 
-  it("gates the refresh spinner on useDohertyGate to avoid sub-threshold flashes", () => {
-    expect(source).toContain("useDohertyGate");
-    expect(source).toMatch(/showRefreshSpinner\s*=\s*useDohertyGate\(\s*isRefreshing\s*\)/);
+  it("gates the refresh spinner on useSkeletonDisplayFloor so a fast refresh stays perceptible", () => {
+    expect(source).toContain("useSkeletonDisplayFloor");
+    expect(source).toMatch(
+      /showRefreshSpinner\s*=\s*useSkeletonDisplayFloor\(\s*isRefreshing\s*\)/
+    );
     expect(source).toMatch(/showRefreshSpinner\s*\?\s*"animate-spin"/);
     expect(source).not.toMatch(/isRefreshing\s*\?\s*"animate-spin"/);
   });
