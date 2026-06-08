@@ -38,7 +38,7 @@ const {
   pluginGetPluginDir: vi.fn((id: string) => `/plugins/${id}`),
   pluginActivateStartup: vi.fn(),
   setPluginDirResolver: vi.fn(),
-  activateOpenFileInstaller: vi.fn(async () => {}),
+  activateOpenFileInstaller: vi.fn(async (_svc?: unknown) => {}),
 }));
 
 vi.mock("../../utils/performance.js", () => ({
