@@ -18,19 +18,20 @@ export function McpAnomalyFooterLink() {
 
   if (!hasAnomaly) return null;
 
+  const label = anomalyCount === 1 ? "1 anomaly signal" : `${anomalyCount} anomaly signals`;
+
   return (
     <button
       type="button"
       onClick={() =>
         void actionService.dispatch("app.settings.openTab", { tab: "mcp" }, { source: "user" })
       }
-      className="flex items-center gap-1 min-w-0 shrink-0 text-status-warning transition-colors duration-150 ease-out hover:text-status-warning/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-      title="Open MCP audit log to review anomaly signals"
+      className="flex items-center gap-1 shrink-0 text-status-warning transition-colors duration-150 ease-out hover:text-status-warning/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+      aria-label={`${label} — open MCP audit log`}
+      title={`${label} — open MCP audit log`}
     >
       <TriangleAlert aria-hidden className="w-3 h-3 shrink-0" />
-      <span className="truncate">
-        {anomalyCount === 1 ? "1 anomaly signal" : `${anomalyCount} anomaly signals`}
-      </span>
+      <span className="tabular-nums">{anomalyCount}</span>
     </button>
   );
 }

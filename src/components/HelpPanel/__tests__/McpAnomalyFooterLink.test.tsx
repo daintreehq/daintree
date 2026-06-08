@@ -33,16 +33,26 @@ describe("McpAnomalyFooterLink", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it("renders singular copy for a single anomaly", () => {
-    useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+  it("shows only the count as visible text", () => {
+    useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 73 });
     render(<McpAnomalyFooterLink />);
-    expect(screen.getByRole("button").textContent).toBe("1 anomaly signal");
+    expect(screen.getByRole("button").textContent).toBe("73");
   });
 
-  it("renders plural copy for multiple anomalies", () => {
+  it("keeps the full meaning in the accessible label, singular", () => {
+    useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+    render(<McpAnomalyFooterLink />);
+    expect(screen.getByRole("button").getAttribute("aria-label")).toBe(
+      "1 anomaly signal — open MCP audit log"
+    );
+  });
+
+  it("keeps the full meaning in the accessible label, plural", () => {
     useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 3 });
     render(<McpAnomalyFooterLink />);
-    expect(screen.getByRole("button").textContent).toBe("3 anomaly signals");
+    expect(screen.getByRole("button").getAttribute("aria-label")).toBe(
+      "3 anomaly signals — open MCP audit log"
+    );
   });
 
   it("navigates to the MCP settings tab on click", () => {
