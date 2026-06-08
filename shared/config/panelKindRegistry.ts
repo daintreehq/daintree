@@ -554,6 +554,30 @@ export function getFirstRenderSeeds(): string[] {
 }
 
 /**
+ * The renderer entry (`src/main.tsx`) is a thin bootstrap shell that immediately
+ * `await import("./App")`s the real app root. Because App sits behind that
+ * dynamic-import boundary it is NOT part of the entry's static closure, so Vite
+ * never auto-preloads it and — until this seed existed — the first-render budget
+ * never measured it, even though every cold boot needs App (the build's largest
+ * chunk) unconditionally before first interactive.
+ */
+export const FIRST_RENDER_ROOT_SEED = "src/App.tsx";
+
+/**
+ * The full first-render seed set: the app root plus every `firstRenderRestore`
+ * panel chunk. BOTH consumers of the first-render closure read this single
+ * accessor — the `<link rel="modulepreload">` injection and the build-time seed
+ * artifact the budget gate measures — so the preloaded set and the gated set are
+ * derived from the same seeds and cannot drift (#9771). Kept separate from
+ * {@link getFirstRenderSeeds} so that function stays the registry's own contract.
+ *
+ * @returns Root-relative source paths matching Vite manifest keys
+ */
+export function getFirstRenderPreloadSeeds(): string[] {
+  return [FIRST_RENDER_ROOT_SEED, ...getFirstRenderSeeds()];
+}
+
+/**
  * Remove all extension-contributed panel kinds while preserving built-ins.
  *
  * Built-in entries have no `extensionId` field, so this deletes only entries

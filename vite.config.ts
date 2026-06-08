@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
 import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp";
-import { getFirstRenderSeeds } from "./shared/config/panelKindRegistry";
+import { getFirstRenderPreloadSeeds } from "./shared/config/panelKindRegistry";
 import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
 
 const devServerConfig = getDevServerConfig();
@@ -470,11 +470,12 @@ function rendererBundleSizePlugin(): Plugin {
 }
 
 // Emits dist/.vite/first-render-seeds.json — the root-relative source paths of
-// every lazy panel chunk that loads on the first-render path, derived from the
-// panel-kind registry (getFirstRenderSeeds). The check-first-render-chunk-budget
-// script reads this artifact instead of a hardcoded list, so the seed set can
-// never drift from the registry. Build-only; the seeds are static registry data,
-// not bundle-derived, so this doesn't inspect the OutputBundle.
+// the app root plus every lazy panel chunk that loads on the first-render path,
+// derived from the panel-kind registry (getFirstRenderPreloadSeeds). The
+// check-first-render-chunk-budget script reads this artifact instead of a
+// hardcoded list, so the seed set can never drift from the registry. Build-only;
+// the seeds are static registry data, not bundle-derived, so this doesn't
+// inspect the OutputBundle.
 function firstRenderSeedsPlugin(): Plugin {
   const seedsPath = path.join(process.cwd(), "dist", ".vite", "first-render-seeds.json");
 
@@ -482,7 +483,7 @@ function firstRenderSeedsPlugin(): Plugin {
     name: "first-render-seeds",
     apply: "build",
     writeBundle() {
-      const seeds = getFirstRenderSeeds();
+      const seeds = getFirstRenderPreloadSeeds();
       mkdirSync(path.dirname(seedsPath), { recursive: true });
       writeFileSync(seedsPath, JSON.stringify(seeds, null, 2) + "\n");
     },
@@ -562,11 +563,11 @@ interface BundleChunkLike {
 // budget gates on, so the injected preload set and the measured budget cannot
 // drift. Chunk membership is untouched — this only adds <link> tags to the HTML.
 function firstRenderModulePreloadPlugin(): Plugin {
-  // getFirstRenderSeeds() returns repo-relative POSIX source paths; the bundle
-  // keys chunks by hashed file name and tags each lazy seed chunk with an
+  // getFirstRenderPreloadSeeds() returns repo-relative POSIX source paths; the
+  // bundle keys chunks by hashed file name and tags each lazy seed chunk with an
   // absolute `facadeModuleId`, so seeds are matched by normalizing each
   // facadeModuleId back to that same repo-relative POSIX form.
-  const seedSourcePaths = new Set(getFirstRenderSeeds());
+  const seedSourcePaths = new Set(getFirstRenderPreloadSeeds());
   const root = process.cwd();
   const toRelativePosix = (facadeModuleId: string) =>
     path.relative(root, facadeModuleId).split(path.sep).join("/");
@@ -595,7 +596,7 @@ function firstRenderModulePreloadPlugin(): Plugin {
         // Warn and emit nothing rather than failing the build; the budget gate
         // still measures the closure independently and would catch real drift.
         console.warn(
-          "[first-render-modulepreload] no first-render seed chunk matched getFirstRenderSeeds() — emitting no preload tags"
+          "[first-render-modulepreload] no first-render seed chunk matched getFirstRenderPreloadSeeds() — emitting no preload tags"
         );
         return;
       }

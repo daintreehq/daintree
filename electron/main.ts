@@ -157,7 +157,13 @@ app.commandLine.appendSwitch(
 // setBackgroundThrottling is unsuitable since Electron 28 — #8599).
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // BackForwardCache wastes memory in an Electron app (no browser navigation history).
-const disabledFeatures = ["BackForwardCache"];
+// Translate: Chrome's page-translate feature has no surface in Electron and we never
+// invoke it — disabling skips its startup wiring. The feature is "Translate" (the
+// old "TranslateUI" name was renamed in Chromium ~M86 and is a no-op now).
+// (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
+// lever, not a boot win, and disabling it fights the per-view CDP throttling
+// ProjectViewManager already does.)
+const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
 const __filename = fileURLToPath(import.meta.url);

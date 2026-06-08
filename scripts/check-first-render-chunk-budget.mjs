@@ -37,13 +37,14 @@ const BASELINE_FILE = path.join(ROOT, "first-render-chunk-baseline.json");
 const SUMMARY_FILE = path.join(DIST, "first-render-chunk-summary.md");
 
 // Seed list: every source path that is part of the renderer's first-paint
-// bundle. The renderer entry chunk is auto-detected via `isEntry`. The lazy
-// entries are React.lazy boundaries in src/panels/registry.tsx that resolve
-// immediately when a persisted browser/dev-preview/review panel is restored —
-// i.e. on the first-render path even though they're nominally "lazy".
+// bundle. The renderer entry chunk is auto-detected via `isEntry`. The seeds
+// are the app root (src/App.tsx — dynamically imported by the entry shell) plus
+// the React.lazy boundaries in src/panels/registry.tsx that resolve immediately
+// when a persisted browser/dev-preview/review panel is restored — i.e. on the
+// first-render path even though they're nominally "lazy".
 //
 // The list is no longer hardcoded here: it's derived from the panel-kind
-// registry (shared/config/panelKindRegistry.ts → getFirstRenderSeeds) and
+// registry (shared/config/panelKindRegistry.ts → getFirstRenderPreloadSeeds) and
 // emitted to dist/.vite/first-render-seeds.json by firstRenderSeedsPlugin at
 // build time. This script can't import the TS registry directly from plain
 // Node ESM, so it reads the emitted artifact. Keeping the registry as the
