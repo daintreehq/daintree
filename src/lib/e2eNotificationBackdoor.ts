@@ -153,5 +153,3 @@ export function installE2ENotificationBackdoor(): void {
 
   window.__daintreeNotificationsE2E = buildApi();
 }
-
-installE2ENotificationBackdoor();

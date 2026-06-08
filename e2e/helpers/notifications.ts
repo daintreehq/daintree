@@ -34,7 +34,23 @@ export interface InjectHistoryOptions {
   seenAsToast?: boolean;
 }
 
+/**
+ * Waits for the renderer to attach `window.__daintreeNotificationsE2E`. The
+ * backdoor is now lazy-loaded via a dynamic `import()` in the E2E useEffect
+ * (issue #10323) so it resolves asynchronously after first paint — guard every
+ * helper that throws on a missing backdoor against that race.
+ */
+export async function waitForNotificationsBackdoor(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () =>
+      !!(window as unknown as { __daintreeNotificationsE2E?: unknown }).__daintreeNotificationsE2E,
+    undefined,
+    { timeout: 5_000 }
+  );
+}
+
 export async function injectToast(page: Page, opts: InjectToastOptions = {}): Promise<string> {
+  await waitForNotificationsBackdoor(page);
   return page.evaluate((o) => {
     const a = (
       window as unknown as {
@@ -86,6 +102,7 @@ export async function injectHistoryEntry(
   page: Page,
   opts: InjectHistoryOptions = {}
 ): Promise<string> {
+  await waitForNotificationsBackdoor(page);
   return page.evaluate((o) => {
     const a = (
       window as unknown as {
@@ -134,6 +151,7 @@ export async function snoozeThread(
 
 /** Full reset of all notification surfaces — call in beforeEach. */
 export async function resetNotifications(page: Page): Promise<void> {
+  await waitForNotificationsBackdoor(page);
   await page.evaluate(() => {
     const a = (
       window as unknown as {
@@ -200,6 +218,7 @@ export async function setRestoreConfirmation(page: Page, visible: boolean): Prom
 
 /** Reads MAX_VISIBLE_TOASTS from the renderer so the test stays in sync with the store constant. */
 export async function getMaxVisibleToasts(page: Page): Promise<number> {
+  await waitForNotificationsBackdoor(page);
   return page.evaluate(() => {
     const a = (
       window as unknown as {
@@ -213,6 +232,7 @@ export async function getMaxVisibleToasts(page: Page): Promise<number> {
 
 /** Reads GRID_BAR_DWELL_FLOOR_MS from the renderer so dwell-floor tests track the store constant. */
 export async function getGridBarDwellFloorMs(page: Page): Promise<number> {
+  await waitForNotificationsBackdoor(page);
   return page.evaluate(() => {
     const a = (
       window as unknown as {

@@ -40,10 +40,6 @@ import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
-// Imported for its module side-effect: the module self-installs the notification
-// E2E backdoor at eval time, gated on `__DAINTREE_E2E_MODE__`, so it is inert in
-// production sessions. No symbol is referenced — the import is load-bearing.
-import "./lib/e2eNotificationBackdoor";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import {
@@ -418,6 +414,14 @@ function AppInner() {
       });
       window.__DAINTREE_E2E_SET_PERF_MODE__ = (enabled: boolean) =>
         usePerformanceModeStore.getState().setPerformanceMode(enabled);
+
+      // Lazy-load the notification backdoor only under E2E so its module closure
+      // stays out of the production first-paint chunk. Fire-and-forget: the helper
+      // side in e2e/helpers/notifications.ts waits for __daintreeNotificationsE2E
+      // before use, so the async resolve doesn't need to block the effect.
+      void import("./lib/e2eNotificationBackdoor").then(({ installE2ENotificationBackdoor }) => {
+        installE2ENotificationBackdoor();
+      });
     }
 
     return () => {
@@ -432,6 +436,7 @@ function AppInner() {
       delete window.__DAINTREE_E2E_SET_PERF_METRIC__;
       delete window.__DAINTREE_E2E_PERF_MODE_STATE__;
       delete window.__DAINTREE_E2E_SET_PERF_MODE__;
+      delete window.__daintreeNotificationsE2E;
     };
   }, []);
 
