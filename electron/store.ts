@@ -636,8 +636,13 @@ function preflightValidateConfig(configPath: string): ConfigPreflightResult {
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return { status: "corrupt" };
     }
-    // A valid parse guarantees a BOM-free string (a BOM throws SyntaxError),
-    // so re-encoding is byte-identical to fs.readFileSync(configPath) raw.
+    // Re-encode the bytes preflight just decoded so the caller can use them as
+    // the pre-construction wipe snapshot without reading the file again. For
+    // well-formed UTF-8 (BOM-free — a BOM throws SyntaxError above) this is
+    // byte-identical to fs.readFileSync(configPath) raw. The lone edge is a
+    // file with invalid UTF-8 byte sequences that still parses as JSON: those
+    // bytes round-trip through U+FFFD, so rawBuffer matches what electron-store
+    // itself decodes and rewrites — which is exactly what detectStoreWipe needs.
     return { status: "valid", rawBuffer: Buffer.from(raw, "utf8") };
   } catch (err) {
     if (err instanceof SyntaxError) return { status: "corrupt" };

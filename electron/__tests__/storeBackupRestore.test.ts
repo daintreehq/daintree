@@ -239,6 +239,18 @@ describe("initializeStore", () => {
     expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
   });
 
+  it("does not trip wipe detection on a pretty-printed valid config (reused-buffer byte identity)", () => {
+    const configPath = path.join(tempDir, "config.json");
+    // Whitespace-heavy formatting: the reused preflight buffer must match the
+    // on-disk bytes exactly, or detectStoreWipe's byte fast-path would diverge.
+    fs.writeFileSync(configPath, `${JSON.stringify({ _schemaVersion: 5 }, null, 2)}\n`, "utf8");
+    const instance = initializeStore(testOptions(tempDir));
+    expect(instance.get("_schemaVersion")).toBe(5);
+    // A benign load must not be misreported as a silent reset.
+    expect(consumePendingSettingsRecovery()).toBeNull();
+    expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
+  });
+
   it("recovers from corrupt config with valid backup", () => {
     const configPath = path.join(tempDir, "config.json");
     fs.writeFileSync(configPath, "{corrupt!", "utf8");
