@@ -527,20 +527,25 @@ describe("NotificationCenterEntry roving focus props", () => {
     expect((container.firstElementChild as HTMLElement).className).toMatch(/focus-visible:ring/);
   });
 
-  it("reveals the dismiss button on keyboard focus (row or descendant)", () => {
+  it("reveals the action layer on keyboard focus of the row or a descendant", () => {
     render(<NotificationCenterEntry entry={makeEntry()} onDismiss={vi.fn()} />);
-    const dismiss = screen.getByLabelText("Dismiss notification");
-    expect(dismiss.className).toMatch(/group-focus-visible:opacity-100/);
-    expect(dismiss.className).toMatch(/group-has-\[:focus-visible\]:opacity-100/);
-    expect(dismiss.className).not.toMatch(/group-focus-within:opacity-100/);
+    // Visibility is owned by the action-layer wrapper (the dismiss button's parent),
+    // not the buttons themselves.
+    const actionLayer = screen.getByLabelText("Dismiss notification").parentElement as HTMLElement;
+    // Row-focus path: the row is the `group`, so `group-focus-visible` must be present.
+    expect(actionLayer.className).toMatch(/group-focus-visible:opacity-100/);
+    expect(actionLayer.className).toMatch(/group-focus-visible:pointer-events-auto/);
+    // Descendant-focus path (focus lands on a button inside the row).
+    expect(actionLayer.className).toMatch(/group-has-\[:focus-visible\]:opacity-100/);
+    expect(actionLayer.className).toMatch(/group-has-\[:focus-visible\]:pointer-events-auto/);
+    expect(actionLayer.className).not.toMatch(/group-focus-within:opacity-100/);
   });
 
-  it("reveals the kebab trigger on keyboard focus (row or descendant)", () => {
+  it("keeps the action layer revealed while the kebab dropdown is open", () => {
     render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    const kebab = screen.getByLabelText("Notification options");
-    expect(kebab.className).toMatch(/group-focus-visible:opacity-100/);
-    expect(kebab.className).toMatch(/group-has-\[:focus-visible\]:opacity-100/);
-    expect(kebab.className).not.toMatch(/group-focus-within:opacity-100/);
+    const actionLayer = screen.getByLabelText("Notification options").parentElement as HTMLElement;
+    expect(actionLayer.className).toMatch(/group-has-\[\[data-state=open\]\]:opacity-100/);
+    expect(actionLayer.className).toMatch(/group-has-\[\[data-state=open\]\]:pointer-events-auto/);
   });
 
   it("invokes onDropdownOpenChange when the kebab menu opens and closes", async () => {
