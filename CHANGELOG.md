@@ -157,6 +157,10 @@ The Daintree Assistant learns to show its work, and GitHub stops being special. 
 - Issue/PR dropdown revalidation gated on open state (#10125); CI-status enrichment dropped on unattended instances (#10124); toolbar counts decoupled from the first-page query (#10122)
 - Action manifest cached per pinned WebContents (#9887)
 
+### Other Changes
+
+- Upgraded to Electron 42 (Chromium 148); `better-sqlite3` carries a V8 14.8 source patch so it compiles against the new ABI
+
 ## [0.17.0] - 2026-06-05
 
 Light mode looks designed. The light-theme token engine was rebuilt for perceptual contrast, Bondi Beach became the gold-standard template, and the six remaining light themes were redesigned on it. Alongside: a live MCP tool-call activity strip in the Daintree Assistant, context-aware keyterm biasing for voice dictation, and a deep round of terminal project-switch and GitHub-count fixes.
