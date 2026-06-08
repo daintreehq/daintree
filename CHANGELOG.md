@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.18.1] - 2026-06-08
+
+A same-day follow-up to 0.18.0 focused on cold-boot and first-paint speed, with a few UX-polish fixes. Most of the work trims the startup critical path — deferring non-essential imports, batching boot reads, and unblocking the deferred-init drain — alongside hover and dismiss refinements in notifications and global banners.
+
+### Features
+
+- Notification rows swap timestamp and snooze for action buttons on hover via an overlay layer
+- Global recovery banners gain dismiss support and inset for the OS window controls
+
+### Bug Fixes
+
+- Worktree sidebar no longer animates from its default width on project switch (#10321)
+- Sidebar refresh spinner now spins immediately on a direct user action instead of deferring behind the Doherty gate
+- ScrollIndicator no longer leaks a stale count from abandoned concurrent renders (#10316)
+
+### Performance
+
+- Defer the PluginService import off the first-paint path (#10322)
+- Fold `system:get-tmp-dir` into the batched boot payload (#10326)
+- Eliminate redundant `config.json` reads on cold boot (#10324)
+- Unblock the deferred-init drain from slow github-auth and sync-log prune (#10325)
+- Lazy-load the E2E notification backdoor off the first-paint path (#10323)
+- Preload the App entry chunk and disable the Chromium Translate feature (#9771)
+
 ## [0.18.0] - 2026-06-08
 
 The Daintree Assistant learns to show its work, and GitHub stops being special. The Assistant gains a figure rail, lightbox, and inline doc images, and surfaces its MCP grant lifecycle and live session tier. Underneath, GitHub was rebuilt as one forge provider among many — issue creation, "assign to me", and worktree actions now route through a provider-neutral contract. The bulk of the release is terminal reliability: wake/hibernation correctness, memory-aware resource governing, and a deep round of flow-control and stall-recovery fixes that were previously dead in production.
