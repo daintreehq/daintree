@@ -116,6 +116,15 @@ export function AppLayout({
   // reset still animate.
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [isAssistantResizing, setIsAssistantResizing] = useState(false);
+  // Issue #10321: sidebarWidth boots at DEFAULT_SIDEBAR_WIDTH and is only
+  // replaced once the async appClient.getState() restore (restoreState below)
+  // resolves ~50-100ms later. With the width transition live from first paint,
+  // that late setSidebarWidth animates the sidebar from 350px to the persisted
+  // width on every project switch — an animation the user never triggered.
+  // Suppress the transition until the restore lands, then clear the flag in the
+  // same synchronous post-await block so React batches both updates into one
+  // paint (the new width arrives with the class already gone — no animation).
+  const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -157,10 +166,26 @@ export function AppLayout({
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceAnimations || isSidebarResizing || prefersReducedMotion || layout.performanceMode) {
+    // #10321: while the width transition is suppressed during the initial
+    // hydration window, transitionend never fires on a hide, so flush directly
+    // here — otherwise sidebarFullyHidden stays false and a 6px clip-margin
+    // strip lingers.
+    if (
+      reduceAnimations ||
+      isSidebarResizing ||
+      isSidebarWidthHydrating ||
+      prefersReducedMotion ||
+      layout.performanceMode
+    ) {
       setSidebarFullyHidden(true);
     }
-  }, [showSidebar, reduceAnimations, isSidebarResizing, layout.performanceMode]);
+  }, [
+    showSidebar,
+    reduceAnimations,
+    isSidebarResizing,
+    isSidebarWidthHydrating,
+    layout.performanceMode,
+  ]);
 
   const handleSidebarTransitionEnd = useCallback(
     (event: React.TransitionEvent<HTMLDivElement>) => {
@@ -221,8 +246,15 @@ export function AppLayout({
           popoverHeight: appState.dockedPopoverHeight,
         });
         useFleetScopeFlagStore.getState().hydrate(appState.fleetScopeMode);
+        // #10321: clear unconditionally (even when sidebarWidth is null) so a
+        // session without a persisted width still gets a live transition. React
+        // batches this with the setSidebarWidth above into a single paint.
+        setIsSidebarWidthHydrating(false);
       } catch (error) {
         logError("Failed to restore app state", error);
+        // #10321: a failed restore must still re-enable the transition, else
+        // every later user resize/collapse would be silently suppressed.
+        setIsSidebarWidthHydrating(false);
       }
     };
     restoreState();
@@ -595,6 +627,7 @@ export function AppLayout({
               "relative h-full shrink-0 overflow-clip",
               !reduceAnimations &&
                 !isSidebarResizing &&
+                !isSidebarWidthHydrating &&
                 "transition-[width] duration-[var(--duration-250)] ease-[var(--ease-out-expo)] motion-reduce:transition-none",
               !showSidebar && "pointer-events-none"
             )}
