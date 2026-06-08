@@ -328,6 +328,10 @@ describe("app:boot handler", () => {
     expect(result).toHaveProperty("agentSettings");
     expect(result).toHaveProperty("crashPending", null);
     expect(result).toHaveProperty("crashConfig", { autoRestoreOnCrash: false });
+    // Boot inherits systemTmpDir from the hydrate spread so the renderer can skip
+    // the standalone system:get-tmp-dir round-trip on cold boot.
+    expect(typeof (result as { systemTmpDir?: unknown }).systemTmpDir).toBe("string");
+    expect((result as { systemTmpDir: string }).systemTmpDir.length).toBeGreaterThan(0);
   });
 
   it("attaches a pending crash plus the live crashCount when one exists", async () => {

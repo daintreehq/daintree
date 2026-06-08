@@ -1,4 +1,5 @@
 // eager-import-allow: reads persisted hydration state via store.get synchronously during startup
+import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
@@ -101,5 +102,8 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     projectStateRecovery: projectStateQuarantinedPath
       ? { quarantinedPath: projectStateQuarantinedPath }
       : null,
+    // Folded into the payload so the renderer skips a standalone
+    // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
+    systemTmpDir: os.tmpdir(),
   };
 }
