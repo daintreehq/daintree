@@ -273,53 +273,57 @@ export function NotificationCenterEntry({
           </div>
         )}
       </div>
-      <div className="shrink-0 flex items-center gap-1.5 mt-0.5">
-        {(() => {
-          const ts = formatNotificationTimestamp(entry.timestamp);
-          return (
+      <div className="relative shrink-0 self-start mt-0.5 flex items-center justify-end">
+        <div className="flex items-center gap-1.5 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0 group-has-[:focus-visible]:opacity-0 group-has-[[data-state=open]]:opacity-0">
+          {isSnoozed && snoozedUntil !== undefined && (
             <span
-              data-testid="notification-timestamp"
-              title={ts.absolute}
-              aria-label={ts.absolute}
-              className="text-[10px] text-daintree-text/40 tabular-nums"
+              data-testid="notification-snoozed-indicator"
+              title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+              aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+              className="inline-flex h-4 w-4 items-center justify-center text-daintree-text/40"
             >
-              {ts.label}
+              <Clock className="h-3 w-3" aria-hidden="true" />
             </span>
-          );
-        })()}
-        <RowOptionsMenu
-          entry={entry}
-          onDropdownOpenChange={onDropdownOpenChange}
-          isSnoozePending={isSnoozePending}
-          isSnoozed={isSnoozed}
-          snoozedUntil={snoozedUntil}
-          onConsumeSnoozePending={onConsumeSnoozePending}
-          onSnooze={onSnooze}
-          onUnsnooze={onUnsnooze}
-        />
-        {isSnoozed && snoozedUntil !== undefined && (
-          <span
-            data-testid="notification-snoozed-indicator"
-            title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-            aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-            className="inline-flex h-4 w-4 items-center justify-center text-daintree-text/40"
-          >
-            <Clock className="h-3 w-3" aria-hidden="true" />
-          </span>
-        )}
-        {onDismiss && (
-          <button
-            type="button"
-            aria-label="Dismiss notification"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss();
-            }}
-            className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 focus:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        )}
+          )}
+          {(() => {
+            const ts = formatNotificationTimestamp(entry.timestamp);
+            return (
+              <span
+                data-testid="notification-timestamp"
+                title={ts.absolute}
+                aria-label={ts.absolute}
+                className="text-[10px] text-daintree-text/40 tabular-nums"
+              >
+                {ts.label}
+              </span>
+            );
+          })()}
+        </div>
+        <div className="absolute inset-y-0 right-0 flex items-center gap-1.5 pl-3 bg-overlay-raised opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto group-has-[:focus-visible]:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[[data-state=open]]:opacity-100 group-has-[[data-state=open]]:pointer-events-auto">
+          <RowOptionsMenu
+            entry={entry}
+            onDropdownOpenChange={onDropdownOpenChange}
+            isSnoozePending={isSnoozePending}
+            isSnoozed={isSnoozed}
+            snoozedUntil={snoozedUntil}
+            onConsumeSnoozePending={onConsumeSnoozePending}
+            onSnooze={onSnooze}
+            onUnsnooze={onUnsnooze}
+          />
+          {onDismiss && (
+            <button
+              type="button"
+              aria-label="Dismiss notification"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss();
+              }}
+              className="h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -501,7 +505,7 @@ function RowOptionsMenu({
           type="button"
           aria-label="Notification options"
           onClick={(e) => e.stopPropagation()}
-          className="opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
+          className="h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
         >
           <MoreHorizontal className="h-3 w-3" />
         </button>
