@@ -435,5 +435,17 @@ describe("logger", () => {
       const missingBase = join(TEST_LOG_DIR, "does-not-exist");
       await expect(pruneOldLogsAsync(missingBase, 30)).resolves.toBeUndefined();
     });
+
+    it("skips non-file entries (subdirectories) without deleting them", async () => {
+      const nestedDir = join(logsDir, "archive");
+      mkdirSync(nestedDir, { recursive: true });
+      // Backdate the directory so an age-only check would target it.
+      const oldSeconds = (Date.now() - 40 * DAY_MS) / 1000;
+      utimesSync(nestedDir, oldSeconds, oldSeconds);
+
+      await expect(pruneOldLogsAsync(TEST_LOG_DIR, 30)).resolves.toBeUndefined();
+
+      expect(existsSync(nestedDir)).toBe(true);
+    });
   });
 });

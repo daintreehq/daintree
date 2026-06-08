@@ -266,6 +266,9 @@ export async function pruneOldLogsAsync(
     try {
       const handle = await fsp.opendir(dir);
       for await (const dirent of handle) {
+        // dirent.isFile() (unlike the sync twin's statSync().isFile()) does not
+        // follow symlinks; log dirs in userData never contain symlinks, so this
+        // is equivalent in practice while avoiding an extra stat per entry.
         if (!dirent.isFile()) continue;
         try {
           const filePath = join(dir, dirent.name);

@@ -539,6 +539,62 @@ describe("initGlobalServices task ordering", () => {
     resolveValidate?.({ valid: false });
   });
 
+  it("github-auth-validate contains a rejected validate() so it can't surface as an unhandled rejection (#10325)", async () => {
+    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
+    vi.mocked(GitHubAuth.validate).mockRejectedValue(new Error("network down"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+
+      const run = registeredTaskRuns.get("github-auth-validate");
+      expect(run).toBeDefined();
+      expect(run?.()).toBeUndefined();
+
+      // Let the floated IIFE's catch run and any (absent) rejection propagate.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(unhandled).toHaveLength(0);
+      expect(GitHubAuth.setValidatedUserInfo).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("github-auth-validate forwards the captured token version so a stale write can be rejected (#10325)", async () => {
+    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
+    // Version 7 captured at registration; the guard inside setValidatedUserInfo
+    // compares against this. validate resolves valid, so the task tries to cache.
+    vi.mocked(GitHubAuth.getTokenVersion).mockReturnValue(7);
+    vi.mocked(GitHubAuth.validate).mockResolvedValue({
+      valid: true,
+      username: "octocat",
+      avatarUrl: undefined,
+      scopes: ["repo"],
+    } as Awaited<ReturnType<typeof GitHubAuth.validate>>);
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("github-auth-validate");
+    expect(run).toBeDefined();
+    run?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // The task forwards the captured version so GitHubAuth can reject a stale write.
+    expect(GitHubAuth.setValidatedUserInfo).toHaveBeenCalledWith("octocat", undefined, ["repo"], 7);
+  });
+
   it("returns 'ok' on the happy path", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     const result = await initGlobalServices(fakeRegistry);
