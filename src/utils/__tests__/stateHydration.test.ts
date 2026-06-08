@@ -5,6 +5,8 @@ const appClientMock = {
   hydrate: vi.fn(),
 };
 
+const getTmpDirMock = vi.fn().mockResolvedValue("/tmp");
+
 const terminalClientMock = {
   getForProject: vi.fn(),
   reconnect: vi.fn(),
@@ -60,7 +62,7 @@ vi.mock("@/clients", () => ({
   terminalClient: terminalClientMock,
   worktreeClient: worktreeClientMock,
   projectClient: projectClientMock,
-  systemClient: { getTmpDir: vi.fn().mockResolvedValue("/tmp") },
+  systemClient: { getTmpDir: getTmpDirMock },
 }));
 
 vi.mock("@/clients/terminalConfigClient", () => ({
@@ -3052,6 +3054,59 @@ describe("hydrateAppState", () => {
 
       expect(beginHydrationBatch).toHaveBeenCalled();
       expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+    });
+  });
+
+  describe("system temp dir folding", () => {
+    const baseOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("uses systemTmpDir from the prefetched payload and skips the getTmpDir IPC call", async () => {
+      await hydrateAppState({
+        ...baseOptions(),
+        prefetchedHydrateResult: {
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          systemTmpDir: "/payload-tmp",
+        } as unknown as import("@shared/types/ipc/app").HydrateResult,
+      });
+
+      expect(getTmpDirMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the getTmpDir IPC call when systemTmpDir is absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [] },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // systemTmpDir intentionally omitted (older main process / safe-boot payload)
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(getTmpDirMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("degrades without throwing when the getTmpDir fallback rejects", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [] },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+      getTmpDirMock.mockRejectedValueOnce(new Error("tmp dir unavailable"));
+
+      await expect(hydrateAppState(baseOptions())).resolves.not.toThrow();
     });
   });
 });
