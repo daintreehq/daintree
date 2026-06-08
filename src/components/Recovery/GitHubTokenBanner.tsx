@@ -6,8 +6,10 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 export function GitHubTokenBanner() {
   const isUnhealthy = useGitHubTokenHealthStore((s) => s.isUnhealthy);
+  const isDismissed = useGitHubTokenHealthStore((s) => s.isDismissed);
+  const dismiss = useGitHubTokenHealthStore((s) => s.dismiss);
 
-  if (!isUnhealthy) return null;
+  if (!isUnhealthy || isDismissed) return null;
 
   const handleReconnect = () => {
     // Route through the action service with `sectionId` so the user lands on
@@ -28,6 +30,8 @@ export function GitHubTokenBanner() {
       description="Reconnect to restore issue, PR, and repository data."
       severity="warning"
       role="status"
+      onClose={dismiss}
+      closeAriaLabel="Dismiss GitHub token warning"
       actions={[
         {
           id: "reconnect",

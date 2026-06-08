@@ -22,6 +22,9 @@ export interface ForgeProviderHealth {
   rateLimitResetAt: number | null;
   rateLimitMultiplier: number;
   tokenUnhealthy: boolean;
+  // User dismissed the token-health banner for the current unhealthy episode.
+  // Reset on every health transition so a fresh expiry re-surfaces the banner.
+  tokenBannerDismissed: boolean;
 }
 
 // Frozen: the selector returns this by reference for an unseen provider, so a
@@ -32,6 +35,7 @@ export const DEFAULT_PROVIDER_HEALTH: ForgeProviderHealth = Object.freeze({
   rateLimitResetAt: null,
   rateLimitMultiplier: 1,
   tokenUnhealthy: false,
+  tokenBannerDismissed: false,
 });
 
 /** Normalized rate-limit state applied to a provider's slice. */
@@ -46,6 +50,7 @@ interface ForgeProviderHealthStore {
   providers: Record<string, ForgeProviderHealth>;
   applyRateLimit: (providerId: string, state: ForgeRateLimitState) => void;
   setTokenUnhealthy: (providerId: string, value: boolean) => void;
+  dismissTokenBanner: (providerId: string) => void;
 }
 
 function mergeProvider(
@@ -88,8 +93,19 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
     }));
   },
   setTokenUnhealthy: (providerId, value) =>
+    set((s) => {
+      const prev = s.providers[providerId] ?? DEFAULT_PROVIDER_HEALTH;
+      // Clear the dismissed flag on a real transition only. Repeated identical
+      // "still unhealthy" pushes must not un-dismiss a banner the user closed,
+      // but a fresh expiry (healthy → unhealthy) or recovery resets it.
+      const tokenBannerDismissed = value && prev.tokenUnhealthy ? prev.tokenBannerDismissed : false;
+      return {
+        providers: mergeProvider(s, providerId, { tokenUnhealthy: value, tokenBannerDismissed }),
+      };
+    }),
+  dismissTokenBanner: (providerId) =>
     set((s) => ({
-      providers: mergeProvider(s, providerId, { tokenUnhealthy: value }),
+      providers: mergeProvider(s, providerId, { tokenBannerDismissed: true }),
     })),
 }));
 

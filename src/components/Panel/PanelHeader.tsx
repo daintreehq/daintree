@@ -874,7 +874,7 @@ function PanelHeaderComponent({
                   <button
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                     aria-label="More panel actions"
                   >
                     <Ellipsis className="w-3 h-3" aria-hidden="true" />
@@ -1031,7 +1031,7 @@ function PanelHeaderComponent({
                   onMinimize!();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                 aria-label="Move to dock"
                 aria-keyshortcuts={moveToDockAriaShortcut}
                 data-testid="panel-move-to-dock"
@@ -1060,7 +1060,7 @@ function PanelHeaderComponent({
                       onRestore();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                     aria-label="Move to grid"
                     data-testid="panel-move-to-grid"
                   >
@@ -1081,7 +1081,7 @@ function PanelHeaderComponent({
                   onToggleMaximize();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 px-2 py-1 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                 aria-label="Restore grid view"
                 aria-keyshortcuts={maximizeAriaShortcut}
               >
@@ -1104,7 +1104,7 @@ function PanelHeaderComponent({
                     onToggleMaximize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                  className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                   aria-label="Maximize"
                   aria-keyshortcuts={maximizeAriaShortcut}
                 >
@@ -1134,7 +1134,7 @@ function PanelHeaderComponent({
                 }
               }}
               onPointerDown={(e) => e.stopPropagation()}
-              className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
+              className="p-1.5 rounded-sm hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
               data-testid="panel-close"
               aria-label={formatShortcutForTooltip(
                 "Close session. Hold Alt and click to force close without recovery."

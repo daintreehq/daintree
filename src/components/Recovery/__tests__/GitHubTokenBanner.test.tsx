@@ -72,6 +72,36 @@ describe("GitHubTokenBanner", () => {
     dispatchEventSpy.mockRestore();
   });
 
+  it("dismisses on the close button and stays hidden while still unhealthy", () => {
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    const { container } = render(<GitHubTokenBanner />);
+    expect(container.firstChild).not.toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Dismiss GitHub token warning/i }));
+    });
+    expect(container.firstChild).toBeNull();
+    // Token is still unhealthy — dismissal only hides the banner, it does not
+    // claim the token recovered.
+    expect(useGitHubTokenHealthStore.getState().isUnhealthy).toBe(true);
+  });
+
+  it("re-surfaces after a fresh expiry following a dismissal", () => {
+    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    const { container } = render(<GitHubTokenBanner />);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Dismiss GitHub token warning/i }));
+    });
+    expect(container.firstChild).toBeNull();
+
+    // Recovery then a new expiry must show the banner again.
+    act(() => {
+      useGitHubTokenHealthStore.getState().setUnhealthy(false);
+      useGitHubTokenHealthStore.getState().setUnhealthy(true);
+    });
+    expect(container.firstChild).not.toBeNull();
+  });
+
   it("hides automatically when store transitions back to healthy", () => {
     useGitHubTokenHealthStore.setState({ isUnhealthy: true });
     const { container } = render(<GitHubTokenBanner />);

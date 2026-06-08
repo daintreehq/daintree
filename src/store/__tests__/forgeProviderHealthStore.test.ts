@@ -35,6 +35,7 @@ describe("forgeProviderHealthStore", () => {
       rateLimitResetAt: resetAt,
       rateLimitMultiplier: 1,
       tokenUnhealthy: false,
+      tokenBannerDismissed: false,
     });
   });
 
@@ -62,6 +63,7 @@ describe("forgeProviderHealthStore", () => {
       rateLimitResetAt: 1_700_000_000_000,
       rateLimitMultiplier: 1,
       tokenUnhealthy: false,
+      tokenBannerDismissed: false,
     });
     expect(fake).toEqual({
       rateLimitBlocked: true,
@@ -69,6 +71,7 @@ describe("forgeProviderHealthStore", () => {
       rateLimitResetAt: 1_700_000_500_000,
       rateLimitMultiplier: 1,
       tokenUnhealthy: true,
+      tokenBannerDismissed: false,
     });
   });
 

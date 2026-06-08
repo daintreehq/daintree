@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useState } from "react";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useAnimatedPresence } from "../../hooks/useAnimatedPresence";
@@ -26,13 +26,11 @@ export function ScrollIndicator({
   // filter/sort/group change that resets the offscreen counts) flips `isOpen`
   // false but holds `shouldRender` true for the exit animation, and the live
   // `count` prop — now 0 — would render "0 more above/below" mid-fade (#10316).
-  // The latch lives in an effect, not the render body: writing a ref during
-  // render would let an abandoned concurrent render leak a stale count into it.
-  const lastPositiveCountRef = useRef(count);
-  useEffect(() => {
-    if (count > 0) lastPositiveCountRef.current = count;
-  }, [count]);
-  const displayCount = count > 0 ? count : lastPositiveCountRef.current;
+  // The latch is state adjusted during render, not a ref: React discards an
+  // abandoned concurrent render's state update, so a stale count can't leak in.
+  const [lastPositiveCount, setLastPositiveCount] = useState(count);
+  if (count > 0 && count !== lastPositiveCount) setLastPositiveCount(count);
+  const displayCount = count > 0 ? count : lastPositiveCount;
 
   if (!shouldRender) return null;
 
