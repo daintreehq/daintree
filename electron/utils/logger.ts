@@ -12,6 +12,7 @@ import {
   openSync,
   readSync,
   closeSync,
+  promises as fsp,
 } from "fs";
 import { join } from "path";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
@@ -242,6 +243,42 @@ export function pruneOldLogs(basePath: string, retentionDays: number | 0): void 
       }
     } catch {
       // Directory read failed — non-fatal
+    }
+  }
+}
+
+/**
+ * Async twin of {@link pruneOldLogs}. Uses `fs/promises` so the scan/delete pass
+ * yields to the event loop between files instead of blocking it with sync fs.
+ * Use this from async contexts (e.g. the deferred-init queue); keep the sync
+ * version for callers that run in a synchronous context (DiskSpaceMonitor).
+ */
+export async function pruneOldLogsAsync(
+  basePath: string,
+  retentionDays: number | 0
+): Promise<void> {
+  if (retentionDays === 0) return;
+
+  const threshold = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const dirs = [join(basePath, "logs"), join(basePath, "debug")];
+
+  for (const dir of dirs) {
+    try {
+      const handle = await fsp.opendir(dir);
+      for await (const dirent of handle) {
+        if (!dirent.isFile()) continue;
+        try {
+          const filePath = join(dir, dirent.name);
+          const stats = await fsp.stat(filePath);
+          if (stats.mtimeMs < threshold) {
+            await fsp.unlink(filePath);
+          }
+        } catch {
+          // Skip locked or inaccessible files
+        }
+      }
+    } catch {
+      // Directory read failed or doesn't exist — non-fatal
     }
   }
 }

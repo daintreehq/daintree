@@ -9,7 +9,10 @@ const setMcpRegistry = vi.fn();
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let mockLogRetentionDays: number | undefined = 30;
-const { pruneOldLogs } = vi.hoisted(() => ({ pruneOldLogs: vi.fn() }));
+const { pruneOldLogs, pruneOldLogsAsync } = vi.hoisted(() => ({
+  pruneOldLogs: vi.fn(),
+  pruneOldLogsAsync: vi.fn(),
+}));
 const {
   pluginMcpHydrate,
   getPluginMcpAuditService,
@@ -59,6 +62,7 @@ vi.mock("../../store.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   pruneOldLogs,
+  pruneOldLogsAsync,
   logError: vi.fn(),
   logWarn: vi.fn(),
   logInfo: vi.fn(),
@@ -73,9 +77,9 @@ vi.mock("../../services/TelemetryService.js", () => ({
 vi.mock("../../services/github/GitHubAuth.js", () => ({
   GitHubAuth: {
     initializeStorage: vi.fn(),
-    hasToken: () => false,
-    getToken: () => null,
-    getTokenVersion: () => 0,
+    hasToken: vi.fn(() => false),
+    getToken: vi.fn(() => null),
+    getTokenVersion: vi.fn(() => 0),
     setMemoryToken: vi.fn(),
     setValidatedUserInfo: vi.fn(),
     validate: vi.fn(),
@@ -236,6 +240,7 @@ import { initGlobalServices } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app } from "electron";
+import { GitHubAuth } from "../../services/github/GitHubAuth.js";
 
 describe("initGlobalServices task ordering", () => {
   beforeEach(() => {
@@ -245,6 +250,12 @@ describe("initGlobalServices task ordering", () => {
     // leak into the next — keeps tests independent as the suite grows.
     setMcpRegistry.mockReset();
     pruneOldLogs.mockReset();
+    pruneOldLogsAsync.mockReset();
+    vi.mocked(GitHubAuth.hasToken).mockReturnValue(false);
+    vi.mocked(GitHubAuth.getToken).mockReturnValue(null);
+    vi.mocked(GitHubAuth.getTokenVersion).mockReturnValue(0);
+    vi.mocked(GitHubAuth.validate).mockReset();
+    vi.mocked(GitHubAuth.setValidatedUserInfo).mockReset();
     pluginMcpHydrate.mockClear();
     getPluginMcpAuditService.mockClear();
     getPluginMcpConsentService.mockClear();
@@ -464,28 +475,31 @@ describe("initGlobalServices task ordering", () => {
     expect(assistantSpy).toHaveBeenCalled();
   });
 
-  it("prune-old-logs task invokes pruneOldLogs with retentionDays from privacy settings", async () => {
+  it("prune-old-logs task invokes pruneOldLogsAsync with retentionDays from privacy settings", async () => {
     mockLogRetentionDays = 14;
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
     const run = registeredTaskRuns.get("prune-old-logs");
     expect(run).toBeDefined();
-    run?.();
+    await run?.();
 
-    expect(pruneOldLogs).toHaveBeenCalledWith("/tmp/userData", 14);
+    expect(pruneOldLogsAsync).toHaveBeenCalledWith("/tmp/userData", 14);
+    // The async twin replaces the sync version in the deferred drain so the
+    // fs scan no longer blocks the main-process event loop (#10325).
+    expect(pruneOldLogs).not.toHaveBeenCalled();
   });
 
-  it("prune-old-logs task skips pruning when retentionDays is 0", async () => {
+  it("prune-old-logs task delegates retentionDays 0 to pruneOldLogsAsync (which skips internally)", async () => {
     mockLogRetentionDays = 0;
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
     const run = registeredTaskRuns.get("prune-old-logs");
     expect(run).toBeDefined();
-    run?.();
+    await run?.();
 
-    expect(pruneOldLogs).not.toHaveBeenCalled();
+    expect(pruneOldLogsAsync).toHaveBeenCalledWith("/tmp/userData", 0);
   });
 
   it("prune-old-logs task defaults retentionDays to 30 when privacy setting is missing", async () => {
@@ -495,9 +509,34 @@ describe("initGlobalServices task ordering", () => {
 
     const run = registeredTaskRuns.get("prune-old-logs");
     expect(run).toBeDefined();
-    run?.();
+    await run?.();
 
-    expect(pruneOldLogs).toHaveBeenCalledWith("/tmp/userData", 30);
+    expect(pruneOldLogsAsync).toHaveBeenCalledWith("/tmp/userData", 30);
+  });
+
+  it("github-auth-validate task returns void synchronously so a slow validate can't stall the drain (#10325)", async () => {
+    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
+    // A validate() that never resolves models a slow/offline network. The task
+    // must not return this promise, otherwise drainNext would await it.
+    let resolveValidate: ((value: unknown) => void) | undefined;
+    vi.mocked(GitHubAuth.validate).mockReturnValue(
+      new Promise((resolve) => {
+        resolveValidate = resolve;
+      }) as ReturnType<typeof GitHubAuth.validate>
+    );
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("github-auth-validate");
+    expect(run).toBeDefined();
+    // run() must complete (return a non-thenable) even while validate hangs.
+    const result = run?.();
+    expect(result).toBeUndefined();
+
+    // Cleanup: let the floated validation settle to avoid an open handle.
+    resolveValidate?.({ valid: false });
   });
 
   it("returns 'ok' on the happy path", async () => {
