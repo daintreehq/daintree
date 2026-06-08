@@ -839,6 +839,7 @@ function ProjectPaletteInner({
         className="pb-2"
       >
         <AppPaletteDialog.Input
+          className="bg-overlay-soft border-[var(--border-overlay)]"
           inputRef={inputRef}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
