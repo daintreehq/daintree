@@ -4,16 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // behind implicit activation. The singleton constructor calls `app.getVersion()`
 // which is undefined in this test's electron stub — mock the module surface
 // before importing forgeRpcServer so the constructor never runs.
+// `isPluginScanComplete` is mutable so resolveProvider tests can exercise both
+// the pre-scan ("not-ready") and post-scan ("no-match") miss states (#9997).
+const pluginServiceMock = vi.hoisted(() => ({
+  activatePluginForForgeProvider: vi.fn().mockResolvedValue(undefined),
+  isPluginScanComplete: true,
+}));
 vi.mock("../PluginService.js", () => ({
-  pluginService: {
-    activatePluginForForgeProvider: vi.fn().mockResolvedValue(undefined),
-  },
+  pluginService: pluginServiceMock,
 }));
 
 import { _resetForgeRpcInFlightForTests, dispatchForgeRpc } from "../forgeRpcServer.js";
 import {
   clearForgeProviderImplRegistry,
+  clearForgeProviderRegistry,
   registerForgeProviderImpl,
+  registerForgeProviders,
 } from "../forgeProviderRegistry.js";
 import type { ForgeProviderImpl, PR, RepoRef } from "../../../shared/types/forge.js";
 import type { WorkspaceHostRequest } from "../../../shared/types/workspace-host.js";
@@ -76,11 +82,14 @@ function makeImpl(overrides: Partial<ForgeProviderImpl> = {}): ForgeProviderImpl
 beforeEach(() => {
   _resetForgeRpcInFlightForTests();
   clearForgeProviderImplRegistry();
+  clearForgeProviderRegistry();
+  pluginServiceMock.isPluginScanComplete = true;
 });
 
 afterEach(() => {
   _resetForgeRpcInFlightForTests();
   clearForgeProviderImplRegistry();
+  clearForgeProviderRegistry();
 });
 
 describe("dispatchForgeRpc cross-window singleflight", () => {
@@ -303,5 +312,66 @@ describe("dispatchForgeRpc cross-window singleflight", () => {
     if (!sent[1].ok) {
       expect(sent[1].error).toContain("could not be delivered");
     }
+  });
+});
+
+describe("resolveProvider miss discrimination (#9997)", () => {
+  const resolveArgs = [
+    {
+      remoteUrl: "https://gitlab.com/owner/repo.git",
+      forgeProviderOverride: null,
+      globalDefaultProviderId: null,
+    },
+  ];
+
+  function dispatchResolve(send: (request: WorkspaceHostRequest) => boolean): Promise<void> {
+    return dispatchForgeRpc(
+      { forgeRequestId: "resolve-1", method: "resolveProvider", args: resolveArgs },
+      send
+    );
+  }
+
+  it("returns not-ready when no descriptor matches and the plugin scan is still running", async () => {
+    pluginServiceMock.isPluginScanComplete = false;
+    const { send, sent } = captureSender();
+
+    await dispatchResolve(send);
+
+    expect(sent[0]).toMatchObject({ ok: true, value: { status: "not-ready" } });
+  });
+
+  it("returns no-match when no descriptor matches after the plugin scan settled", async () => {
+    const { send, sent } = captureSender();
+
+    await dispatchResolve(send);
+
+    expect(sent[0]).toMatchObject({ ok: true, value: { status: "no-match" } });
+  });
+
+  it("returns no-match when the descriptor matched but no impl bound after activation", async () => {
+    registerForgeProviders(PLUGIN_ID, [
+      { id: CONTRIBUTION_ID, name: "Test Provider", matches: ["gitlab.com"] },
+    ]);
+    // No registerForgeProviderImpl — activation completes without binding.
+    const { send, sent } = captureSender();
+
+    await dispatchResolve(send);
+
+    expect(sent[0]).toMatchObject({ ok: true, value: { status: "no-match" } });
+  });
+
+  it("returns the resolved provider with parsed repo when descriptor and impl are present", async () => {
+    registerForgeProviders(PLUGIN_ID, [
+      { id: CONTRIBUTION_ID, name: "Test Provider", matches: ["gitlab.com"] },
+    ]);
+    registerForgeProviderImpl(PLUGIN_ID, CONTRIBUTION_ID, makeImpl());
+    const { send, sent } = captureSender();
+
+    await dispatchResolve(send);
+
+    expect(sent[0]).toMatchObject({
+      ok: true,
+      value: { status: "resolved", namespacedId: NAMESPACED_ID, repo: { owner: "owner" } },
+    });
   });
 });

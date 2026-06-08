@@ -103,3 +103,71 @@ test.describe.serial("Persistence: Dock popover height across restart", () => {
     await expect.poll(() => getDockedPopoverHeight(w2), { timeout: T_LONG }).toBe(PERSISTED_HEIGHT);
   });
 });
+
+test.describe.serial("UI: Dock popover drag resize", () => {
+  let userDataDir: string;
+  let fixtureDir: string;
+  let fixtureCleanup: () => void;
+  let ctx: AppContext | null = null;
+
+  test.beforeAll(async () => {
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-dock-resize-"));
+    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "dock-resize" }));
+  });
+
+  test.afterAll(async () => {
+    if (ctx?.app) {
+      const pid = ctx.app.process().pid;
+      await closeApp(ctx.app);
+      if (pid) await waitForProcessExit(pid).catch(() => {});
+      ctx = null;
+    }
+    removePathSync(userDataDir);
+    fixtureCleanup?.();
+  });
+
+  test("dragging the top-edge handle grows the popover and persists the height", async () => {
+    ctx = await launchApp({ userDataDir });
+    let { window: w } = ctx;
+    const { app } = ctx;
+
+    w = await openAndOnboardProject(app, w, fixtureDir, "Dock Resize");
+
+    // Dock a terminal, then open its popover.
+    await openTerminal(w);
+    const firstGridPanel = getFirstGridPanel(w);
+    await firstGridPanel.hover();
+    await firstGridPanel.locator(SEL.panel.minimize).click();
+    await expect.poll(() => getDockPanelCount(w), { timeout: T_MEDIUM }).toBe(1);
+
+    await w.locator("[data-dock-item]").first().click();
+
+    const handle = w.locator(SEL.panel.dockPopoverResizeHandle);
+    await handle.waitFor({ state: "visible", timeout: T_MEDIUM });
+
+    // offsetParent of the absolutely-positioned handle is the popover container,
+    // so its height tracks the rendered popover height.
+    const heightOf = () =>
+      handle.evaluate(
+        (el) => (el.offsetParent as HTMLElement | null)?.getBoundingClientRect().height ?? 0
+      );
+
+    const before = await heightOf();
+    expect(before).toBeGreaterThan(0);
+
+    // Drag the handle upward — the dock is at the bottom so up means taller.
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await w.mouse.move(cx, cy);
+    await w.mouse.down();
+    await w.mouse.move(cx, cy - 120, { steps: 12 });
+    await w.mouse.up();
+
+    await expect.poll(heightOf, { timeout: T_MEDIUM }).toBeGreaterThan(before + 40);
+
+    // The committed height is persisted through the same IPC pipeline.
+    await expect.poll(() => getDockedPopoverHeight(w), { timeout: T_MEDIUM }).toBeGreaterThan(500);
+  });
+});

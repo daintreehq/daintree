@@ -1,17 +1,12 @@
 import { useEffect, useRef } from "react";
-import { Mic, Unplug } from "lucide-react";
+import { Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 
@@ -57,7 +52,6 @@ export function VoiceRecordingToolbarButton({
   const pauseShortcut = useKeybindingDisplay("voiceInput.togglePause");
   const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
   const hover = useShortcutHintHover("voiceInput.toggle");
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   const isArming = status === "arming";
   const isConnecting = status === "connecting";
@@ -354,10 +348,7 @@ export function VoiceRecordingToolbarButton({
         </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ContextMenuItem onSelect={() => toggleButtonVisibility("voice-recording", "right")}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId="voice-recording" side="right" />
       </ContextMenuContent>
     </ContextMenu>
   );

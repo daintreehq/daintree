@@ -198,6 +198,17 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("validateToken", "ghp_secrettoken")).toBe("");
   });
 
+  it("returns empty string for validateToken with the { providerId, token } payload shape (#9985)", () => {
+    // The handler now passes the full payload object; the redaction must
+    // continue to drop both the token and the provider id.
+    expect(
+      summarizeForgeArgs("validateToken", {
+        providerId: "daintree.github.github",
+        token: "ghp_secrettoken",
+      })
+    ).toBe("");
+  });
+
   it("includes only the number for getIssue/getPR", () => {
     expect(summarizeForgeArgs("getIssue", 42)).toBe('{"number":42}');
     expect(summarizeForgeArgs("getPR", 7)).toBe('{"number":7}');
@@ -205,6 +216,24 @@ describe("summarizeForgeArgs redaction", () => {
 
   it("omits username for assign/unassign (only the issue number)", () => {
     expect(summarizeForgeArgs("assignIssue", 99)).toBe('{"number":99}');
+  });
+
+  it("redacts createIssue title/body, keeping only the label count", () => {
+    expect(
+      summarizeForgeArgs("createIssue", {
+        title: "Security issue",
+        body: "token abc123",
+        labels: ["bug", "security"],
+      })
+    ).toBe('{"labels":2}');
+  });
+
+  it("emits an empty object for createIssue with no labels", () => {
+    expect(summarizeForgeArgs("createIssue", { title: "No labels" })).toBe("{}");
+  });
+
+  it("returns empty string for getCurrentUser — read probe, no args to summarize", () => {
+    expect(summarizeForgeArgs("getCurrentUser", { cwd: "/repo" })).toBe("");
   });
 
   it("summarizes list filters as safe metadata only", () => {

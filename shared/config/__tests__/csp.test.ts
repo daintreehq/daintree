@@ -99,4 +99,29 @@ describe("Daintree app CSP", () => {
       expect(connectSrcMatch?.[1]).toContain("plugin:");
     });
   });
+
+  describe("daintree.org doc images in img-src (#9828)", () => {
+    // The `help.displayImage` MCP tool surfaces documentation images served
+    // from daintree.org. Chromium 148 does not match the apex against a
+    // wildcard, so both forms must be present for apex and subdomain images.
+    it("allows the daintree.org apex in img-src in production", () => {
+      const imgSrc = getDaintreeAppProdCSP().match(/img-src ([^;]*);/)?.[1];
+      expect(imgSrc).toContain("https://daintree.org");
+    });
+
+    it("allows daintree.org subdomains in img-src in production", () => {
+      const imgSrc = getDaintreeAppProdCSP().match(/img-src ([^;]*);/)?.[1];
+      expect(imgSrc).toContain("https://*.daintree.org");
+    });
+
+    it("allows the daintree.org apex in img-src in development", () => {
+      const imgSrc = getDaintreeAppDevCSP().match(/img-src ([^;]*);/)?.[1];
+      expect(imgSrc).toContain("https://daintree.org");
+    });
+
+    it("allows daintree.org subdomains in img-src in development", () => {
+      const imgSrc = getDaintreeAppDevCSP().match(/img-src ([^;]*);/)?.[1];
+      expect(imgSrc).toContain("https://*.daintree.org");
+    });
+  });
 });

@@ -131,6 +131,50 @@ describe("sanitizePath", () => {
     const result = sanitizePath("/Users/alice/foo and /Users/bob/bar");
     expect(result).toBe("/Users/USER/foo and /Users/USER/bar");
   });
+
+  it("redacts a bare user path with no trailing separator", () => {
+    expect(sanitizePath("/Users/alice")).toBe("/Users/USER");
+    expect(sanitizePath("/home/bob")).toBe("/home/USER");
+    expect(sanitizePath("C:\\Users\\Carol")).toBe("C:\\Users\\USER");
+  });
+
+  it("redacts Windows user profiles on non-C drives", () => {
+    expect(sanitizePath("D:\\Users\\alice\\project\\file.ts")).toBe(
+      "D:\\Users\\USER\\project\\file.ts"
+    );
+    expect(sanitizePath("E:/Users/bob/code")).toBe("E:/Users/USER/code");
+  });
+
+  it("redacts lowercase Windows drive letters", () => {
+    expect(sanitizePath("d:\\Users\\alice\\repo")).toBe("d:\\Users\\USER\\repo");
+  });
+
+  it("redacts JSON-doubled Windows paths", () => {
+    const json = JSON.stringify({ cwd: "D:\\Users\\carol\\repo" });
+    const result = sanitizePath(json);
+    expect(result).not.toContain("carol");
+    expect(result).toContain("USER");
+  });
+
+  it("redacts WSL UNC paths", () => {
+    const result = sanitizePath("\\\\wsl$\\Ubuntu\\home\\alice\\project");
+    expect(result).not.toContain("alice");
+    expect(result).toContain("Ubuntu");
+    expect(result).toContain("home\\USER");
+  });
+
+  it("redacts WSL localhost UNC paths", () => {
+    const result = sanitizePath("\\\\wsl.localhost\\Debian\\home\\bob\\src");
+    expect(result).not.toContain("bob");
+    expect(result).toContain("Debian");
+  });
+
+  it("redacts JSON-doubled WSL UNC paths", () => {
+    const json = JSON.stringify({ cwd: "\\\\wsl$\\Ubuntu\\home\\alice" });
+    const result = sanitizePath(json);
+    expect(result).not.toContain("alice");
+    expect(result).toContain("Ubuntu");
+  });
 });
 
 describe("sanitizeEvent", () => {
@@ -364,6 +408,22 @@ describe("sanitizeEvent", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
+  it("documents the depth-cap invariant: containers beyond the cap pass through unscrubbed", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      extra: {
+        a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: { token: secret } } } } } } } } } } },
+      },
+    };
+    const result = sanitizeEvent(event);
+    // The container at depth 11 is returned unchanged — only scalar strings
+    // scrub past the cap. This shape is unreachable in production: Sentry's
+    // normalizeDepth (pinned to MAX_DEEP_SANITIZE_DEPTH in init) flattens
+    // deeper containers into "[Object]"/"[Array]" strings before beforeSend
+    // fires. If this assertion starts failing, the cap semantics changed.
+    expect(JSON.stringify(result)).toContain(secret);
+  });
+
   it("returns null when sanitization throws (fail-closed)", () => {
     const event = {
       // Getter that throws — forces the outer try/catch to kick in. If
@@ -465,6 +525,99 @@ describe("sanitizeEvent", () => {
     expect(frame?.pre_context).toBeUndefined();
     expect(frame?.post_context).toBeUndefined();
     expect(frame?.vars).toBeUndefined();
+  });
+
+  it("scrubs user paths from parsed request.url path segments", () => {
+    const event: SentryEvent = {
+      request: {
+        url: "https://api.example.com/Users/alice/repos",
+      },
+    };
+    const result = sanitizeEvent(event);
+    // URL() parses fine, so the try branch runs — the path segment must
+    // still go through sanitizeString, not just the search/hash clears.
+    expect(result?.request?.url).toBe("https://api.example.com/Users/USER/repos");
+    expect(result?.request?.url).not.toContain("alice");
+  });
+
+  it("scrubs token-shaped path segments from parsed request.url", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      request: {
+        url: `https://api.example.com/download/${secret}/artifact`,
+      },
+    };
+    const result = sanitizeEvent(event);
+    expect(result?.request?.url).not.toContain(secret);
+    expect(result?.request?.url).toContain("[REDACTED]");
+  });
+
+  it("scrubs secret values in event.tags and preserves non-string values", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      tags: { source: "react-uncaught", token: secret, count: 3 },
+    };
+    const result = sanitizeEvent(event);
+    const tags = result?.tags as Record<string, unknown>;
+    expect(tags.token).toBe("[REDACTED]");
+    expect(tags.source).toBe("react-uncaught");
+    expect(tags.count).toBe(3);
+  });
+
+  it("preserves non-string leaves in tags and reaches nested sub-objects in user", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      tags: { count: 42, flag: true, name: null },
+      user: { profile: { home: "/Users/alice/Projects", pat: secret } },
+    };
+    const result = sanitizeEvent(event);
+    const tags = result?.tags as Record<string, unknown>;
+    expect(tags.count).toBe(42);
+    expect(tags.flag).toBe(true);
+    expect(tags.name).toBeNull();
+    const profile = (result?.user as { profile: Record<string, unknown> }).profile;
+    expect(profile.home).toBe("/Users/USER/Projects");
+    expect(profile.pat).toBe("[REDACTED]");
+  });
+
+  it("scrubs home paths in event.user and passes null user through unchanged", () => {
+    const event: SentryEvent = {
+      user: { id: "abc123", lastProjectPath: "/Users/alice/Projects/daintree" },
+    };
+    const result = sanitizeEvent(event);
+    const user = result?.user as Record<string, unknown>;
+    expect(user.lastProjectPath).toBe("/Users/USER/Projects/daintree");
+    expect(user.id).toBe("abc123");
+
+    const nullUserEvent = { user: null } as unknown as SentryEvent;
+    expect(() => sanitizeEvent(nullUserEvent)).not.toThrow();
+    expect(sanitizeEvent(nullUserEvent)?.user).toBeNull();
+  });
+
+  it("scrubs home paths from event.contexts (React componentStack)", () => {
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+    const event: SentryEvent = {
+      contexts: {
+        react: {
+          componentStack: `at App (/Users/alice/Projects/daintree/src/App.tsx:10:5) token=${secret}`,
+        },
+      },
+    };
+    const result = sanitizeEvent(event);
+    const contexts = result?.contexts as { react: { componentStack: string } };
+    expect(contexts.react.componentStack).toContain("/Users/USER/");
+    expect(contexts.react.componentStack).not.toContain("alice");
+    expect(contexts.react.componentStack).not.toContain(secret);
+    expect(contexts.react.componentStack).toContain("[REDACTED]");
+  });
+
+  it("leaves events without tags, user, or contexts unchanged", () => {
+    const event: SentryEvent = { message: "plain message" };
+    const result = sanitizeEvent(event);
+    expect(result).not.toBeNull();
+    expect(result?.tags).toBeUndefined();
+    expect(result?.user).toBeUndefined();
+    expect(result?.contexts).toBeUndefined();
   });
 });
 

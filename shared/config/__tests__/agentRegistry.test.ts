@@ -478,10 +478,11 @@ describe("mistral configuration", () => {
     }
   });
 
-  it("relies on prompt fast-path with the shared 6s waiting debounce", () => {
+  it("relies on prompt fast-path without a per-agent quiet override", () => {
     const detection = getAgentConfig("mistral")?.detection;
+    expect(detection).toBeDefined();
     expect(detection?.completionPatterns).toBeUndefined();
-    expect(detection?.promptFastPathMinQuietMs).toBe(6000);
+    expect(detection?.promptFastPathMinQuietMs).toBeUndefined();
   });
 
   it("ships the local-llamacpp preset as a labeled placeholder", () => {
@@ -590,14 +591,45 @@ describe("kimi detection patterns", () => {
     expect(patterns.some((p) => p.test(`${glyph} `))).toBe(true);
   });
 
-  it("matches braille spinner with task description (primary)", () => {
-    const patterns = compilePatterns("primaryPatterns");
-    expect(patterns.some((p) => p.test("⠋ Thinking about the request"))).toBe(true);
+  it.each(["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"])(
+    "matches moon-phase spinner frame %s as primary",
+    (glyph) => {
+      const patterns = compilePatterns("primaryPatterns");
+      // Trailing space — Rich's documented frame format.
+      expect(patterns.some((p) => p.test(`${glyph} `))).toBe(true);
+      // No trailing space — renderers that drop the trailing whitespace when
+      // the spinner is the only content on a line.
+      expect(patterns.some((p) => p.test(glyph))).toBe(true);
+    }
+  );
+
+  it("matches the kimi-cli welcome banner as boot-complete", () => {
+    const patterns = compilePatterns("bootCompletePatterns");
+    // Bare banner line (Rich Console.print output before Panel wrapping)
+    expect(patterns.some((p) => p.test("Welcome to Kimi Code CLI!"))).toBe(true);
+    // Banner wrapped in the Rich Panel box-drawing characters rendered in
+    // the live terminal — a literal substring match must still fire here.
+    expect(patterns.some((p) => p.test("╭─ Welcome to Kimi Code CLI! ─╮"))).toBe(true);
   });
 
-  it("matches braille spinner with single word (fallback)", () => {
+  it("matches braille dots spinner with task description in fallback", () => {
+    const patterns = compilePatterns("fallbackPatterns");
+    expect(patterns.some((p) => p.test("⠋ Compacting..."))).toBe(true);
+    expect(patterns.some((p) => p.test("⠹ Connecting to MCP servers..."))).toBe(true);
+  });
+
+  it("matches braille dots spinner with single word in fallback", () => {
     const patterns = compilePatterns("fallbackPatterns");
     expect(patterns.some((p) => p.test("⠹ Working"))).toBe(true);
+  });
+
+  it("does not match braille dots in primary (no #3941 footgun)", () => {
+    const patterns = compilePatterns("primaryPatterns");
+    // kimi-cli's content/tool blocks render braille-with-text, but a copy-paste
+    // of that glyph class into primary would mis-classify goose's identical
+    // cliclack spinner. The moon class is the only thing that earns primary.
+    expect(patterns.some((p) => p.test("⠋ Thinking about the request"))).toBe(false);
+    expect(patterns.some((p) => p.test("⠹ Working"))).toBe(false);
   });
 });
 
@@ -612,8 +644,9 @@ describe("amp configuration", () => {
     expect(config?.name).toBe("Amp");
   });
 
-  it("declares the @sourcegraph/amp npm package", () => {
-    expect(getAgentConfig("amp")?.packages?.npm).toBe("@sourcegraph/amp");
+  it("declares the @ampcode/cli npm package", () => {
+    // Renamed from @sourcegraph/amp; the old alias is removed June 15, 2026
+    expect(getAgentConfig("amp")?.packages?.npm).toBe("@ampcode/cli");
   });
 
   it("probes ~/.amp/bin/amp as a native install path", () => {
@@ -978,11 +1011,11 @@ describe("resume configuration", () => {
     }
   });
 
-  it("kiro is project-scoped and produces --resume args without an ID", () => {
+  it("kiro is project-scoped and produces chat --resume args without an ID", () => {
     const resume = getAgentConfig("kiro")?.resume;
     expect(resume?.kind).toBe("project-scoped");
     if (resume?.kind === "project-scoped") {
-      expect(resume.args()).toEqual(["--resume"]);
+      expect(resume.args()).toEqual(["chat", "--resume"]);
       expect(resume.quitCommand).toBe("/quit");
     }
   });

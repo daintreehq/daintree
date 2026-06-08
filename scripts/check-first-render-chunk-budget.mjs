@@ -8,12 +8,15 @@
 //
 // Compares against the checked-in first-render-chunk-baseline.json.
 //
-// There is no override flag: an intentional regression is accepted by applying
+// This budget is not wired into CI pre-1.0 (see .github/workflows/ci.yml) — it
+// runs locally on demand. There is no override flag: when the budget is
+// reintroduced as a CI gate, an intentional regression is accepted by applying
 // the `first-render-chunk-override` label to the PR with a linked tracking
-// issue (enforced by scripts/check-budget-override-gate.mjs in CI).
+// issue (the label is checked by scripts/check-budget-override-gate.mjs, which
+// is also dormant until budgets gate CI again).
 //
 // Usage:
-//   node scripts/check-first-render-chunk-budget.mjs                   # check (CI)
+//   node scripts/check-first-render-chunk-budget.mjs                   # check mode (local, not wired to CI pre-1.0)
 //   node scripts/check-first-render-chunk-budget.mjs --update          # write baseline
 //   node scripts/check-first-render-chunk-budget.mjs --update --force  # bypass shrink guard
 //   node scripts/check-first-render-chunk-budget.mjs --threshold 0.10  # 10% growth allowed
@@ -23,6 +26,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
+import { collectClosure as collectClosureGeneric } from "./first-render-closure-lib.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), "..");
@@ -146,33 +150,19 @@ function readFirstRenderSeeds() {
 // always enqueued explicitly regardless of `followDynamic` — they're first-paint
 // paths by definition (a persisted browser/dev-preview/review panel restores
 // synchronously), not edges discovered by walking `dynamicImports[]`.
+//
+// Thin manifest adapter over the shared first-render-closure-lib traversal: the
+// firstRenderModulePreloadPlugin in vite.config.ts walks the same graph through
+// the OutputBundle (keyed by file name), so the gated closure measured here and
+// the preload set injected there share one BFS and can't drift (#9771). Default
+// `followDynamic: true` (the total walk) is preserved for the existing callers.
 export function collectClosure(manifest, seedKeys, { followDynamic = true } = {}) {
-  const visited = new Set();
-  const queue = [];
-
-  for (const seed of seedKeys) {
-    if (manifest[seed]) {
-      queue.push(seed);
-    }
-  }
-
-  while (queue.length > 0) {
-    const key = queue.shift();
-    if (visited.has(key)) continue;
-
-    const chunk = manifest[key];
-    // Skip keys not present in the manifest — the closure measures real
-    // chunks only, so a dangling import reference must not enter the set.
-    if (!chunk) continue;
-    visited.add(key);
-
-    for (const dep of chunk.imports ?? []) queue.push(dep);
-    if (followDynamic) {
-      for (const dep of chunk.dynamicImports ?? []) queue.push(dep);
-    }
-  }
-
-  return visited;
+  return collectClosureGeneric(seedKeys, {
+    getNode: (key) => manifest[key],
+    getStaticImports: (chunk) => chunk.imports,
+    getDynamicImports: (chunk) => chunk.dynamicImports,
+    followDynamic,
+  });
 }
 
 function findEntryKey(manifest) {
@@ -464,8 +454,7 @@ function main() {
     `::error::first-render chunk gzip grew from ${result.baselineGzip} to ${result.currentGzip} (+${result.delta}, ${(result.ratio * 100).toFixed(2)}%, threshold +${(args.threshold * 100).toFixed(1)}%)`
   );
   console.error(
-    `   If the change is intentional, run \`npm run first-render-chunk-budget:update\` to refresh the baseline, ` +
-      `or apply the \`first-render-chunk-override\` label to the PR with a linked tracking issue (\`Fixes #N\`, \`Resolves #N\`, or \`Closes #N\` in the PR body).`
+    `   If the change is intentional, run \`npm run first-render-chunk-budget:update\` to refresh the baseline.`
   );
   process.exit(1);
 }

@@ -1,6 +1,8 @@
 import { AlertTriangle } from "lucide-react";
 import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 export function GitHubTokenBanner() {
   const isUnhealthy = useGitHubTokenHealthStore((s) => s.isUnhealthy);
@@ -8,10 +10,14 @@ export function GitHubTokenBanner() {
   if (!isUnhealthy) return null;
 
   const handleReconnect = () => {
-    window.dispatchEvent(
-      new CustomEvent("daintree:open-settings-tab", {
-        detail: { tab: "code-forge", subtab: "github" },
-      })
+    // Route through the action service with `sectionId` so the user lands on
+    // the token field, not the top of the Code Forge tab — matches every other
+    // recovery entry point (e.g. `useGitHubTokenExpiryNotification`). Use the
+    // canonical provider id for `subtab` to match the standardized forge routing.
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
+      { source: "user" }
     );
   };
 

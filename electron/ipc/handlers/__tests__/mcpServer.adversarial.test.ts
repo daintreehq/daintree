@@ -17,6 +17,7 @@ const serviceMock = vi.hoisted(() => ({
   rotateApiKey: vi.fn().mockResolvedValue("k-new"),
   getConfigSnippet: vi.fn(() => "snippet"),
   getAuditRecords: vi.fn(() => []),
+  getLogRecords: vi.fn(() => []),
   getAuditConfig: vi.fn(() => ({ enabled: true, maxRecords: 500 })),
   clearAuditLog: vi.fn(),
   getTurnOutcomeRecords: vi.fn(() => []),
@@ -32,11 +33,15 @@ const serviceMock = vi.hoisted(() => ({
   onRuntimeStateChange: vi.fn(() => () => {}),
   listActiveBearers: vi.fn(() => []),
   disconnectBearer: vi.fn((tokenHash: string) => ({ tokenHash, disconnected: true })),
+  resetDenialCounts: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   app: { getVersion: () => "0.0.0-test" },
+  // withContext handlers resolve the sender window via BrowserWindow —
+  // stub it so the context-bearing ops (resetDenialCounts) don't blow up.
+  BrowserWindow: { fromWebContents: () => null },
 }));
 vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: serviceMock }));
 
@@ -194,6 +199,38 @@ describe("mcpServer IPC adversarial", () => {
     expect((result as unknown[]).length).toBe(1);
   });
 
+  it("getLogRecords returns the full union (dispatch + grant) and does not call the dispatch variant (#10027)", async () => {
+    const mixed = [
+      {
+        id: "a",
+        timestamp: 2,
+        toolId: "t",
+        sessionId: "s",
+        tier: "unknown",
+        argsSummary: "{}",
+        result: "success",
+        durationMs: 0,
+      },
+      {
+        id: "g",
+        timestamp: 1,
+        type: "grant.issued",
+        sessionId: "s",
+        toolId: "files.search",
+        ttlMs: 60000,
+      },
+    ] as never;
+    serviceMock.getLogRecords.mockReturnValueOnce(mixed);
+    const result = await getHandler(CHANNELS.MCP_SERVER_GET_LOG_RECORDS)(fakeEvent());
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as unknown[]).length).toBe(2);
+    expect(serviceMock.getLogRecords).toHaveBeenCalledTimes(1);
+    // Make sure the new channel routes to the union accessor, not the
+    // legacy dispatch-only one — a typo in the handler would silently
+    // re-introduce the original bug.
+    expect(serviceMock.getAuditRecords).not.toHaveBeenCalled();
+  });
+
   it("clearAuditLog calls service clear", async () => {
     await getHandler(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG)(fakeEvent());
     expect(serviceMock.clearAuditLog).toHaveBeenCalledTimes(1);
@@ -240,8 +277,38 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.disconnectBearer).toHaveBeenCalledWith(valid);
   });
 
-  it("cleanup removes all twenty-one registered handlers", () => {
-    expect(ipcHandlers.size).toBe(21);
+  const RESET_DENIAL_COUNTS_CHANNEL = "mcp-server:reset-denial-counts";
+
+  it("resetDenialCounts rejects a non-object payload", async () => {
+    for (const bad of [null, undefined, "s1", 42]) {
+      await expect(getHandler(RESET_DENIAL_COUNTS_CHANNEL)(fakeEvent(), bad)).rejects.toThrow(
+        /Invalid payload/
+      );
+    }
+    expect(serviceMock.resetDenialCounts).not.toHaveBeenCalled();
+  });
+
+  it("resetDenialCounts rejects an empty or non-string sessionId", async () => {
+    for (const sessionId of ["", 42, null, undefined]) {
+      await expect(
+        getHandler(RESET_DENIAL_COUNTS_CHANNEL)(fakeEvent(), { sessionId })
+      ).rejects.toThrow(/Invalid sessionId/);
+    }
+    expect(serviceMock.resetDenialCounts).not.toHaveBeenCalled();
+  });
+
+  it("resetDenialCounts forwards a valid sessionId to the service with the caller's webContents id", async () => {
+    const event = {
+      sender: { id: 77 } as Electron.WebContents,
+    } as Electron.IpcMainInvokeEvent;
+    await getHandler(RESET_DENIAL_COUNTS_CHANNEL)(event, { sessionId: "sess-7" });
+    // The caller-pin id must ride along so the service can reject a renderer
+    // that doesn't own the session.
+    expect(serviceMock.resetDenialCounts).toHaveBeenCalledWith("sess-7", 77);
+  });
+
+  it("cleanup removes all twenty-four registered handlers", () => {
+    expect(ipcHandlers.size).toBe(24);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });

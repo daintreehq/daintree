@@ -5,8 +5,10 @@ type WebContentsCreatedListener = (event: unknown, contents: MockWebContents) =>
 
 interface MockWebContents {
   getType: () => string;
+  isDestroyed: () => boolean;
   setWindowOpenHandler: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  once: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
   id: number;
 }
@@ -69,6 +71,7 @@ vi.mock("../../utils/appProtocol.js", () => ({
   getMimeType: vi.fn(),
   buildHeaders: vi.fn(),
   isImmutableAppAsset: vi.fn(() => false),
+  isNotModified: vi.fn(() => false),
 }));
 
 // Real-ish flag values matter: the protocol handler passes
@@ -111,6 +114,7 @@ vi.mock("../../services/WebviewDialogService.js", () => ({
     registerDialog: vi.fn(),
     getPanelId: vi.fn(() => "panel-browser-1"),
     getPanelKind: vi.fn(() => "dev-preview"),
+    cancelPendingForGuest: vi.fn(),
     storeOAuthSessionStorage: vi.fn(),
   })),
 }));
@@ -124,6 +128,7 @@ vi.mock("../../ipc/channels.js", () => ({
     WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
     WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
     WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
+    WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   },
 }));
 
@@ -141,14 +146,17 @@ const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
 function createMockWebContents(type: "webview" | "window" | "browserView"): MockWebContents {
   const eventHandlers = new Map<string, ((...args: unknown[]) => void)[]>();
+  const record = (event: string, handler: (...args: unknown[]) => void) => {
+    const handlers = eventHandlers.get(event) ?? [];
+    handlers.push(handler);
+    eventHandlers.set(event, handlers);
+  };
   return {
     getType: () => type,
+    isDestroyed: () => false,
     setWindowOpenHandler: vi.fn(),
-    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-      const handlers = eventHandlers.get(event) ?? [];
-      handlers.push(handler);
-      eventHandlers.set(event, handlers);
-    }),
+    on: vi.fn(record),
+    once: vi.fn(record),
     executeJavaScript: vi.fn().mockResolvedValue([]),
     id: Math.floor(Math.random() * 1000),
     // expose for testing
@@ -162,9 +170,12 @@ function getEventHandlers(
   contents: MockWebContents,
   eventName: string
 ): ((...args: unknown[]) => void)[] {
-  return (contents.on as ReturnType<typeof vi.fn>).mock.calls
-    .filter((call) => call[0] === eventName)
-    .map((call) => call[1] as (...args: unknown[]) => void);
+  // Reads both .on and .once registrations (both record into _eventHandlers).
+  return (
+    (
+      contents as unknown as { _eventHandlers: Map<string, ((...args: unknown[]) => void)[]> }
+    )._eventHandlers.get(eventName) ?? []
+  );
 }
 
 describe("setupWebviewCSP — webview guest navigation restriction", () => {
@@ -508,6 +519,119 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
     });
   });
 
+  describe("dialog dismissal on navigation, crash, and destroy (#9943)", () => {
+    function setupGuestWithDialogService(): {
+      contents: MockWebContents;
+      cancelPendingForGuest: ReturnType<typeof vi.fn>;
+      mockSend: ReturnType<typeof vi.fn>;
+    } {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      const cancelPendingForGuest = vi.fn();
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        cancelPendingForGuest,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+      return { contents, cancelPendingForGuest, mockSend };
+    }
+
+    it("registers did-navigate, render-process-gone, and destroyed handlers on the guest", () => {
+      const { contents } = setupGuestWithDialogService();
+      expect(getEventHandlers(contents, "did-navigate").length).toBe(1);
+      expect(getEventHandlers(contents, "render-process-gone").length).toBe(1);
+      expect(getEventHandlers(contents, "destroyed").length).toBe(1);
+    });
+
+    it("cancels pending dialogs and notifies the renderer on did-navigate", () => {
+      const { contents, cancelPendingForGuest, mockSend } = setupGuestWithDialogService();
+      getEventHandlers(contents, "did-navigate")[0]({}, "http://localhost:3000/next", 200, "OK");
+
+      expect(cancelPendingForGuest).toHaveBeenCalledWith(contents.id);
+      expect(mockSend).toHaveBeenCalledWith("webview:dialog-dismiss", { panelId: "panel-1" });
+    });
+
+    it("cancels pending dialogs and notifies the renderer on render-process-gone", () => {
+      const { contents, cancelPendingForGuest, mockSend } = setupGuestWithDialogService();
+      getEventHandlers(contents, "render-process-gone")[0]({}, { reason: "crashed" });
+
+      expect(cancelPendingForGuest).toHaveBeenCalledWith(contents.id);
+      expect(mockSend).toHaveBeenCalledWith("webview:dialog-dismiss", { panelId: "panel-1" });
+    });
+
+    it("dismisses on destroyed using the cached parent window after hostWebContents is gone", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      const cancelPendingForGuest = vi.fn();
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(() => "panel-1"),
+        getPanelId: vi.fn(() => "panel-1"),
+        cancelPendingForGuest,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      // A dialog is shown while the guest is alive — this caches the parent window.
+      const jsDialogHandlers = getEventHandlers(contents, "js-dialog");
+      jsDialogHandlers[0](
+        { preventDefault: vi.fn() },
+        "http://localhost:3000",
+        "msg",
+        "alert",
+        "",
+        vi.fn()
+      );
+
+      // The guest is then destroyed: hostWebContents is unreachable and the live
+      // lookup returns null, so the destroy handler must fall back to the cached
+      // window captured during the guest's lifetime.
+      (contents as unknown as { isDestroyed: () => boolean }).isDestroyed = () => true;
+      mockFromWebContents.mockReturnValue(null);
+      mockSend.mockClear();
+
+      getEventHandlers(contents, "destroyed")[0]();
+
+      expect(cancelPendingForGuest).toHaveBeenCalledWith(contents.id);
+      expect(mockSend).toHaveBeenCalledWith("webview:dialog-dismiss", { panelId: "panel-1" });
+    });
+
+    it("does not notify the renderer when no panel is registered for the guest", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      const cancelPendingForGuest = vi.fn();
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => undefined),
+        cancelPendingForGuest,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      getEventHandlers(contents, "did-navigate")[0]({}, "http://localhost:3000/next", 200, "OK");
+
+      // Callbacks are still cancelled main-side, but no stale dismiss is broadcast.
+      expect(cancelPendingForGuest).toHaveBeenCalledWith(contents.id);
+      expect(mockSend).not.toHaveBeenCalledWith("webview:dialog-dismiss", expect.anything());
+    });
+  });
+
   describe("navigation-blocked IPC routing", () => {
     it("captures OAuth sessionStorage before offering the loopback flow", async () => {
       const storeOAuthSessionStorage = vi.fn();
@@ -764,6 +888,72 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).not.toHaveBeenCalled();
     });
   });
+
+  describe("browser-panel navigation (per-project partition)", () => {
+    function createBrowserWebContents(partition: string): MockWebContents {
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { session: { partition: string } }).session = { partition };
+      return contents;
+    }
+
+    it("allows cross-origin navigation for a per-project browser partition", () => {
+      const contents = createBrowserWebContents("persist:browser-proj-a");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://github.com/login");
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("still blocks unsafe URLs for a browser partition", () => {
+      const contents = createBrowserWebContents("persist:browser-proj-a");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "javascript:alert(1)");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats distinct per-project browser partitions independently as browser panels", () => {
+      const contentsB = createBrowserWebContents("persist:browser-proj-b");
+      simulateWebContentsCreated(contentsB);
+
+      const handler = getEventHandlers(contentsB, "will-redirect")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://accounts.google.com/oauth");
+
+      // Browser partitions allow cross-origin http/https (OAuth flows), unlike
+      // dev-preview which is localhost-only.
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("restricts a dev-preview partition to localhost (cross-origin blocked)", () => {
+      const contents = createBrowserWebContents("persist:dev-preview-proj-a-main-panel");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://github.com/login");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("safely treats a webview with no resolvable session partition as non-browser", () => {
+      // contents.session is absent on the mock; the optional-chaining guard must
+      // not throw and must fall back to the restrictive (localhost-only) path.
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      expect(() => handler(event, "https://github.com/login")).not.toThrow();
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("setupWebviewCSP — partition CSP wiring", () => {
@@ -772,15 +962,17 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     webContentsCreatedListeners.length = 0;
   });
 
-  it("registers CSP on persist:browser and persist:daintree", async () => {
+  it("registers CSP on persist:daintree and does not eagerly open a browser session", async () => {
     const { session } = await import("electron");
     const fromPartition = vi.mocked(session.fromPartition);
 
     setupWebviewCSP();
 
     const partitions = fromPartition.mock.calls.map((call) => call[0]);
-    expect(partitions).toContain("persist:browser");
     expect(partitions).toContain("persist:daintree");
+    // Browser sessions are per-project and created lazily; setup no longer opens a
+    // singleton persist:browser session for identity comparison (#9965).
+    expect(partitions).not.toContain("persist:browser");
   });
 
   it("uses the daintree app CSP for persist:daintree (and skips localhost dev CSP for browser)", async () => {
@@ -1747,5 +1939,252 @@ describe("createPluginProtocolHandler", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+});
+
+describe("createAppProtocolHandler — direct disk read", () => {
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "app");
+    if (!call) throw new Error("handler for app not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeRequest(
+    pathname = "/assets/index-abc123.js",
+    init?: { method?: string; headers?: Record<string, string> }
+  ): GlobalRequest {
+    return new Request(`app://daintree${pathname}`, init) as GlobalRequest;
+  }
+
+  function makeFileHandle(content: string | Buffer = "bytes") {
+    const buffer = typeof content === "string" ? Buffer.from(content) : content;
+    return {
+      readFile: vi.fn().mockResolvedValue(buffer),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockResolvedValue({
+      mtime: new Date(0),
+      isFile: () => true,
+    } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(fs.open).mockResolvedValue(
+      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
+      filePath: "/tmp/dist/assets/index-abc123.js",
+    } as ReturnType<typeof appProtocol.resolveAppUrlToDistPath>);
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+    vi.mocked(appProtocol.buildHeaders).mockReturnValue({
+      "Content-Type": "text/javascript",
+    } as ReturnType<typeof appProtocol.buildHeaders>);
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(false);
+  });
+
+  it("serves the file straight off disk with fs.open(O_RDONLY) and never touches net.fetch", async () => {
+    const { net } = await import("electron");
+    const fs = await import("fs/promises");
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("bytes");
+    // The whole point of #9768: read directly, no Chromium network-stack hop.
+    expect(vi.mocked(net.fetch)).not.toHaveBeenCalled();
+    expect(fs.open).toHaveBeenCalledTimes(1);
+    const openArgs = vi.mocked(fs.open).mock.calls[0];
+    expect(openArgs[0]).toBe("/tmp/dist/assets/index-abc123.js");
+    // No O_NOFOLLOW — app:// uses lexical containment with no realpath, so there
+    // is no TOCTOU window for the flag to close.
+    expect(openArgs[1]).toBe(fs.constants.O_RDONLY);
+  });
+
+  it("builds the 200 response headers from the validator stats (Last-Modified / Cache-Control)", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    const stats = { mtime: new Date(1000), isFile: () => true } as Awaited<
+      ReturnType<typeof fs.stat>
+    >;
+    vi.mocked(fs.stat).mockResolvedValue(stats);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(appProtocol.buildHeaders).toHaveBeenCalledWith("text/javascript", {
+      stats,
+      filePath: "/tmp/dist/assets/index-abc123.js",
+    });
+  });
+
+  it("returns 404 for a directory URL even when the validator matches (no spurious 304)", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(fs.stat).mockResolvedValue({
+      mtime: new Date(0),
+      isFile: () => false,
+    } as Awaited<ReturnType<typeof fs.stat>>);
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(true);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/assets/", {
+        headers: { "If-Modified-Since": new Date(0).toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits to 304 without opening the file when the validator matches", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.isNotModified).mockReturnValue(true);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeRequest("/assets/index-abc123.js", {
+        headers: { "If-Modified-Since": new Date(0).toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(304);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 405 for non-GET/HEAD methods without resolving a path", async () => {
+    const appProtocol = await import("../../utils/appProtocol.js");
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/assets/index-abc123.js", { method: "POST" }));
+
+    expect(response.status).toBe(405);
+    expect(appProtocol.resolveAppUrlToDistPath).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the URL resolves outside the dist root", async () => {
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
+      filePath: "",
+      error: "path traversal",
+    } as ReturnType<typeof appProtocol.resolveAppUrlToDistPath>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest("/../../etc/passwd"));
+
+    expect(response.status).toBe(404);
+    expect(fs.stat).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when stat fails (missing file)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.stat).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when fs.open rejects with ENOENT", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when fs.open rejects with EISDIR (directory URL on Windows)", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("EISDIR"), { code: "EISDIR" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 404 when readFile rejects with EISDIR (directory open succeeds on macOS/Linux)", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockRejectedValue(Object.assign(new Error("EISDIR"), { code: "EISDIR" })),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 and closes the handle when readFile fails unexpectedly", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockRejectedValue(Object.assign(new Error("EIO"), { code: "EIO" })),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(500);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 500 when fs.open rejects with an unexpected error", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(500);
+  });
+
+  it("closes the file handle on the success path", async () => {
+    const fs = await import("fs/promises");
+    const handle = makeFileHandle("bytes");
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 200 when close() rejects after a successful read (close errors are swallowed)", async () => {
+    const fs = await import("fs/promises");
+    const handle = {
+      readFile: vi.fn().mockResolvedValue(Buffer.from("ok")),
+      close: vi.fn().mockRejectedValue(new Error("EBADF")),
+    };
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ok");
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 });

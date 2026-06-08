@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -48,6 +49,7 @@ import {
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
+  INVALID_URL_CODE,
   buildToolError,
   buildMcpErrorPayload,
 } from "./shared.js";
@@ -73,7 +75,56 @@ import {
 } from "./tierAuth.js";
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
+const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 import type { SessionStore } from "./sessionStore.js";
+
+/**
+ * Validate a `help.displayImage` URL (#9828). Only `https://daintree.org` and
+ * its subdomains are accepted; `data:`/`blob:`/other-host URLs are rejected so
+ * the assistant can't smuggle arbitrary content into the panel. The explicit
+ * `data:`/`blob:` pre-check gives a clearer message than the generic
+ * protocol failure (`new URL("data:...")` parses with `protocol === "data:"`).
+ */
+export function validateDisplayImageUrl(
+  url: string
+): { valid: true } | { valid: false; message: string } {
+  if (url.startsWith("data:") || url.startsWith("blob:")) {
+    return {
+      valid: false,
+      message: "data: and blob: URIs are not permitted; provide an https://daintree.org URL.",
+    };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { valid: false, message: `Invalid URL: ${url}` };
+  }
+  if (parsed.protocol !== "https:") {
+    return {
+      valid: false,
+      message: `Only https: URLs are accepted; got '${parsed.protocol}'.`,
+    };
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname !== "daintree.org" && !hostname.endsWith(".daintree.org")) {
+    return {
+      valid: false,
+      message: `URL host must be daintree.org (or a subdomain); got '${parsed.hostname}'.`,
+    };
+  }
+  // Reject non-default ports: the CSP `img-src https://daintree.org` matches
+  // port 443 only, so a non-standard port would pass validation here but get
+  // blocked at render time — a success/render mismatch the model can't recover
+  // from. `URL.port` is "" when the default 443 was used.
+  if (parsed.port !== "" && parsed.port !== "443") {
+    return {
+      valid: false,
+      message: `Only the default https port is accepted; got port '${parsed.port}'.`,
+    };
+  }
+  return { valid: true };
+}
 
 export interface SessionServerDeps {
   sessionStore: SessionStore;
@@ -97,6 +148,14 @@ export interface SessionServerDeps {
     outcome: AuditOutcome;
     confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
     bannerSuppressed?: boolean;
+    /**
+     * Turn id snapshotted once at dispatch start (#10067). Forwarded so the
+     * audit record is stamped with the same turn the live activity strip's
+     * started/settled events carry — never re-read at write time, where an
+     * active→passive FSM transition could have cleared it and split one call
+     * across two groupings.
+     */
+    capturedTurnId?: string | null;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   getFullToolSurface: () => boolean;
@@ -144,6 +203,15 @@ export interface SessionServerDeps {
    */
   clearDenialState?: (sessionId: string) => void;
   /**
+   * Resolve the help-session turn id live (#10067). Called exactly once per
+   * dispatch — at the top of the CallTool handler — so a single snapshot feeds
+   * the started event, the settled event, and the audit record. Returns `null`
+   * for sessions with no help binding (external/api-key) or no active turn.
+   * Implemented by httpLifecycle (it closes over the help-session id); absent
+   * in test fixtures that don't exercise turn correlation.
+   */
+  getCurrentTurnId?: () => string | null;
+  /**
    * Optional renderer notifier fired when an MCP tool dispatch enters the call
    * path (after tier/rate/dedup guards pass and the manifest entry resolves).
    * Drives the Assistant panel's live activity strip (#9759). Implemented by
@@ -158,6 +226,8 @@ export interface SessionServerDeps {
     startedAt: number;
     /** True when the resolved manifest entry is `danger: "confirm"`. */
     danger: boolean;
+    /** Turn id snapshotted at dispatch start (#10067); see {@link SessionServerDeps.getCurrentTurnId}. */
+    capturedTurnId: string | null;
   }) => void;
   /**
    * Optional renderer notifier fired when a dispatch announced via
@@ -170,6 +240,25 @@ export interface SessionServerDeps {
     toolId: string;
     durationMs: number;
     outcome: AuditOutcome;
+    /** Turn id snapshotted at dispatch start (#10067); matches the started event's value. */
+    capturedTurnId: string | null;
+  }) => void;
+  /**
+   * Optional renderer notifier fired when the assistant invokes
+   * `help.displayImage` (#9828). Pushes the validated image URL and the
+   * session-assigned figure number to the pinned WebContents so the Assistant
+   * panel can render the figure inline. Implemented by httpLifecycle for
+   * help-session bearers; absent for external/api-key sessions (which can't
+   * call the tool — it's outside their allowlist — so it never fires for them).
+   */
+  notifyDisplayImage?: (payload: {
+    sessionId: string;
+    imageId: string;
+    figureNumber: number;
+    figureLabel: string;
+    url: string;
+    caption?: string;
+    altText?: string;
   }) => void;
 }
 
@@ -186,8 +275,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     recordDenial,
     notifySessionRevoked,
     clearDenialState,
+    getCurrentTurnId,
     notifyToolCallStarted,
     notifyToolCallSettled,
+    notifyDisplayImage,
   } = deps;
 
   const server = new Server(
@@ -206,7 +297,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const manifest = await requestManifest();
+    // Prefer a live fetch so runtime action-set changes (plugin enable/disable)
+    // are reflected. On failure (renderer bridge unavailable / timed out /
+    // destroyed) fall back to the last-known cached manifest instead of failing
+    // the whole tools/list (#9892). For pinned sessions (#7003) getCachedManifest
+    // always returns null, so they correctly fail closed rather than serve
+    // another window's tool surface. `=== null` (not `!manifest`) so an empty
+    // manifest — a valid zero-tool surface — is not misread as "unavailable".
+    //
+    // Snapshot the fallback BEFORE the await: getCachedManifest() reads the
+    // live session→WebContents map, and a pinned session can be torn down
+    // (map entry deleted) while requestManifest() is in flight. Reading it
+    // after the await would then see the session as unpinned and return the
+    // shared cache — another window's tool surface — defeating #7003. Taken
+    // synchronously here, the request is still in flight so the pin holds.
+    const cachedFallback = getCachedManifest();
+    let manifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
+    try {
+      manifest = await requestManifest();
+    } catch (err) {
+      if (cachedFallback === null) {
+        throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
+      }
+      console.warn("[MCP] tools/list using cached manifest after live fetch failed:", err);
+      manifest = cachedFallback;
+    }
     const tier = sessionStore.getTier(sessionId);
     const fullToolSurface = getFullToolSurface();
     const tools = manifest
@@ -234,6 +349,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
     const fullToolSurface = getFullToolSurface();
+    // Snapshot the turn id once, at dispatch start, before any guard or await
+    // can yield to an active→passive FSM transition that would clear it (#10067).
+    // Every consumer below — the started/settled strip events and all audit
+    // records — receives this same value so one tool call can never split
+    // across two turn groupings in the Assistant panel.
+    const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
 
     // Layered authorization (#8442):
     //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
@@ -268,6 +389,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             durationMs: Date.now() - startedAt,
             outcome: { kind: "unauthorized" },
             bannerSuppressed: suppressBanner ? true : undefined,
+            capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
@@ -331,6 +453,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           args,
           durationMs: Date.now() - startedAt,
           outcome: { kind: "rate_limited", retryAfter: rateLimit.retryAfter },
+          capturedTurnId,
         });
       } catch (err) {
         console.error("[MCP] Failed to append audit record:", err);
@@ -366,6 +489,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 args,
                 durationMs: Date.now() - startedAt,
                 outcome: { kind: "collision" },
+                capturedTurnId,
               });
             } catch (err) {
               console.error("[MCP] Failed to append audit record:", err);
@@ -385,6 +509,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               args,
               durationMs: Date.now() - startedAt,
               outcome: { kind: "dedup" },
+              capturedTurnId,
             });
           } catch (err) {
             console.error("[MCP] Failed to append audit record:", err);
@@ -405,6 +530,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               args,
               durationMs: Date.now() - startedAt,
               outcome: { kind: "collision" },
+              capturedTurnId,
             });
           } catch (err) {
             console.error("[MCP] Failed to append audit record:", err);
@@ -424,6 +550,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             args,
             durationMs: Date.now() - startedAt,
             outcome: { kind: "dedup" },
+            capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
@@ -448,7 +575,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const emitToolCallStarted = (danger: boolean): void => {
       if (!notifyToolCallStarted) return;
       try {
-        notifyToolCallStarted({ sessionId, toolId: actionId, args, startedAt, danger });
+        notifyToolCallStarted({
+          sessionId,
+          toolId: actionId,
+          args,
+          startedAt,
+          danger,
+          capturedTurnId,
+        });
         toolCallStartedEmitted = true;
       } catch (err) {
         console.error("[MCP] Failed to notify tool-call-started:", err);
@@ -508,6 +642,86 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "waitUntilIdle failed"),
+            });
+          }
+        }
+
+        // Short-circuit: help.displayImage runs entirely in the main process
+        // (#9828). The action manifest entry handles schema/tier/audit; the URL
+        // allowlist check, the per-session figure-number assignment, and the
+        // imageId mint are authoritative state that must live here, not in the
+        // renderer. The figure is pushed to the pinned WebContents via
+        // `notifyDisplayImage`. Audit + strip-settle unify via the shared
+        // `finally`. Never `danger: "confirm"` — it's a passive display.
+        if (actionId === HELP_DISPLAY_IMAGE_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            // Help-session bearers only. A pane-token session can also resolve
+            // to the workbench tier and clear the static allowlist gate above,
+            // but it has no pinned panel to render the figure and no public
+            // help-session id to key the counter, so reject it here.
+            const helpSessionId = sessionStore.sessionHelpIdMap.get(sessionId);
+            if (helpSessionId === undefined) {
+              const message = "help.displayImage is only available to help sessions.";
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: TIER_NOT_PERMITTED_CODE, message } },
+              };
+              return buildToolError({ code: TIER_NOT_PERMITTED_CODE, message });
+            }
+            const params = (args ?? {}) as {
+              url?: unknown;
+              caption?: unknown;
+              altText?: unknown;
+            };
+            const url = typeof params.url === "string" ? params.url : "";
+            const validation = url
+              ? validateDisplayImageUrl(url)
+              : { valid: false as const, message: "A non-empty `url` string is required." };
+            if (!validation.valid) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: { code: INVALID_URL_CODE, message: validation.message },
+                },
+              };
+              return buildToolError({ code: INVALID_URL_CODE, message: validation.message });
+            }
+            const caption = typeof params.caption === "string" ? params.caption : undefined;
+            const altText = typeof params.altText === "string" ? params.altText : undefined;
+            const figureNumber = sessionStore.nextFigureNumber(helpSessionId);
+            const figureLabel = `image #${figureNumber}`;
+            const imageId = randomUUID();
+            if (notifyDisplayImage) {
+              try {
+                notifyDisplayImage({
+                  sessionId,
+                  imageId,
+                  figureNumber,
+                  figureLabel,
+                  url,
+                  ...(caption !== undefined ? { caption } : {}),
+                  ...(altText !== undefined ? { altText } : {}),
+                });
+              } catch (err) {
+                console.error("[MCP] Failed to notify display-image:", err);
+              }
+            }
+            const result = { imageId, figureNumber, figureLabel };
+            outcome = { kind: "result", value: { ok: true, result } };
+            return {
+              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+              structuredContent: result as unknown as Record<string, unknown>,
+            };
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "help.displayImage failed"),
             });
           }
         }
@@ -620,6 +834,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             durationMs,
             outcome: settledOutcome,
             confirmationDecision,
+            capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
@@ -634,6 +849,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               toolId: actionId,
               durationMs,
               outcome: settledOutcome,
+              capturedTurnId,
             });
           } catch (err) {
             console.error("[MCP] Failed to notify tool-call-settled:", err);

@@ -104,7 +104,7 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
         deny: [
           "Write(**)",
           "Edit(**)",
-          "MultiEdit(**)",
+          "NotebookEdit(**)",
           "Bash(gh issue create*)",
           "Bash(gh pr create*)",
           "Bash(gh pr merge*)",
@@ -1254,11 +1254,13 @@ describe("HelpSessionService", () => {
       expect(service.validateToken(result.token)).toBe(false);
     });
 
-    it("placeholder is visible to takePendingHibernation before gracefulKill resolves, then overwritten with the real id (#9639)", async () => {
+    it("placeholder is visible to takePendingHibernation before gracefulKill resolves (#9639) and the post-gracefulKill finalize block does NOT overwrite with a stale real id (#10048)", async () => {
       // The core race: eviction's revokeByWebContentsId is fire-and-forget, so
       // the renderer can reopen and call takePendingHibernation while
       // gracefulKill is still in flight. A stateful store proves the synchronous
-      // placeholder is observable in that window.
+      // placeholder is observable in that window AND that consuming it
+      // invalidates the in-flight capture owner so the finalize block cannot
+      // write a stale (already-killed) agent resume id on top of it.
       type PendingHelpHibernationLike = {
         agentId: string;
         agentSessionId: string;
@@ -1300,19 +1302,77 @@ describe("HelpSessionService", () => {
 
       // Before gracefulKill resolves, the renderer's takePendingHibernation
       // sees the empty-sentinel placeholder — so it resumes instead of starting
-      // a fresh session (the visible "restart" this issue fixes).
+      // a fresh session (the visible "restart" #9639 fixes).
       const early = await service.takePendingHibernation("proj-visible");
       expect(early).toEqual(
         expect.objectContaining({ agentId: "claude", agentSessionId: "", cwd: result.sessionPath })
       );
 
-      // gracefulKill finally yields the real resume id; the placeholder is
-      // overwritten so a later open resumes the exact session.
+      // gracefulKill finally yields the real resume id. Because the renderer
+      // already consumed the placeholder, the post-gracefulKill finalize
+      // block's ownership guard must fail (#10048) — the stale (already-killed)
+      // agent id must not be written back to the persistent store.
       resolveGraceful("real-resume-id-xyz");
       await revokePromise;
       await Promise.resolve();
 
-      expect(backing.get("proj-visible")?.agentSessionId).toBe("real-resume-id-xyz");
+      expect(backing.get("proj-visible")).toBeUndefined();
+    });
+
+    it("placeholder gets overwritten with the real id when no take happens (#9639 baseline — finalize-block still updates an untouched capture)", async () => {
+      // Regression guard for #9639: when the renderer does NOT consume the
+      // placeholder during the kill window, the post-gracefulKill finalize
+      // block is still the legitimate writer of the real resume id (no
+      // competing consumer has invalidated ownership).
+      type PendingHelpHibernationLike = {
+        agentId: string;
+        agentSessionId: string;
+        cwd: string;
+        capturedAt: number;
+      };
+      const backing = new Map<string, PendingHelpHibernationLike>();
+      const statefulStore = {
+        get: vi.fn((projectId: string) => backing.get(projectId) ?? null),
+        set: vi.fn((projectId: string, entry: PendingHelpHibernationLike) => {
+          backing.set(projectId, entry);
+          return Promise.resolve();
+        }),
+        clear: vi.fn((projectId: string) => {
+          backing.delete(projectId);
+          return Promise.resolve();
+        }),
+      };
+      service.setPendingHibernationStore(statefulStore as never);
+
+      let resolveGraceful: (value: string | null) => void = () => {};
+      mockPtyGracefulKill.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGraceful = resolve;
+          })
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 78,
+        projectId: "proj-no-take",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-no-take")).toBe(true);
+
+      const revokePromise = service.revokeByWebContentsId(78);
+
+      // Sanity: the empty-sentinel placeholder is observable during the kill
+      // window, exactly as #9639 promises.
+      expect(backing.get("proj-no-take")?.agentSessionId).toBe("");
+
+      // No take happens; gracefulKill yields the real resume id and the
+      // finalize block is still the legitimate writer.
+      resolveGraceful("real-resume-id-abc");
+      await revokePromise;
+      await Promise.resolve();
+
+      expect(backing.get("proj-no-take")?.agentSessionId).toBe("real-resume-id-abc");
     });
   });
 
@@ -2177,7 +2237,7 @@ describe("HelpSessionService", () => {
             deny: [
               "Write(**)",
               "Edit(**)",
-              "MultiEdit(**)",
+              "NotebookEdit(**)",
               "Bash(gh issue create*)",
               "Bash(gh pr create*)",
               "Bash(gh pr merge*)",

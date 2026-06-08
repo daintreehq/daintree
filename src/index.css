@@ -886,6 +886,20 @@ code.hljs {
     display: none;
   }
 
+  /* Mitigate xterm #5893 / #9812: the DOM renderer applies negative inline
+     letter-spacing to emoji spans because OffscreenCanvas.measureText mismeasures
+     them. Author !important wins over the inline style at the same origin. We clamp
+     to 0 rather than `initial` because Daintree sets letterSpacing: 0 (xtermConfig.ts),
+     so the .xterm-rows baseline is ~0px. Only negative values are matched: positive
+     corrections for wide glyphs (CJK) are measured correctly and left alone; sub-pixel
+     bleed from clamping a rare legitimate negative correction beats the multi-px emoji
+     collapse. Chromium has serialized both `letter-spacing: -Npx` and
+     `letter-spacing:-Npx`; keep both forms covered. Remove when on @xterm/xterm >=7.0.0. */
+  .xterm-rows span[style*="letter-spacing: -"],
+  .xterm-rows span[style*="letter-spacing:-"] {
+    letter-spacing: 0 !important;
+  }
+
   /* Consistent monospace font stack */
   code,
   kbd,
@@ -1520,6 +1534,27 @@ body,
   will-change: opacity;
 }
 
+/* Figure-rail "just arrived" highlight — a one-shot accent ring that fades out
+ * as the newest thumbnail mounts (help.displayImage, #9829). This is a transient
+ * single-element signal (one figure highlights at a time, settling to nothing),
+ * so the accent ring is permitted under the accent-restraint rule rather than a
+ * persistent multi-element marker. `forwards` settles to a transparent ring so
+ * no residual outline lingers; the stable `key={imageId}` means it fires exactly
+ * once per figure on mount. */
+@keyframes figure-arrive {
+  0% {
+    box-shadow: 0 0 0 2px var(--color-accent-primary);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+.animate-figure-arrive {
+  animation: figure-arrive 1200ms var(--ease-out-expo) 1 forwards;
+  will-change: box-shadow;
+}
+
 /* Fleet broadcast bar refocus pulse — when the OS window regains focus and
  * fleet is armed, breathe the bar's amber stripe so the user can re-orient
  * to the active mode without searching for it. ~800ms total, opacity-only.
@@ -1690,7 +1725,8 @@ body,
   .animate-all-clear-flash,
   .animate-diagnostics-flash,
   .animate-upstream-badge-flash,
-  .animate-border-flash {
+  .animate-border-flash,
+  .animate-figure-arrive {
     animation: none;
     opacity: 1;
     transform: none;
@@ -2936,6 +2972,50 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   [role="switch"][data-state] span[data-state="unchecked"] {
     background-color: ButtonText;
   }
+
+  /* Project Pulse heatmap (issue #9819). Theme-authored backgrounds collapse
+   * to Canvas under forced-colors, so the four heat levels + missed-day cell
+   * become indistinguishable. Use a system-paint + size-coded inner square
+   * (GitHub's 2023+ contribution-graph approach) keyed off data-heat-level,
+   * and a solid fill for the missed-day streak-break signal. The shape span
+   * is rendered always (display: none baseline) so theme switches don't
+   * reflow; the !important on the heat cell background is required to beat
+   * the inline author style set in PulseHeatmap.getCellStyle. */
+  .pulse-heat-cell {
+    background: Canvas !important;
+  }
+  .pulse-heat-cell-shape {
+    display: block;
+    background: CanvasText !important;
+  }
+  .pulse-heat-cell[data-heat-level="1"] .pulse-heat-cell-shape {
+    width: 35%;
+    height: 35%;
+  }
+  .pulse-heat-cell[data-heat-level="2"] .pulse-heat-cell-shape {
+    width: 55%;
+    height: 55%;
+  }
+  .pulse-heat-cell[data-heat-level="3"] .pulse-heat-cell-shape {
+    width: 75%;
+    height: 75%;
+  }
+  .pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape {
+    width: 90%;
+    height: 90%;
+  }
+  .pulse-heat-cell-missed {
+    background: CanvasText !important;
+  }
+  /* The empty (level 0) legend swatch is a <span>, so it misses both the
+     global button ButtonText border above and the shape-span cue (empty cells
+     carry neither a shape nor a data-heat-level). Left alone it paints Canvas
+     on Canvas — invisible. Grid empty cells stay visible because they're
+     <button>s with the border; give the legend's empty swatch an equivalent
+     CanvasText border so "Less" remains a visible box. */
+  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
+    border: 1px solid CanvasText;
+  }
 }
 
 /* Increased contrast mode — heavier borders for visibility.
@@ -2988,6 +3068,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * utility rule has equal specificity (0,1,0) and wins on source order. */
   [class*="text-daintree-text/"] {
     color: var(--color-daintree-text) !important;
+  }
+
+  /* Project Pulse heatmap (issue #9819). On macOS Increase Contrast the theme
+   * backgrounds still render, but low-alpha heat cells can wash out. A 1px
+   * theme-text border (overriding `border-0` in PulseHeatmap) gives every
+   * cell a visible boundary so the four levels stay distinguishable. */
+  .pulse-heat-cell {
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--color-daintree-text);
   }
 }
 

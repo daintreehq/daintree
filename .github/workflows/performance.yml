@@ -12,6 +12,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # onnxruntime-node (transitive via avr-vad for CPU-only Silero VAD) tries
+  # to download optional CUDA/TensorRT GPU binaries from api.nuget.org on
+  # postinstall. Daintree's VAD runs on CPU; the GPU binaries are never
+  # loaded. The CI runner pool can't reliably reach nuget.org, so skip the
+  # GPU download and let the bundled CPU runtime + binding node module
+  # (already in the npm tarball) do the work.
+  ONNXRUNTIME_NODE_INSTALL: "skip"
+
 jobs:
   perf-ci:
     runs-on: ubuntu-22.04
@@ -55,8 +64,49 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # PERF-004 launches a real packaged binary, so the nightly job must
+      # build one first (#10068). The `--dir` target skips AppImage/deb
+      # packaging and outputs release/linux-unpacked/ directly.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libarchive-tools \
+            libxss-dev \
+            libsecret-1-dev \
+            libnss3-dev \
+            libnotify-dev \
+            libxkbfile-dev
+
+      - name: Build
+        run: npm run build
+
+      - name: Package Linux binary (dir target)
+        run: npx electron-builder --config electron-builder.config.cjs --linux --dir --publish never
+
+      - name: Verify packaged binary exists
+        run: test -f release/linux-unpacked/daintree && test -x release/linux-unpacked/daintree
+
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
       - name: Run nightly matrix
-        run: npm run perf:nightly
+        env:
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
+        run: xvfb-run --auto-servernum npm run perf:nightly
 
       - name: Run soak matrix
         run: npm run perf:soak
@@ -67,3 +117,58 @@ jobs:
         with:
           name: perf-nightly-results
           path: .tmp/perf-results/
+
+  perf-update-baselines:
+    # Regenerate the committed baselines and open a PR rather than committing
+    # directly to the protected base branch. Scheduled-only on develop so feature
+    # branches never spawn baseline PRs.
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A regenerated baseline is still written even when a scenario regresses
+      # against the old values (run.ts exits 1 in that case), so don't let the
+      # non-zero exit abort the job before the PR step runs.
+      - name: Regenerate smoke baseline
+        run: npm run perf:update-baselines:smoke
+        continue-on-error: true
+
+      - name: Regenerate CI baseline
+        run: npm run perf:update-baselines:ci
+        continue-on-error: true
+
+      - name: Regenerate nightly baseline
+        run: npm run perf:update-baselines:nightly
+        continue-on-error: true
+
+      - name: Regenerate soak baseline
+        run: npm run perf:update-baselines:soak
+        continue-on-error: true
+
+      - name: Open baseline update PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          add-paths: scripts/perf/config/baseline.*.json
+          branch: perf/update-baselines-automated
+          delete-branch: true
+          commit-message: "perf(baselines): regenerate stale perf baselines"
+          title: "perf: regenerate stale perf baselines"
+          body: |
+            Automated regeneration of the committed perf baselines (`scripts/perf/config/baseline.*.json`) from the scheduled nightly + soak runs.
+
+            Review the p95 deltas before merging — large swings may indicate a real regression rather than noise.

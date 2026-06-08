@@ -14,7 +14,7 @@ type TerminalBridge = {
 
 const WINDOWS_COMMAND_ECHO_TIMEOUT_MS = 7_500;
 const WINDOWS_COMMAND_ECHO_RETRIES = 2;
-const WINDOWS_COMMAND_ECHO_MAX_CHARS = 80;
+const WINDOWS_COMMAND_ECHO_MAX_CHARS = 320;
 const WINDOWS_COMMAND_SUBMIT_SETTLE_MS = 1_000;
 
 async function getPanelId(panelLocator: Locator): Promise<string> {

@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
 import { isMac } from "@/lib/platform";
+import { runSpringLoop } from "@/lib/demoSpring";
 import { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { usePanelStore } from "@/store/panelStore";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
@@ -12,6 +15,8 @@ import type {
   DemoDragPayload,
   DemoPressKeyPayload,
   DemoWaitForIdlePayload,
+  DemoTypeInTerminalPayload,
+  DemoSendKeyToTerminalPayload,
 } from "@shared/types/ipc/demo";
 
 const CURSOR_SVG_PATH = "M2.5 1L17.5 13.5H9.5L14 22L11 23.5L6.5 15L2.5 19.5V1Z";
@@ -20,6 +25,23 @@ const FITTS_A = 100;
 const FITTS_B = 200;
 const FITTS_DEFAULT_W = 40;
 const TWO_PHASE_THRESHOLD = 300;
+
+// Short moves accelerate from rest with a bell-shaped velocity profile (ease-in-out),
+// matching the ballistic ease-in start the long-move path already uses.
+const SHORT_MOVE_EASING = "cubic-bezier(0.25, 0, 0.65, 1)";
+
+// Occasional subtle overshoot-and-correct on larger moves (Fitts's Law naturalism).
+// Probability scales with distance; magnitude stays small so the cursor never drifts
+// far enough to hover the wrong target. Purely cosmetic — left/top are committed to the
+// real target before the overshoot runs, so posRef stays accurate for click dispatch.
+const OVERSHOOT_FAR_THRESHOLD = 600;
+const OVERSHOOT_PROB_MID = 0.15;
+const OVERSHOOT_PROB_FAR = 0.2;
+const OVERSHOOT_DURATION_MS = 180;
+const OVERSHOOT_DISTANCE_FRACTION = 0.1;
+const OVERSHOOT_MAG_CAP = 20;
+const OVERSHOOT_PERP_FRACTION = 0.2;
+const OVERSHOOT_PEAK_OFFSET = 0.88;
 
 function getDemoApi() {
   return window.electron.demo!;
@@ -67,12 +89,57 @@ function getTypingDelay(char: string, prevChar: string, baseMean: number): numbe
   return gaussianRandom(mean, stdev);
 }
 
+// Escape sequences for special keys sent into a terminal. Arrow keys have a
+// separate application-cursor-mode (DECCKM) form used by TUIs (vim, less); the
+// renderer reads the live xterm mode to pick the right one. All other keys are
+// mode-independent.
+const TERMINAL_KEY_NORMAL: Record<string, string> = {
+  up: "\x1b[A",
+  down: "\x1b[B",
+  right: "\x1b[C",
+  left: "\x1b[D",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  pageup: "\x1b[5~",
+  pagedown: "\x1b[6~",
+  enter: "\r",
+  tab: "\t",
+  escape: "\x1b",
+  backspace: "\x7f",
+  "ctrl-c": "\x03",
+  "ctrl-d": "\x04",
+  "ctrl-u": "\x15",
+};
+
+const TERMINAL_KEY_APP: Record<string, string> = {
+  up: "\x1bOA",
+  down: "\x1bOB",
+  right: "\x1bOC",
+  left: "\x1bOD",
+};
+
+function resolveTerminalKey(key: string, appCursorMode: boolean): string | null {
+  if (appCursorMode && key in TERMINAL_KEY_APP) {
+    return TERMINAL_KEY_APP[key]!;
+  }
+  return TERMINAL_KEY_NORMAL[key] ?? null;
+}
+
+// Resolve a terminal panel id from a selector that either targets the panel
+// root (`[data-panel-id="x"]`) or any element inside it.
+function getPanelIdFromSelector(selector: string): string | null {
+  const el = document.querySelector(selector);
+  if (!el) return null;
+  const panel = el.closest("[data-panel-id]");
+  return panel?.getAttribute("data-panel-id") ?? null;
+}
+
 function cubicBezier(t: number, p0: number, p1: number, p2: number, p3: number): number {
   const u = 1 - t;
   return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
 }
 
-function computeBezierKeyframes(
+export function computeBezierKeyframes(
   fromX: number,
   fromY: number,
   toX: number,
@@ -87,23 +154,55 @@ function computeBezierKeyframes(
   const perpX = dist > 0 ? -dy / dist : 0;
   const perpY = dist > 0 ? dx / dist : 0;
 
-  const offset = dist * (0.05 + Math.random() * 0.25);
+  // Which way the arc bows. Drawn first so the call order stays stable.
   const sign = Math.random() > 0.5 ? 1 : -1;
 
-  const p1x = fromX + dx * 0.33 + perpX * offset * sign;
-  const p1y = fromY + dy * 0.33 + perpY * offset * sign;
+  // Sqrt taper: the leading control point's deviation grows sub-linearly with
+  // distance, so short nudges stay nearly straight while long sweeps bow
+  // noticeably, capped so very long moves don't balloon.
+  const p1Dist = Math.min(Math.sqrt(dist) * (1.5 + Math.random() * 1.5), 80);
 
-  const p2x = fromX + dx * 0.8 + perpX * offset * 0.3 * sign + dx * 0.05;
-  const p2y = fromY + dy * 0.8 + perpY * offset * 0.3 * sign + dy * 0.05;
+  // Occasional mid-flight correction: only long moves can inflect into an S, and
+  // only some of the time.
+  const isSCurve = dist > TWO_PHASE_THRESHOLD && Math.random() < 0.2;
+
+  let p1t: number;
+  let p2t: number;
+  let p2Dist: number;
+  let p2Sign: number;
+  if (isSCurve) {
+    // S-shaped path: a comparable second lobe to the opposite side, placed
+    // mid-flight so the inflection is actually visible rather than a sub-pixel
+    // wobble at the very end.
+    p1t = 0.2 + Math.random() * 0.1;
+    p2t = 0.6 + Math.random() * 0.1;
+    p2Dist = p1Dist * (0.5 + Math.random() * 0.3);
+    p2Sign = -sign;
+  } else {
+    // Single bow: peak early during acceleration, then settle the trailing
+    // control point most of the way back to the chord so the path decelerates
+    // straight into the target.
+    p1t = 0.25 + Math.random() * 0.15;
+    p2t = 0.9 + Math.random() * 0.05;
+    p2Dist = p1Dist * (0.1 + Math.random() * 0.15);
+    p2Sign = sign;
+  }
+
+  const p1x = fromX + dx * p1t + perpX * p1Dist * sign;
+  const p1y = fromY + dy * p1t + perpY * p1Dist * sign;
+
+  const p2x = fromX + dx * p2t + perpX * p2Dist * p2Sign;
+  const p2y = fromY + dy * p2t + perpY * p2Dist * p2Sign;
 
   const jitterAmplitude = Math.min(2, dist * 0.003);
+  const safeSteps = Math.max(1, steps);
   const frames: Array<{ transform: string }> = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
+  for (let i = 0; i <= safeSteps; i++) {
+    const t = i / safeSteps;
     let x = cubicBezier(t, fromX, p1x, p2x, toX) - fromX;
     let y = cubicBezier(t, fromY, p1y, p2y, toY) - fromY;
 
-    if (i > 0 && i < steps && jitterAmplitude > 0) {
+    if (i > 0 && i < safeSteps && jitterAmplitude > 0) {
       const noiseVal = (noise1D(i * 0.15 + seed) * 2 - 1) * jitterAmplitude;
       x += perpX * noiseVal;
       y += perpY * noiseVal;
@@ -114,6 +213,79 @@ function computeBezierKeyframes(
   return frames;
 }
 
+function shouldOvershoot(dist: number): boolean {
+  if (dist <= TWO_PHASE_THRESHOLD) return false;
+  const prob = dist >= OVERSHOOT_FAR_THRESHOLD ? OVERSHOOT_PROB_FAR : OVERSHOOT_PROB_MID;
+  return Math.random() < prob;
+}
+
+function computeOvershootKeyframes(
+  dx: number,
+  dy: number,
+  dist: number
+): Array<{ transform: string; offset: number }> {
+  const dirX = dist > 0 ? dx / dist : 0;
+  const dirY = dist > 0 ? dy / dist : 0;
+  const perpX = -dirY;
+  const perpY = dirX;
+
+  const magnitude = Math.min(dist * OVERSHOOT_DISTANCE_FRACTION, OVERSHOOT_MAG_CAP);
+  const perpMag = magnitude * OVERSHOOT_PERP_FRACTION * (Math.random() > 0.5 ? 1 : -1);
+
+  const peakX = dirX * magnitude + perpX * perpMag;
+  const peakY = dirY * magnitude + perpY * perpMag;
+
+  return [
+    { transform: "translate(0px, 0px)", offset: 0 },
+    { transform: `translate(${peakX}px, ${peakY}px)`, offset: OVERSHOOT_PEAK_OFFSET },
+    { transform: "translate(0px, 0px)", offset: 1 },
+  ];
+}
+
+// Absolute {x, y} sample of the same arced path used by computeBezierKeyframes,
+// evaluated at a single parameter t. Control points are derived deterministically
+// from `seed` (not Math.random) so repeated per-frame samples trace one stable arc.
+// Used by the drag handler to drive the visible glyph and synthetic move events
+// from identical coordinates each animation frame.
+function computeBezierPoint(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  seed: number,
+  t: number
+): { x: number; y: number } {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  const perpX = dist > 0 ? -dy / dist : 0;
+  const perpY = dist > 0 ? dx / dist : 0;
+
+  const offset = dist * (0.05 + noise1D(seed) * 0.25);
+  const sign = noise1D(seed + 100) > 0.5 ? 1 : -1;
+
+  const p1x = fromX + dx * 0.33 + perpX * offset * sign;
+  const p1y = fromY + dy * 0.33 + perpY * offset * sign;
+  const p2x = fromX + dx * 0.8 + perpX * offset * 0.3 * sign + dx * 0.05;
+  const p2y = fromY + dy * 0.8 + perpY * offset * 0.3 * sign + dy * 0.05;
+
+  // Ease-out on the timeline so the drag decelerates onto the target,
+  // matching the perceived feel of animateCursor's WAAPI easing.
+  const easedT = 1 - Math.pow(1 - t, 3);
+  let x = cubicBezier(easedT, fromX, p1x, p2x, toX);
+  let y = cubicBezier(easedT, fromY, p1y, p2y, toY);
+
+  const jitterAmplitude = Math.min(2, dist * 0.003);
+  if (t > 0 && t < 1 && jitterAmplitude > 0) {
+    const noiseVal = (noise1D(t * 10 + seed) * 2 - 1) * jitterAmplitude;
+    x += perpX * noiseVal;
+    y += perpY * noiseVal;
+  }
+
+  return { x, y };
+}
+
 export function DemoCursor() {
   const cursorRef = useRef<HTMLDivElement>(null);
   const svgWrapperRef = useRef<HTMLDivElement>(null);
@@ -121,6 +293,7 @@ export function DemoCursor() {
   const posRef = useRef({ x: 0, y: 0 });
   const pauseResolversRef = useRef<Array<() => void>>([]);
   const pausedRef = useRef(false);
+  const scrollAnimRef = useRef<{ cancel: () => void } | null>(null);
 
   useEffect(() => {
     posRef.current = {
@@ -221,25 +394,49 @@ export function DemoCursor() {
         el.style.top = `${targetY}px`;
         el.style.transform = "";
         acquisitionAnim.cancel();
-      } else {
-        const keyframes = computeBezierKeyframes(fromX, fromY, targetX, targetY, steps, seed);
-        const anim = el.animate(keyframes, {
-          duration: totalDuration,
-          easing: "ease-out",
-          fill: "forwards",
-        });
-        await anim.finished;
-        el.style.left = `${targetX}px`;
-        el.style.top = `${targetY}px`;
-        el.style.transform = "";
-        anim.cancel();
+
+        // Real target is committed; posRef is accurate before any cosmetic overshoot so a
+        // click dispatched after this resolves reads the true landing position.
+        posRef.current = { x: targetX, y: targetY };
+
+        if (shouldOvershoot(dist)) {
+          // The overshoot is purely cosmetic — the logical move already landed on the real
+          // target above. If the animation is aborted mid-flight, swallow it so a cosmetic
+          // failure never poisons the command result.
+          const overshootAnim = el.animate(computeOvershootKeyframes(dx, dy, dist), {
+            duration: OVERSHOOT_DURATION_MS,
+            easing: "ease-in-out",
+            fill: "forwards",
+          });
+          try {
+            await overshootAnim.finished;
+          } catch {
+            // animation cancelled — position is already committed, nothing to recover
+          }
+          el.style.transform = "";
+          overshootAnim.cancel();
+        }
+        return;
       }
+
+      const keyframes = computeBezierKeyframes(fromX, fromY, targetX, targetY, steps, seed);
+      const anim = el.animate(keyframes, {
+        duration: totalDuration,
+        easing: SHORT_MOVE_EASING,
+        fill: "forwards",
+      });
+      await anim.finished;
+      el.style.left = `${targetX}px`;
+      el.style.top = `${targetY}px`;
+      el.style.transform = "";
+      anim.cancel();
 
       posRef.current = { x: targetX, y: targetY };
     }
 
     cleanups.push(
       demo.onExecCommand("demo:exec-move-to", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoMoveToPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -255,6 +452,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-move-to-selector", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoMoveToSelectorPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -262,6 +460,7 @@ export function DemoCursor() {
           const elements = document.querySelectorAll(payload.selector);
           let target: Element | null = null;
           for (const el of elements) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const htmlEl = el as HTMLElement;
             if (htmlEl.checkVisibility ? htmlEl.checkVisibility() : htmlEl.offsetParent !== null) {
               target = el;
@@ -294,6 +493,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-click", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as { requestId: string };
         try {
           await waitIfPaused();
@@ -361,7 +561,19 @@ export function DemoCursor() {
               clientX: cx,
               clientY: cy,
             };
+            // Lead each MouseEvent with its PointerEvent counterpart: Radix triggers
+            // open on onPointerDown and dnd-kit's PointerSensor activates on pointerdown,
+            // so a mouse-only dispatch silently no-ops on pointer-first controls (#10145).
+            const pointerOpts = {
+              ...opts,
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              button: 0,
+            };
+            clickTarget.dispatchEvent(new PointerEvent("pointerdown", { ...pointerOpts, buttons: 1 }));
             clickTarget.dispatchEvent(new MouseEvent("mousedown", { ...opts, buttons: 1 }));
+            clickTarget.dispatchEvent(new PointerEvent("pointerup", { ...pointerOpts, buttons: 0 }));
             clickTarget.dispatchEvent(new MouseEvent("mouseup", { ...opts, buttons: 0 }));
             clickTarget.dispatchEvent(new MouseEvent("click", { ...opts, buttons: 0 }));
           }
@@ -375,6 +587,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-type", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoTypePayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -403,6 +616,7 @@ export function DemoCursor() {
               prevChar = char;
             }
           } else {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const inputTarget = target as HTMLInputElement | HTMLTextAreaElement;
             inputTarget.focus();
             let prevChar = "";
@@ -423,8 +637,67 @@ export function DemoCursor() {
       })
     );
 
+    // --- type-in-terminal: humanized char-by-char PTY write into a terminal ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-type-in-terminal", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        const payload = raw as unknown as DemoTypeInTerminalPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const panelId = getPanelIdFromSelector(payload.selector);
+          if (!panelId) {
+            sendDone(payload.requestId, `Terminal panel not found: ${payload.selector}`);
+            return;
+          }
+
+          const cps = Math.max(1, payload.cps ?? 12);
+          const baseMean = 1000 / cps;
+          let prevChar = "";
+          for (const char of payload.text) {
+            await waitIfPaused();
+            window.electron.terminal.write(panelId, char);
+            await pauseAwareDelay(getTypingDelay(char, prevChar, baseMean));
+            prevChar = char;
+          }
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- send-key-to-terminal: write a special-key escape sequence to the PTY ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-send-key-to-terminal", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        const payload = raw as unknown as DemoSendKeyToTerminalPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const panelId = getPanelIdFromSelector(payload.selector);
+          if (!panelId) {
+            sendDone(payload.requestId, `Terminal panel not found: ${payload.selector}`);
+            return;
+          }
+
+          const appCursorMode =
+            terminalInstanceService.get(panelId)?.terminal.modes.applicationCursorKeysMode ?? false;
+          const seq = resolveTerminalKey(payload.key, appCursorMode);
+          if (seq === null) {
+            sendDone(payload.requestId, `Unknown terminal key: ${payload.key}`);
+            return;
+          }
+
+          window.electron.terminal.write(panelId, seq);
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
     cleanups.push(
       demo.onExecCommand("demo:exec-wait-for-selector", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoWaitForSelectorPayload & { requestId: string };
         try {
           if (document.querySelector(payload.selector)) {
@@ -457,6 +730,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-sleep", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoSleepPayload & { requestId: string };
         try {
           await pauseAwareDelay(payload.durationMs);
@@ -470,6 +744,7 @@ export function DemoCursor() {
     // --- scroll handler: spring-animate scrollTop on nearest scrollable ancestor ---
     cleanups.push(
       demo.onExecCommand("demo:exec-scroll", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoScrollPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -510,32 +785,20 @@ export function DemoCursor() {
             Math.min(targetScrollTop, container.scrollHeight - container.clientHeight)
           );
 
-          // Spring animation (semi-implicit Euler)
-          const stiffness = 70;
-          const damping = 20;
-          let current = container.scrollTop;
-          let velocity = 0;
-
+          // Frame-rate-independent spring glide (see src/lib/demoSpring.ts).
           await new Promise<void>((resolve) => {
-            let lastTime = performance.now();
-            function step(now: number) {
-              let dt = (now - lastTime) / 1000;
-              dt = Math.min(dt, 0.032);
-              lastTime = now;
-
-              const force = -stiffness * (current - clampedTarget) - damping * velocity;
-              velocity += force * dt;
-              current += velocity * dt;
-              container!.scrollTop = current;
-
-              if (Math.abs(velocity) < 0.5 && Math.abs(clampedTarget - current) < 0.5) {
+            scrollAnimRef.current = runSpringLoop(
+              { scroll: { current: container!.scrollTop, velocity: 0 } },
+              { scroll: clampedTarget },
+              (axes) => {
+                container!.scrollTop = axes.scroll.current;
+              },
+              () => {
                 container!.scrollTop = clampedTarget;
+                scrollAnimRef.current = null;
                 resolve();
-              } else {
-                requestAnimationFrame(step);
               }
-            }
-            requestAnimationFrame(step);
+            );
           });
 
           sendDone(payload.requestId);
@@ -548,6 +811,7 @@ export function DemoCursor() {
     // --- drag handler: mousedown → animate → mousemove×N → mouseup ---
     cleanups.push(
       demo.onExecCommand("demo:exec-drag", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoDragPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -570,6 +834,11 @@ export function DemoCursor() {
           const toY = toRect.top + toRect.height / 2;
 
           const eventOpts = { bubbles: true, cancelable: true };
+          // dnd-kit's PointerSensor hard-gates activation on isPrimary && button === 0,
+          // and Radix Select reads pointerType/pointerId; without these a synthetic drag
+          // never starts a pointer-first sortable (#10145). `button` is set per-event
+          // (0 on down/up, -1 on move per the Pointer Events spec).
+          const pointerMeta = { pointerId: 1, pointerType: "mouse", isPrimary: true };
 
           // Move cursor to source first
           await animateCursor(fromX, fromY, Math.min(payload.durationMs ?? 500, 300));
@@ -579,6 +848,8 @@ export function DemoCursor() {
           sourceTarget.dispatchEvent(
             new PointerEvent("pointerdown", {
               ...eventOpts,
+              ...pointerMeta,
+              button: 0,
               clientX: fromX,
               clientY: fromY,
               buttons: 1,
@@ -594,36 +865,79 @@ export function DemoCursor() {
           );
 
           try {
-            // Animate cursor to target, dispatching intermediate move events
-            const steps = 10;
+            // Drive the visible glyph and the synthetic move events from the
+            // same arced coordinates each frame, paced by wall-clock elapsed
+            // time, so the cursor travels with the drag instead of teleporting.
             const duration = payload.durationMs ?? 500;
-            for (let i = 1; i <= steps; i++) {
-              const t = i / steps;
-              const cx = fromX + (toX - fromX) * t;
-              const cy = fromY + (toY - fromY) * t;
-              await pauseAwareDelay(duration / steps);
-              const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
-              moveTarget.dispatchEvent(
-                new PointerEvent("pointermove", {
-                  ...eventOpts,
-                  clientX: cx,
-                  clientY: cy,
-                  buttons: 1,
-                })
-              );
-              moveTarget.dispatchEvent(
-                new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
-              );
-            }
+            const seed = Math.random() * 1000;
 
-            // Visual cursor follows
-            await animateCursor(toX, toY, 50);
+            await new Promise<void>((resolve) => {
+              let startTs: number | null = null;
+              let pauseStartedAt: number | null = null;
+              let pausedTotal = 0;
+
+              function frame(timestamp: number) {
+                const el = cursorRef.current;
+                // Component unmounted mid-drag — stop the loop (also breaks the
+                // reschedule-forever path when unmounted while paused).
+                if (!el) {
+                  resolve();
+                  return;
+                }
+                if (startTs === null) startTs = timestamp;
+
+                if (pausedRef.current) {
+                  // Freeze progress: remember when the pause began, keep ticking.
+                  if (pauseStartedAt === null) pauseStartedAt = timestamp;
+                  requestAnimationFrame(frame);
+                  return;
+                }
+                if (pauseStartedAt !== null) {
+                  pausedTotal += timestamp - pauseStartedAt;
+                  pauseStartedAt = null;
+                }
+
+                const elapsed = timestamp - startTs - pausedTotal;
+                const t = duration > 0 ? Math.min(elapsed / duration, 1) : 1;
+                const { x: cx, y: cy } = computeBezierPoint(fromX, fromY, toX, toY, seed, t);
+
+                el.style.left = `${cx}px`;
+                el.style.top = `${cy}px`;
+                el.style.transform = "";
+
+                const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
+                moveTarget.dispatchEvent(
+                  new PointerEvent("pointermove", {
+                    ...eventOpts,
+                    ...pointerMeta,
+                    button: -1,
+                    clientX: cx,
+                    clientY: cy,
+                    buttons: 1,
+                  })
+                );
+                moveTarget.dispatchEvent(
+                  new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
+                );
+
+                if (t >= 1) {
+                  posRef.current = { x: toX, y: toY };
+                  resolve();
+                  return;
+                }
+                requestAnimationFrame(frame);
+              }
+
+              requestAnimationFrame(frame);
+            });
           } finally {
             // Release at target (guaranteed even on error)
             const releaseTarget = document.elementFromPoint(toX, toY) ?? toEl;
             releaseTarget.dispatchEvent(
               new PointerEvent("pointerup", {
                 ...eventOpts,
+                ...pointerMeta,
+                button: 0,
                 clientX: toX,
                 clientY: toY,
                 buttons: 0,
@@ -644,6 +958,7 @@ export function DemoCursor() {
     // --- pressKey handler: dispatch keydown/keyup on target ---
     cleanups.push(
       demo.onExecCommand("demo:exec-press-key", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoPressKeyPayload & { requestId: string };
         try {
           await waitIfPaused();
@@ -681,9 +996,19 @@ export function DemoCursor() {
       })
     );
 
-    // --- waitForIdle handler: MutationObserver + getAnimations + double-rAF ---
+    // --- waitForIdle handler: MutationObserver + getAnimations + terminal
+    // onWriteParsed + video playback + double-rAF ---
+    //
+    // getAnimations() and the MutationObserver only see CSS/WAAPI animations and
+    // DOM mutations. They are blind to two activity channels that paint outside
+    // that pipeline: xterm WebGL canvas repaints (terminal output) and <video>
+    // playback. Without covering those, waitForIdle reports idle while a terminal
+    // is still streaming output or a video is mid-playback. We treat all three
+    // channels as independent activity signals — idle requires every channel
+    // quiet for settleMs simultaneously (see issue #10144).
     cleanups.push(
       demo.onExecCommand("demo:exec-wait-for-idle", async (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as DemoWaitForIdlePayload & { requestId: string };
         try {
           const settleMs = payload.settleMs ?? 300;
@@ -692,7 +1017,79 @@ export function DemoCursor() {
           await new Promise<void>((resolve, reject) => {
             const start = performance.now();
             let timer: ReturnType<typeof setTimeout>;
+            let cleaned = false;
+            // The settle confirmation runs across a double-rAF gap. Any activity
+            // arriving inside that gap calls resetTimer(), which flips this flag
+            // so the in-flight rAF chain aborts instead of falsely resolving.
+            let rafCancelled = false;
             const demoOverlay = document.querySelector("[data-demo-overlay]");
+
+            // Terminal output channel: subscribe to onWriteParsed on every live
+            // terminal. onWriteParsed fires at most once per frame after an async
+            // parse of terminal.write() completes — it never fires on cursor
+            // blink, scroll, or focus, so it is the correct settle signal (unlike
+            // onRender, which the blink cycle triggers continuously). We snapshot
+            // the terminals at entry; demo scripts are sequential, so no new
+            // terminal appears mid-wait.
+            const terminalDisposables: Array<{ dispose: () => void }> = [];
+            for (const panelId of usePanelStore.getState().panelIds) {
+              const managed = terminalInstanceService.get(panelId);
+              // Hibernated terminals have a disposed xterm instance — skip them.
+              if (!managed || managed.isHibernated) continue;
+              try {
+                terminalDisposables.push(managed.terminal.onWriteParsed(() => resetTimer()));
+              } catch {
+                // A terminal that disposes mid-snapshot cannot produce output.
+              }
+            }
+
+            // Video channel: media events do not bubble, so listen in the capture
+            // phase on document. The active set holds videos currently playing;
+            // idle requires it to be empty. `waiting` (buffering) counts as
+            // inactive so a stalled video can never permanently block idle —
+            // `playing` re-fires and resets the timer if playback resumes.
+            const activeVideos = new Set<HTMLVideoElement>();
+            for (const video of document.querySelectorAll("video")) {
+              if (!video.paused && !video.ended && video.readyState >= 3) {
+                activeVideos.add(video);
+              }
+            }
+            function onVideoPlaying(e: Event) {
+              if (e.target instanceof HTMLVideoElement) {
+                activeVideos.add(e.target);
+                resetTimer();
+              }
+            }
+            function onVideoInactive(e: Event) {
+              if (e.target instanceof HTMLVideoElement) {
+                activeVideos.delete(e.target);
+                // A video stopping is a state change — restart the settle window
+                // so idle requires settleMs of quiet *after* playback ceases.
+                resetTimer();
+              }
+            }
+            document.addEventListener("playing", onVideoPlaying, true);
+            document.addEventListener("pause", onVideoInactive, true);
+            document.addEventListener("ended", onVideoInactive, true);
+            document.addEventListener("waiting", onVideoInactive, true);
+
+            function cleanup() {
+              if (cleaned) return;
+              cleaned = true;
+              clearTimeout(timer);
+              observer.disconnect();
+              for (const d of terminalDisposables) {
+                try {
+                  d.dispose();
+                } catch {
+                  // A throwing dispose must not strand the remaining teardown.
+                }
+              }
+              document.removeEventListener("playing", onVideoPlaying, true);
+              document.removeEventListener("pause", onVideoInactive, true);
+              document.removeEventListener("ended", onVideoInactive, true);
+              document.removeEventListener("waiting", onVideoInactive, true);
+            }
 
             function isDemoOwned(el: Element | null): boolean {
               if (!el || !demoOverlay) return false;
@@ -703,6 +1100,7 @@ export function DemoCursor() {
               const hasAnimations = document.getAnimations().some((a) => {
                 const state = a.playState as string;
                 if (state !== "running" && state !== "pending") return false;
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 const effect = a.effect as KeyframeEffect | null;
                 // Skip demo-owned animations (cursor, overlay)
                 if (effect?.target && isDemoOwned(effect.target as Element)) return false;
@@ -717,18 +1115,35 @@ export function DemoCursor() {
                 return;
               }
 
-              // Double rAF to ensure paint is complete
+              // Drop videos that were removed from the DOM while playing without
+              // firing pause/ended (e.g. a React conditional unmount) — they
+              // would otherwise block idle until the timeout.
+              for (const v of activeVideos) {
+                if (!v.isConnected) activeVideos.delete(v);
+              }
+
+              // A video still playing means the page is not idle yet.
+              if (activeVideos.size > 0) {
+                resetTimer();
+                return;
+              }
+
+              // Double rAF to ensure paint is complete. resetTimer() flips
+              // rafCancelled if activity arrives before the chain completes.
+              rafCancelled = false;
               requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
-                  observer.disconnect();
+                  if (rafCancelled) return;
+                  cleanup();
                   resolve();
                 });
               });
             }
 
             function resetTimer() {
+              rafCancelled = true;
               if (performance.now() - start > timeoutMs) {
-                observer.disconnect();
+                cleanup();
                 reject(new Error("waitForIdle timed out"));
                 return;
               }
@@ -756,6 +1171,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-pause", (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as { requestId: string };
         pausedRef.current = true;
         sendDone(payload.requestId);
@@ -764,6 +1180,7 @@ export function DemoCursor() {
 
     cleanups.push(
       demo.onExecCommand("demo:exec-resume", (raw: Record<string, unknown>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const payload = raw as unknown as { requestId: string };
         pausedRef.current = false;
         const resolvers = pauseResolversRef.current.splice(0);
@@ -776,12 +1193,15 @@ export function DemoCursor() {
 
     return () => {
       for (const cleanup of cleanups) cleanup();
+      scrollAnimRef.current?.cancel();
+      scrollAnimRef.current = null;
     };
   }, []);
 
   return (
     <div
       ref={cursorRef}
+      data-demo-cursor
       style={{
         position: "fixed",
         left: "50%",

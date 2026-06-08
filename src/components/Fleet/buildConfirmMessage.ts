@@ -28,6 +28,6 @@ export function buildConfirmMessage(
     case "kill":
       return `Kill ${count} ${count === 1 ? "terminal" : "terminals"}?`;
     case "trash":
-      return `Trash ${count} ${count === 1 ? "worktree" : "worktrees"}?`;
+      return `Trash ${count} ${count === 1 ? "terminal" : "terminals"}?`;
   }
 }

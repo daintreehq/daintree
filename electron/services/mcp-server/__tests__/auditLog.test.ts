@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { AuditService, type AuditOutcome } from "../auditLog.js";
-import type { McpAuditResult } from "../../../../shared/types/ipc/mcpServer.js";
+import {
+  type McpAuditResult,
+  isAuditRecord,
+  isGrantRecord,
+} from "../../../../shared/types/ipc/mcpServer.js";
 
 function makeFixture(initialConfig: Record<string, unknown> = {}) {
   const config: Record<string, unknown> = {
@@ -213,6 +217,76 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
   });
 });
 
+describe("AuditService.appendRecord — resultMeta (#10014)", () => {
+  it("persists retryAfter on rate_limited records and round-trips through getRecords", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "rate_limited", retryAfter: 5 },
+      argsSummary: "{}",
+      resultMeta: { retryAfter: 5 },
+    });
+    const [record] = service.getRecords();
+    expect(record!.result).toBe("rate_limited");
+    expect(record!.resultMeta).toEqual({ retryAfter: 5 });
+  });
+
+  it("leaves resultMeta undefined on records that do not provide it", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect("resultMeta" in record!).toBe(false);
+  });
+
+  it("does not backfill resultMeta on gate outcomes that omit it (unauthorized / dedup / collision)", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "workbench",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "unauthorized" },
+      argsSummary: "{}",
+    });
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "dedup" },
+      argsSummary: "{}",
+    });
+    service.appendRecord({
+      toolId: "agent.terminal",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 0,
+      outcome: { kind: "collision" },
+      argsSummary: "{}",
+    });
+    const records = service.getRecords();
+    expect(records).toHaveLength(3);
+    for (const r of records) {
+      expect("resultMeta" in r!).toBe(false);
+    }
+  });
+});
+
 describe("AuditService.recordAuth401 pre-auth records", () => {
   it("emits a pre-auth record alongside the counter increment", () => {
     const { service } = makeFixture();
@@ -370,6 +444,33 @@ describe("AuditService hydrate — backward compat", () => {
     expect(records).toHaveLength(1);
     expect(records[0]!.schemaVersion).toBe(1);
     expect(records[0]!.severity).toBe("info");
+  });
+
+  it("reclassifies a malformed persisted record with `type: 'dispatch'` as audit (#10027)", () => {
+    // A forward-compat dispatch-record discriminator on a persisted row
+    // would otherwise be misclassified as a grant and bypass severity
+    // backfill. Lock down the hydrate-path guard to match the
+    // `isGrantRecord` literal-union check.
+    const malformed = {
+      id: "mal-1",
+      timestamp: 1000,
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success",
+      durationMs: 50,
+      type: "dispatch",
+    };
+    const { service } = makeFixture({ auditLog: [malformed] });
+    const records = service.getLogRecords();
+    expect(records).toHaveLength(1);
+    // The record survives hydrate (the string `type` field is preserved),
+    // but isAuditRecord narrows it to the dispatch kind — getRecords() sees it.
+    expect(service.getRecords()).toHaveLength(1);
+    // "type" stays in the persisted shape for round-trip safety; the
+    // union consumer narrows by isGrantRecord at read time.
+    expect((records[0] as { type?: unknown }).type).toBe("dispatch");
   });
 });
 
@@ -552,6 +653,48 @@ describe("AuditService anomaly detection", () => {
     expect(firstSeen).toHaveLength(1);
     expect(firstSeen[0]!.toolId).toBe("tool.new");
     expect(firstSeen[0]!.tier).toBe("external");
+  });
+
+  it("first-seen: passive read (markSeen=false) does not consume the signal", () => {
+    const service = makeRecords(50, () => ({
+      toolId: "tool.a",
+      tier: "action",
+      durationMs: 10,
+    }));
+    service.getAuditStats(); // seed baseline known combos
+
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+
+    // Two passive reads in a row both still surface the new combo — a
+    // background poll must not acknowledge it (#10022).
+    const firstPassive = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstPassive).toHaveLength(1);
+    const secondPassive = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(secondPassive).toHaveLength(1);
+
+    // A user-facing read (default markSeen=true) acknowledges it...
+    const acknowledged = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(acknowledged).toHaveLength(1);
+
+    // ...so the next read (passive or not) sees it as known and stays quiet.
+    const afterAck = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(afterAck).toHaveLength(0);
   });
 
   it("first-seen: knownCombinations survives clear()", () => {
@@ -820,5 +963,146 @@ describe("AuditService anomaly detection", () => {
     const p95 = stats.anomalySignals.filter((s) => s.kind === "p95-z-score");
     expect(p95.length).toBeGreaterThanOrEqual(1);
     expect(p95[0]!.toolId).toBe("tool.e");
+  });
+});
+
+describe("shared narrowers — isGrantRecord / isAuditRecord (#10027)", () => {
+  it("classifies a legacy dispatch record (no `type` field) as audit", () => {
+    const record = {
+      id: "audit-1",
+      timestamp: 1,
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as const,
+      durationMs: 5,
+      schemaVersion: 1,
+      severity: "info" as const,
+    };
+    expect(isGrantRecord(record)).toBe(false);
+    expect(isAuditRecord(record)).toBe(true);
+  });
+
+  it("classifies a grant record (with `type`) as grant", () => {
+    const record = {
+      type: "grant.issued" as const,
+      id: "grant-1",
+      timestamp: 1,
+      sessionId: "sess-1",
+      toolId: "files.search",
+      ttlMs: 60000,
+    };
+    expect(isGrantRecord(record)).toBe(true);
+    expect(isAuditRecord(record)).toBe(false);
+  });
+
+  it("rejects a record with a non-string `type` discriminator", () => {
+    // Defensive: a malformed on-disk record that survived hydration should
+    // be treated as the implicit dispatch kind, not as a grant record.
+    const record = {
+      id: "x",
+      timestamp: 1,
+      toolId: "t",
+      sessionId: "s",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as const,
+      durationMs: 0,
+      schemaVersion: 1,
+      severity: "info" as const,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentionally malformed
+      type: 123 as any,
+    };
+    expect(isGrantRecord(record as never)).toBe(false);
+    expect(isAuditRecord(record as never)).toBe(true);
+  });
+
+  it("rejects a record with an unknown `type` discriminator value", () => {
+    // Forward-compat hazard: a future dispatch-record discriminator (or a
+    // malformed persisted row) would otherwise be misclassified as a grant
+    // and misrendered with `undefined` for its `type` field.
+    const record = {
+      id: "x",
+      timestamp: 1,
+      toolId: "t",
+      sessionId: "s",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success" as const,
+      durationMs: 0,
+      schemaVersion: 1,
+      severity: "info" as const,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentionally unknown discriminator
+      type: "dispatch" as any,
+    };
+    expect(isGrantRecord(record as never)).toBe(false);
+    expect(isAuditRecord(record as never)).toBe(true);
+  });
+
+  it("rejects case-mismatched `type` discriminators (lowercase grant.issued only)", () => {
+    const record = {
+      id: "x",
+      timestamp: 1,
+      sessionId: "s",
+      toolId: "*",
+      ttlMs: 0,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentionally case-mismatched
+      type: "Grant.Expired" as any,
+    };
+    expect(isGrantRecord(record as never)).toBe(false);
+  });
+
+  it("accepts every McpGrantRecordType value", () => {
+    const types = [
+      "grant.issued",
+      "grant.expired",
+      "grant.revoked",
+      "tier.elevated",
+      "tier.decayed",
+    ] as const;
+    for (const t of types) {
+      const record = {
+        type: t,
+        id: "g",
+        timestamp: 1,
+        sessionId: "s",
+        toolId: "*",
+        ttlMs: 0,
+      };
+      expect(isGrantRecord(record)).toBe(true);
+    }
+  });
+});
+
+describe("AuditService.getLogRecords — union preservation (#10027)", () => {
+  it("returns grant and dispatch records interleaved chronologically (newest-first)", async () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    // Wait a tick so timestamps differ — appendRecord stamps Date.now() each
+    // call but rapid back-to-back calls can collide on coarse-resolution
+    // clocks; the ordering assertion is structural, not timestamp-strict.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    service.appendGrantRecord({
+      type: "tier.elevated",
+      sessionId: "sess-1",
+      toolId: "*",
+      ttlMs: 1800000,
+      tier: "action",
+      previousTier: "workbench",
+    });
+    const log = service.getLogRecords();
+    expect(log).toHaveLength(2);
+    // Newest-first: the grant was appended last, so it leads.
+    expect(isGrantRecord(log[0]!)).toBe(true);
+    expect(isAuditRecord(log[1]!)).toBe(true);
   });
 });

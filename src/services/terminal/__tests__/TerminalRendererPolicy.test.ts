@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 import type { ManagedTerminal } from "../types";
 import type { RendererPolicyDeps } from "../TerminalRendererPolicy";
@@ -33,7 +33,7 @@ describe("TerminalRendererPolicy", () => {
 
     mockDeps = {
       getInstance: vi.fn(() => mockManagedTerminal as ManagedTerminal),
-      wakeAndRestore: vi.fn(() => Promise.resolve(true)),
+      wakeAndRestore: vi.fn(() => Promise.resolve({ ok: true, replayedMainBuffer: true })),
     };
 
     const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -216,7 +216,9 @@ describe("TerminalRendererPolicy", () => {
     it("does not call onPostWake when wake fails", async () => {
       const onPostWake = vi.fn();
       mockDeps.onPostWake = onPostWake;
-      mockDeps.wakeAndRestore = vi.fn(() => Promise.resolve(false));
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: false, replayedMainBuffer: false })
+      );
       mockManagedTerminal.isAltBuffer = true;
       mockManagedTerminal.needsWake = true;
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
@@ -257,6 +259,80 @@ describe("TerminalRendererPolicy", () => {
       });
 
       expect(terminal.scrollToBottom).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("wake-result flush dispatch (#9910)", () => {
+    let onResumeFlush: ReturnType<typeof vi.fn>;
+    let onDiscardHeld: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      onResumeFlush = vi.fn();
+      onDiscardHeld = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
+      mockDeps.onDiscardHeld = onDiscardHeld as unknown as ((id: string) => void) | undefined;
+      mockManagedTerminal.needsWake = true;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    });
+
+    async function applyActiveUpgrade(): Promise<void> {
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      policy.initializeBackendTier("test-id", "background");
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      await vi.waitFor(() => {
+        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
+      });
+    }
+
+    it("discards held bytes (no flush) after a successful main-buffer replay", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: true, replayedMainBuffer: true })
+      );
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onDiscardHeld).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("flushes held bytes on an alt-buffer wake (ok without replay)", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: true, replayedMainBuffer: false })
+      );
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onDiscardHeld).not.toHaveBeenCalled();
+    });
+
+    it("flushes held bytes when the wake fails", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() =>
+        Promise.resolve({ ok: false, replayedMainBuffer: false })
+      );
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onDiscardHeld).not.toHaveBeenCalled();
+    });
+
+    it("flushes held bytes when the wake rejects", async () => {
+      mockDeps.wakeAndRestore = vi.fn(() => Promise.reject(new Error("boom")));
+
+      await applyActiveUpgrade();
+
+      await vi.waitFor(() => {
+        expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      });
+      expect(onDiscardHeld).not.toHaveBeenCalled();
     });
   });
 
@@ -383,6 +459,285 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
       expect(onTierApplied).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("flap-resolution flush (#9779)", () => {
+    let onResumeFlush: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
+      // The active-tier-supersede branch re-arms a downgrade timer via
+      // window.setTimeout; the node test env has no window, so stub it.
+      vi.stubGlobal("window", { setTimeout: vi.fn(() => 999), clearTimeout: vi.fn() });
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // A pending BACKGROUND downgrade is in flight (timer armed) and the computed
+    // tier flaps back to the SAME active tier it left. This lands in the
+    // equal-tier branch, which clears the timer without applying any tier change
+    // — so without the fix the held bytes would never flush.
+    it("flushes on the equal-tier flap-back (FOCUSED → BG-pending → FOCUSED)", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+    });
+
+    // The computed tier flaps to a MORE active tier than the applied one while a
+    // BACKGROUND downgrade is pending. This lands in the upgrade branch; the
+    // applied tier was active throughout so applyRendererPolicyImmediate's own
+    // flush branch (prevBackendTier !== "active") never fires.
+    it("flushes on the upgrade flap (VISIBLE applied, BG-pending → FOCUSED)", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      // No wake: the applied tier never went to background.
+      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+    });
+
+    // The pending BACKGROUND downgrade is superseded by a different active-tier
+    // downgrade (FOCUSED → VISIBLE). The old held bytes must drain now rather
+    // than waiting for the new tier's debounce timer to fire.
+    it("flushes when an active-tier downgrade supersedes the BG-pending one", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+    });
+
+    it("does not flush when no BACKGROUND downgrade is pending", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = undefined;
+      mockManagedTerminal.tierChangeTimer = undefined;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("does not flush when the pending downgrade targets a non-BACKGROUND tier", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("does not flush when the incoming tier is itself BACKGROUND", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.pendingTier = TerminalRefreshTier.BACKGROUND;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+
+    it("does not flush when a timer is armed but no tier is pending", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.pendingTier = undefined;
+      mockManagedTerminal.tierChangeTimer = 999 as unknown as number;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onResumeFlush).not.toHaveBeenCalled();
+    });
+  });
+
+  // Uses real (faked) timers to prove the flush hook coexists with — and the
+  // flap-back actually cancels — the armed downgrade timer. The sentinel-stub
+  // block above checks the hook fires; this verifies the timer never fires.
+  describe("flap-resolution timer cancellation (#9779)", () => {
+    let onResumeFlush: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush as unknown as ((id: string) => void) | undefined;
+      // The implementation arms timers via window.setTimeout; point window at
+      // the faked global timers so setTimeout/clearTimeout stay consistent.
+      vi.stubGlobal("window", globalThis);
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("flushes once and cancels the armed timer so BACKGROUND never applies", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+
+      // Computed tier drops to BACKGROUND: arms the real 500ms downgrade timer.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.pendingTier).toBe(TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.tierChangeTimer).not.toBeUndefined();
+      expect(onResumeFlush).not.toHaveBeenCalled();
+
+      // Flap back to FOCUSED before the timer fires.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      expect(onResumeFlush).toHaveBeenCalledExactlyOnceWith("test-id");
+      expect(mockManagedTerminal.pendingTier).toBeUndefined();
+      expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+
+      // Advancing past the hysteresis window must NOT apply BACKGROUND — the
+      // timer was cancelled, so the applied tier stays FOCUSED.
+      vi.advanceTimersByTime(1000);
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect(onResumeFlush).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("reassertActiveTier (watchdog repair)", () => {
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("window", globalThis);
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("re-sends the active backend tier and runs the wake path", async () => {
+      const { terminalClient } = await import("@/clients");
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      mockManagedTerminal.needsWake = true;
+      policy.initializeBackendTier("test-id", "background");
+
+      policy.reassertActiveTier("test-id");
+
+      expect(policy.getLastBackendTier("test-id")).toBe("active");
+      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "active", 200);
+      expect(mockDeps.wakeAndRestore).toHaveBeenCalledWith("test-id");
+    });
+
+    it("no-ops when the backend tier is already active or the applied tier is BACKGROUND", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+      policy.initializeBackendTier("test-id", "active");
+      policy.reassertActiveTier("test-id");
+      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      policy.initializeBackendTier("test-id", "background");
+      policy.reassertActiveTier("test-id");
+      expect(mockDeps.wakeAndRestore).not.toHaveBeenCalled();
+    });
+
+    it("cancels a pending hysteresis downgrade so the repair is not undone", () => {
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+
+      // Arm a real BACKGROUND downgrade timer, then simulate a host-side
+      // background rewrite landing while it is pending.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.tierChangeTimer).not.toBeUndefined();
+      policy.initializeBackendTier("test-id", "background");
+
+      policy.reassertActiveTier("test-id");
+      expect(mockManagedTerminal.pendingTier).toBeUndefined();
+      expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+
+      // The stale timer must not fire and re-background the terminal.
+      vi.advanceTimersByTime(1000);
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect(policy.getLastBackendTier("test-id")).toBe("active");
+    });
+  });
+
+  describe("onBackgrounded callback (#9906)", () => {
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("window", globalThis);
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("fires when the backend tier transitions active → background", async () => {
+      const onBackgrounded = vi.fn();
+      mockDeps.onBackgrounded = onBackgrounded;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+
+      // Downgrade to BACKGROUND arms the hysteresis timer; the callback fires
+      // only when it actually applies.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      expect(onBackgrounded).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1000);
+      expect(onBackgrounded).toHaveBeenCalledExactlyOnceWith("test-id");
+    });
+
+    it("does not fire on an active → active tier change", async () => {
+      const onBackgrounded = vi.fn();
+      mockDeps.onBackgrounded = onBackgrounded;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+
+      // Upgrade VISIBLE → FOCUSED stays "active" on the backend — no background.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      vi.advanceTimersByTime(1000);
+      expect(onBackgrounded).not.toHaveBeenCalled();
+    });
+
+    it("does not fire again when already background (background → background)", async () => {
+      const onBackgrounded = vi.fn();
+      mockDeps.onBackgrounded = onBackgrounded;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      mockManagedTerminal.getRefreshTier = () => TerminalRefreshTier.FOCUSED;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(1000);
+      expect(onBackgrounded).toHaveBeenCalledTimes(1);
+
+      // Re-applying BACKGROUND is a no-op (prevBackendTier already background).
+      onBackgrounded.mockClear();
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(1000);
+      expect(onBackgrounded).not.toHaveBeenCalled();
     });
   });
 

@@ -18,9 +18,10 @@ export interface PushErrorState {
 export type PushBannerCta =
   /**
    * Routes to the active forge provider's settings subtab. `providerId` is the
-   * resolved provider's `contribution.id` (the Code-forge settings subtab key),
-   * supplied at render time by {@link getPushBannerConfig} — the static config
-   * table can't know the runtime-resolved provider.
+   * resolved provider's canonical `{pluginId}.{contributionId}` id (the
+   * Code-forge settings subtab key), supplied at render time by
+   * {@link getPushBannerConfig} — the static config table can't know the
+   * runtime-resolved provider.
    */
   | { kind: "settings-forge"; label: string; providerId: string }
   | { kind: "retry"; label: string }

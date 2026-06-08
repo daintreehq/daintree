@@ -11,10 +11,12 @@ import type {
   ActiveBearerRecord,
   AssistantTurnRecord,
   DisconnectBearerResult,
+  HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpAuditRecord,
   McpAuditStats,
   McpIssueGrantResult,
+  McpLogRecord,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpServerStatusSnapshot,
@@ -86,6 +88,18 @@ export const mcpServerNamespace = defineIpcNamespace({
         return svc.getAuditRecords();
       }
     ),
+    // Sibling of getAuditRecords that returns the full McpLogRecord union
+    // (dispatch + grant lifecycle). Used by the audit-log viewer and NDJSON
+    // export. Dispatch-only consumers (latency table, recent-calls popover)
+    // keep using getAuditRecords so their `result`/`durationMs` reads stay
+    // type-safe — see #10027.
+    getLogRecords: op(
+      MCP_SERVER_METHOD_CHANNELS.getLogRecords,
+      async (): Promise<McpLogRecord[]> => {
+        const svc = await getMcpServerService();
+        return svc.getLogRecords();
+      }
+    ),
     getAuditConfig: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditConfig,
       async (): Promise<{ enabled: boolean; maxRecords: number }> => {
@@ -95,9 +109,12 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     getAuditStats: op(
       MCP_SERVER_METHOD_CHANNELS.getAuditStats,
-      async (): Promise<McpAuditStats> => {
+      // `markSeen` defaults to true (user-facing reads acknowledge first-seen
+      // combos). Passive pollers pass false so a background read doesn't consume
+      // the transient first-seen signal before the user sees it (#10022).
+      async (markSeen?: boolean): Promise<McpAuditStats> => {
         const svc = await getMcpServerService();
-        return svc.getAuditStats();
+        return svc.getAuditStats(markSeen ?? true);
       }
     ),
     clearAuditLog: op(MCP_SERVER_METHOD_CHANNELS.clearAuditLog, async (): Promise<void> => {
@@ -151,9 +168,12 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     exportAuditLog: op(
       MCP_SERVER_METHOD_CHANNELS.exportAuditLog,
-      async (ctx, records: McpAuditRecord[]): Promise<boolean> => {
+      async (ctx, records: McpLogRecord[]): Promise<boolean> => {
         if (!Array.isArray(records)) throw new Error("records must be an array");
         const ndjsonLines = records.map((rawRecord) => {
+          if (rawRecord === null || typeof rawRecord !== "object") {
+            throw new Error("each record must be a non-null object");
+          }
           const record = rawRecord as unknown as Record<string, unknown>;
           const cleaned: Record<string, unknown> = {};
           for (const [key, value] of Object.entries(record)) {
@@ -242,11 +262,35 @@ export const mcpServerNamespace = defineIpcNamespace({
       },
       { withContext: true }
     ),
+    resetDenialCounts: op(
+      MCP_SERVER_METHOD_CHANNELS.resetDenialCounts,
+      async (ctx, payload: { sessionId: string }): Promise<void> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { sessionId } = payload;
+        if (typeof sessionId !== "string" || !sessionId) {
+          throw new Error("Invalid sessionId");
+        }
+        const svc = await getMcpServerService();
+        // Same caller-pin invariant as `revokeSessionGrants` — only the
+        // renderer that minted the session can reset its denial counters.
+        svc.resetDenialCounts(sessionId, ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
     listActiveBearers: op(
       MCP_SERVER_METHOD_CHANNELS.listActiveBearers,
       async (): Promise<ActiveBearerRecord[]> => {
         const svc = await getMcpServerService();
         return svc.listActiveBearers();
+      }
+    ),
+    listHelpSessionBearers: op(
+      MCP_SERVER_METHOD_CHANNELS.listHelpSessionBearers,
+      async (): Promise<HelpSessionBearerRecord[]> => {
+        const svc = await getMcpServerService();
+        return svc.listHelpSessionBearers();
       }
     ),
     disconnectBearer: op(

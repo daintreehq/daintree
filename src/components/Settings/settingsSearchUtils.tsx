@@ -148,7 +148,7 @@ export function filterSettings(
 
     if (tabLabelLower === normalized) {
       score += 5;
-      if (entry.id.startsWith("tab-nav-")) {
+      if (entry.kind === "tab-nav") {
         // Only stack the extra tab-nav bonus when the entry is in the
         // user's active scope. Cross-scope tab-nav rows would otherwise
         // bury same-scope content entries that match the same label
@@ -157,7 +157,7 @@ export function filterSettings(
         const isSameScope = !activeScope || entry.scope === activeScope;
         if (isSameScope) score += 2;
       }
-    } else if (tokens.length > 1 && entry.id.startsWith("tab-nav-")) {
+    } else if (tokens.length > 1 && entry.kind === "tab-nav") {
       score -= 3;
     }
 

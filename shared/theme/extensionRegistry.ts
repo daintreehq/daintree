@@ -88,6 +88,37 @@ const TOOLBAR_ARMED: ExtensionKeyMetadata = {
   formatGuard: /inset\s+0\s+0\s+0\s+1px/,
 };
 
+// toolbar-control-hover-bg / toolbar-control-armed-bg / toolbar-control-active-bg
+// are polarity-conditional. On DARK, all three are required: without the
+// hover/armed/active overrides the CSS fallback to --theme-overlay-emphasis
+// (alpha 0.10) collapses armed and hover to the same fill, leaving only a 1px
+// hairline to signal the toggle (#9827). Per-theme tints differ (white,
+// green, warm, sand, cool slate, cream), so no expectedTint regex is
+// enforced at the registry level — the per-key alpha range + the
+// builtInThemes.test.ts relationship check together defend the spec.
+//
+// toolbar-control-hover-bg is also set by every light theme (their armed/
+// hover separation comes from #8175), so the hover key carries no
+// forbidWhenNotRequired — the existing light values are valid. Only the
+// armed/active pair forbids light overrides: a dark white-alpha copy-paste
+// would invert the layer order on a light toolbar.
+const TOOLBAR_HOVER_FILL: ExtensionKeyMetadata = {
+  required: (mode) => mode === "dark",
+  perceptibility: {
+    minAlpha: { dark: 0.05 },
+    maxAlpha: { dark: 0.2 },
+  },
+};
+
+const TOOLBAR_ARMED_FILL: ExtensionKeyMetadata = {
+  required: (mode) => mode === "dark",
+  forbidWhenNotRequired: true,
+  perceptibility: {
+    minAlpha: { dark: 0.05 },
+    maxAlpha: { dark: 0.3 },
+  },
+};
+
 const DOCK_SHADOW: ExtensionKeyMetadata = {
   required: false,
   formatGuard: /rgb\(from var\(--theme-shadow-color\) r g b \/ ([0-9.]+)\)/,
@@ -187,10 +218,10 @@ export const EXTENSION_KEY_REGISTRY = {
   // ship a per-theme white-tinted ring for crispness on dark chrome.
   "toolbar-agent-hover-bg": OPTIONAL,
   "toolbar-bg": OPTIONAL,
-  "toolbar-control-active-bg": OPTIONAL,
-  "toolbar-control-armed-bg": OPTIONAL,
+  "toolbar-control-active-bg": TOOLBAR_ARMED_FILL,
+  "toolbar-control-armed-bg": TOOLBAR_ARMED_FILL,
   "toolbar-control-armed-shadow": TOOLBAR_ARMED,
-  "toolbar-control-hover-bg": OPTIONAL,
+  "toolbar-control-hover-bg": TOOLBAR_HOVER_FILL,
   "toolbar-control-hover-fg": OPTIONAL,
   "toolbar-control-hover-shadow": OPTIONAL,
   "toolbar-divider": OPTIONAL,

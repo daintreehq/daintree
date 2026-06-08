@@ -13,6 +13,24 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 
+// Mock electron so the suite loads without the Electron binary present (no
+// `node_modules/electron/path.txt`). httpLifecycle.ts and its transitive imports
+// only touch these at runtime — never in these unit tests — so stubs suffice.
+// The controllable WebContents registry lets targeted-send paths (e.g.
+// notifyTurnOutcomeAlert) be exercised without a real renderer; the source only
+// imports `webContents` from electron, so this mock is a superset of that.
+const { mockWebContentsById } = vi.hoisted(() => ({
+  mockWebContentsById: new Map<
+    number,
+    { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }
+  >(),
+}));
+vi.mock("electron", () => ({
+  app: { getVersion: () => "0.0.0-test" },
+  webContents: { fromId: (id: number) => mockWebContentsById.get(id) ?? null },
+  ipcMain: { on: () => undefined, removeListener: () => undefined },
+}));
+
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
@@ -76,6 +94,11 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       revokeSession: vi.fn(() => false),
       registerClientMetadata: vi.fn(),
       listExternalActiveClients: vi.fn(() => []),
+      grantCache: {
+        clearDenialCounts: vi.fn(),
+        revokeSession: vi.fn(() => 0),
+        issueGrant: vi.fn(),
+      },
     },
     auditService: {
       hydrate: vi.fn(),
@@ -438,53 +461,161 @@ describe("HttpLifecycle", () => {
     });
   });
 
-  describe("buildSessionServerDeps — appendAuditRecord turnId/helpSessionId stamping", () => {
-    it("resolves turnId via the HELP session id and stamps both onto the record", () => {
+  describe("resetDenialCounts (#10017)", () => {
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (
+        deps.sessionStore as unknown as {
+          grantCache: { clearDenialCounts: ReturnType<typeof vi.fn> };
+        }
+      ).grantCache;
+    }
+
+    it("clears the session's denial counters without revoking its grants", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.resetDenialCounts("sess-1");
+
+      expect(grantCacheOf(deps).clearDenialCounts).toHaveBeenCalledWith("sess-1");
+      // Resetting denials must NOT touch per-tool grants — those have their
+      // own approval lifecycle (#8442).
+      expect(deps.sessionStore.grantCache.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it("throws when the caller WebContents id doesn't match the pinned id", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-pin", 42);
+      const lc = new HttpLifecycle(deps);
+
+      expect(() => lc.resetDenialCounts("sess-pin", 99)).toThrow(/not the pinned renderer/);
+      expect(grantCacheOf(deps).clearDenialCounts).not.toHaveBeenCalled();
+    });
+
+    it("accepts the caller WebContents id when it matches the pinned id", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-ok", 42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.resetDenialCounts("sess-ok", 42);
+      expect(grantCacheOf(deps).clearDenialCounts).toHaveBeenCalledWith("sess-ok");
+    });
+
+    it("is an idempotent no-op for a drained session (no pin) so banner dismissal always succeeds", () => {
+      const deps = fakeDeps();
+      // No sessionWebContentsMap entry — session already drained.
+      const lc = new HttpLifecycle(deps);
+
+      expect(() => lc.resetDenialCounts("sess-gone", 99)).not.toThrow();
+      expect(grantCacheOf(deps).clearDenialCounts).toHaveBeenCalledWith("sess-gone");
+    });
+
+    it("throws for blank session ids", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  describe("buildSessionServerDeps — pinned manifest cache routing (#9887)", () => {
+    type CacheDeps = {
+      getCachedManifest: () => unknown[] | null;
+    };
+    const buildDeps = (lc: HttpLifecycle, sessionId: string): CacheDeps =>
+      (
+        lc as unknown as { buildSessionServerDeps: (id: string) => CacheDeps }
+      ).buildSessionServerDeps(sessionId);
+
+    it("routes a pinned session's getCachedManifest to its own per-WebContents cache, never the shared one", () => {
+      const deps = fakeDeps();
+      (deps.getCachedManifest as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "shared" }]);
+      const perWc = vi.fn(() => [{ id: "pinned" }]);
+      deps.getCachedManifestForWebContents =
+        perWc as unknown as typeof deps.getCachedManifestForWebContents;
+      deps.sessionStore.sessionWebContentsMap.set("session-1", 101);
+      const lc = new HttpLifecycle(deps);
+
+      const result = buildDeps(lc, "session-1").getCachedManifest();
+
+      expect(result).toEqual([{ id: "pinned" }]);
+      expect(perWc).toHaveBeenCalledWith(101);
+      expect(deps.getCachedManifest).not.toHaveBeenCalled();
+    });
+
+    it("routes an unpinned session's getCachedManifest to the shared cache", () => {
+      const deps = fakeDeps();
+      (deps.getCachedManifest as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "shared" }]);
+      const perWc = vi.fn(() => [{ id: "pinned" }]);
+      deps.getCachedManifestForWebContents =
+        perWc as unknown as typeof deps.getCachedManifestForWebContents;
+      // No sessionWebContentsMap entry → api-key/external session.
+      const lc = new HttpLifecycle(deps);
+
+      const result = buildDeps(lc, "session-1").getCachedManifest();
+
+      expect(result).toEqual([{ id: "shared" }]);
+      expect(perWc).not.toHaveBeenCalled();
+    });
+
+    it("a pinned session torn down mid-call stays pinned (fails closed), never flipping to the shared cache", () => {
+      const deps = fakeDeps();
+      (deps.getCachedManifest as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "shared" }]);
+      // After teardown the per-WebContents cache is evicted → returns null.
+      const perWc = vi.fn(() => null);
+      deps.getCachedManifestForWebContents =
+        perWc as unknown as typeof deps.getCachedManifestForWebContents;
+      deps.sessionStore.sessionWebContentsMap.set("session-1", 101);
+      const lc = new HttpLifecycle(deps);
+      const sessionDeps = buildDeps(lc, "session-1");
+
+      // Simulate the pin being deleted (idle timeout / revoke) after deps build.
+      deps.sessionStore.sessionWebContentsMap.delete("session-1");
+
+      const result = sessionDeps.getCachedManifest();
+
+      // Build-time capture keeps it pinned → null (fail-closed), not the shared
+      // cache — the #7003 isolation invariant the fix protects.
+      expect(result).toBeNull();
+      expect(perWc).toHaveBeenCalledWith(101);
+      expect(deps.getCachedManifest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
+    type TurnDeps = {
+      getCurrentTurnId?: () => string | null;
+      appendAuditRecord: (input: Record<string, unknown>) => void;
+    };
+    const buildDeps = (lc: HttpLifecycle, sessionId: string): TurnDeps =>
+      (
+        lc as unknown as { buildSessionServerDeps: (id: string) => TurnDeps }
+      ).buildSessionServerDeps(sessionId);
+
+    it("resolves the live turn id via the HELP session id through getCurrentTurnId", () => {
       const deps = fakeDeps();
       (
         deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
       ).mockReturnValue("turn-uuid-abc");
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
       const lc = new HttpLifecycle(deps);
-      const deps_ = (
-        lc as unknown as {
-          buildSessionServerDeps: (sessionId: string) => {
-            appendAuditRecord: (input: Record<string, unknown>) => void;
-          };
-        }
-      ).buildSessionServerDeps("session-1");
-      deps_.appendAuditRecord({
-        toolId: "agent.terminal",
-        sessionId: "session-1",
-        tier: "action",
-        args: {},
-        durationMs: 5,
-        outcome: { kind: "result", value: { ok: true, result: null } },
-      });
-      // The turn-id register is keyed by HELP session id, not the MCP
-      // transport id — passing the transport id always missed (#9759 gap).
+      const deps_ = buildDeps(lc, "session-1");
+      // The turn-id register is keyed by HELP session id, not the MCP transport
+      // id — passing the transport id always missed (#9759 gap).
+      expect(deps_.getCurrentTurnId?.()).toBe("turn-uuid-abc");
       expect(deps.turnOutcomeService.getCurrentTurnIdForSession).toHaveBeenCalledWith(
         "help-session-9"
       );
-      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
-        expect.objectContaining({ turnId: "turn-uuid-abc", helpSessionId: "help-session-9" })
-      );
     });
 
-    it("omits turnId when getCurrentTurnIdForSession returns null", () => {
+    it("stamps the captured turn id onto the audit record without re-reading it", () => {
       const deps = fakeDeps();
       (
         deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>
-      ).mockReturnValue(null);
+      ).mockReturnValue("turn-uuid-abc");
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
       const lc = new HttpLifecycle(deps);
-      const deps_ = (
-        lc as unknown as {
-          buildSessionServerDeps: (sessionId: string) => {
-            appendAuditRecord: (input: Record<string, unknown>) => void;
-          };
-        }
-      ).buildSessionServerDeps("session-1");
+      const deps_ = buildDeps(lc, "session-1");
+      (deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<typeof vi.fn>).mockClear();
       deps_.appendAuditRecord({
         toolId: "agent.terminal",
         sessionId: "session-1",
@@ -492,6 +623,35 @@ describe("HttpLifecycle", () => {
         args: {},
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: "turn-uuid-abc",
+      });
+      // The write path must not re-read the live register — the snapshot is the
+      // single source of truth, so the audit record can't disagree with the
+      // started/settled strip events.
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ turnId: "turn-uuid-abc", helpSessionId: "help-session-9" })
+      );
+      // `capturedTurnId` is a transport-only carrier — it must be peeled off and
+      // never persist into the stored record (the public field is `turnId`).
+      const persisted = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(persisted.capturedTurnId).toBeUndefined();
+    });
+
+    it("omits turnId when the captured snapshot is null", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
       });
       const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
         .calls[0]?.[0];
@@ -500,7 +660,65 @@ describe("HttpLifecycle", () => {
       expect(callArgs.helpSessionId).toBe("help-session-9");
     });
 
-    it("skips turn lookup and helpSessionId for sessions with no help binding", () => {
+    it("getCurrentTurnId returns null and skips lookup for sessions with no help binding", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-external");
+      expect(deps_.getCurrentTurnId?.()).toBeNull();
+      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-external",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
+      });
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs.turnId).toBeUndefined();
+      expect(callArgs.helpSessionId).toBeUndefined();
+    });
+
+    it("stamps the start-time snapshot even after the FSM clears the turn mid-call", () => {
+      const deps = fakeDeps();
+      const liveTurn = deps.turnOutcomeService.getCurrentTurnIdForSession as ReturnType<
+        typeof vi.fn
+      >;
+      liveTurn.mockReturnValue("turn-T1");
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+
+      // Snapshot at dispatch start, while the turn is still active.
+      const capturedTurnId = deps_.getCurrentTurnId?.() ?? null;
+      expect(capturedTurnId).toBe("turn-T1");
+
+      // The active→passive FSM transition clears the register before the call
+      // settles — a fresh read would now return null (the #10067 race).
+      liveTurn.mockReturnValue(null);
+
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId,
+      });
+
+      // The audit record carries the snapshot, not the post-transition null —
+      // so it groups with the started/settled events under the same turn.
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ turnId: "turn-T1", helpSessionId: "help-session-9" })
+      );
+    });
+  });
+
+  describe("buildSessionServerDeps — appendAuditRecord resultMeta for rate_limited (#10014)", () => {
+    it("forwards resultMeta.retryAfter on rate_limited outcomes and omits resultSummary", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       const deps_ = (
@@ -509,20 +727,74 @@ describe("HttpLifecycle", () => {
             appendAuditRecord: (input: Record<string, unknown>) => void;
           };
         }
-      ).buildSessionServerDeps("session-external");
+      ).buildSessionServerDeps("session-rl");
       deps_.appendAuditRecord({
         toolId: "agent.terminal",
-        sessionId: "session-external",
+        sessionId: "session-rl",
+        tier: "action",
+        args: {},
+        durationMs: 0,
+        outcome: { kind: "rate_limited", retryAfter: 5 },
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ resultMeta: { retryAfter: 5 } })
+      );
+      const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0];
+      expect(callArgs.resultSummary).toBeUndefined();
+    });
+
+    it("does not attach resultMeta for unauthorized / dedup / collision outcomes", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-gate");
+      for (const outcome of [{ kind: "unauthorized" }, { kind: "dedup" }, { kind: "collision" }]) {
+        deps_.appendAuditRecord({
+          toolId: "agent.terminal",
+          sessionId: "session-gate",
+          tier: "action",
+          args: {},
+          durationMs: 0,
+          outcome,
+        });
+      }
+      const calls = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toHaveLength(3);
+      for (const call of calls) {
+        expect(call[0].resultMeta).toBeUndefined();
+        expect(call[0].resultSummary).toBeUndefined();
+      }
+    });
+
+    it("does not attach resultMeta for success outcomes (only rate_limited carries hints)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-ok");
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-ok",
         tier: "action",
         args: {},
         durationMs: 5,
         outcome: { kind: "result", value: { ok: true, result: null } },
       });
-      expect(deps.turnOutcomeService.getCurrentTurnIdForSession).not.toHaveBeenCalled();
       const callArgs = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock
         .calls[0]?.[0];
-      expect(callArgs.turnId).toBeUndefined();
-      expect(callArgs.helpSessionId).toBeUndefined();
+      expect(callArgs.resultMeta).toBeUndefined();
+      // Success dispatches DO carry a resultSummary (tool output).
+      expect(callArgs.resultSummary).toBeDefined();
     });
   });
 
@@ -553,7 +825,7 @@ describe("HttpLifecycle", () => {
       expect(bearers[0]).not.toHaveProperty("sessionIds");
     });
 
-    it("hides internal (help/pane) bearers from the settings list but still tracks them (#9151)", () => {
+    it("hides internal (help/pane) bearers from the External-clients list but still tracks them (#9151)", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       const handle = lc as unknown as BearerTestHandle;
@@ -564,13 +836,65 @@ describe("HttpLifecycle", () => {
       // ...but tracked in the register so eager teardown can find them.
       expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-help"]);
       expect(lc.getBearerSessionIds(hashOf(authB))).toEqual(["sess-pane"]);
-      // Help-bearer handshakes don't push a runtime-state change (they never
-      // surface in the UI) — only the external bearer below does.
-      expect(deps.emitRuntimeStateChange).not.toHaveBeenCalled();
       // A subsequent external bearer is still tracked AND listed.
       handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
       expect(lc.listActiveBearers()).toHaveLength(1);
+    });
+
+    it("surfaces help-session bearers in listHelpSessionBearers with display fields only (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-1", "action");
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help-2", "action");
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+
+      const help = lc.listHelpSessionBearers();
+      // Only the help-session bearer is returned — the external one is excluded.
+      expect(help).toHaveLength(1);
+      expect(help[0]).toEqual({
+        userAgent: "Daintree Assistant/1",
+        lastActiveAt: expect.any(Number),
+        requestsSinceLaunch: 2,
+        sessionCount: 2,
+      });
+      // No token, hash, or raw session ids cross the listing surface.
+      const serialized = JSON.stringify(help);
+      expect(serialized).not.toContain("secret-token-aaaa");
+      expect(help[0]).not.toHaveProperty("tokenHash");
+      expect(help[0]).not.toHaveProperty("token4LastChars");
+      expect(help[0]).not.toHaveProperty("sessionIds");
+    });
+
+    it("listHelpSessionBearers is empty when only external bearers are connected (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Claude/1", "sess-ext", "external");
+      expect(lc.listHelpSessionBearers()).toHaveLength(0);
+    });
+
+    it("listHelpSessionBearers covers every non-external tier, not just the help chat (#10036)", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      const handle = lc as unknown as BearerTestHandle;
+      // In-panel agent (pane) tokens are non-external too — they belong in the
+      // Internal connections row alongside the help-chat assistant.
+      handle.touchBearer(authA, "Help/1", "sess-help", "action");
+      handle.touchBearer(authB, "Pane/1", "sess-pane", "workbench");
+      handle.touchBearer("Bearer external-cccc", "Claude/1", "sess-ext", "external");
+
+      const help = lc.listHelpSessionBearers();
+      expect(help).toHaveLength(2);
+      expect(help.map((h) => h.userAgent).sort()).toEqual(["Help/1", "Pane/1"]);
+    });
+
+    it("pushes a runtime-state change on help-session connect and disconnect (#10036)", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const handle = lc as unknown as BearerTestHandle;
+      handle.touchBearer(authA, "Daintree Assistant/1", "sess-help", "action");
       expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
+      handle.detachBearerSession("sess-help");
+      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
+      expect(lc.listHelpSessionBearers()).toHaveLength(0);
     });
 
     it("findHelpBearerHash resolves a help token to its register key, ignoring external bearers (#9151)", () => {
@@ -800,6 +1124,89 @@ describe("HttpLifecycle", () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
       expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("notifyTurnOutcomeAlert (#10018)", () => {
+    beforeEach(() => {
+      mockWebContentsById.clear();
+    });
+
+    function liveWc(id: number) {
+      const wc = { isDestroyed: () => false, send: vi.fn() };
+      mockWebContentsById.set(id, wc);
+      return wc;
+    }
+    function deadWc(id: number) {
+      const wc = { isDestroyed: () => true, send: vi.fn() };
+      mockWebContentsById.set(id, wc);
+      return wc;
+    }
+
+    it("sends the alert to the pinned WebContents of the matching help session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("transport-1", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      const wc = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
+
+      expect(wc.send).toHaveBeenCalledTimes(1);
+      expect(wc.send).toHaveBeenCalledWith(
+        "mcp-server:turn-outcome-alert",
+        expect.objectContaining({ helpSessionId: "help-9", outcome: "agent-stuck" })
+      );
+      // No turnId on the payload means none is forwarded.
+      expect(wc.send.mock.calls[0]![1]).not.toHaveProperty("turnId");
+    });
+
+    it("forwards turnId when present", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("transport-1", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      const wc = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({
+        helpSessionId: "help-9",
+        outcome: "reasoning-loop",
+        turnId: "turn-7",
+      });
+
+      expect(wc.send).toHaveBeenCalledWith(
+        "mcp-server:turn-outcome-alert",
+        expect.objectContaining({ outcome: "reasoning-loop", turnId: "turn-7" })
+      );
+    });
+
+    it("falls through a destroyed WebContents to a second live transport for the same help session", () => {
+      const deps = fakeDeps();
+      // Two transports map to the same help session; the first is destroyed.
+      deps.sessionStore.sessionHelpIdMap.set("transport-dead", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-dead", 41);
+      deps.sessionStore.sessionHelpIdMap.set("transport-live", "help-9");
+      deps.sessionStore.sessionWebContentsMap.set("transport-live", 42);
+      const dead = deadWc(41);
+      const live = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
+
+      expect(dead.send).not.toHaveBeenCalled();
+      expect(live.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("no-ops when no transport session maps to the help session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("transport-1", "help-other");
+      deps.sessionStore.sessionWebContentsMap.set("transport-1", 42);
+      const wc = liveWc(42);
+      const lc = new HttpLifecycle(deps);
+
+      lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
+
+      expect(wc.send).not.toHaveBeenCalled();
     });
   });
 });

@@ -11,7 +11,10 @@ import type {
   BroadcastWriteResultPayload,
   SpawnResult,
 } from "@shared/types";
-import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
+import type {
+  PtyHostToRendererMessage,
+  TerminalReliabilityMetricPayload,
+} from "@shared/types/pty-host";
 import { logDebug, logWarn } from "@/utils/logger";
 
 let messagePort: MessagePort | null = null;
@@ -24,9 +27,43 @@ const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
 const pendingPortAckBytes = new Map<string, number[]>();
 const MAX_EARLY_BUFFER_CHUNKS = 500;
 
+// Single global subscriber set — the host pushes tier-changed reconciliation
+// messages for any terminal, and the lone consumer (TerminalInstanceService)
+// routes by id internally. No per-terminal map and no ACK accounting: these
+// control messages carry no byte count and must never enter pendingPortAckBytes.
+const tierChangedCallbacks = new Set<(id: string, tier: "active" | "background") => void>();
+
+// Per-window terminal-status pulses delivered on the MessagePort (currently the
+// `data-loss` signal for a saturated window in the multi-window fan-out case,
+// issue #9891). The Main-process `onStatus` broadcast can't target one window,
+// so these ride the saturated window's own port and are dispatched to the same
+// `onStatus` subscribers as the IPC path. No ACK, no byte accounting — pulses.
+const terminalStatusCallbacks = new Set<(data: TerminalStatusPayload) => void>();
+
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data as PtyHostToRendererMessage;
+    if (msg?.type === "tier-changed" && typeof msg.id === "string") {
+      // Host-pushed tier reconciliation — no ACK, no byte accounting.
+      for (const cb of tierChangedCallbacks) {
+        cb(msg.id, msg.tier);
+      }
+      return;
+    }
+    if (msg?.type === "terminal-status" && typeof msg.id === "string") {
+      // Per-window flow-status pulse (e.g. data-loss for a saturated window).
+      // Routed to the same subscribers as the IPC broadcast path.
+      for (const cb of terminalStatusCallbacks) {
+        cb({
+          id: msg.id,
+          status: msg.status,
+          bufferUtilization: msg.bufferUtilization,
+          droppedBytes: msg.droppedBytes,
+          timestamp: msg.timestamp,
+        });
+      }
+      return;
+    }
     if (msg?.type === "data" && typeof msg.id === "string") {
       const byteCount = msg.bytes ?? 0;
 
@@ -285,6 +322,21 @@ export const terminalClient = {
     };
   },
 
+  /**
+   * Subscribe to host-pushed activity-tier reconciliation messages.
+   * The PTY host emits these whenever it rewrites a terminal's tier on its own
+   * (window connect/disconnect/project switch) so the renderer can re-arm its
+   * dedupe baseline (TerminalRendererPolicy.initializeBackendTier) before the
+   * producer gate suppresses output. Rides the per-window MessagePort, so it is
+   * FIFO-ordered ahead of subsequent data chunks. Returns a cleanup function.
+   */
+  onTierChanged: (callback: (id: string, tier: "active" | "background") => void): (() => void) => {
+    tierChangedCallbacks.add(callback);
+    return () => {
+      tierChangedCallbacks.delete(callback);
+    };
+  },
+
   onExit: (callback: (id: string, exitCode: number) => void): (() => void) => {
     return window.electron.terminal.onExit(callback);
   },
@@ -360,6 +412,33 @@ export const terminalClient = {
   },
 
   /**
+   * Drain the entire pending port-ack FIFO for a terminal as one batched ack.
+   * Called when held ingest bytes are discarded without ever reaching xterm
+   * (hibernation reset, post-replay discard on wake) — the pty-host's
+   * queuedBytes ledger still counts them, so dropping the queue without
+   * acking leaves a permanent deficit that degrades every backpressure pause
+   * to the 10s safety timeout (#9910). The FIFO entry is always deleted, even
+   * when the port is gone or postMessage throws: stale entries would be
+   * re-summed into phantom acks on the next discard.
+   */
+  discardPortAcks: (id: string): void => {
+    const queue = pendingPortAckBytes.get(id);
+    if (!queue) return;
+    pendingPortAckBytes.delete(id);
+    if (!messagePort) return;
+    let bytes = 0;
+    for (const entry of queue) {
+      bytes += entry;
+    }
+    if (bytes === 0) return;
+    try {
+      messagePort.postMessage({ type: "ack", id, bytes });
+    } catch {
+      // Port closed — ack lost, safety timeout will resume PTY
+    }
+  },
+
+  /**
    * Query backend for terminals belonging to a specific project.
    * Used during state hydration to reconcile UI with backend processes.
    */
@@ -421,9 +500,31 @@ export const terminalClient = {
 
   /**
    * Listen for terminal status changes (flow control state).
+   *
+   * Subscribes to both delivery paths: the Main-process IPC broadcast and the
+   * per-window MessagePort pulses (data-loss for a saturated window in the
+   * multi-window fan-out, issue #9891). A window only receives port pulses meant
+   * for it, so the discontinuity marker lands in the right place.
    */
   onStatus: (callback: (data: TerminalStatusPayload) => void): (() => void) => {
-    return window.electron.terminal.onStatus(callback);
+    terminalStatusCallbacks.add(callback);
+    const ipcCleanup = window.electron.terminal.onStatus(callback);
+    return () => {
+      terminalStatusCallbacks.delete(callback);
+      ipcCleanup();
+    };
+  },
+
+  /**
+   * Listen for terminal reliability metrics (pause-start/end, suspend,
+   * pending-bytes-gauge, throughput-rate, pause-duration-gauge,
+   * queue-depth-gauge, data-loss-count). Emitted by the host's
+   * `ResourceGovernor` tick and the queue managers' pause/resume paths.
+   */
+  onReliabilityMetric: (
+    callback: (data: TerminalReliabilityMetricPayload) => void
+  ): (() => void) => {
+    return window.electron.terminal.onReliabilityMetric(callback);
   },
 
   /**

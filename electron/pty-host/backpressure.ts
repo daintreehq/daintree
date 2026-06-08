@@ -41,6 +41,14 @@ export interface BackpressureDeps {
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   sendEvent: (event: PtyHostEvent) => void;
   metricsEnabled: () => boolean;
+  /**
+   * Optional override for the canonical reliability-metric funnel. When
+   * supplied, internal `pause-start` / `pause-end` / `suspend` emissions
+   * route through this dep (so the host can update its per-source
+   * pause-tracking map before the wire event fires). When omitted, the
+   * internal default just sends the wire event (legacy behavior).
+   */
+  emitReliabilityMetric?: (payload: TerminalReliabilityMetricPayload, forceEmit?: boolean) => void;
 }
 
 export class BackpressureManager {
@@ -130,8 +138,30 @@ export class BackpressureManager {
     return this.terminalActivityTiers.get(id) ?? "active";
   }
 
-  setActivityTier(id: string, tier: PtyHostActivityTier): void {
+  setActivityTier(id: string, tier: PtyHostActivityTier, reason?: string): void {
+    const from = this.getActivityTier(id);
+    if (from === tier) return;
     this.terminalActivityTiers.set(id, tier);
+
+    if (!this.deps.metricsEnabled()) return;
+    // Best-effort observability: a throwing sendEvent (detached MessagePort
+    // during a shutdown race) must never abort functional tier application in
+    // the callers (clearSuspended/clearPendingVisual/setActivityMonitorTier/
+    // tier-changed broadcast all run after this method returns).
+    try {
+      const heldTokens = Array.from(this.deps.getPauseCoordinator(id)?.heldTokens ?? []).sort();
+      this.emitReliabilityMetric({
+        terminalId: id,
+        metricType: "tier-transition",
+        timestamp: Date.now(),
+        tierTransitionFrom: from,
+        tierTransitionTo: tier,
+        tierTransitionReason: reason,
+        tierTransitionHeldTokens: heldTokens,
+      });
+    } catch {
+      // Metric emission is non-critical — the tier map is already updated.
+    }
   }
 
   pendingBytesRemaining(segment: PendingVisualSegment): number {
@@ -217,6 +247,15 @@ export class BackpressureManager {
   }
 
   emitReliabilityMetric(payload: TerminalReliabilityMetricPayload, forceEmit = false): void {
+    if (this.deps.emitReliabilityMetric) {
+      // Route through the host-supplied funnel so per-source pause
+      // tracking (held-duration map) stays in sync with wire emissions.
+      this.deps.emitReliabilityMetric(payload, forceEmit);
+      return;
+    }
+    // Legacy default: just emit the wire event. The funnel dep is the
+    // canonical path; this branch is kept only for tests/embedders that
+    // construct BackpressureManager without supplying one.
     if (!forceEmit && !this.deps.metricsEnabled()) return;
     this.deps.sendEvent({
       type: "terminal-reliability-metric",
@@ -235,6 +274,14 @@ export class BackpressureManager {
     return { totalPendingBytes: this.totalPendingVisualBytes, perTerminal };
   }
 
+  // FUTURE_SAB: the only producer of the `suspended` `flowStatus`. This
+  // method is reachable only via the `visualBuffers.length > 0` branch in
+  // `electron/pty-host.ts:669`/`:726`, which the disabled SAB transport
+  // path never enters in production (PR #7724 / issue #7653). The
+  // renderer-side `Suspended` pill (`TerminalHeaderContent.tsx`), a11y
+  // formatter (`useAccessibilityAnnouncements.ts`), and the lifecycle
+  // listener's wake branch (`lifecycle.ts`) are all marked with // FUTURE_SAB:
+  // annotations and treated as forward-looking code; see #9900.
   suspendVisualStream(
     id: string,
     reason: string,
@@ -255,6 +302,7 @@ export class BackpressureManager {
     this.pauseStartTimes.delete(id);
 
     this.suspendedDueToStall.add(id);
+    this.stats.suspendCount++;
     this.clearPendingVisual(id);
 
     this.emitTerminalStatus(id, "suspended", utilization, pauseDuration, reason);

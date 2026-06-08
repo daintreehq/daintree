@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
-import { useFleetFailureStore } from "../fleetFailureStore";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { useFleetFailureStore, subscribeFleetFailureAutoClear } from "../fleetFailureStore";
 import { useFleetArmingStore } from "../fleetArmingStore";
 import { usePanelStore } from "../panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null, recordedAt: null });
+  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -35,23 +35,33 @@ function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelD
 }
 
 describe("useFleetFailureStore", () => {
+  let unsubscribe: (() => void) | null = null;
+
   beforeEach(() => {
     resetStores();
+    // Subscribe AFTER resetting so the factory's `prevArmed` closure captures
+    // the empty baseline. This mirrors the `subscribeFleetArmingPanelPruning`
+    // direct-call pattern in `fleetArmingStore.test.ts` — the subscription
+    // only fires on subsequent state changes (#9923).
+    unsubscribe = subscribeFleetFailureAutoClear();
+  });
+
+  afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = null;
   });
 
   it("starts empty", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
-  it("recordFailure populates ids, payload, and timestamp", () => {
+  it("recordFailure populates ids and payload", () => {
     useFleetFailureStore.getState().recordFailure("hello", ["a", "b"]);
     const s = useFleetFailureStore.getState();
     expect(s.failedIds).toEqual(new Set(["a", "b"]));
     expect(s.payload).toBe("hello");
-    expect(s.recordedAt).toBeGreaterThan(0);
   });
 
   it("recordFailure with empty ids resets state", () => {
@@ -60,7 +70,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("recordFailure accepts a null payload for non-replayable failures", () => {
@@ -71,7 +80,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds).toEqual(new Set(["a", "b"]));
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeGreaterThan(0);
   });
 
   it("dismissId removes a single id and preserves the rest", () => {
@@ -87,7 +95,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("clear resets everything", () => {
@@ -96,7 +103,6 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("auto-clears when the whole fleet drains", () => {
@@ -120,6 +126,25 @@ describe("useFleetFailureStore", () => {
     useFleetFailureStore.getState().recordFailure("p", ["a", "b"]);
     useFleetArmingStore.getState().disarmId("a");
     expect(useFleetFailureStore.getState().failedIds).toEqual(new Set(["b"]));
+    expect(useFleetFailureStore.getState().payload).toBe("p");
+  });
+
+  it("halts auto-clear once the returned unsubscribe is invoked", () => {
+    usePanelStore.setState({
+      panelsById: { a: makeAgent("a"), b: makeAgent("b") },
+      panelIds: ["a", "b"],
+    });
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    useFleetFailureStore.getState().recordFailure("p", ["a", "b"]);
+
+    // Tear down the subscription explicitly. The factory is the only thing
+    // wiring `useFleetArmingStore` → `useFleetFailureStore`, so once it's
+    // gone the failure set is frozen until the caller mutates it directly.
+    unsubscribe?.();
+    unsubscribe = null;
+
+    useFleetArmingStore.getState().clear();
+    expect(useFleetFailureStore.getState().failedIds).toEqual(new Set(["a", "b"]));
     expect(useFleetFailureStore.getState().payload).toBe("p");
   });
 });

@@ -220,7 +220,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     []
   );
 
+  // Worker instances suppress automatic background polling to conserve
+  // GitHub GraphQL quota (#10123) — on-demand `refresh()` stays functional.
+  const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
+
   const polling = usePollingLifecycle({
+    enabled: !isWorkerInstance,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();
@@ -477,6 +482,39 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return cleanup;
   }, [applyStatsResult]);
 
+  // Subscribe to the count-only push from the cheap REST background poll
+  // (issue #10122). Carries no page items — only the toolbar counts — so it
+  // skips the cache seeding above and just applies the stats, behind the same
+  // project filter and freshness guard as the combined push.
+  useEffect(() => {
+    const cleanup = githubClient.onRepoCountsUpdated((payload) => {
+      if (!mountedRef.current) return;
+      projectClient
+        .getCurrent()
+        .then((project) => {
+          if (!project || project.path !== payload.projectPath) return;
+          if (!mountedRef.current) return;
+
+          const pushedLastUpdated = payload.stats.lastUpdated ?? null;
+          if (
+            pushedLastUpdated !== null &&
+            lastUpdatedRef.current !== null &&
+            pushedLastUpdated <= lastUpdatedRef.current
+          ) {
+            return;
+          }
+
+          applyStatsResult(payload.stats, { projectPath: payload.projectPath });
+        })
+        .catch(() => {
+          // Project lookup races during teardown / project switch are
+          // expected and benign — swallow rather than producing an
+          // unhandled rejection.
+        });
+    });
+    return cleanup;
+  }, [applyStatsResult]);
+
   // Coalesce sleep-wake fetches onto the shared wake-coordinator slice
   // (#8066). The store bumps `wakeEpoch` once per qualifying wake; every
   // consumer reacts to the same epoch instead of independently registering
@@ -489,8 +527,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   useEffect(() => {
     if (wakeEpoch <= lastSeenWakeEpochRef.current) return;
     lastSeenWakeEpochRef.current = wakeEpoch;
+    // Wake refetches are automatic background fetches — suppressed on worker
+    // instances like the polling loop itself (#10123).
+    if (isWorkerInstance) return;
     void polling.refresh();
-  }, [wakeEpoch, polling]);
+  }, [wakeEpoch, polling, isWorkerInstance]);
 
   useEffect(() => {
     const cleanup = githubClient.onRateLimitChanged((payload) => {
@@ -504,15 +545,18 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // When the limit clears, run an immediate refresh so the UI updates
       // without waiting a full poll interval; `refresh` clears the timer,
       // fetches, and reschedules against the new rate-limit-aware interval.
-      // When blocked, just reschedule against the new resume time.
+      // When blocked, just reschedule against the new resume time. The clear
+      // is an automatic system event, not a user action — suppressed on
+      // worker instances like the polling loop itself (#10123).
       if (!payload.blocked) {
+        if (isWorkerInstance) return;
         void polling.refresh();
       } else {
         polling.scheduleNextPoll();
       }
     });
     return cleanup;
-  }, [polling]);
+  }, [polling, isWorkerInstance]);
 
   const isTokenError = isTokenRelatedError(error);
 

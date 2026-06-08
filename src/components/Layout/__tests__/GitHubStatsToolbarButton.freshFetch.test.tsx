@@ -172,11 +172,63 @@ describe("GitHubStatsToolbarButton corner activity chip wiring", () => {
 
   it("schedules an auto-clear timer per pulseAt with ACTIVITY_CHIP_TTL_MS", () => {
     expect(source).toMatch(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,400}?issuesPulseAt[\s\S]{0,400}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,400}?setIssuesPulseAt\(null\)/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?issuesPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setIssuesPulseAt\(null\)/
     );
     expect(source).toMatch(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,400}?prsPulseAt[\s\S]{0,400}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,400}?setPrsPulseAt\(null\)/
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?prsPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setPrsPulseAt\(null\)/
     );
+  });
+
+  it("anchors the chip TTL to visible time via a per-chip hiddenAtRef + pulseAt shift — issue #9822", () => {
+    // The visibility handler must (a) record the wall-clock anchor when the
+    // document goes hidden, and (b) shift `pulseAt` forward by the hidden
+    // duration on restore so the next `remaining` math reflects elapsed
+    // visible time only. A bare wall-clock subtraction would let a chip
+    // expire unseen if the user hides for longer than the remaining TTL.
+    expect(source).toContain("issuesHiddenAtRef");
+    expect(source).toContain("prsHiddenAtRef");
+    // The shift must be `prev + hiddenMs` (anchor moves forward in time), not
+    // a subtract, no-op, or null/clear. Tightened to catch the exact shape.
+    expect(source).toMatch(
+      /setIssuesPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    expect(source).toMatch(
+      /setPrsPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    // Subscribe-before-sample: the effect must call addEventListener before
+    // the first tick() so a hide between sample and schedule is caught.
+    // Easier to check as a positional invariant: addEventListener appears
+    // earlier in the effect body than the bare `tick();` call.
+    const issuesEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?issuesPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[issuesPulseAt\]\)/
+    );
+    expect(issuesEffect).not.toBeNull();
+    const prsEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?prsPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[prsPulseAt\]\)/
+    );
+    expect(prsEffect).not.toBeNull();
+    // tick() must early-return while the document is hidden to avoid a
+    // race between a scheduled timer firing and the visibility event.
+    const tickGuardCount = (
+      source.match(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/g) ?? []
+    ).length;
+    expect(tickGuardCount).toBeGreaterThanOrEqual(2);
+    // The effect body's post-listener sample must use an if/else (not an
+    // early `return`) so the cleanup at the bottom always registers and
+    // the visibilitychange listener is paired with a removeEventListener
+    // on unmount / dep change. A bare `if (document.hidden) { ...; return; }`
+    // here leaks the listener on every subsequent effect run that commits
+    // while hidden (round-3 review finding).
+    const issuesSample = source.match(
+      /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+    );
+    expect(issuesSample).not.toBeNull();
+    const prsSample = source
+      .slice(issuesSample!.index! + issuesSample![0].length)
+      .match(
+        /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+      );
+    expect(prsSample).not.toBeNull();
   });
 
   it("derives showIssuesChip / showPrsChip with open-state and count guards", () => {

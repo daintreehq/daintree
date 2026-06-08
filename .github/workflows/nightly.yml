@@ -26,6 +26,13 @@ permissions:
 
 env:
   NODE_VERSION: "22"
+  # onnxruntime-node (transitive via avr-vad for CPU-only Silero VAD) tries
+  # to download optional CUDA/TensorRT GPU binaries from api.nuget.org on
+  # postinstall. Daintree's VAD runs on CPU; the GPU binaries are never
+  # loaded. The CI runner pool can't reliably reach nuget.org, so skip the
+  # GPU download and let the bundled CPU runtime + binding node module
+  # (already in the npm tarball) do the work.
+  ONNXRUNTIME_NODE_INSTALL: "skip"
 
 jobs:
   matrix-setup:
@@ -74,13 +81,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: matrix.os != 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Check (typecheck + lint + format)
         run: npm run check
@@ -112,13 +119,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: matrix.os != 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Test
         run: npm run test
@@ -179,13 +186,13 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: matrix.os != 'windows-latest'
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Stamp nightly version
         shell: bash
@@ -216,6 +223,7 @@ jobs:
         env:
           NODE_ENV: production
           ELECTRON_ENABLE_LOGGING: "1"
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
           SMOKE_RUNS: "1"
           SMOKE_TIMEOUT_MS: "210000"
           SMOKE_RETRIES: "1"
@@ -376,7 +384,7 @@ jobs:
           sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Run integration tests
         run: npm run test:integration
@@ -404,7 +412,7 @@ jobs:
           sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies
-        run: npm ci
+        run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Knip (static dead-code report)
         run: npm run knip
@@ -428,7 +436,6 @@ jobs:
       suite: core
       platform: ${{ inputs.platform || 'all' }}
       json_report: true
-      emit_classification: true
 
   # Seven domain buckets, each a reusable-workflow call expanded across the OS
   # matrix inside e2e.yml. e2e.yml auto-shards every full-* suite 4 ways
@@ -456,7 +463,6 @@ jobs:
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
       enable_blob_report: true
-      emit_classification: true
 
   e2e-online:
     needs: [check, test]
@@ -465,7 +471,6 @@ jobs:
       suite: online
       platform: ${{ inputs.platform || 'all' }}
       json_report: true
-      emit_classification: true
     secrets: inherit
 
   # Memory-leak detection — runs the `nightly` E2E suite. e2e.yml forces
@@ -480,7 +485,6 @@ jobs:
       platform: ${{ inputs.platform || 'non-windows' }}
       json_report: true
       enable_blob_report: true
-      emit_classification: true
 
   # Merges Playwright blob reports from every nightly e2e shard into a single
   # unified HTML report. Runs independently of publish — a broken merge must
@@ -502,7 +506,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
 
       - name: Download blob reports
         continue-on-error: true
@@ -542,7 +546,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: node scripts/ci/npm-ci-retry.mjs --ignore-scripts
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v8
@@ -601,6 +605,22 @@ jobs:
             --exclude "*" \
             --include "latest*.yml" \
             --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Verify macOS metadata at CDN edge
+        shell: bash
+        env:
+          PUBLISH_URL: https://updates.daintree.org/nightly/
+          UPDATE_METADATA_PREFIX: latest
+          METADATA_SUFFIX: "-mac"
+        run: node scripts/ci/verify-r2-metadata.mjs
+
+      - name: Verify Linux metadata at CDN edge
+        shell: bash
+        env:
+          PUBLISH_URL: https://updates.daintree.org/nightly/
+          UPDATE_METADATA_PREFIX: latest
+          METADATA_SUFFIX: "-linux"
+        run: node scripts/ci/verify-r2-metadata.mjs
 
       - name: Clean up old nightly builds
         shell: bash
@@ -715,11 +735,22 @@ jobs:
             const reportsDir = path.join(workspace, 'failure-reports');
             const failures = [];
             if (fs.existsSync(reportsDir)) {
+              // Re-runs upload a fresh attempt-suffixed artifact per shard.
+              // Keep only the latest attempt per shard so stale attempt-1
+              // failures don't survive a green re-run.
+              const latestByShard = new Map();
               for (const entry of fs.readdirSync(reportsDir, { withFileTypes: true })) {
                 if (!entry.isDirectory()) continue;
+                const attemptMatch = entry.name.match(/-attempt-(\d+)$/);
+                const attempt = attemptMatch ? Number(attemptMatch[1]) : 0;
+                const shardKey = attemptMatch ? entry.name.slice(0, attemptMatch.index) : entry.name;
+                const prev = latestByShard.get(shardKey);
+                if (!prev || attempt > prev.attempt) latestByShard.set(shardKey, { entry, attempt });
+              }
+              for (const { entry } of latestByShard.values()) {
                 const reportPath = path.join(reportsDir, entry.name, 'failure-report.json');
                 if (!fs.existsSync(reportPath)) continue;
-                const osMatch = entry.name.match(/-(Linux|macOS|Windows)-s\d+of\d+$/);
+                const osMatch = entry.name.match(/-(Linux|macOS|Windows)-s\d+of\d+(?:-attempt-\d+)?$/);
                 const os = osMatch ? osMatch[1] : 'unknown';
                 try {
                   for (const r of JSON.parse(fs.readFileSync(reportPath, 'utf8'))) {

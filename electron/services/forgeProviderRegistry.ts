@@ -140,6 +140,17 @@ export function getForgeProviderImpl(namespacedId: string): ForgeProviderImpl | 
   return PLUGIN_FORGE_PROVIDER_IMPLS.get(namespacedId);
 }
 
+/**
+ * Whether any forge provider has bound a runtime impl. Synchronous, repo-agnostic
+ * presence signal for surfaces (command `isEnabled` gates, etc.) that need to know
+ * "can any forge answer at all?" before a `cwd` is available to resolve a specific
+ * provider. Returns `false` when descriptors are registered but no plugin's
+ * `activate()` has bound an impl yet.
+ */
+export function hasActivatedForgeProvider(): boolean {
+  return PLUGIN_FORGE_PROVIDER_IMPLS.size > 0;
+}
+
 /** Test-isolation helper paralleling {@link clearForgeProviderRegistry}. */
 export function clearForgeProviderImplRegistry(): void {
   PLUGIN_FORGE_PROVIDER_IMPLS.clear();

@@ -473,7 +473,6 @@ export function WorktreeHeader({
           lastFetchedAt={worktree.lastFetchedAt}
           fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
           fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
-          isGitHubProvider={worktree.linked?.providerId === BUILTIN_GITHUB_PROVIDER_ID}
           aggregateCounts={aggregateCounts}
         />
       )}

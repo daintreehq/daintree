@@ -171,6 +171,31 @@ describe("buildCrashReportUrl", () => {
     expect(body).toContain("USER");
   });
 
+  it("redacts WSL UNC user paths", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: "ENOENT at \\\\wsl$\\Ubuntu\\home\\alice\\file.ts" })
+    );
+    const body = decodeBody(result.url);
+    expect(body).not.toContain("alice");
+    expect(body).toContain("Ubuntu");
+  });
+
+  it("redacts non-C-drive Windows paths inside action args", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ recentActions: [action({ args: { cwd: "D:\\Users\\Carol\\repo" } })] })
+    );
+    const body = decodeBody(result.url);
+    expect(body).not.toContain("Carol");
+    expect(body).toContain("USER");
+  });
+
+  it("redacts non-C-drive Windows paths in the error stack", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorStack: "at run (D:\\Users\\carol\\app\\file.ts:1:1)" })
+    );
+    expect(decodeBody(result.url)).not.toContain("carol");
+  });
+
   it("middle-truncates a long stack before falling back to the clipboard", () => {
     // 200 frames push the full body well past the URL budget, but the 15-head +
     // 5-tail truncation brings it back under, so this hits stage 3 (not the stub).
@@ -191,6 +216,85 @@ describe("buildCrashReportUrl", () => {
       baseEntry({ errorMessage: undefined, cause: "watchdog-deadlock" })
     );
     expect(result.url).toContain(encodeURIComponent("watchdog-deadlock"));
+  });
+
+  it("uses a cause-aware title when no errorMessage and no precise cause", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: undefined, crashCause: "power-loss" })
+    );
+    const title = decodeTitle(result.url);
+    expect(title).toContain("Power was interrupted");
+  });
+
+  it("uses a cause-aware title for external-kill when no errorMessage", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: undefined, crashCause: "external-kill" })
+    );
+    expect(decodeTitle(result.url)).toContain("Daintree was forced to close");
+  });
+
+  it("falls back to the generic V1 title when neither errorMessage nor crashCause is set", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: undefined, crashCause: undefined })
+    );
+    expect(decodeTitle(result.url)).toContain("Daintree closed unexpectedly");
+  });
+
+  it("renders a Cause line in the body for non-uncaught-exception crashCause values", () => {
+    const result = buildCrashReportUrl(baseEntry({ crashCause: "power-loss" }));
+    const body = decodeBody(result.url);
+    expect(body).toContain("**Cause**: Power loss or system reboot");
+  });
+
+  it("renders a Cause line for external-kill in the body", () => {
+    const result = buildCrashReportUrl(baseEntry({ crashCause: "external-kill" }));
+    const body = decodeBody(result.url);
+    expect(body).toContain("**Cause**: External kill");
+  });
+
+  it("skips the Cause line for uncaught-exception (redundant with the Error line)", () => {
+    const result = buildCrashReportUrl(baseEntry({ crashCause: "uncaught-exception" }));
+    const body = decodeBody(result.url);
+    expect(body).not.toMatch(/\*\*Cause\*\*:/);
+  });
+
+  it("preserves the watchdog Cause line byte-identical when watchdog is set", () => {
+    const result = buildCrashReportUrl(
+      baseEntry({ cause: "watchdog-deadlock", crashCause: "external-kill" })
+    );
+    const body = decodeBody(result.url);
+    // Watchdog exact wording is load-bearing for downstream regex extraction.
+    expect(body).toContain("**Cause**: Watchdog deadlock (SIGKILL)");
+    expect(body).not.toContain("External kill");
+  });
+
+  it("does not throw on a future-schema crashCause value (defensive normalization)", () => {
+    // A log from a newer build with a cause enum value this build doesn't know
+    // about must not throw TypeError from CRASH_CAUSE_COPY[bad].title — the
+    // dialog and report preview both render during a crash-pending state.
+    const result = buildCrashReportUrl(
+      baseEntry({ errorMessage: undefined, crashCause: "future-value" as never })
+    );
+    const body = decodeBody(result.url);
+    // No Cause: line for unknown / future-schema values (would be "Unknown"
+    // noise).
+    expect(body).not.toContain("**Cause**:");
+    // Title falls back to the V1 generic for an unknown cause.
+    expect(decodeTitle(result.url)).toContain("Daintree closed unexpectedly");
+  });
+
+  it("does not throw on an out-of-range timestamp (safeIsoTime guards toISOString)", () => {
+    expect(() =>
+      buildCrashReportUrl(
+        baseEntry({
+          timestamp: Number.MAX_VALUE,
+          watchdogKilledAt: Number.MAX_VALUE,
+          cause: "watchdog-deadlock",
+          watchdogMissedBeats: 3,
+          watchdogMainPid: 42,
+        })
+      )
+    ).not.toThrow();
   });
 });
 

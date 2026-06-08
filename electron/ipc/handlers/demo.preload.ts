@@ -24,6 +24,8 @@ export const DEMO_METHOD_CHANNELS = {
   scroll: "demo:scroll",
   drag: "demo:drag",
   pressKey: "demo:press-key",
+  typeInTerminal: "demo:type-in-terminal",
+  sendKeyToTerminal: "demo:send-key-to-terminal",
   spotlight: "demo:spotlight",
   dismissSpotlight: "demo:dismiss-spotlight",
   annotate: "demo:annotate",

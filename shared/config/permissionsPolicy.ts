@@ -9,12 +9,26 @@
  * protocol handler (electron/utils/appProtocol.ts). There is no <meta>
  * equivalent for Permissions-Policy in Chromium 146.
  */
-export const DAINTREE_APP_PERMISSIONS_POLICY = [
-  "camera=()",
-  "display-capture=()",
-  "geolocation=()",
-  "microphone=(self)",
-  "midi=()",
-  "screen-wake-lock=()",
-  "usb=()",
-].join(", ");
+export interface AppPermissionsPolicyOptions {
+  /**
+   * Allow `display-capture=(self)` so the renderer can call
+   * `navigator.mediaDevices.getDisplayMedia()`. Off by default; enabled only
+   * for the demo-mode screencast recorder (DemoCaptureBridge), which is gated
+   * on `!app.isPackaged && --demo-mode` and therefore never reaches production.
+   */
+  allowDisplayCapture?: boolean;
+}
+
+export function buildAppPermissionsPolicy(options: AppPermissionsPolicyOptions = {}): string {
+  return [
+    "camera=()",
+    options.allowDisplayCapture ? "display-capture=(self)" : "display-capture=()",
+    "geolocation=()",
+    "microphone=(self)",
+    "midi=()",
+    "screen-wake-lock=()",
+    "usb=()",
+  ].join(", ");
+}
+
+export const DAINTREE_APP_PERMISSIONS_POLICY = buildAppPermissionsPolicy();

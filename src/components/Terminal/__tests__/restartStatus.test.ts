@@ -241,3 +241,105 @@ describe("getRestartBannerVariant", () => {
     expect(result).toEqual({ type: "auto-restarting" });
   });
 });
+
+describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)", () => {
+  // A panel that resumed cleanly: not exited, no errors. Isolates the
+  // sessionLostOnRestore signal from the exit-error path.
+  const restored: RestartBannerInput = {
+    isExited: false,
+    exitCode: null,
+    dismissedRestartPrompt: false,
+    restartError: undefined,
+    isRestarting: false,
+    isAutoRestarting: false,
+    exitBehavior: "keep",
+    backendStatus: "connected",
+  };
+
+  it("returns session-resume-unavailable when restore fell through to a fresh launch", () => {
+    const result = getRestartBannerVariant({ ...restored, sessionLostOnRestore: true });
+    expect(result).toEqual({ type: "session-resume-unavailable" });
+  });
+
+  it("returns none when sessionLostOnRestore is absent (resumed normally)", () => {
+    const result = getRestartBannerVariant({ ...restored, sessionLostOnRestore: false });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("ignores backendStatus — the lost session is independent of host connectivity", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      backendStatus: "disconnected",
+    });
+    expect(result).toEqual({ type: "session-resume-unavailable" });
+  });
+
+  it("yields to an in-flight restart (isRestarting wins)", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      isRestarting: true,
+    });
+    expect(result).toEqual({ type: "restarting" });
+  });
+
+  it("yields to auto-restart (isAutoRestarting wins)", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      isAutoRestarting: true,
+    });
+    expect(result).toEqual({ type: "auto-restarting" });
+  });
+
+  it("suppresses while a restartError is present", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      restartError: {
+        message: "failed",
+        code: "RESTART_FAILED",
+        timestamp: Date.now(),
+        recoverable: false,
+      },
+    });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("suppresses while a reconnectError is present", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      reconnectError: {
+        message: "lost connection",
+        code: "RECONNECT_FAILED",
+        timestamp: Date.now(),
+      } as never,
+    });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("suppresses while a spawnError is present", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: true,
+      spawnError: {
+        message: "spawn failed",
+        code: "SPAWN_FAILED",
+        timestamp: Date.now(),
+      } as never,
+    });
+    expect(result).toEqual({ type: "none" });
+  });
+
+  it("takes precedence over exit-error when both signals are present", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      isExited: true,
+      exitCode: 1,
+      sessionLostOnRestore: true,
+    });
+    expect(result).toEqual({ type: "session-resume-unavailable" });
+  });
+});

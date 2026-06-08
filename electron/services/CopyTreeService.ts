@@ -1,10 +1,17 @@
-import { copy, ConfigManager } from "copytree";
 import type { CopyResult, CopyOptions as SdkCopyOptions, ProgressEvent } from "copytree";
 import * as path from "path";
 import * as fs from "fs/promises";
 import type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress } from "../types/index.js";
 import { logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+// Lazy-load copytree so its module graph (ajv, xmlbuilder2, fast-glob, lodash, …)
+// stays off the workspace-host readiness path; it resolves on first use.
+let _copytreeModule: Promise<typeof import("copytree")> | null = null;
+
+function getCopytree(): Promise<typeof import("copytree")> {
+  return (_copytreeModule ??= import("copytree"));
+}
 
 export type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress };
 
@@ -60,6 +67,9 @@ class CopyTreeService {
       const controller = new AbortController();
       this.activeOperations.set(opId, controller);
 
+      const { copy, ConfigManager } = await getCopytree();
+      this.throwIfAborted(controller.signal);
+
       let config;
       try {
         config = await ConfigManager.create();
@@ -69,6 +79,8 @@ class CopyTreeService {
           { error }
         );
       }
+
+      this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
         signal: controller.signal,
@@ -160,6 +172,9 @@ class CopyTreeService {
       const controller = new AbortController();
       this.activeOperations.set(opId, controller);
 
+      const { copy, ConfigManager } = await getCopytree();
+      this.throwIfAborted(controller.signal);
+
       let config;
       try {
         config = await ConfigManager.create();
@@ -169,6 +184,8 @@ class CopyTreeService {
           { error }
         );
       }
+
+      this.throwIfAborted(controller.signal);
 
       const sdkOptions: SdkCopyOptions = {
         signal: controller.signal,
@@ -205,7 +222,7 @@ class CopyTreeService {
           bySize: 0,
           byPattern: 0,
         },
-        files: undefined,
+        files: result.manifest ?? [],
       };
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
@@ -242,6 +259,12 @@ class CopyTreeService {
       return true;
     }
     return false;
+  }
+
+  private throwIfAborted(signal: AbortSignal): void {
+    if (signal.aborted) {
+      throw Object.assign(new Error("Context generation cancelled"), { name: "AbortError" });
+    }
   }
 
   private handleError(error: unknown): CopyTreeResult {

@@ -17,6 +17,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
+import { getCompileCacheMeta } from "./utils/hostPerformance.js";
+import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import {
   registerAppProtocol,
@@ -73,7 +75,7 @@ import {
 import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
-import { isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
+import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { activateOpenFileInstaller } from "./setup/openFileInstall.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
@@ -96,9 +98,16 @@ import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 enforceIpcSenderValidation();
 {
   const osToAppBootMs = getOsToAppBootMs();
+  // Attach compile-cache state (enabled flag, status, cacheFileCount) so the
+  // cold-start aggregator can tell cache-cold from cache-warm runs and flag a
+  // silently-disabled cache. bootstrap.ts ran enableCompileCache() before this
+  // module evaluated, so the captured status is already available.
+  const compileCacheMeta = getCompileCacheMeta();
+  const bootMeta: Record<string, unknown> = { ...compileCacheMeta };
+  if (osToAppBootMs !== null) bootMeta.osToAppBootMs = osToAppBootMs;
   markPerformance(
     PERF_MARKS.APP_BOOT_START,
-    osToAppBootMs !== null ? { osToAppBootMs } : undefined
+    Object.keys(bootMeta).length > 0 ? bootMeta : undefined
   );
 }
 
@@ -356,6 +365,14 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn(`[main] pushSnapshotTo failed for wc ${wcId}:`, err);
           });
+        // Replay the run-history snapshot to the freshly-loaded view so a
+        // cold-started / LRU-restored renderer's history store is current even
+        // if every prior push fired against a previous V8 context (#9949).
+        import("./services/runHistory/runHistoryService.js")
+          .then(({ pushRunHistorySnapshotTo }) => pushRunHistorySnapshotTo(wc))
+          .catch((err) => {
+            console.warn(`[main] run-history pushSnapshotTo failed for wc ${wcId}:`, err);
+          });
       },
     });
     setProjectViewManager(pvm);
@@ -416,6 +433,16 @@ if (!gotTheLock) {
       initialAppView: appView,
     });
 
+    // Seed the eviction guard's agent-state cache from the pty-host registry.
+    // hasActiveAgent() is read synchronously during LRU scoring, so it can't
+    // await the host; this fire-and-forget seed + event subscription keeps an
+    // instance-level cache fresh (#10054). Must run AFTER setupWindowServices,
+    // which constructs the PtyClient — getPtyClient() returns null before then,
+    // so seeding earlier would leave the cache permanently empty on first launch
+    // and re-break the active-agent eviction guard this fix restores.
+    const pvmPtyClient = getPtyClient();
+    if (pvmPtyClient) void pvm.initAgentStateCache(pvmPtyClient);
+
     if (!powerMonitorInitialized) {
       powerMonitorInitialized = true;
       setupPowerMonitor({
@@ -465,6 +492,11 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     try {
+      // Self-start GPU/compositor tracing when the cold-start harness asked
+      // for it (DAINTREE_PERF_TRACE=1). No-op for every normal run. Must run
+      // first inside whenReady so the trace covers the full window-reveal
+      // pipeline; the matching stop runs on `will-quit` below.
+      await startPerformanceTraceIfEnabled();
       // Fire-and-forget the user-PATH refresh. Runs concurrently with the
       // rest of startup; the PtyClient creation site awaits it before
       // spawning the PTY host (#8625). Kicked off inside whenReady() so the
@@ -476,7 +508,7 @@ if (!gotTheLock) {
       });
       setupPermissionLockdown();
       registerDeepLinkProtocolClient();
-      registerAppProtocol(distPath);
+      registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
       const { pluginService } = await import("./services/PluginService.js");
       registerPluginProtocol((pluginId) => pluginService.getPluginDir(pluginId));

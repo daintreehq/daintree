@@ -1,5 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
 import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
+import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
@@ -180,9 +181,42 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
       if (msg.projectPath && pool) {
-        pool.drainAndRefill(msg.projectPath).catch((err) => {
-          console.error("[PtyHost] drainAndRefill failed:", err);
-        });
+        // Bound the warm set to what the pool can hold alongside the root entry
+        // without LRU-evicting the entries we just warmed. The root drain/refill
+        // takes poolSize slots; each panel cwd takes up to poolSize more. Cap
+        // the distinct panel cwds so root + panels never exceed maxEntries —
+        // otherwise warming a low-priority cwd would evict the oldest entry,
+        // which is the high-priority (active-worktree) cwd warmed first (#9774).
+        const maxPanelKeys = Math.max(
+          0,
+          Math.floor(pool.getMaxEntries() / pool.getMaxPoolSize()) - 1
+        );
+        const panelCwds = (msg.panelCwds ?? []).slice(0, maxPanelKeys);
+        // Compute the envHash here (not in Main) so the warm key is guaranteed
+        // to match the `acquireByKey` lookup at spawn time — the same
+        // `computePoolEnvHash` over the same merged env produces both (#9810).
+        // When `projectEnv` is null/empty, `computePoolEnvHash` collapses to
+        // POOL_ENV_EMPTY_HASH and the warm path is identical to the pre-#9810
+        // behaviour.
+        const projectEnvHash = computePoolEnvHash(msg.projectEnv ?? undefined);
+        const warmCallerEnv =
+          projectEnvHash === POOL_ENV_EMPTY_HASH ? undefined : (msg.projectEnv ?? undefined);
+        pool
+          .drainAndRefill(msg.projectPath)
+          .then(() => {
+            // Warm the restored panels' own cwds AFTER the root drain/refill
+            // resolves. drainAndRefill bumps the drain epoch synchronously and
+            // clears stale entries; warming here (not before) guarantees these
+            // entries are tagged with the current epoch and survive (#9774).
+            // warmForKey is idempotent, per-key capacity-capped, and circuit-
+            // broken, so stale/deleted worktree paths self-limit.
+            for (const cwd of panelCwds) {
+              pool.warmForKey(cwd, warmCallerEnv, projectEnvHash);
+            }
+          })
+          .catch((err) => {
+            console.error("[PtyHost] drainAndRefill failed:", err);
+          });
       }
     },
 

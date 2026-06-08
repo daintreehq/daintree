@@ -5,6 +5,7 @@ const { mockTerminalClient } = vi.hoisted(() => ({
     resize: vi.fn(),
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
+    onTierChanged: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -15,6 +16,7 @@ const { mockTerminalClient } = vi.hoisted(() => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
   },
 }));
 

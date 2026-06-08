@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 vi.mock("electron", () => ({
   app: {
-    getPath: vi.fn(),
+    getPath: vi.fn(() => "/tmp/test-user-data"),
     on: vi.fn(),
   },
   ipcMain: {
@@ -41,6 +41,8 @@ const registerMocks = vi.hoisted(() => ({
   registerHibernationHandlers: vi.fn(),
   registerIdleTerminalHandlers: vi.fn(),
   registerSystemSleepHandlers: vi.fn(),
+  registerAppVersionInfoHandlers: vi.fn(),
+  registerOsDndHandlers: vi.fn(),
   registerKeybindingHandlers: vi.fn(),
   registerWorktreeConfigHandlers: vi.fn(),
   registerNotificationHandlers: vi.fn(),
@@ -62,10 +64,14 @@ const registerMocks = vi.hoisted(() => ({
   registerMilestonesHandlers: vi.fn(),
   registerShortcutHintsHandlers: vi.fn(),
   registerForgeSettingsHandlers: vi.fn(),
+  registerForgeHandlers: vi.fn(),
+  registerForgeDataHandlers: vi.fn(),
+  registerForgeAuditHandlers: vi.fn(),
   registerVoiceInputHandlers: vi.fn(),
   registerMcpServerHandlers: vi.fn(),
   registerHelpAssistantHandlers: vi.fn(),
   registerWebviewHandlers: vi.fn(),
+  registerWebviewNavigationHandlers: vi.fn(),
   registerDiagnosticsHandlers: vi.fn(),
 
   registerAccessibilityHandlers: vi.fn(),
@@ -149,6 +155,12 @@ vi.mock("../handlers/idleTerminals.js", () => ({
 vi.mock("../handlers/systemSleep.js", () => ({
   registerSystemSleepHandlers: registerMocks.registerSystemSleepHandlers,
 }));
+vi.mock("../handlers/appVersionInfo.js", () => ({
+  registerAppVersionInfoHandlers: registerMocks.registerAppVersionInfoHandlers,
+}));
+vi.mock("../handlers/osDnd.js", () => ({
+  registerOsDndHandlers: registerMocks.registerOsDndHandlers,
+}));
 vi.mock("../handlers/keybinding.js", () => ({
   registerKeybindingHandlers: registerMocks.registerKeybindingHandlers,
 }));
@@ -212,6 +224,15 @@ vi.mock("../handlers/shortcutHints.js", () => ({
 vi.mock("../handlers/forgeSettings.js", () => ({
   registerForgeSettingsHandlers: registerMocks.registerForgeSettingsHandlers,
 }));
+vi.mock("../handlers/forge.js", () => ({
+  registerForgeHandlers: registerMocks.registerForgeHandlers,
+}));
+vi.mock("../handlers/forgeData.js", () => ({
+  registerForgeDataHandlers: registerMocks.registerForgeDataHandlers,
+}));
+vi.mock("../handlers/forgeAudit.js", () => ({
+  registerForgeAuditHandlers: registerMocks.registerForgeAuditHandlers,
+}));
 vi.mock("../handlers/voiceInput.js", () => ({
   registerVoiceInputHandlers: registerMocks.registerVoiceInputHandlers,
 }));
@@ -223,6 +244,9 @@ vi.mock("../handlers/helpAssistant.js", () => ({
 }));
 vi.mock("../handlers/webview.js", () => ({
   registerWebviewHandlers: registerMocks.registerWebviewHandlers,
+}));
+vi.mock("../handlers/webviewNavigation.js", () => ({
+  registerWebviewNavigationHandlers: registerMocks.registerWebviewNavigationHandlers,
 }));
 vi.mock("../handlers/diagnostics.js", () => ({
   registerDiagnosticsHandlers: registerMocks.registerDiagnosticsHandlers,

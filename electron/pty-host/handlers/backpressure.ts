@@ -16,7 +16,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
 
   return {
     "acknowledge-data": (msg) => {
-      const acknowledgedBytes = msg.charCount ?? 0;
+      const acknowledgedBytes = msg.byteCount ?? 0;
       ipcQueueManager.removeBytes(msg.id, acknowledgedBytes);
       ipcQueueManager.tryResume(msg.id);
 
@@ -34,7 +34,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
 
     "set-activity-tier": (msg) => {
       const tier = msg.tier === "background" ? "background" : "active";
-      backpressureManager.setActivityTier(msg.id, tier);
+      backpressureManager.setActivityTier(msg.id, tier, "set-activity-tier");
 
       // Clear any stall suspension and unblock the PTY
       backpressureManager.clearSuspended(msg.id);
@@ -70,7 +70,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
             : tier === "active"
               ? 50
               : 500;
-        ptyManager.setActivityMonitorTier(msg.id, pollingInterval);
+        ptyManager.setActivityMonitorTier(msg.id, tier, pollingInterval);
       }
 
       if (!atCoordinator?.isPaused) {
@@ -91,8 +91,15 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
     "wake-terminal": async (msg) => {
       const wakeStartTime = Date.now();
 
+      // Capture the tier before the wake promotes it. A trailing-edge wake that
+      // fires after the renderer already backgrounded the pane (#9906) arrives
+      // here with the host still at "background" — the signal that this wake is
+      // stale and must be undone once the snapshot is served, so the host
+      // doesn't stream at full rate into a hidden terminal forever.
+      const preWakeTier = backpressureManager.getActivityTier(msg.id);
+
       // Wake implies we want a faithful snapshot + resume streaming.
-      backpressureManager.setActivityTier(msg.id, "active");
+      backpressureManager.setActivityTier(msg.id, "active", "wake-terminal");
       backpressureManager.clearSuspended(msg.id);
       backpressureManager.clearPendingVisual(msg.id);
 
@@ -105,19 +112,36 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       }
       backpressureManager.deletePauseStartTime(msg.id);
 
-      // Release backpressure hold via coordinator (respects other holds)
+      // Hold the backpressure pause until after serialization — resuming the
+      // PTY first lets bytes emitted in the gap land in both the snapshot and
+      // the live stream, duplicating them on replay (#9897). The resume
+      // happens in the finally below.
       const wakeCoordinator = getPauseCoordinator(msg.id);
-      if (wasPaused) {
-        wakeCoordinator?.resume("backpressure");
-      }
 
       // Apply active tier polling (50ms) when waking
       const terminal = ptyManager.getTerminal(msg.id);
       if (terminal) {
-        ptyManager.setActivityMonitorTier(msg.id, 50);
+        ptyManager.setActivityMonitorTier(msg.id, "active", 50);
       }
 
-      // Best-effort warning: cwd missing
+      let state: string | null;
+      try {
+        state = await ptyManager.getSerializedStateAsync(msg.id);
+      } catch {
+        state = ptyManager.getSerializedState(msg.id);
+      } finally {
+        // Resume even when serialization throws so wake always unblocks the
+        // terminal (#9896). Reuses the coordinator captured above — the
+        // terminal may have been torn down during the await.
+        if (wasPaused) {
+          wakeCoordinator?.resume("backpressure");
+        }
+      }
+
+      const wakeLatencyMs = Date.now() - wakeStartTime;
+
+      // Best-effort warning: cwd missing. Runs after the resume so a slow
+      // stat (stale network mount) can't extend the pause window.
       const warnings: string[] = [];
       try {
         const t = ptyManager.getTerminal(msg.id);
@@ -130,15 +154,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       } catch {
         // ignore
       }
-
-      let state: string | null = null;
-      try {
-        state = await ptyManager.getSerializedStateAsync(msg.id);
-      } catch {
-        state = ptyManager.getSerializedState(msg.id);
-      }
-
-      const wakeLatencyMs = Date.now() - wakeStartTime;
 
       if (!wakeCoordinator?.isPaused) {
         backpressureManager.emitTerminalStatus(msg.id, "running");
@@ -164,6 +179,35 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         state,
         warnings: warnings.length > 0 ? warnings : undefined,
       });
+
+      // Reconcile a stale wake (#9906). If the host was already "background"
+      // when this wake arrived, the renderer had moved the pane offscreen and
+      // this wake is a trailing-edge artifact (a rate-limited timer that fired
+      // after the BACKGROUND transition). The snapshot has been served, so
+      // re-demote the host to "background" and push a tier-changed correction
+      // to reset the renderer's setActivityTier dedup baseline — otherwise its
+      // lastBackendTier stays "background" and it can never re-send the
+      // "background" correction, leaving the host streaming at 50ms into a
+      // hidden pane indefinitely. Posted unconditionally when preWakeTier was
+      // "background" (setActivityTier dedupes same-tier, so the broadcast, not
+      // the set, is what reconciles the renderer). FIFO-ordered after the data
+      // path on the same per-window port, project-filtered exactly like
+      // recomputeActivityTiers.
+      if (preWakeTier === "background") {
+        backpressureManager.setActivityTier(msg.id, "background", "wake-terminal-correction");
+        ptyManager.setActivityMonitorTier(msg.id, "background", 500);
+        const wakeTerminal = ptyManager.getTerminal(msg.id);
+        const termProject = wakeTerminal?.projectId ?? null;
+        for (const [windowId, conn] of ctx.rendererConnections) {
+          const windowProject = ctx.windowProjectMap.get(windowId) ?? null;
+          if (windowProject !== null && termProject !== windowProject) continue;
+          try {
+            conn.port.postMessage({ type: "tier-changed", id: msg.id, tier: "background" });
+          } catch {
+            // Port closing between iteration and post — disconnect handles cleanup.
+          }
+        }
+      }
     },
 
     "force-resume": (msg) => {
@@ -173,6 +217,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         return;
       }
       coordinator.forceReleaseAll();
+      backpressureManager.stats.forceResumeCount++;
       console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
 
       // Clean up any pending backpressure monitoring
@@ -182,11 +227,6 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         backpressureManager.deletePausedInterval(msg.id);
       }
       backpressureManager.clearPendingVisual(msg.id);
-
-      // Calculate pause duration if we have a start time
-      const pauseStart = backpressureManager.getPauseStartTime(msg.id);
-      const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-      backpressureManager.deletePauseStartTime(msg.id);
 
       // Clear suspended flag to allow output to flow again
       backpressureManager.clearSuspended(msg.id);
@@ -202,24 +242,33 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
         conn.portQueueManager.clearQueue(msg.id);
       }
 
-      // Emit resume status (uses current visualBuffers via ctx getter)
+      // Compute resume status with the actual held duration from the visual
+      // buffer (SAB path) when available. The wire `pause-end` metric gets
+      // its `durationMs` from the canonical funnel's closure map (the
+      // multi-source-of-truth path) — see `emitReliabilityMetricWithTracking`.
+      // We intentionally do NOT read from `backpressureManager.getPauseStartTime()`
+      // (SAB-only, dead in production) for the metric; the funnel does that
+      // work and clears all sources for this terminal atomically.
       const buffers = ctx.visualBuffers;
       const utilization =
         buffers.length > 0
           ? buffers[selectShard(msg.id, buffers.length)].getUtilization()
           : undefined;
-      backpressureManager.emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
+      backpressureManager.emitTerminalStatus(msg.id, "running", utilization);
 
-      // Emit metrics for pause-end (user force-resume path)
-      if (pauseDuration !== undefined) {
-        backpressureManager.emitReliabilityMetric({
-          terminalId: msg.id,
-          metricType: "pause-end",
-          timestamp: Date.now(),
-          durationMs: pauseDuration,
-          bufferUtilization: utilization,
-        });
-      }
+      // Emit the user force-resume's `pause-end` via the canonical funnel
+      // (null source). The funnel populates `durationMs` from the closure
+      // `pausedTerminals` map (or skips it when the terminal had no recorded
+      // pause) and clears the map. This routes the wire event through the
+      // load-bearing split so it always reaches the renderer in production
+      // (issue #9898: the previous `backpressureManager.emitReliabilityMetric`
+      // path was gated by `metricsEnabled()` and never fired).
+      backpressureManager.emitReliabilityMetric({
+        terminalId: msg.id,
+        metricType: "pause-end",
+        timestamp: Date.now(),
+        bufferUtilization: utilization,
+      });
     },
 
     "pause-all": () => {

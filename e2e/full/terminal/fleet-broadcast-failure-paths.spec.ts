@@ -25,6 +25,13 @@ let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
+async function editorContains(locator: Locator, text: string): Promise<boolean> {
+  if (!(await locator.isVisible().catch(() => false))) return false;
+  return locator
+    .evaluate((element, expected) => (element.textContent ?? "").includes(expected), text)
+    .catch(() => false);
+}
+
 async function dispatchAction<T = unknown>(
   page: Page,
   actionId: string,
@@ -142,7 +149,35 @@ async function broadcastViaEditor(
   await expect(editor).toBeVisible({ timeout: T_MEDIUM });
   await editor.click();
   await editor.pressSequentially(command);
-  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => editorContains(editor, command), {
+      timeout: T_MEDIUM,
+      intervals: [100, 250],
+    })
+    .toBe(true);
+
+  await editor.press("Enter");
+  const consumed = await expect
+    .poll(() => editorContains(editor, command), {
+      timeout: T_MEDIUM,
+      intervals: [100, 250],
+    })
+    .toBe(false)
+    .then(
+      () => true,
+      () => false
+    );
+
+  if (!consumed) {
+    await editor.click();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(() => editorContains(editor, command), {
+        timeout: T_MEDIUM,
+        intervals: [100, 250],
+      })
+      .toBe(false);
+  }
 }
 
 test.describe.serial("Fleet broadcast: failure and progress paths", () => {

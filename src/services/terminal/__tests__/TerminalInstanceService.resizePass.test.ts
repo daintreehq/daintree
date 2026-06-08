@@ -7,6 +7,7 @@ vi.mock("@/clients", () => ({
     resize: vi.fn(),
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
+    onTierChanged: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
   appClient: { getHydrationState: vi.fn() },
@@ -124,6 +126,7 @@ function makeManaged(visible = true): ManagedTerminal {
     imageAddon: null,
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: null,
+    imageLinksDisposable: null,
     webLinksAddon: null,
     hoveredLink: null,
   } as ManagedTerminal;

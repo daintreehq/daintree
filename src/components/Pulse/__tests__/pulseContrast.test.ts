@@ -5,6 +5,27 @@ import { resolve } from "path";
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
+const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
+const PULSE_CSS_PATH = resolve(__dirname, "../../../styles/components/pulse.css");
+
+// Find a `@media (X)` opening brace and return the slice up to the matching
+// closing brace (or until the next top-level @media / @layer / @theme opens).
+// Forbids rules being placed in the wrong block — the dual-block guard.
+function mediaBlockSlice(content: string, mediaSelector: string): string {
+  const start = content.indexOf(mediaSelector);
+  if (start === -1) return "";
+  const openBrace = content.indexOf("{", start);
+  if (openBrace === -1) return "";
+  let depth = 1;
+  let i = openBrace + 1;
+  while (i < content.length && depth > 0) {
+    const ch = content[i];
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+    i += 1;
+  }
+  return content.slice(openBrace, i);
+}
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
   it("card shell uses pulse component vars for per-theme shell styling", async () => {
@@ -93,6 +114,24 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
     expect(content).toContain("text-status-success/80");
     expect(content).toContain("text-status-error/80");
+  });
+});
+
+describe("PulseSummary — streak flame color fidelity (issue #9820)", () => {
+  it("StreakFlame rows opt out of the opacity-70 dim so tier color renders at full strength", async () => {
+    const content = await readFile(SUMMARY_PATH, "utf-8");
+    // The `dim={false}` opt-out lives on the wrapping <Stat>, not the
+    // <StreakFlame .../> child — match a windowed slice of each call site.
+    const flameMatches = content.match(/<StreakFlame[\s\S]{0,400}?\n\s{10}\/>/g) ?? [];
+    expect(flameMatches.length).toBe(2);
+    for (const snippet of flameMatches) {
+      expect(snippet).toContain("dim={false}");
+      // And the dim class must not survive inside the flame Stat's window.
+      expect(snippet).not.toContain("opacity-70");
+    }
+    // Symmetric guard: the cn(...) definition still applies opacity-70 to
+    // the other neutral icons (GitCommit, Calendar, FilePenLine).
+    expect(content).toContain("opacity-70");
   });
 });
 
@@ -197,5 +236,155 @@ describe("ProjectPulseCard — accessibility (issue #7229)", () => {
   it("refresh spinner respects motion-reduce", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain("motion-reduce:animate-none");
+  });
+});
+
+describe("PulseHeatmap — legend (issue #9819)", () => {
+  it("ProjectPulseCard renders the legend testid", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain('data-testid="pulse-heatmap-legend"');
+  });
+
+  it("legend spans the empty cell plus heat levels 1..4 (full Less→More range)", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    // The legend iterates the empty (0) swatch and the four heat levels so
+    // "Less" starts at no-commits, matching the GitHub contribution legend.
+    expect(content).toContain("[0, 1, 2, 3, 4]");
+    // Non-empty swatches carry their data-heat-level (forced-colors shape cue);
+    // the empty swatch omits it, mirroring an empty cell.
+    expect(content).toContain("data-heat-level={level > 0 ? level : undefined}");
+    // Swatch fills route through the shared cell-background helper so the legend
+    // tracks the same opacity ramp the grid uses (the bug fixed here: a flat,
+    // full-strength legend on themes without opaque pulse-heat-1..4 stops).
+    expect(content).toContain("getPulseHeatLevelBackground(level)");
+  });
+
+  it("per-level heat vars stay referenced so the drift scanner registers them", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    // Each per-level var is referenced explicitly (not via template literal) so
+    // the EXTENSION_KEYS drift scanner registers all four consumers. After the
+    // legend was routed through getPulseHeatLevelBackground, these live in the
+    // heatmap module rather than the card.
+    for (const level of [1, 2, 3, 4]) {
+      expect(content).toContain(`var(--pulse-heat-${level},`);
+    }
+  });
+
+  it("legend uses Less and More labels", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain(">Less<");
+    expect(content).toContain(">More<");
+  });
+
+  it("legend is decorative (aria-hidden) and ships an sr-only description for aria-describedby", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain('aria-hidden="true"');
+    expect(content).toContain("Heat intensity from no commits to many commits");
+    expect(content).toContain("useId()");
+    expect(content).toContain("describedBy=");
+  });
+
+  it("legend does NOT use the accent color (CLAUDE.md accent restraint)", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    // Strip the health-chip palette entry — it's a `tone: "accent"` chip on a
+    // separate surface, not part of the legend chrome.
+    const legendBlock = content.match(/function PulseHeatmapLegend[\s\S]*?^}/m);
+    expect(legendBlock).toBeTruthy();
+    expect(legendBlock![0]).not.toContain("text-accent-primary");
+    expect(legendBlock![0]).not.toContain("var(--color-accent-primary)");
+    expect(legendBlock![0]).not.toContain("ring-daintree-accent");
+  });
+
+  it("legend shares the heatmap row width via getPulseHeatmapRowWidth", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain("getPulseHeatmapRowWidth");
+  });
+
+  it("legend swatches reuse the pulse-heat-cell shape cue so they stay distinguishable in forced-colors", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    // Each swatch is a pulse-heat-cell with an inner shape span, so the
+    // forced-colors size rules in src/index.css size the inner CanvasText
+    // square per level — sighted WHCM users see the same 4-step cue on the
+    // legend as on the grid itself.
+    expect(content).toContain("pulse-heat-cell relative overflow-hidden");
+    expect(content).toMatch(/pulse-heat-cell-shape/);
+  });
+});
+
+describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
+  it("PulseHeatmap tags non-empty cells with data-heat-level and a shape span", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    // Clamp to >=1 so a future renderer emitting (count > 0, level: 0) doesn't
+    // produce a 0-sized CanvasText shape under forced-colors. The current
+    // ProjectPulseService never emits this combination; the clamp is
+    // defensive.
+    expect(content).toContain("cell.count > 0 && cell.level > 0");
+    expect(content).toContain("pulse-heat-cell-shape");
+    expect(content).toContain('"pulse-heat-cell');
+  });
+
+  it("PulseHeatmap accepts a describedBy prop and applies aria-describedby", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    expect(content).toContain("describedBy?: string");
+    expect(content).toContain("aria-describedby={describedBy}");
+  });
+
+  it("pulse.css defines a hidden base rule for the shape (default off, forced-colors flips on)", async () => {
+    const content = await readFile(PULSE_CSS_PATH, "utf-8");
+    expect(content).toContain(".pulse-heat-cell-shape");
+    expect(content).toMatch(/\.pulse-heat-cell-shape\s*{[^}]*display:\s*none/);
+    expect(content).toMatch(/\.pulse-heat-cell-shape\s*{[^}]*position:\s*absolute/);
+  });
+
+  it("forced-colors block paints the shape with CanvasText and sizes it per level", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    expect(block).toContain(".pulse-heat-cell-shape");
+    expect(block).toContain("CanvasText");
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="1"] .pulse-heat-cell-shape');
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="2"] .pulse-heat-cell-shape');
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="3"] .pulse-heat-cell-shape');
+    expect(block).toContain('.pulse-heat-cell[data-heat-level="4"] .pulse-heat-cell-shape');
+  });
+
+  it("forced-colors block borders the empty legend swatch so it stays visible", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    // The level-0 legend swatch is a <span> (no button border) with no shape
+    // span, so it needs an explicit border or it paints Canvas-on-Canvas.
+    expect(block).toContain(
+      '[data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level])'
+    );
+    expect(block).toMatch(
+      /\[data-testid="pulse-heatmap-legend"\] \.pulse-heat-cell:not\(\[data-heat-level\]\)\s*{[^}]*border:\s*1px solid CanvasText/
+    );
+  });
+
+  it("forced-colors block distinguishes missed-day via a solid CanvasText fill", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (forced-colors: active)");
+    expect(block).toContain(".pulse-heat-cell-missed");
+    // Missed cell must be the more salient signal (filled, not empty).
+    expect(block).toMatch(/\.pulse-heat-cell-missed\s*{[^}]*background:\s*CanvasText/);
+  });
+
+  it("prefers-contrast block bumps heat-cell border to 1px theme-text", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const block = mediaBlockSlice(content, "@media (prefers-contrast: more)");
+    expect(block).toContain(".pulse-heat-cell");
+    expect(block).toMatch(/\.pulse-heat-cell\s*{[^}]*border-width:\s*1px/);
+    expect(block).toContain("border-color: var(--color-daintree-text)");
+  });
+
+  it("the two contrast blocks stay separate (CLAUDE.md dual-block guard)", async () => {
+    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const forcedStart = content.indexOf("@media (forced-colors: active)");
+    const contrastStart = content.indexOf("@media (prefers-contrast: more)");
+    expect(forcedStart).toBeGreaterThan(-1);
+    expect(contrastStart).toBeGreaterThan(forcedStart);
+    // The forced-colors block must close before the prefers-contrast block opens.
+    const forcedBlock = mediaBlockSlice(content, "@media (forced-colors: active)");
+    const forcedEnd = content.indexOf(forcedBlock) + forcedBlock.length;
+    expect(forcedEnd).toBeLessThanOrEqual(contrastStart);
   });
 });

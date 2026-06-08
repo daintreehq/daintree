@@ -175,8 +175,8 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     clearResizeJob: vi.fn(),
     clearSettledTimer: vi.fn(),
     applyDeferredResize: vi.fn(),
-    openLink: vi.fn(),
-    getCwdProvider: vi.fn(() => undefined),
+    drawDataLossMarker: vi.fn(),
+    ensureDeferredAddons: vi.fn(),
     onHibernationChanged: vi.fn(),
     getIsBackgrounded: vi.fn(() => false),
     onBufferModeChange: vi.fn(),
@@ -358,6 +358,37 @@ describe("TerminalHibernationManager adversarial", () => {
     expect(managed.isDetached).toBe(true);
     expect(managed.restoreGeneration).toBe(8);
     expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("STRANDED_PENDING_WRITES_CLEARED_ON_WAKE_RESTORES_HIBERNATION_ELIGIBILITY", () => {
+    // A mid-write dispose (pre-#9912) leaves pendingWrites stranded above
+    // zero — the old terminal's write callbacks never fire. The counter must
+    // not survive the wake cycle, or hibernation is blocked forever.
+    managed = makeMockManaged({
+      isHibernated: true,
+      isOpened: false,
+      pendingWrites: 3, // stranded by a mid-write dispose
+    });
+    connectHost(managed.hostElement, 800, 600);
+    deps = makeMockDeps(managed);
+    manager = new TerminalHibernationManager(deps);
+
+    // While stranded, the guard blocks hibernation for ANY terminal shape —
+    // verify via the eligibility facade before the wake clears it.
+    managed.isHibernated = false;
+    expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+      false
+    );
+    managed.isHibernated = true;
+
+    manager.unhibernate("t1");
+    expect(managed.pendingWrites).toBe(0);
+
+    // With the counter cleared, the terminal is hibernatable again.
+    expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(true);
+    manager.hibernate("t1");
+    expect(managed.isHibernated).toBe(true);
+    expect(managed.terminal.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("BACKGROUNDED_BYPASS_DROPPED_WHEN_RESTORED_BETWEEN_SCHEDULE_AND_FIRE", () => {

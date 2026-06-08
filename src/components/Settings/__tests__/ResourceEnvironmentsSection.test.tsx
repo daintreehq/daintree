@@ -179,3 +179,21 @@ describe("ResourceEnvironmentsSection", () => {
     expect((dockerRadio as HTMLInputElement).checked).toBe(true);
   });
 });
+
+describe("ResourceEnvironmentsSection — DOM anchors for settings deep-links", () => {
+  it("exposes the legacy tab-nav-project:environments anchor for back-compat deep-links", () => {
+    const { container } = render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={mockResourceEnvironments}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="docker-local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="docker-local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    expect(container.querySelector("#tab-nav-project\\:environments")).not.toBeNull();
+  });
+});

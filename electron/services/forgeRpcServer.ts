@@ -25,6 +25,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 // at module-load time. The first forge RPC dispatch performs the import.
 type PluginServiceShape = {
   activatePluginForForgeProvider(namespacedId: string): Promise<void>;
+  readonly isPluginScanComplete: boolean;
 };
 let pluginServicePromise: Promise<PluginServiceShape> | null = null;
 function getPluginService(): Promise<PluginServiceShape> {
@@ -68,13 +69,14 @@ interface InFlightEntry {
   waiters: Waiter[];
 }
 
-// Cross-window singleflight. Each Electron window forks its own workspace-host
-// UtilityProcess; before this map, N windows watching the same project meant
-// N identical GraphQL calls per poll. The bridge-side singleflight in
-// `forgeBridge.ts` only dedupes within a single host. This map sits at the
-// boundary main owns and absorbs the cross-host fan-in: identical concurrent
-// requests join a single in-flight provider call and the result is delivered
-// to every waiter. See #9055.
+// Cross-host singleflight, and the sole dedup layer main owns. Workspace-hosts
+// are pooled one-per-project (`WorkspaceHostPool`), so the windows sharing a
+// project route through a single host; this map still absorbs the fan-in from
+// distinct projects whose calls collapse on `namespacedId`/args, plus any
+// transient overlap when a host is restarting or handing off. Identical
+// concurrent requests join a single in-flight provider call and the result is
+// delivered to every waiter. The bridge-side singleflight in `forgeBridge.ts`
+// only dedupes within a single host; this sits at the boundary main owns.
 //
 // Evicted on settlement (success or error) so retries proceed immediately —
 // no TTL caching here; the GitHub response cache in `forgeProvider.runQuery`
@@ -234,7 +236,7 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   }
 }
 
-async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProviderResult | null> {
+async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProviderResult> {
   const [opts] = args as [
     {
       remoteUrl: string | null;
@@ -242,26 +244,35 @@ async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProvi
       globalDefaultProviderId: string | null;
     },
   ];
+  const pluginService = await getPluginService();
+  // Hostname matching runs against descriptors registered at manifest
+  // scan-time, so a miss is only definitive once `PluginService.initialize()`
+  // has finished. Before that, report "not-ready" so the workspace-host keeps
+  // its short cold-start retry instead of treating the miss as permanent
+  // (#9997). After scan completion every failure mode below is "no-match" —
+  // re-evaluated when forge settings or the plugin registry change.
+  const miss: ForgeResolveProviderResult = pluginService.isPluginScanComplete
+    ? { status: "no-match" }
+    : { status: "not-ready" };
   const resolved = resolveForgeProvider({
     remoteUrl: opts.remoteUrl,
     forgeProviderOverride: opts.forgeProviderOverride,
     globalDefaultProviderId: opts.globalDefaultProviderId,
   });
-  if (!resolved.entry) return null;
+  if (!resolved.entry) return miss;
 
   const { pluginId, contribution } = resolved.entry;
   const namespacedId = makeForgeProviderId(pluginId, contribution.id);
   // Implicit activation before impl lookup — see `invoke` above for rationale.
-  const pluginService = await getPluginService();
   await pluginService.activatePluginForForgeProvider(namespacedId);
   const impl = getForgeProviderImpl(namespacedId);
-  if (!impl) return null;
-  if (!opts.remoteUrl) return null;
+  if (!impl) return miss;
+  if (!opts.remoteUrl) return miss;
 
   const repo = impl.parseRemote(opts.remoteUrl);
-  if (!repo) return null;
+  if (!repo) return miss;
 
-  return { namespacedId, repo };
+  return { status: "resolved", namespacedId, repo };
 }
 
 function invokeFindPRByBranch(impl: ForgeProviderImpl, args: unknown[]): Promise<PR | null> {

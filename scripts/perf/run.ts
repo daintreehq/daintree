@@ -2,9 +2,11 @@ import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
+import { checkBaselineCoverage, checkBaselineFreshness } from "./lib/baselineCoverage";
 import { compareSamples } from "./lib/comparison";
+import { evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
-import { mean, percentile, round, stdDev } from "./lib/stats";
+import { averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
 import { assertMatrixCoverage, getScenariosForMode } from "./scenarios";
 import type {
@@ -50,7 +52,6 @@ const DEFAULT_ITERATIONS: Record<PerfMode, Record<ScenarioTier, number>> = {
 };
 
 const MODES: ReadonlySet<string> = new Set(["smoke", "ci", "nightly", "soak"]);
-const MIN_REGRESSION_BASELINE_MS = 5;
 
 function parseArgs(argv: string[]): CliOptions {
   const args = new Map<string, string>();
@@ -114,9 +115,27 @@ async function run(): Promise<void> {
   const budgetConfig = loadBudgetConfig();
   const baseline = readJson<BaselineSummary>(cli.baselinePath);
 
+  checkBaselineFreshness(baseline, cli.mode);
+
   const scenarios = getScenariosForMode(cli.mode);
   if (scenarios.length === 0) {
     throw new Error(`No scenarios configured for mode ${cli.mode}`);
+  }
+
+  // Regenerating the baseline is exactly how coverage gaps get fixed, so let an
+  // --update-baseline run proceed even when entries are missing.
+  if (!cli.updateBaseline) {
+    const coverageGaps = checkBaselineCoverage(baseline, budgetConfig, scenarios);
+    if (coverageGaps.length > 0) {
+      const ids = coverageGaps.map((gap) => gap.scenarioId).join(", ");
+      console.error(
+        `[perf:${cli.mode}] FAIL ${coverageGaps.length} budgeted scenario(s) missing from ` +
+          `baseline (${cli.baselinePath}) — regression gate cannot run: ${ids}. ` +
+          `Regenerate with --update-baseline.`
+      );
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -151,6 +170,13 @@ async function run(): Promise<void> {
       const start = performance.now();
       const sample = (await scenario.run(context)) as ScenarioSample;
       const wallClockMs = performance.now() - start;
+      if (!Number.isFinite(sample.durationMs)) {
+        throw new Error(
+          `Scenario ${scenario.id} returned non-finite durationMs (${sample.durationMs})`
+        );
+      }
+      // Negative durationMs is the documented "harness self-times" sentinel
+      // (see TERM scenarios) — substitute the wall-clock bracket.
       const durationMs = sample.durationMs >= 0 ? sample.durationMs : wallClockMs;
 
       const metrics = sample.metrics ?? {};
@@ -196,53 +222,19 @@ async function run(): Promise<void> {
     const meanMs = mean(aggregate.durations);
     const stdDevMs = stdDev(aggregate.durations);
 
-    const metricAverages: Record<string, number> = {};
-    for (const sampleMetrics of aggregate.metrics) {
-      for (const [key, value] of Object.entries(sampleMetrics)) {
-        metricAverages[key] = (metricAverages[key] ?? 0) + value;
-      }
-    }
-    for (const key of Object.keys(metricAverages)) {
-      metricAverages[key] = metricAverages[key] / aggregate.metrics.length;
-    }
+    const metricAverages = averageMetrics(aggregate.metrics);
 
     const budget = getScenarioBudget(budgetConfig, scenarioId);
-    let failedBudget = false;
-    const reasons: string[] = [];
-
-    if (budget.p95Ms !== undefined && p95Ms > budget.p95Ms) {
-      failedBudget = true;
-      reasons.push(`p95 ${round(p95Ms)}ms > budget ${budget.p95Ms}ms`);
-    }
-
-    if (budget.maxMetricValues) {
-      for (const [metricName, maxValue] of Object.entries(budget.maxMetricValues)) {
-        const actual = metricAverages[metricName];
-        if (actual !== undefined && actual > maxValue) {
-          failedBudget = true;
-          reasons.push(`${metricName} ${round(actual)} > max ${maxValue}`);
-        }
-      }
-    }
-
     const baselineP95 = baseline?.p95ByScenario?.[scenarioId];
-    if (
-      baselineP95 !== undefined &&
-      baselineP95 >= MIN_REGRESSION_BASELINE_MS &&
-      budget.maxRegressionPct !== undefined
-    ) {
-      const regressionPct = ((p95Ms - baselineP95) / baselineP95) * 100;
-      if (regressionPct > budget.maxRegressionPct) {
-        failedBudget = true;
-        reasons.push(
-          `regression ${round(regressionPct)}% exceeds ${budget.maxRegressionPct}% baseline gate`
-        );
-      }
-    }
-
-    if (!baseline && budgetConfig.criticalScenarios.includes(scenarioId)) {
-      reasons.push("baseline missing - regression gate skipped");
-    }
+    const { failedBudget, reasons } = evaluateScenarioBudget({
+      scenarioId,
+      p95Ms,
+      metricAverages,
+      budget,
+      baselineP95,
+      isCritical: budgetConfig.criticalScenarios.includes(scenarioId),
+      hasBaselineFile: baseline !== null,
+    });
 
     if (failedBudget) {
       failedScenarios.push(scenarioId);
@@ -274,9 +266,28 @@ async function run(): Promise<void> {
   // A/B comparison mode: run baseline arm and compare statistically
   let comparisonAggregates: ComparisonAggregate[] = [];
   if (cli.compare) {
+    const expectedComparisons = [...aggregateById.keys()].filter(
+      (id) => getScenarioBudget(budgetConfig, id).comparison !== undefined
+    );
+    const failComparison = (reason: string) => {
+      console.error(`[perf:compare] FAIL ${reason}`);
+      for (const id of expectedComparisons) {
+        if (!failedScenarios.includes(id)) {
+          failedScenarios.push(id);
+        }
+      }
+    };
+
     const mergeBase = getMergeBase(cli.compareBase);
     if (!mergeBase) {
       console.warn("[perf:compare] Could not determine merge-base — skipping comparison");
+      // A requested comparison that can't run is not a pass. Fail closed when any
+      // scenario in this run carries a comparison budget.
+      if (expectedComparisons.length > 0) {
+        failComparison(
+          `merge-base unresolved — ${expectedComparisons.length} scenario(s) with comparison budgets left unenforced`
+        );
+      }
     } else {
       console.log(`[perf:compare] Baseline ref: ${mergeBase.slice(0, 12)}`);
 
@@ -287,17 +298,28 @@ async function run(): Promise<void> {
 
       comparisonAggregates = computeComparisons(aggregateById, baseArmData, budgetConfig);
 
+      if (expectedComparisons.length > 0 && comparisonAggregates.length === 0) {
+        failComparison(
+          `comparison arm produced no data for ${expectedComparisons.length} scenario(s) with comparison budgets — baseline arm did not run`
+        );
+      }
+
+      const aggregateByIdForReport = new Map(aggregates.map((agg) => [agg.id, agg]));
       for (const comp of comparisonAggregates) {
         if (comp.comparison.regression) {
-          const headAgg = comp.head;
-          if (!failedScenarios.includes(headAgg.id)) {
-            failedScenarios.push(headAgg.id);
+          if (!failedScenarios.includes(comp.head.id)) {
+            failedScenarios.push(comp.head.id);
           }
-          headAgg.failedBudget = true;
-          headAgg.budgetReason =
-            (headAgg.budgetReason ?? "")
-              ? `${headAgg.budgetReason}; A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`
-              : `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
+          // Mutate the aggregate that gets serialized into the summary/report,
+          // not comp.head (a detached copy built by computeComparisons).
+          const reportAgg = aggregateByIdForReport.get(comp.head.id);
+          if (reportAgg) {
+            const abReason = `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
+            reportAgg.failedBudget = true;
+            reportAgg.budgetReason = reportAgg.budgetReason
+              ? `${reportAgg.budgetReason}; ${abReason}`
+              : abReason;
+          }
         }
       }
 

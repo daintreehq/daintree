@@ -19,7 +19,6 @@ interface MainWorktreeSecondaryRowProps {
   lastFetchedAt: number | null | undefined;
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
-  isGitHubProvider: boolean;
   aggregateCounts?: AggregateCounts;
 }
 
@@ -35,7 +34,6 @@ export function MainWorktreeSecondaryRow({
   lastFetchedAt,
   fetchAuthFailed,
   fetchNetworkFailed,
-  isGitHubProvider,
   aggregateCounts,
 }: MainWorktreeSecondaryRowProps) {
   const fetchIntervalActiveMs = useResourceProfileStore((s) => s.fetchIntervalActiveMs);
@@ -58,7 +56,7 @@ export function MainWorktreeSecondaryRow({
           lastFetchedAt={lastFetchedAt}
           fetchAuthFailed={fetchAuthFailed}
           fetchNetworkFailed={fetchNetworkFailed}
-          isGitHubProvider={isGitHubProvider}
+          hasAuthFailedSignIn={hasAuthFailedSignIn}
           containerGapClass="gap-1"
           fetchIntervalMs={fetchIntervalMs}
         />

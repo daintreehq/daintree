@@ -1,4 +1,5 @@
-import { use, useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useEffect, useState } from "react";
+import type { ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { cn } from "@/lib/utils";
 import { TerminalRefreshTier } from "@/types";
@@ -8,7 +9,6 @@ import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClos
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
-import { terminalFontReady } from "@/config/terminalFont";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -48,13 +48,13 @@ export function XtermAdapter({
   restoreOnAttach = false,
   hasBottomBar = false,
 }: XtermAdapterProps) {
-  // Gate xterm's grid measurement (which happens at `terminal.open()` inside
-  // `terminalInstanceService.attach`) on the JetBrains Mono font being ready.
-  // xterm does not re-measure after open, so measuring with the fallback stack
-  // would leave a permanently mis-sized grid. The promise is a module-level
-  // singleton so `use()` sees a stable reference across re-renders.
-  use(terminalFontReady);
-
+  // No font-ready Suspense gate: `terminalFontReady` is an unannotated native
+  // promise, so `use()` suspended for at least one React cycle on every cold
+  // open even when JetBrains Mono was already cached — blanking the pane via the
+  // `<Suspense fallback={null}>` in TerminalPane for no benefit. We open against
+  // whatever font is resolved; if JBM arrives late, `TerminalInstanceService`
+  // repairs the mis-sized grid out-of-band via `repairFontGrid()` (wired once to
+  // `onTerminalFontArrivedLate` in its constructor) (#9809).
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
   const exitUnsubRef = useRef<(() => void) | null>(null);
@@ -158,6 +158,18 @@ export function XtermAdapter({
     ]
   );
 
+  // Appearance changes must not re-run the attach effect — detaching and
+  // reattaching every mounted terminal made theme-picker hover previews
+  // heavyweight and silently blurred the focused terminal (#9929). The attach
+  // effect reads the latest options through this ref instead of closing over
+  // `terminalOptions`; `appliedOptionsRef` records what the terminal actually
+  // received so the options effect below only forwards real deltas.
+  const terminalOptionsRef = useRef(terminalOptions);
+  const appliedOptionsRef = useRef<ITerminalOptions | null>(null);
+  useLayoutEffect(() => {
+    terminalOptionsRef.current = terminalOptions;
+  }, [terminalOptions]);
+
   // Push-based resize handler using ResizeObserver dimensions directly
   const handleResizeEntry = useCallback(
     (entry: ResizeObserverEntry) => {
@@ -236,11 +248,15 @@ export function XtermAdapter({
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       launchAgentId,
-      terminalOptions,
+      terminalOptionsRef.current,
       stableRefreshTierProvider,
       stableOnInput,
       stableCwdProvider
     );
+    // getOrCreate applies the current options itself (creation or its internal
+    // updateOptions call for existing instances) — record them so the options
+    // effect doesn't re-apply the same values on this commit.
+    appliedOptionsRef.current = terminalOptionsRef.current;
 
     const wasDetachedForSwitch = managed.isDetached === true;
     const hasSavedTargetDims = !!(managed.targetCols && managed.targetRows);
@@ -500,7 +516,6 @@ export function XtermAdapter({
   }, [
     terminalId,
     launchAgentId,
-    terminalOptions,
     performFit,
     stableRefreshTierProvider,
     stableOnInput,
@@ -508,6 +523,38 @@ export function XtermAdapter({
     restoreOnAttach,
     hasVisibleBufferContent,
   ]);
+
+  // Apply appearance changes in-place. updateOptions keys on presence
+  // ("theme" in options → full-row refresh; any text-metric key → refit and
+  // dimension-cache reset), so only the keys that actually changed are
+  // forwarded — a theme hover must not refit every mounted terminal, and an
+  // unchanged scrollback write must not touch xterm's CircularList. The
+  // applied-vs-current check also makes this a no-op on the commits where the
+  // attach effect already passed current options to getOrCreate. The five
+  // diffed keys are the only runtime-variable outputs of getXtermOptions —
+  // everything else is a static BASE_TERMINAL_OPTIONS constant; extend the
+  // diff if a new option ever becomes user-configurable.
+  useLayoutEffect(() => {
+    const applied = appliedOptionsRef.current;
+    appliedOptionsRef.current = terminalOptions;
+    if (!applied || applied === terminalOptions) return;
+
+    const delta: Partial<ITerminalOptions> = {};
+    if (applied.theme !== terminalOptions.theme) delta.theme = terminalOptions.theme;
+    if (applied.fontSize !== terminalOptions.fontSize) delta.fontSize = terminalOptions.fontSize;
+    if (applied.fontFamily !== terminalOptions.fontFamily) {
+      delta.fontFamily = terminalOptions.fontFamily;
+    }
+    if (applied.screenReaderMode !== terminalOptions.screenReaderMode) {
+      delta.screenReaderMode = terminalOptions.screenReaderMode;
+    }
+    if (applied.scrollback !== terminalOptions.scrollback) {
+      delta.scrollback = terminalOptions.scrollback;
+    }
+    if (Object.keys(delta).length === 0) return;
+
+    terminalInstanceService.updateOptions(terminalId, delta);
+  }, [terminalId, terminalOptions]);
 
   useLayoutEffect(() => {
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);

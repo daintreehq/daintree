@@ -1696,6 +1696,84 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     expect(await handler({}, "s:1", ["a.ts"])).toEqual({});
   });
 
+  // Issue #9953: the renderer reads `decoration.url` as the click target
+  // for the review-thread badge. The IPC merge must forward it — the prior
+  // implementation only copied badge/tooltip/color and silently dropped
+  // `url`, so the bugfix would have been non-functional in production.
+  it("forwards decoration.url through the IPC boundary", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p",
+        contributionId: "d",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({
+            "a.ts": {
+              badge: "3",
+              tooltip: "3 unresolved review comments",
+              color: "text-status-warning",
+              url: "https://github.com/owner/repo/pull/42/files#diff-abc",
+            },
+          }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    const result = (await handler({}, "worktree-diff:/r", ["a.ts"])) as Record<
+      string,
+      { badge?: string; tooltip?: string; color?: string; url?: string }
+    >;
+    expect(result["a.ts"]).toEqual({
+      badge: "3",
+      tooltip: "3 unresolved review comments",
+      color: "text-status-warning",
+      url: "https://github.com/owner/repo/pull/42/files#diff-abc",
+    });
+  });
+
+  it("preserves a url-only decoration through the empty-field cleanup", async () => {
+    // A future provider may ship a deep-link with no badge/tooltip/color
+    // (e.g. a "view related CI run" decoration). The cleanup must not
+    // delete it just because the visual fields are absent.
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p",
+        contributionId: "d",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({
+            "a.ts": { url: "https://example.test/run/42" },
+          }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    expect(await handler({}, "s:1", ["a.ts"])).toEqual({
+      "a.ts": { url: "https://example.test/run/42" },
+    });
+  });
+
+  it("drops an empty-string url so a later provider can fill it", async () => {
+    mockGetFileDecorationImpls.mockReturnValue([
+      {
+        pluginId: "p.first",
+        contributionId: "d",
+        impl: { provideDecorations: vi.fn().mockResolvedValue({ "a.ts": { url: "" } }) },
+      },
+      {
+        pluginId: "p.second",
+        contributionId: "d",
+        impl: {
+          provideDecorations: vi.fn().mockResolvedValue({
+            "a.ts": { url: "https://example.test/replacement" },
+          }),
+        },
+      },
+    ]);
+    const handler = getHandler();
+    expect(await handler({}, "s:1", ["a.ts"])).toEqual({
+      "a.ts": { url: "https://example.test/replacement" },
+    });
+  });
+
   it("treats an empty-string field as absent so a later provider can fill it", async () => {
     mockGetFileDecorationImpls.mockReturnValue([
       {

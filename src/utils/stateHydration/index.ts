@@ -27,7 +27,6 @@ import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useDistributionStore } from "@/store/distributionStore";
 import type { AgentPreset } from "@/config/agents";
-import { splitSnapshotRestoreTasks } from "./batchScheduler";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { normalizeAndApplyScrollback } from "./scrollbackConfig";
 import { ensureHydrationBootstrap } from "./bootstrapGuard";
@@ -95,6 +94,7 @@ export interface HydrationOptions {
     originalPresetId?: string;
     isUsingFallback?: boolean;
     fallbackChainIndex?: number;
+    sessionLostOnRestore?: boolean;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;
@@ -123,14 +123,15 @@ export interface HydrationOptions {
    */
   beginHydrationBatch?: () => HydrationBatchToken;
   flushHydrationBatch?: (token: HydrationBatchToken) => void;
+  /**
+   * Pre-fetched hydration payload from the boot path, eliminating a redundant
+   * ~50-150ms `appClient.hydrate()` IPC round-trip. Falls back to the IPC pull
+   * model when omitted.
+   */
+  prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult;
 }
 
-export async function hydrateAppState(
-  options: HydrationOptions,
-  _switchId?: string,
-  isCurrent?: () => boolean,
-  prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult
-): Promise<void> {
+export async function hydrateAppState(options: HydrationOptions): Promise<void> {
   const {
     addPanel,
     setActiveWorktree,
@@ -138,6 +139,7 @@ export async function hydrateAppState(
     openDiagnosticsDock,
     beginHydrationBatch,
     flushHydrationBatch,
+    prefetchedHydrateResult,
   } = options;
   const hydrationStartedAt = Date.now();
 
@@ -163,32 +165,18 @@ export async function hydrateAppState(
   let panelRestoreCount = 0;
   let tabGroupRestoreCount = 0;
 
-  markRendererPerformance(PERF_MARKS.HYDRATE_START, {
-    switchId: _switchId ?? null,
-  });
-
-  // Helper to check if this hydration is still current (not superseded by newer switch)
-  const checkCurrent = (): boolean => {
-    if (!isCurrent) return true;
-    return isCurrent();
-  };
+  markRendererPerformance(PERF_MARKS.HYDRATE_START);
 
   suppressMruRecording(true);
   try {
-    await withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP, () => ensureHydrationBootstrap(), {
-      switchId: _switchId ?? null,
-    });
-    if (!checkCurrent()) return;
+    await withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP, () => ensureHydrationBootstrap());
 
-    // Use pre-fetched hydration data from the project switch payload when available,
-    // eliminating a ~50-150ms IPC round-trip. Fall back to the IPC pull model for
-    // initial app load or when the switch payload didn't include hydration data.
+    // Use the pre-fetched hydration payload when available, eliminating a
+    // ~50-150ms IPC round-trip. Fall back to the IPC pull model otherwise.
     const [hydrateResult, tmpDir] = await Promise.all([
       prefetchedHydrateResult
         ? Promise.resolve(prefetchedHydrateResult)
-        : withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate(), {
-            switchId: _switchId ?? null,
-          }),
+        : withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate()),
       systemClient.getTmpDir().catch(() => ""),
     ]);
     const {
@@ -199,7 +187,6 @@ export async function hydrateAppState(
       gpuWebGLHardware,
     } = hydrateResult;
     const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
-    if (!checkCurrent()) return;
 
     useProjectStore.setState((state) => {
       if (!currentProject) return { currentProject: null };
@@ -241,7 +228,6 @@ export async function hydrateAppState(
     // Terminals stay running across project switches - we just reconnect to them
     const currentProjectId = currentProject?.id;
     const projectRoot = currentProject?.path;
-    const shouldDeferSnapshotRestore = Boolean(_switchId);
 
     const worktreesPromise = worktreeClient.getAll().catch((error) => {
       logWarn("Failed to prefetch worktrees during hydration", { error });
@@ -300,24 +286,22 @@ export async function hydrateAppState(
     // Start the backend-terminal lookup alongside the other prefetch promises so
     // its IPC round-trip overlaps with draft-input restore and the rest of the
     // synchronous hydration work. The result is consumed inside the panel-restore
-    // block below; any rejection is captured and re-thrown there so the existing
-    // outer try/catch still logs and skips terminal restore.
+    // block below; any rejection is logged inline and converted to `[]` so saved
+    // panel restore still proceeds without live backend data — otherwise a failed
+    // query would skip restore and the first post-boot save would wipe the saved
+    // session (#9928).
     //
     // Perf span is split into startRendererSpan + manual finishGetForProject so
-    // the `:end` mark only fires once `checkCurrent()` has confirmed the run is
-    // still current. Wrapping the in-flight promise in `withRendererSpan` would
-    // emit `:end` after `hydrateAppState`'s `finally` flushes the buffer when a
-    // mid-flight supersede happens, polluting the next run's marks with the
-    // wrong `switchId`.
-    let terminalFetchError: unknown = null;
+    // the `:end` mark fires when the awaited result is consumed below, not when
+    // the in-flight promise settles in the background.
     const finishGetForProjectSpan = currentProjectId
-      ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS, {
-          switchId: _switchId ?? null,
-        })
+      ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS)
       : null;
     const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
       ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
-          terminalFetchError = error;
+          logWarn("Failed to query backend terminals; continuing with saved panel restore", {
+            error,
+          });
           return [];
         })
       : Promise.resolve([]);
@@ -327,7 +311,6 @@ export async function hydrateAppState(
     if (currentProjectId) {
       try {
         const draftInputs = await draftInputsPromise;
-        if (!checkCurrent()) return;
         if (Object.keys(draftInputs).length > 0) {
           useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
         }
@@ -339,9 +322,7 @@ export async function hydrateAppState(
     if (currentProjectId) {
       try {
         const backendTerminals = await getForProjectPromise;
-        if (!checkCurrent()) return;
         finishGetForProjectSpan?.();
-        if (terminalFetchError) throw terminalFetchError;
 
         logHydrationInfo(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
@@ -364,11 +345,9 @@ export async function hydrateAppState(
 
         // Fetch terminal sizes for restoration
         const terminalSizes = await terminalSizesPromise;
-        if (!checkCurrent()) return;
 
         const activeWorktreeId = appState.activeWorktreeId ?? null;
         const projectPresetsByAgent = await projectPresetsPromise;
-        if (!checkCurrent()) return;
 
         // Seed the persistence cache so the first save after launch can
         // preserve kind-specific fields for unregistered kinds (e.g., an
@@ -395,7 +374,6 @@ export async function hydrateAppState(
 
         const { restoreTasks } = await restorePanelsPhase(appState.terminals, {
           addPanel,
-          checkCurrent,
           withHydrationBatch,
           backendTerminalMap,
           terminalSizes,
@@ -404,59 +382,37 @@ export async function hydrateAppState(
           agentSettings,
           clipboardDirectory,
           projectPresetsByAgent,
-          _switchId,
           worktreesPromise,
           restoreTerminalOrder: options.restoreTerminalOrder,
           safeMode: hydrateResult.safeMode,
           logHydrationInfo,
         });
 
-        if (!checkCurrent()) return;
-
-        const { criticalTasks, deferredTasks } = splitSnapshotRestoreTasks(
-          restoreTasks,
-          appState.activeWorktreeId ?? null,
-          shouldDeferSnapshotRestore
-        );
-
-        // Schedule critical scrollback restores at background priority —
-        // no blocking IPC fetch on the critical path. The overlay can dismiss
-        // immediately and scrollback fills in asynchronously.
-        if (criticalTasks.length > 0) {
+        // Schedule scrollback restores at background priority — no blocking IPC
+        // fetch on the critical path. The overlay can dismiss immediately and
+        // scrollback fills in asynchronously.
+        if (restoreTasks.length > 0) {
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL, {
-            switchId: _switchId ?? null,
-            criticalCount: criticalTasks.length,
+            criticalCount: restoreTasks.length,
           });
-          scheduleScrollbackRestore(criticalTasks, checkCurrent, "background");
-        }
-
-        // Deferred terminals restore lazily on first scroll interaction
-        if (deferredTasks.length > 0) {
-          markRendererPerformance("hydrate_restore_snapshots_deferred_scheduled", {
-            deferredSnapshotCount: deferredTasks.length,
-            switchId: _switchId ?? null,
-          });
-
-          scheduleScrollbackRestore(deferredTasks, checkCurrent, "lazy");
+          scheduleScrollbackRestore(restoreTasks, () => true);
         }
 
         if (panelRestoreStartedAt !== null) {
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_PANELS_END, {
             panelCount: panelRestoreCount,
             durationMs: Date.now() - panelRestoreStartedAt,
-            criticalSnapshotCount: criticalTasks.length,
-            deferredSnapshotCount: deferredTasks.length,
+            criticalSnapshotCount: restoreTasks.length,
           });
         }
       } catch (error) {
-        logWarn("Failed to query backend terminals", { error });
+        logWarn("Failed to restore panels during hydration", { error });
       }
 
       // Restore tab groups after terminals are restored
       if (options.hydrateTabGroups) {
         try {
           const tabGroups = tabGroupsPromise ? await tabGroupsPromise : [];
-          if (!checkCurrent()) return;
 
           if (tabGroups === null) {
             options.hydrateTabGroups([], { skipPersist: true });
@@ -480,8 +436,6 @@ export async function hydrateAppState(
           }
         } catch (error) {
           logWarn("Failed to restore tab groups", { error });
-          // Check staleness before clearing to prevent race condition
-          if (!checkCurrent()) return;
           // Clear tab groups on error to prevent stale state, but skip persist to avoid wiping storage
           options.hydrateTabGroups([], { skipPersist: true });
           tabGroupRestoreCount = 0;
@@ -583,7 +537,6 @@ export async function hydrateAppState(
   } finally {
     suppressMruRecording(false);
     markRendererPerformance(PERF_MARKS.HYDRATE_COMPLETE, {
-      switchId: _switchId ?? null,
       durationMs: Date.now() - hydrationStartedAt,
       panelCount: panelRestoreCount,
       tabGroupCount: tabGroupRestoreCount,

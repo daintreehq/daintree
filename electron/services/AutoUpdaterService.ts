@@ -596,6 +596,18 @@ class AutoUpdaterService {
       }
     }
 
+    // Local packages (electron-builder `--dir` target, e.g. `npm run
+    // install:local`) ship without app-update.yml — electron-updater's config
+    // file, generated only for distributable targets. Wiring the updater
+    // anyway makes the first check reject with ENOENT, and electron-updater's
+    // shared config promise leaks that rejection past runUpdateCheck's .catch
+    // as an [UNHANDLED_REJECTION]. The updater is correctly inert in these
+    // builds, so bail before wiring.
+    if (!existsSync(path.join(process.resourcesPath, "app-update.yml"))) {
+      console.log("[MAIN] Auto-updater disabled: app-update.yml not found (local package)");
+      return;
+    }
+
     try {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;

@@ -12,6 +12,7 @@ import {
   ScrollText,
   Plug,
   ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -30,10 +31,12 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
   type McpActiveClientInfo,
-  type McpAuditRecord,
+  type McpLogRecord,
   type AssistantTurnRecord,
   type McpAuditStats,
   type ActiveBearerRecord,
+  type HelpSessionBearerRecord,
+  type McpRuntimeSnapshot,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
@@ -51,6 +54,13 @@ const STATUS_LOAD_TIMEOUT_MS = 10_000;
 
 const MASKED_KEY = "•".repeat(24);
 
+const INITIAL_RUNTIME_SNAPSHOT: McpRuntimeSnapshot = {
+  enabled: false,
+  state: "disabled",
+  port: null,
+  lastError: null,
+};
+
 export function McpServerSettingsTab() {
   const [status, setStatus] = useState<McpServerStatus>({
     enabled: false,
@@ -58,6 +68,11 @@ export function McpServerSettingsTab() {
     configuredPort: null,
     apiKey: "",
   });
+  // Runtime readiness (state + lastError + bound port) is carried by a
+  // separate snapshot from the persisted config above; the section is gated
+  // on `status.enabled` so the `disabled` branch is unreachable here.
+  const [runtimeSnapshot, setRuntimeSnapshot] =
+    useState<McpRuntimeSnapshot>(INITIAL_RUNTIME_SNAPSHOT);
   const [loading, setLoading] = useState(true);
   // Gate the "Loading…" copy past the Doherty threshold so fast IPC resolutions
   // don't flash a loading state for sub-400ms work.
@@ -76,7 +91,7 @@ export function McpServerSettingsTab() {
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [auditRecords, setAuditRecords] = useState<McpAuditRecord[]>([]);
+  const [auditRecords, setAuditRecords] = useState<McpLogRecord[]>([]);
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
@@ -98,6 +113,12 @@ export function McpServerSettingsTab() {
   const [activeBearers, setActiveBearers] = useState<ActiveBearerRecord[]>([]);
   const [bearersExpanded, setBearersExpanded] = useState(false);
   const [disconnectingHash, setDisconnectingHash] = useState<string | null>(null);
+  // Read-only inventory of Daintree's own internal MCP connections — the
+  // help-chat assistant and in-panel agents (#10036) — surfaced so the External
+  // clients row no longer hides them, but with no disconnect control (these are
+  // Daintree's own consumers, severed via their owning surface, not here).
+  const [helpSessionBearers, setHelpSessionBearers] = useState<HelpSessionBearerRecord[]>([]);
+  const [helpBearersExpanded, setHelpBearersExpanded] = useState(false);
   // Drives the neutral attribution pill on the top card: when the Daintree
   // Assistant holds the server open, the toggle reflects assistant intent
   // rather than a manual choice.
@@ -117,6 +138,15 @@ export function McpServerSettingsTab() {
     }
   };
 
+  const refreshHelpSessionBearers = async (): Promise<void> => {
+    try {
+      const bearers = await window.electron.mcpServer.listHelpSessionBearers();
+      setHelpSessionBearers(bearers);
+    } catch (err) {
+      logError("Failed to load MCP help-session bearers", err);
+    }
+  };
+
   const refreshAssistantControl = async (): Promise<void> => {
     try {
       const settings = await window.electron.helpAssistant?.getSettings();
@@ -129,7 +159,7 @@ export function McpServerSettingsTab() {
   const refreshAuditRecords = async (): Promise<void> => {
     try {
       const [recordsResult, turnsResult, statsResult] = await Promise.allSettled([
-        window.electron.mcpServer.getAuditRecords(),
+        window.electron.mcpServer.getLogRecords(),
         window.electron.mcpServer.getTurnOutcomeRecords(),
         window.electron.mcpServer.getAuditStats(),
       ]);
@@ -164,14 +194,16 @@ export function McpServerSettingsTab() {
 
     Promise.all([
       window.electron.mcpServer.getStatus(),
+      window.electron.mcpServer.getRuntimeState(),
       window.electron.mcpServer.getAuditConfig(),
-      window.electron.mcpServer.getAuditRecords(),
+      window.electron.mcpServer.getLogRecords(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
       window.electron.mcpServer.getAuditStats(),
     ])
-      .then(([s, auditCfg, records, turns, stats]) => {
+      .then(([s, runtime, auditCfg, records, turns, stats]) => {
         if (settled) return;
         setStatus(s);
+        setRuntimeSnapshot(runtime);
         setPortInput(s.configuredPort?.toString() ?? "");
         portDirtyRef.current = false;
         setAuditEnabled(auditCfg.enabled);
@@ -195,10 +227,14 @@ export function McpServerSettingsTab() {
       });
 
     void refreshActiveBearers();
+    void refreshHelpSessionBearers();
     void refreshAssistantControl();
 
-    const unsub = window.electron.mcpServer.onRuntimeStateChanged(() => {
+    const unsub = window.electron.mcpServer.onRuntimeStateChanged((next) => {
       if (!settled) return;
+      // Apply the runtime push directly so the Connection section reflects
+      // the new state without waiting for a config refetch.
+      setRuntimeSnapshot(next);
       window.electron.mcpServer
         .getStatus()
         .then((s) => {
@@ -212,8 +248,9 @@ export function McpServerSettingsTab() {
           logError("Failed to refresh MCP status on runtime change", err);
         });
       // A runtime-state push fires on connect/disconnect, server restart, and
-      // the assistant toggling `daintreeControl` — refresh both derived views.
+      // the assistant toggling `daintreeControl` — refresh all derived views.
       void refreshActiveBearers();
+      void refreshHelpSessionBearers();
       void refreshAssistantControl();
     });
 
@@ -415,7 +452,7 @@ export function McpServerSettingsTab() {
     setShowClearConfirm(false);
   };
 
-  const handleCopyAuditAsJson = async (records: McpAuditRecord[]) => {
+  const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
       setError(null);
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
@@ -433,7 +470,7 @@ export function McpServerSettingsTab() {
     }
   };
 
-  const handleExportAuditLog = async (records: McpAuditRecord[]) => {
+  const handleExportAuditLog = async (records: McpLogRecord[]) => {
     if (isExporting) return;
     setIsExporting(true);
     try {
@@ -472,7 +509,13 @@ export function McpServerSettingsTab() {
     }
   };
 
-  const sseUrl = status.port ? `http://127.0.0.1:${status.port}/sse` : null;
+  // Prefer the runtime-snapshot port for the ready branch so a push that
+  // transitions starting→ready renders the URL without waiting for the
+  // follow-up `getStatus()` refetch. Fall back to `status.port` when the
+  // snapshot hasn't caught up yet (matches the assistant tab precedent at
+  // DaintreeAssistantSettingsTab.tsx:740).
+  const boundPort = runtimeSnapshot.port ?? status.port;
+  const sseUrl = boundPort ? `http://127.0.0.1:${boundPort}/sse` : null;
 
   // Rotation is the revoke-all primitive — it invalidates every external
   // client holding the current key in one shot (Tier D3). Gate it behind
@@ -523,13 +566,24 @@ export function McpServerSettingsTab() {
               showInlineLoading ? (
                 <p className="text-xs text-daintree-text/50">Loading…</p>
               ) : null
-            ) : status.port ? (
+            ) : runtimeSnapshot.state === "starting" ? (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+                <span className="text-xs text-daintree-text/60">Server is starting…</span>
+              </div>
+            ) : runtimeSnapshot.state === "failed" ? (
+              <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+                <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
+                <p className="text-xs text-status-danger leading-relaxed select-text">
+                  MCP server failed to start.{" "}
+                  {runtimeSnapshot.lastError ?? "Check the logs for details."}
+                </p>
+              </div>
+            ) : (
               <div className="contents">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
-                  <span className="text-xs text-daintree-text/60">
-                    Running on port {status.port}
-                  </span>
+                  <span className="text-xs text-daintree-text/60">Running on port {boundPort}</span>
                 </div>
 
                 <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border font-mono text-xs text-daintree-text/80 select-all">
@@ -606,9 +660,53 @@ export function McpServerSettingsTab() {
                     )}
                   </div>
                 )}
+
+                {helpSessionBearers.length > 0 && (
+                  <div className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setHelpBearersExpanded((v) => !v)}
+                      aria-expanded={helpBearersExpanded}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                          helpBearersExpanded && "rotate-90"
+                        )}
+                      />
+                      <Sparkles className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                      Internal connections ({helpSessionBearers.length})
+                    </button>
+
+                    {helpBearersExpanded && (
+                      <ul className="border-t border-daintree-border divide-y divide-daintree-border">
+                        {helpSessionBearers.map((bearer, i) => (
+                          <li
+                            key={`${bearer.userAgent}-${i}`}
+                            className="flex items-center gap-3 px-3 py-2"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs text-daintree-text/80">
+                                {bearer.userAgent}
+                              </div>
+                              <div className="text-[11px] text-daintree-text/50">
+                                {bearer.sessionCount}{" "}
+                                {bearer.sessionCount === 1 ? "session" : "sessions"}
+                                {" · "}
+                                {bearer.requestsSinceLaunch}{" "}
+                                {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
+                                {" · active "}
+                                {formatRelativeTime(bearer.lastActiveAt)}
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </div>
-            ) : (
-              <p className="text-xs text-daintree-text/50">Server is starting…</p>
             )}
           </SettingsSection>
 

@@ -10,7 +10,6 @@ describe("resolveWorktreePortTimeout", () => {
   it("returns the default for fast actions not in the table", () => {
     expect(resolveWorktreePortTimeout("get-all-states")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
     expect(resolveWorktreePortTimeout("set-active")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
-    expect(resolveWorktreePortTimeout("refresh")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
     expect(resolveWorktreePortTimeout("list-branches")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
     expect(resolveWorktreePortTimeout("get-recent-branches")).toBe(
       DEFAULT_WORKTREE_PORT_TIMEOUT_MS
@@ -29,6 +28,21 @@ describe("resolveWorktreePortTimeout", () => {
     expect(resolveWorktreePortTimeout("delete-worktree")).toBe(10 * 60_000);
     expect(resolveWorktreePortTimeout("resource-action")).toBe(15 * 60_000);
     expect(resolveWorktreePortTimeout("run-lifecycle-setup")).toBe(15 * 60_000);
+  });
+
+  it("refresh ceiling exceeds the host-side refresh watchdog", () => {
+    // The host AWAITS and bounds a full refresh at HOST_REFRESH_TIMEOUT_MS
+    // (45s). The renderer ceiling must sit ABOVE that so the host's own bounded
+    // pass — not a premature client timeout — is what completes the refresh.
+    const HOST_REFRESH_WATCHDOG_MS = 45_000;
+    expect(resolveWorktreePortTimeout("refresh")).toBeGreaterThan(HOST_REFRESH_WATCHDOG_MS);
+  });
+
+  it("reconcile-topology uses the fast default — its handler replies immediately", () => {
+    // The host handler only schedules a reconcile (fire-and-forget) and replies
+    // at once, so it must NOT carry an inflated ceiling that implies the reply
+    // waits on the reconcile.
+    expect(resolveWorktreePortTimeout("reconcile-topology")).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
   });
 
   it("delete-worktree timeout exceeds the host worst case", () => {
@@ -76,12 +90,16 @@ describe("resolveWorktreePortTimeout", () => {
     expect(resolveWorktreePortTimeout("get-all-states", 0)).toBe(DEFAULT_WORKTREE_PORT_TIMEOUT_MS);
   });
 
-  it("table only lists the four long-running actions", () => {
-    expect(Object.keys(WORKTREE_PORT_TIMEOUTS_MS).sort()).toEqual([
-      "create-worktree",
-      "delete-worktree",
-      "resource-action",
-      "run-lifecycle-setup",
-    ]);
+  it("every table entry overrides upward — never below the default", () => {
+    // Invariant, not a key mirror: the table exists only to GRANT more time
+    // than the default to actions that legitimately run longer. An entry at or
+    // below the default would be a mistake (it would needlessly tighten, or
+    // duplicate, the default). This catches a bad value without locking the
+    // key set to a literal that must be edited in lockstep with every addition.
+    for (const [action, ms] of Object.entries(WORKTREE_PORT_TIMEOUTS_MS)) {
+      expect(ms, `${action} must exceed the default`).toBeGreaterThan(
+        DEFAULT_WORKTREE_PORT_TIMEOUT_MS
+      );
+    }
   });
 });

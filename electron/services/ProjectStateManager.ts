@@ -25,6 +25,7 @@ export interface ProjectStateReadResult {
 export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
   private pendingQuarantines = new Map<string, string>();
+  private writeQueues = new Map<string, Promise<void>>();
 
   constructor(private projectsConfigDir: string) {}
 
@@ -58,6 +59,41 @@ export class ProjectStateManager {
       return;
     }
     this.projectStateCache.clear();
+  }
+
+  /**
+   * Serialize read-merge-write updates per project. ipcMain.handle runs
+   * handlers concurrently, so two unqueued read-modify-write cycles for the
+   * same projectId read the same snapshot and the last write silently reverts
+   * the other's field. Each queued updater sees the previous update's
+   * committed state. Returning null from the updater skips the save.
+   */
+  enqueueProjectStateUpdate(
+    projectId: string,
+    updater: (existing: ProjectState | null) => ProjectState | null | Promise<ProjectState | null>
+  ): Promise<void> {
+    const current = this.writeQueues.get(projectId) ?? Promise.resolve();
+    // .catch() keeps one failed update from poisoning the chain for later
+    // updates; the failure still propagates to that update's own caller.
+    const next = current
+      .catch(() => {})
+      .then(async () => {
+        const existing = await this.getProjectState(projectId);
+        const updated = await updater(existing);
+        if (updated !== null) {
+          await this.saveProjectState(projectId, updated);
+        }
+      });
+    this.writeQueues.set(projectId, next);
+    const cleanup = () => {
+      if (this.writeQueues.get(projectId) === next) {
+        this.writeQueues.delete(projectId);
+      }
+    };
+    // .then(cleanup, cleanup) instead of .finally(): .finally would create a
+    // new rejected promise nobody handles when the update fails.
+    next.then(cleanup, cleanup);
+    return next;
   }
 
   async saveProjectState(projectId: string, state: ProjectState): Promise<void> {
@@ -210,6 +246,9 @@ export class ProjectStateManager {
           !Array.isArray(parsed.draftInputs)
             ? parsed.draftInputs
             : undefined,
+        mruList: Array.isArray(parsed.mruList)
+          ? parsed.mruList.filter((id: unknown): id is string => typeof id === "string")
+          : undefined,
       };
 
       this.setProjectStateCache(projectId, state);

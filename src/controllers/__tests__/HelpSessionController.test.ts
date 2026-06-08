@@ -5,14 +5,24 @@ const {
   mockMcpOnTierNotPermitted,
   mockMcpOnToolCallStarted,
   mockMcpOnToolCallSettled,
+  mockMcpOnDisplayImage,
+  mockMcpOnSessionRevoked,
+  mockMcpOnGrantLifecycle,
+  mockMcpOnTurnOutcomeAlert,
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
+  mockMcpResetDenialCounts,
+  mockMcpRevokeSessionGrants,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
   tierListeners,
   toolStartedListeners,
   toolSettledListeners,
+  displayImageListeners,
+  sessionRevokedListeners,
+  grantLifecycleListeners,
+  outcomeAlertListeners,
   helpPanelState,
   panelStoreState,
   projectStoreState,
@@ -20,6 +30,10 @@ const {
   mockMcpOnTierNotPermitted: vi.fn(),
   mockMcpOnToolCallStarted: vi.fn(),
   mockMcpOnToolCallSettled: vi.fn(),
+  mockMcpOnDisplayImage: vi.fn(),
+  mockMcpOnSessionRevoked: vi.fn(),
+  mockMcpOnGrantLifecycle: vi.fn(),
+  mockMcpOnTurnOutcomeAlert: vi.fn(),
   mockMcpSetSessionTier: vi.fn().mockResolvedValue(undefined),
   mockMcpIssueGrant: vi.fn().mockResolvedValue({
     sessionId: "",
@@ -27,6 +41,8 @@ const {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   }),
+  mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
+  mockMcpRevokeSessionGrants: vi.fn().mockResolvedValue({ sessionId: "", revokedCount: 0 }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -36,6 +52,10 @@ const {
   tierListeners: [] as Array<(payload: unknown) => void>,
   toolStartedListeners: [] as Array<(payload: unknown) => void>,
   toolSettledListeners: [] as Array<(payload: unknown) => void>,
+  displayImageListeners: [] as Array<(payload: unknown) => void>,
+  sessionRevokedListeners: [] as Array<(payload: unknown) => void>,
+  grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
+  outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
     isOpen: false,
     terminalId: null as string | null,
@@ -130,6 +150,10 @@ beforeEach(() => {
   tierListeners.length = 0;
   toolStartedListeners.length = 0;
   toolSettledListeners.length = 0;
+  displayImageListeners.length = 0;
+  sessionRevokedListeners.length = 0;
+  grantLifecycleListeners.length = 0;
+  outcomeAlertListeners.length = 0;
 
   mockMcpOnTierNotPermitted.mockReset();
   mockMcpOnTierNotPermitted.mockImplementation((cb: (payload: unknown) => void) => {
@@ -155,6 +179,40 @@ beforeEach(() => {
       if (idx >= 0) toolSettledListeners.splice(idx, 1);
     };
   });
+  mockMcpOnDisplayImage.mockReset();
+  mockMcpOnDisplayImage.mockImplementation((cb: (payload: unknown) => void) => {
+    displayImageListeners.push(cb);
+    return () => {
+      const idx = displayImageListeners.indexOf(cb);
+      if (idx >= 0) displayImageListeners.splice(idx, 1);
+    };
+  });
+  mockMcpOnSessionRevoked.mockReset();
+  mockMcpOnSessionRevoked.mockImplementation((cb: (payload: unknown) => void) => {
+    sessionRevokedListeners.push(cb);
+    return () => {
+      const idx = sessionRevokedListeners.indexOf(cb);
+      if (idx >= 0) sessionRevokedListeners.splice(idx, 1);
+    };
+  });
+  mockMcpResetDenialCounts.mockReset();
+  mockMcpResetDenialCounts.mockResolvedValue(undefined);
+  mockMcpOnGrantLifecycle.mockReset();
+  mockMcpOnGrantLifecycle.mockImplementation((cb: (payload: unknown) => void) => {
+    grantLifecycleListeners.push(cb);
+    return () => {
+      const idx = grantLifecycleListeners.indexOf(cb);
+      if (idx >= 0) grantLifecycleListeners.splice(idx, 1);
+    };
+  });
+  mockMcpOnTurnOutcomeAlert.mockReset();
+  mockMcpOnTurnOutcomeAlert.mockImplementation((cb: (payload: unknown) => void) => {
+    outcomeAlertListeners.push(cb);
+    return () => {
+      const idx = outcomeAlertListeners.indexOf(cb);
+      if (idx >= 0) outcomeAlertListeners.splice(idx, 1);
+    };
+  });
   mockMcpSetSessionTier.mockReset();
   mockMcpSetSessionTier.mockResolvedValue(undefined);
   mockMcpIssueGrant.mockReset();
@@ -164,6 +222,8 @@ beforeEach(() => {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   });
+  mockMcpRevokeSessionGrants.mockReset();
+  mockMcpRevokeSessionGrants.mockResolvedValue({ sessionId: "", revokedCount: 1 });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -207,8 +267,14 @@ beforeEach(() => {
           onTierNotPermitted: mockMcpOnTierNotPermitted,
           onToolCallStarted: mockMcpOnToolCallStarted,
           onToolCallSettled: mockMcpOnToolCallSettled,
+          onDisplayImage: mockMcpOnDisplayImage,
+          onSessionRevoked: mockMcpOnSessionRevoked,
+          onGrantLifecycle: mockMcpOnGrantLifecycle,
+          onTurnOutcomeAlert: mockMcpOnTurnOutcomeAlert,
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
+          resetDenialCounts: mockMcpResetDenialCounts,
+          revokeSessionGrants: mockMcpRevokeSessionGrants,
         },
         git: { snapshotGet: vi.fn().mockResolvedValue(null) },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
@@ -249,12 +315,18 @@ describe("HelpSessionController — lifecycle", () => {
     expect(tierListeners).toHaveLength(1);
     expect(toolStartedListeners).toHaveLength(1);
     expect(toolSettledListeners).toHaveLength(1);
+    expect(displayImageListeners).toHaveLength(1);
+    expect(sessionRevokedListeners).toHaveLength(1);
+    expect(grantLifecycleListeners).toHaveLength(1);
     expect(systemSleepListeners.suspend).toHaveLength(1);
     expect(systemSleepListeners.wake).toHaveLength(1);
     ctrl.stop();
     expect(tierListeners).toHaveLength(0);
     expect(toolStartedListeners).toHaveLength(0);
     expect(toolSettledListeners).toHaveLength(0);
+    expect(displayImageListeners).toHaveLength(0);
+    expect(sessionRevokedListeners).toHaveLength(0);
+    expect(grantLifecycleListeners).toHaveLength(0);
     expect(systemSleepListeners.suspend).toHaveLength(0);
     expect(systemSleepListeners.wake).toHaveLength(0);
   });
@@ -278,6 +350,7 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     expect(snap.isCheckingVersion).toBe(false);
     expect(snap.launchError).toBeNull();
     expect(snap.mcpActivity).toBeNull();
+    expect(snap.sessionRevoked).toBeNull();
   });
 
   it("returns the same snapshot reference when no state changes (Object.is stable)", () => {
@@ -325,6 +398,82 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
     ctrl["_patch"]({ showResumeBanner: true });
     expect(a).not.toHaveBeenCalled();
     expect(b).toHaveBeenCalled();
+  });
+});
+
+describe("HelpSessionController — turn-outcome alert pip", () => {
+  function fireOutcome(payload: { helpSessionId: string; outcome: string; turnId?: string }) {
+    outcomeAlertListeners[0]!(payload);
+  }
+  function fireToolStart(payload: { turnId?: string }) {
+    toolStartedListeners[0]!({
+      sessionId: "s1",
+      toolId: "agent.getState",
+      argsSummary: "{}",
+      startedAt: Date.now(),
+      danger: false,
+      ...payload,
+    });
+  }
+
+  it("surfaces agent-stuck as outcomeAlert and notifies listeners", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    const listener = vi.fn();
+    ctrl.subscribe(listener);
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+
+    fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
+    expect(listener).toHaveBeenCalled();
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("agent-stuck");
+    ctrl.stop();
+  });
+
+  it("surfaces reasoning-loop and clears on user dismiss", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+
+    ctrl.dismissOutcomeAlert();
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+    ctrl.stop();
+  });
+
+  it("auto-clears the pip when a tool call from a different turn starts", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+
+    // Same-turn residual call must NOT clear the pip.
+    fireToolStart({ turnId: "turn-1" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+
+    // A fresh turn means the agent resumed — clear.
+    fireToolStart({ turnId: "turn-2" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+    ctrl.stop();
+  });
+
+  it("auto-clears an agent-stuck pip (no turn id) on the next turn-stamped call", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("agent-stuck");
+
+    fireToolStart({ turnId: "turn-9" });
+    expect(ctrl.getSnapshot().outcomeAlert).toBeNull();
+    ctrl.stop();
+  });
+
+  it("does not clear the pip for a call with no turn id", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
+    fireToolStart({});
+    expect(ctrl.getSnapshot().outcomeAlert).toBe("reasoning-loop");
+    ctrl.stop();
   });
 });
 
@@ -582,6 +731,451 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
     ctrl.dismissTierMismatch();
     expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    ctrl.stop();
+  });
+
+  it("dismissTierMismatch() resets the denial counter for the dismissed session (#10017)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    tierListeners[0]?.({
+      sessionId: "sess-9",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+    ctrl.dismissTierMismatch();
+    // Cancel must re-arm the banner by clearing the per-session denial
+    // counters in main — without this the next denial is silently suppressed.
+    expect(mockMcpResetDenialCounts).toHaveBeenCalledWith({ sessionId: "sess-9" });
+    ctrl.stop();
+  });
+
+  it("dismissTierMismatch() does not reset denial counts when no banner is showing", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl.dismissTierMismatch();
+    expect(mockMcpResetDenialCounts).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("dismissTierMismatch() clears the banner even if the denial-reset IPC rejects", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // Fire-and-forget: a rejected reset (e.g. caller-pin mismatch after a view
+    // rebind) must not throw or leave the banner stuck open.
+    mockMcpResetDenialCounts.mockRejectedValueOnce(new Error("not the pinned renderer"));
+    tierListeners[0]?.({
+      sessionId: "sess-r",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+    expect(() => ctrl.dismissTierMismatch()).not.toThrow();
+    expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    expect(mockMcpResetDenialCounts).toHaveBeenCalledWith({ sessionId: "sess-r" });
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — session revoked (#10017)", () => {
+  it("start() arms the session-revoked subscription", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    expect(mockMcpOnSessionRevoked).toHaveBeenCalledTimes(1);
+    ctrl.stop();
+  });
+
+  it("a session-revoked push surfaces the recovery banner", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.sessionId = "sess-live";
+    sessionRevokedListeners[0]?.({ sessionId: "sess-live", denialKind: "tierMismatch" });
+    expect(ctrl.getSnapshot().sessionRevoked).toEqual({
+      sessionId: "sess-live",
+      denialKind: "tierMismatch",
+    });
+    ctrl.stop();
+  });
+
+  it("ignores a revoke for a session the panel has already replaced", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.sessionId = "sess-current";
+    sessionRevokedListeners[0]?.({ sessionId: "sess-stale", denialKind: "auth401" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+    ctrl.stop();
+  });
+
+  it("ignores a revoke while no session is pinned (torn-down or mid-relaunch window)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    // A null store sessionId means there is no live session to end — a revoke
+    // arriving now is for a session being torn down or replaced, and must not
+    // paint a banner over the fresh launch the user just started (#10017).
+    helpPanelState.sessionId = null;
+    sessionRevokedListeners[0]?.({ sessionId: "sess-old", denialKind: "tierMismatch" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+    ctrl.stop();
+  });
+
+  it("dismissSessionRevoked clears the banner", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-1", denialKind: "tierMismatch" } });
+    expect(ctrl.getSnapshot().sessionRevoked).not.toBeNull();
+    ctrl.dismissSessionRevoked();
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+  });
+
+  it("a launch supersedes any standing revoked-session banner", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_lastInputs"] = {
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "p1", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      visibilityEpoch: 0,
+    };
+    ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-old", denialKind: "tierMismatch" } });
+    expect(ctrl.getSnapshot().sessionRevoked).not.toBeNull();
+
+    ctrl.launch({ agentId: "claude" });
+    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — grant lifecycle (#10042)", () => {
+  function armMismatch() {
+    tierListeners[0]?.({
+      sessionId: "s1",
+      toolId: "t1",
+      tier: "workbench",
+      targetTier: "action",
+    });
+  }
+
+  it("start() arms the grant lifecycle subscription", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    expect(mockMcpOnGrantLifecycle).toHaveBeenCalledTimes(1);
+    expect(grantLifecycleListeners).toHaveLength(1);
+    ctrl.stop();
+  });
+
+  it("grant.issued sets the active countdown and clears the prompting mismatch", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    armMismatch();
+    expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
+
+    const expiresAt = Date.now() + 900_000;
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt,
+    });
+
+    expect(ctrl.getSnapshot().activeGrant).toEqual({
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt,
+    });
+    expect(ctrl.getSnapshot().tierMismatch).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    ctrl.stop();
+  });
+
+  it("grant.issued without expiresAt is ignored rather than seeding a NaN countdown", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    ctrl.stop();
+  });
+
+  it("grant.expired retires the active grant and surfaces an 'expired' notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "expired" });
+    ctrl.stop();
+  });
+
+  it("grant.revoked with grant-ceiling surfaces a ceiling notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.revoked",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      revokedReason: "grant-ceiling",
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "grant-ceiling" });
+    ctrl.stop();
+  });
+
+  it.each(["user", "session-ended", "session-idle"] as const)(
+    "grant.revoked with reason %s clears the grant silently (no notice)",
+    (revokedReason) => {
+      const ctrl = new HelpSessionController();
+      ctrl.start();
+      grantLifecycleListeners[0]?.({
+        type: "grant.issued",
+        sessionId: "s1",
+        toolId: "t1",
+        ttlMs: 900_000,
+        expiresAt: Date.now() + 900_000,
+      });
+      grantLifecycleListeners[0]?.({
+        type: "grant.revoked",
+        sessionId: "s1",
+        toolId: "t1",
+        ttlMs: 900_000,
+        revokedReason,
+      });
+      expect(ctrl.getSnapshot().activeGrant).toBeNull();
+      expect(ctrl.getSnapshot().grantEnded).toBeNull();
+      ctrl.stop();
+    }
+  );
+
+  it("a lapse for a different tool leaves the on-screen countdown intact", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    // A stale expiry for a tool we're not counting down must not clear t1.
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "other-tool",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    ctrl.stop();
+  });
+
+  it("tier.elevated / tier.decayed do not disturb the per-tool countdown", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "tier.elevated",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    grantLifecycleListeners[0]?.({
+      type: "tier.decayed",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    ctrl.stop();
+  });
+
+  it("a fresh tier denial supersedes a lingering 'approval ended' notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().grantEnded).not.toBeNull();
+    armMismatch();
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
+    ctrl.stop();
+  });
+
+  function issueGrant() {
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+  }
+
+  it("revokeGrant() revokes the session's grants and clears the countdown once the IPC settles", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    ctrl.revokeGrant();
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
+    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledWith({ sessionId: "s1" });
+    // Authoritative renderer-side fallback: even with no `grant.revoked`
+    // lifecycle event echoed back, the countdown clears when the IPC settles.
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+      expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    });
+    ctrl.stop();
+  });
+
+  it("revokeGrant() is a no-op while a revoke is already in flight", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
+      })
+    );
+    ctrl.revokeGrant();
+    ctrl.revokeGrant();
+    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledTimes(1);
+    resolveRevoke?.();
+    ctrl.stop();
+  });
+
+  it("revokeGrant() does not wipe a newer grant that arrived before the IPC settled", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
+      })
+    );
+    ctrl.revokeGrant();
+    // A new grant for a different tool lands while the revoke is in flight.
+    const newerExpiry = Date.now() + 900_000;
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t2",
+      ttlMs: 900_000,
+      expiresAt: newerExpiry,
+    });
+    resolveRevoke?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    });
+    // The settle must not clear the newer t2 grant — only the one we revoked.
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t2");
+    ctrl.stop();
+  });
+
+  it("a failed revoke keeps the countdown banner up as the retry surface", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    mockMcpRevokeSessionGrants.mockRejectedValueOnce(new Error("ipc boom"));
+    ctrl.revokeGrant();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    });
+    // Revoke failed → the grant is still live, so the banner must stay put.
+    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    ctrl.stop();
+  });
+
+  it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    issueGrant();
+    mockMcpRevokeSessionGrants.mockReturnValueOnce(
+      new Promise<{ sessionId: string; revokedCount: number }>(() => {
+        // never resolves — the teardown happens first
+      })
+    );
+    ctrl.revokeGrant();
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.sessionId = "sess-1";
+    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+    expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    ctrl.stop();
+  });
+
+  it("revokeGrant() is a no-op when there is no active grant", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl.revokeGrant();
+    expect(mockMcpRevokeSessionGrants).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("dismissGrantEnded() clears the notice", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    expect(ctrl.getSnapshot().grantEnded).not.toBeNull();
+    ctrl.dismissGrantEnded();
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
     ctrl.stop();
   });
 });
@@ -843,6 +1437,68 @@ describe("HelpSessionController — launch error routing", () => {
     ctrl.stop();
   });
 
+  it("surfaces the folder-unavailable banner when help folder path is null", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError?.kind).toBe("folder-unavailable");
+    });
+    expect(notify).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("surfaces a folder-unavailable toast with the installer-page action when panel is closed", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, false);
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Assistant files missing",
+          action: expect.objectContaining({
+            label: "Open installer page",
+            actionId: "system.openExternal",
+            actionArgs: { url: "https://daintree.org/download" },
+          }),
+        })
+      );
+    });
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    // Toast body must not promise a Retry the click can't deliver, and must
+    // keep the same jargon-free contract the banner enforces.
+    const call = (notify as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) =>
+        typeof c[0] === "object" &&
+        c[0] !== null &&
+        (c[0] as { title?: string }).title === "Assistant files missing"
+    );
+    const payload = call?.[0] as { message: string; action: { onClick: () => void } };
+    expect(payload.message).not.toMatch(/Try again/i);
+    expect(payload.message).not.toMatch(/\bMCP\b/i);
+    expect(payload.message).not.toMatch(/\btoken\b/i);
+    expect(payload.message).not.toMatch(/\bbearer\b/i);
+    // Clicking the toast action must fire the same action the banner's
+    // Open installer page button does — locked to the same URL and source.
+    (actionService.dispatch as ReturnType<typeof vi.fn>).mockClear();
+    payload.action.onClick();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://daintree.org/download" },
+      { source: "user" }
+    );
+    ctrl.stop();
+  });
+
   it("dismissLaunchError clears the banner", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
@@ -925,6 +1581,72 @@ describe("HelpSessionController — launch error routing", () => {
 
     ctrl.syncInputs(inputs("codex"));
     expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — resume banner gating (#10057)", () => {
+  const provisionMock = () =>
+    window.electron.help.provisionSession as unknown as ReturnType<typeof vi.fn>;
+
+  function primeResumeInputs(ctrl: HelpSessionController) {
+    helpPanelState.preferredAgentId = "claude";
+    ctrl["_launchGen"] = 7;
+    (
+      window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
+    ).takePendingHibernation = vi.fn().mockResolvedValue(null);
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-1",
+      sessionPath: "/help",
+      token: "tok-1",
+      mcpUrl: null,
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
+  }
+
+  it("does not show the resume banner when the hibernation sessionId is empty (resume-latest path)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeResumeInputs(ctrl);
+    // Empty sessionId is the sentinel from main's LRU-eviction race.
+    helpPanelState.hibernateSessions["p1"] = {
+      sessionId: "",
+      cwd: "/repo",
+      agentId: "claude",
+    };
+
+    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+
+    // The phase still reached live (the spawn succeeded via --continue) but
+    // the resume-banner claim is suppressed because we never had a real id.
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
+    // The hibernate entry is still consumed so a future auto-launch doesn't
+    // loop on the same --continue attempt.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    // The spawn still happened — the renderer attempted the agent heuristic.
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "terminal" })
+    );
+    ctrl.stop();
+  });
+
+  it("shows the resume banner when the hibernation sessionId is specific", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeResumeInputs(ctrl);
+    helpPanelState.hibernateSessions["p1"] = {
+      sessionId: "abc-123",
+      cwd: "/repo",
+      agentId: "claude",
+    };
+
+    await ctrl["_executeAutoLaunch"](7, "claude", { id: "p1", path: "/repo" });
+
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
     ctrl.stop();
   });
 });

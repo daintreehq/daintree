@@ -112,10 +112,22 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     return result;
   }, [panelIds, panelsById, worktrees, worktreeMap]);
 
-  // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration)
+  // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration).
+  // Panels and worktrees populate asynchronously during hydration, so a category
+  // can be momentarily empty while the other has loaded. Pruning a category before
+  // it has hydrated would gut the restored MRU order before it can be used — so only
+  // prune a category (terminal:/worktree:) once at least one of its items exists,
+  // protecting the not-yet-loaded category's entries in the meantime (#9922).
   useEffect(() => {
     if (mruList.length === 0) return;
+    if (items.length === 0) return;
+    const hasTerminalItems = items.some((item) => item.type === "terminal");
+    const hasWorktreeItems = items.some((item) => item.type === "worktree");
     const validIds = new Set(items.map((item) => item.id));
+    for (const id of mruList) {
+      if (!hasTerminalItems && id.startsWith("terminal:")) validIds.add(id);
+      if (!hasWorktreeItems && id.startsWith("worktree:")) validIds.add(id);
+    }
     pruneMru(validIds);
   }, [items, mruList, pruneMru]);
 

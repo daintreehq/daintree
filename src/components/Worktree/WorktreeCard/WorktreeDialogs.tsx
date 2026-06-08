@@ -1,5 +1,5 @@
 import type { WorktreeState } from "@/types";
-import type { GitHubIssue } from "@shared/types/github";
+import type { Issue } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 import { IssuePickerDialog } from "../IssuePickerDialog";
@@ -15,7 +15,7 @@ export interface WorktreeDialogsProps {
   onCloseDeleteDialog: () => void;
   showIssuePicker: boolean;
   onCloseIssuePicker: () => void;
-  onAttachIssue: (issue: GitHubIssue) => void;
+  onAttachIssue: (issue: Issue) => void;
   onDetachIssue: () => void;
   showReviewHub: boolean;
   onCloseReviewHub: () => void;

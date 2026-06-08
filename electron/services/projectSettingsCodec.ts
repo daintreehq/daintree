@@ -221,9 +221,69 @@ function decodeCommandOverrides(raw: unknown): CommandOverride[] | undefined {
   return valid.length > 0 ? valid : undefined;
 }
 
+function decodeResourceEnvironment(raw: unknown): ResourceEnvironment | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const result: ResourceEnvironment = {};
+
+  const decodeCommandArray = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const filtered = value.filter((s): s is string => typeof s === "string");
+    return filtered.length > 0 ? filtered : undefined;
+  };
+
+  if (obj.provision !== undefined) {
+    const provision = decodeCommandArray(obj.provision);
+    if (provision) result.provision = provision;
+    else if (!Array.isArray(obj.provision)) return undefined;
+  }
+  if (obj.teardown !== undefined) {
+    const teardown = decodeCommandArray(obj.teardown);
+    if (teardown) result.teardown = teardown;
+    else if (!Array.isArray(obj.teardown)) return undefined;
+  }
+  if (obj.resume !== undefined) {
+    const resume = decodeCommandArray(obj.resume);
+    if (resume) result.resume = resume;
+    else if (!Array.isArray(obj.resume)) return undefined;
+  }
+  if (obj.pause !== undefined) {
+    const pause = decodeCommandArray(obj.pause);
+    if (pause) result.pause = pause;
+    else if (!Array.isArray(obj.pause)) return undefined;
+  }
+  if (obj.status !== undefined) {
+    if (typeof obj.status !== "string") return undefined;
+    result.status = obj.status;
+  }
+  if (obj.connect !== undefined) {
+    if (typeof obj.connect !== "string") return undefined;
+    result.connect = obj.connect;
+  }
+  if (obj.icon !== undefined) {
+    if (typeof obj.icon !== "string") return undefined;
+    result.icon = obj.icon;
+  }
+
+  if (Object.keys(result).length > 0) return result;
+  return Object.keys(obj).length === 0 ? {} : undefined;
+}
+
 function decodeResourceEnvironments(raw: unknown): Record<string, ResourceEnvironment> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as Record<string, ResourceEnvironment>;
+  const src = raw as Record<string, unknown>;
+  const result: Record<string, ResourceEnvironment> = {};
+  for (const [name, value] of Object.entries(src)) {
+    // Defend against `__proto__` keys reaching the assignment — `result[name]`
+    // would otherwise invoke the `__proto__` setter and pollute the result's
+    // prototype chain. JSON.parse normally hides these (sets the prototype
+    // instead of an own property) but a hand-crafted or post-processed
+    // settings object can surface them.
+    if (name === "__proto__") continue;
+    const env = decodeResourceEnvironment(value);
+    if (env) result[name] = env;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function decodeMcpTier(raw: unknown): DaintreeMcpTier | undefined {
@@ -254,7 +314,31 @@ function decodePreferredEditor(raw: unknown): EditorConfig | undefined {
 
 function decodeCopyTreeSettings(raw: unknown): CopyTreeSettings | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as CopyTreeSettings;
+  const obj = raw as Record<string, unknown>;
+  const result: CopyTreeSettings = {};
+
+  if (typeof obj.maxContextSize === "number" && Number.isFinite(obj.maxContextSize)) {
+    result.maxContextSize = obj.maxContextSize;
+  }
+  if (typeof obj.maxFileSize === "number" && Number.isFinite(obj.maxFileSize)) {
+    result.maxFileSize = obj.maxFileSize;
+  }
+  if (typeof obj.charLimit === "number" && Number.isFinite(obj.charLimit)) {
+    result.charLimit = obj.charLimit;
+  }
+  if (obj.strategy === "all" || obj.strategy === "modified") {
+    result.strategy = obj.strategy;
+  }
+  if (Array.isArray(obj.alwaysInclude)) {
+    const filtered = obj.alwaysInclude.filter((s): s is string => typeof s === "string");
+    if (filtered.length > 0) result.alwaysInclude = filtered;
+  }
+  if (Array.isArray(obj.alwaysExclude)) {
+    const filtered = obj.alwaysExclude.filter((s): s is string => typeof s === "string");
+    if (filtered.length > 0) result.alwaysExclude = filtered;
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function decodeDevServerLoadTimeout(raw: unknown): number | undefined {
@@ -511,5 +595,7 @@ export const __internal = {
   decodeTerminalSettings,
   decodeNotificationOverrides,
   decodeFleetSavedScopes,
+  decodeCopyTreeSettings,
+  decodeResourceEnvironments,
   migrateLegacyFields,
 };

@@ -112,6 +112,18 @@ export interface CreateMockHostOptions {
   dispatch?: (actionId: string, args?: unknown) => Promise<ActionDispatchResult>;
 }
 
+/**
+ * Mirrors the action-id regex and kind/danger sets in
+ * `electron/services/PluginService.ts` `PLUGIN_ACTION_ID_RE` /
+ * `PLUGIN_ACTION_KINDS` / `PLUGIN_ACTION_DANGERS`. The mock can't import
+ * those (cross-process boundary), so the values are duplicated here and the
+ * production constants are the source of truth. If the production regex or
+ * sets change, mirror the change here.
+ */
+const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
+const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
+
 export function createMockHost(options: CreateMockHostOptions = {}): PluginHostApi & MockHostState {
   const pluginId = options.pluginId ?? "test.mock";
   let activeWorktree: PluginWorktreeSnapshot | null = options.activeWorktree ?? null;
@@ -193,10 +205,63 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const host: PluginHostApi & MockHostState = {
     pluginId,
     registerAction(descriptor, handler) {
-      // Mirror PluginService.registerAction: re-registering the same id
-      // replaces the prior descriptor + handler. Without this, the recording
-      // array would diverge from production semantics and any plugin test
-      // that re-registers an action would silently dispatch the stale handler.
+      // Mirrors PluginService.createHost L1577-L1631. Validation order matches
+      // production: non-object descriptor, non-function handler, non-empty
+      // string id, plugin-prefix not already in id, then the
+      // validateAndBuildActionDescriptor checks (L2686-L2723) applied to the
+      // namespaced id (since production namespaces before that step).
+      // Re-registering the same id replaces the prior descriptor + handler
+      // (replace-by-id, see host-api.md). A plugin test that calls
+      // registerAction with the same id twice should see the second call win,
+      // not accumulate two entries.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerAction: descriptor must be an object");
+      }
+      if (typeof handler !== "function") {
+        throw new Error("registerAction: handler must be a function");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerAction: descriptor.id must be a non-empty string");
+      }
+      if (descriptor.id.startsWith(`${pluginId}.`)) {
+        throw new Error(
+          `registerAction: descriptor.id "${descriptor.id}" must not include the plugin prefix`
+        );
+      }
+      // Mirrors validateAndBuildActionDescriptor (L2697-L2723). The mock
+      // namespaces the id the same way production does and runs the same
+      // checks against the namespaced form, so a plugin test that registers
+      // an action the production host would reject fails the mock in the
+      // same way — no "passes the mock, throws at activation" gap.
+      const namespacedId = `${pluginId}.${descriptor.id}`;
+      if (!PLUGIN_ACTION_ID_RE.test(namespacedId)) {
+        throw new Error(
+          `registerAction: descriptor.id "${descriptor.id}" (namespaced to "${namespacedId}") is invalid. Expected "{pluginId}.{actionId}" (lowercase start, alphanumerics, dot/dash/underscore).`
+        );
+      }
+      if (typeof descriptor.title !== "string" || !descriptor.title.trim()) {
+        throw new Error("registerAction: descriptor.title must be a non-empty string");
+      }
+      if (typeof descriptor.description !== "string") {
+        throw new Error("registerAction: descriptor.description must be a string");
+      }
+      if (typeof descriptor.category !== "string" || !descriptor.category.trim()) {
+        throw new Error("registerAction: descriptor.category must be a non-empty string");
+      }
+      if (!PLUGIN_ACTION_KINDS.has(descriptor.kind)) {
+        throw new Error(
+          `registerAction: descriptor.kind "${descriptor.kind}" is invalid (must be one of: ${[
+            ...PLUGIN_ACTION_KINDS,
+          ].join(", ")})`
+        );
+      }
+      if (!PLUGIN_ACTION_DANGERS.has(descriptor.danger)) {
+        throw new Error(
+          `registerAction: descriptor.danger "${descriptor.danger}" is invalid (must be one of: ${[
+            ...PLUGIN_ACTION_DANGERS,
+          ].join(", ")})`
+        );
+      }
       const existing = registeredActions.findIndex((r) => r.descriptor.id === descriptor.id);
       if (existing >= 0) {
         registeredActions[existing] = { descriptor, handler };
@@ -256,24 +321,81 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
     },
     registerForgeProvider(descriptor, impl) {
-      const record: RegisteredForgeProviderRecord = { descriptor, impl };
-      registeredForgeProviders.push(record);
+      // Mirrors PluginService.createHost L1738-L1817. Validation order matches
+      // production: non-object descriptor, non-empty string id, non-object impl.
+      // The manifest-declared-id check is intentionally skipped — the mock has
+      // no manifest model (see issue #9878). Re-registering the same id
+      // replaces the prior binding (replace-by-id). The disposer's identity
+      // guard compares the captured `impl` reference against the currently
+      // active entry's `impl`, matching `unregisterForgeProviderImpl`'s
+      // `expected` argument: a stale disposer from a re-bound id is a no-op.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerForgeProvider: descriptor must be an object");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerForgeProvider: descriptor.id must be a non-empty string");
+      }
+      if (!impl || typeof impl !== "object") {
+        throw new Error("registerForgeProvider: impl must be an object");
+      }
+      const contributionId = descriptor.id;
+      const existing = registeredForgeProviders.findIndex(
+        (r) => r.descriptor.id === contributionId
+      );
+      if (existing >= 0) {
+        registeredForgeProviders[existing] = { descriptor, impl };
+      } else {
+        registeredForgeProviders.push({ descriptor, impl });
+      }
       let disposed = false;
       return () => {
         if (disposed) return;
         disposed = true;
-        const i = registeredForgeProviders.indexOf(record);
+        // Identity guard: only remove if the currently active entry is still
+        // the one this disposer was captured against. A re-registration with a
+        // different impl invalidates the prior disposer (matches production).
+        const i = registeredForgeProviders.findIndex(
+          (r) => r.descriptor.id === contributionId && r.impl === impl
+        );
         if (i >= 0) registeredForgeProviders.splice(i, 1);
       };
     },
     registerFileDecorationProvider(descriptor, impl) {
-      const record: RegisteredFileDecorationProviderRecord = { descriptor, impl };
-      registeredFileDecorationProviders.push(record);
+      // Mirrors PluginService.createHost L1818-L1875. Validation order matches
+      // production: non-object descriptor, non-empty string id, impl must be
+      // an object exposing `provideDecorations()`. The manifest-declared-id
+      // check is intentionally skipped — the mock has no manifest model (see
+      // issue #9878). Re-registering the same id replaces the prior binding
+      // (replace-by-id). The disposer's identity guard mirrors
+      // `unregisterFileDecorationProviderImpl`'s `expected` argument.
+      if (!descriptor || typeof descriptor !== "object") {
+        throw new Error("registerFileDecorationProvider: descriptor must be an object");
+      }
+      if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+        throw new Error("registerFileDecorationProvider: descriptor.id must be a non-empty string");
+      }
+      if (!impl || typeof impl !== "object" || typeof impl.provideDecorations !== "function") {
+        throw new Error("registerFileDecorationProvider: impl must expose provideDecorations()");
+      }
+      const contributionId = descriptor.id;
+      const existing = registeredFileDecorationProviders.findIndex(
+        (r) => r.descriptor.id === contributionId
+      );
+      if (existing >= 0) {
+        registeredFileDecorationProviders[existing] = { descriptor, impl };
+      } else {
+        registeredFileDecorationProviders.push({ descriptor, impl });
+      }
       let disposed = false;
       return () => {
         if (disposed) return;
         disposed = true;
-        const i = registeredFileDecorationProviders.indexOf(record);
+        // Identity guard: only remove if the currently active entry is still
+        // the one this disposer was captured against. A re-registration with a
+        // different impl invalidates the prior disposer (matches production).
+        const i = registeredFileDecorationProviders.findIndex(
+          (r) => r.descriptor.id === contributionId && r.impl === impl
+        );
         if (i >= 0) registeredFileDecorationProviders.splice(i, 1);
       };
     },

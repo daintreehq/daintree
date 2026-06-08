@@ -13,6 +13,7 @@ import {
   clearPortalPendingIf,
   getPortalBounds,
   parseConfirmed,
+  showPortalTabIfNoOverlay,
 } from "./portalHelpers";
 
 export function registerPortalActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -346,7 +347,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
       try {
         await window.electron.portal.create({ tabId: newTabId, url: tab.url });
         state.markTabCreated(newTabId);
-        await window.electron.portal.show({ tabId: newTabId, bounds });
+        await showPortalTabIfNoOverlay(newTabId, bounds);
       } catch (error) {
         logError("Failed to duplicate portal tab", error);
         state.closeTab(newTabId);

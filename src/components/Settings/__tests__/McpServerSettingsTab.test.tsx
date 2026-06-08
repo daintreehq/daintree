@@ -73,12 +73,18 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
       configuredPort: 9020,
       apiKey: "dnt-key-abc123",
     }),
+    getRuntimeState: vi.fn().mockResolvedValue({
+      enabled: true,
+      state: "ready",
+      port: 9020,
+      lastError: null,
+    }),
     setEnabled: vi.fn(),
     setPort: vi.fn(),
     listActiveClients: vi.fn().mockResolvedValue([]),
     getConfigSnippet: vi.fn().mockResolvedValue("http://127.0.0.1:9020/sse"),
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-rotated789"),
-    getAuditRecords: vi.fn().mockResolvedValue([]),
+    getLogRecords: vi.fn().mockResolvedValue([]),
     getAuditConfig: vi.fn().mockResolvedValue({ enabled: true, maxRecords: 500 }),
     getAuditStats: vi.fn().mockResolvedValue({
       auth401Count: 0,
@@ -93,6 +99,7 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     clearTurnOutcomeLog: vi.fn().mockResolvedValue(undefined),
     onRuntimeStateChanged: vi.fn().mockReturnValue(vi.fn()),
     listActiveBearers: vi.fn().mockResolvedValue([]),
+    listHelpSessionBearers: vi.fn().mockResolvedValue([]),
     disconnectBearer: vi.fn().mockResolvedValue({ tokenHash: "", disconnected: true }),
     ...overrides,
   };
@@ -733,7 +740,7 @@ describe("McpServerSettingsTab", () => {
 
   it("clears audit log via confirm dialog without notifying", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -769,7 +776,7 @@ describe("McpServerSettingsTab", () => {
 
   it("Clear log dialog can be canceled without clearing", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -804,7 +811,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows inline error and logs audit clear failure without notifying", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -840,7 +847,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows Copied! pill on audit copy instead of notifying", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -885,7 +892,7 @@ describe("McpServerSettingsTab", () => {
       configurable: true,
     });
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -913,7 +920,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows filtered count when a result filter is active", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -952,7 +959,7 @@ describe("McpServerSettingsTab", () => {
 
   it("shows filtered count when tool filter is active", async () => {
     installMcpApi({
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "1",
           toolId: "files.read",
@@ -1011,13 +1018,13 @@ describe("McpServerSettingsTab", () => {
     expect(applyButton.disabled).toBe(true);
   });
 
-  it("subscribes to runtime state changes on mount", async () => {
+  it("subscribes to runtime state changes on mount and unsubscribes on unmount", async () => {
     const unsub = vi.fn();
     const onRuntimeStateChanged = vi.fn().mockReturnValue(unsub);
 
     installMcpApi({ onRuntimeStateChanged });
 
-    render(
+    const { unmount } = render(
       <SettingsValidationProvider>
         <McpServerSettingsTab />
       </SettingsValidationProvider>
@@ -1026,6 +1033,10 @@ describe("McpServerSettingsTab", () => {
     await waitFor(() => {
       expect(onRuntimeStateChanged).toHaveBeenCalledTimes(1);
     });
+    expect(unsub).not.toHaveBeenCalled();
+
+    unmount();
+    expect(unsub).toHaveBeenCalledTimes(1);
   });
 
   it("result filter includes Unauthorized option", async () => {
@@ -1061,7 +1072,7 @@ describe("McpServerSettingsTab", () => {
         anomalySuppressed: false,
         anomalyRecordFloor: 50,
       }),
-      getAuditRecords: vi.fn().mockResolvedValue([
+      getLogRecords: vi.fn().mockResolvedValue([
         {
           id: "r1",
           toolId: "slow.tool",
@@ -1242,8 +1253,8 @@ describe("McpServerSettingsTab", () => {
     });
 
     it("populates the clients row when a runtime-state change fires after mount", async () => {
-      let runtimeCb: (() => void) | undefined;
-      const onRuntimeStateChanged = vi.fn((cb: () => void) => {
+      let runtimeCb: ((snapshot: unknown) => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: (snapshot: unknown) => void) => {
         runtimeCb = cb;
         return vi.fn();
       });
@@ -1261,7 +1272,7 @@ describe("McpServerSettingsTab", () => {
       await waitForContent(container, "API key active");
       expect(container.textContent).not.toContain("External clients");
 
-      runtimeCb?.();
+      runtimeCb?.({ enabled: true, state: "ready", port: 9020, lastError: null });
       await waitForContent(container, "External clients (1)");
     });
 
@@ -1284,6 +1295,251 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForContent(container, "API key active");
       expect(container.textContent).not.toContain("Kept alive by Daintree Assistant");
+    });
+  });
+
+  describe("internal connections (#10036)", () => {
+    const helpBearer = {
+      userAgent: "Daintree Assistant/1.0",
+      lastActiveAt: Date.now() - 5000,
+      requestsSinceLaunch: 4,
+      sessionCount: 2,
+    };
+
+    it("hides the internal-connections row when no internal bearer is connected", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("Internal connections");
+    });
+
+    it("shows the internal-connection row read-only, with no disconnect control", async () => {
+      const listHelpSessionBearers = vi.fn().mockResolvedValue([helpBearer]);
+      installMcpApi({ listHelpSessionBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Internal connections (1)");
+
+      fireEvent.click(screen.getByRole("button", { name: /internal connections/i }));
+      await waitFor(() => {
+        expect(container.textContent).toContain("Daintree Assistant/1.0");
+      });
+      // Session and request counts are surfaced...
+      expect(container.textContent).toContain("2 sessions");
+      expect(container.textContent).toContain("4 requests");
+      // ...but there is no disconnect affordance for an internal connection.
+      expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
+    });
+
+    it("keeps the internal row read-only while the external row stays disconnectable (#9151)", async () => {
+      const externalBearer = {
+        tokenHash: "b".repeat(64),
+        token4LastChars: "abcd",
+        userAgent: "Cursor/0.42",
+        lastActiveAt: Date.now() - 1000,
+        requestsSinceLaunch: 7,
+      };
+      const listActiveBearers = vi.fn().mockResolvedValue([externalBearer]);
+      const listHelpSessionBearers = vi.fn().mockResolvedValue([helpBearer]);
+      installMcpApi({ listActiveBearers, listHelpSessionBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "External clients (1)");
+      await waitForContent(container, "Internal connections (1)");
+
+      // Expand both sections so every row is rendered.
+      fireEvent.click(screen.getByRole("button", { name: /external clients/i }));
+      fireEvent.click(screen.getByRole("button", { name: /internal connections/i }));
+      await waitFor(() => {
+        expect(container.textContent).toContain("Cursor/0.42");
+        expect(container.textContent).toContain("Daintree Assistant/1.0");
+      });
+
+      // Exactly one Disconnect button exists — the external row's. The internal
+      // row never offers one, even when both sections are visible at once.
+      expect(screen.getAllByRole("button", { name: "Disconnect" })).toHaveLength(1);
+    });
+
+    it("populates the internal-connections row when a runtime-state change fires after mount", async () => {
+      let runtimeCb: ((snapshot: unknown) => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: (snapshot: unknown) => void) => {
+        runtimeCb = cb;
+        return vi.fn();
+      });
+      const listHelpSessionBearers = vi
+        .fn()
+        .mockResolvedValueOnce([]) // initial mount: nothing connected
+        .mockResolvedValue([helpBearer]); // after the push: connected
+      installMcpApi({ onRuntimeStateChanged, listHelpSessionBearers });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).not.toContain("Internal connections");
+
+      runtimeCb?.({ enabled: true, state: "ready", port: 9020, lastError: null });
+      await waitForContent(container, "Internal connections (1)");
+    });
+  });
+
+  describe("Connection section runtime state", () => {
+    it("renders the running tree, URL block, and copy button when state is ready", async () => {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Running on port 9020");
+      expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
+      expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
+    });
+
+    it("uses the runtime snapshot port when it diverges from the slower getStatus refetch", async () => {
+      // Regression: the ready branch must read the port from the runtime
+      // snapshot, not from the persisted-config `status`, so a push that
+      // binds the port before `getStatus()` resolves still renders the URL.
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "ready",
+          port: 9020,
+          lastError: null,
+        }),
+        getStatus: vi.fn().mockResolvedValue({
+          enabled: true,
+          port: null,
+          configuredPort: 9020,
+          apiKey: "dnt-key-abc123",
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Running on port 9020");
+      expect(container.textContent).toContain("http://127.0.0.1:9020/sse");
+    });
+
+    it("renders the starting copy and hides the URL block when state is starting", async () => {
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "starting",
+          port: null,
+          lastError: null,
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Server is starting…");
+      expect(container.textContent).not.toContain("http://127.0.0.1");
+      expect(container.textContent).not.toContain("Copy MCP config");
+    });
+
+    it("renders the failed banner with lastError when state is failed and an error is set", async () => {
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: "EADDRINUSE: port 45454 already in use",
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "MCP server failed to start");
+      expect(container.textContent).toContain("EADDRINUSE: port 45454 already in use");
+      expect(container.textContent).not.toContain("Server is starting…");
+      expect(container.textContent).not.toContain("Copy MCP config");
+    });
+
+    it("renders the failed banner with fallback copy when state is failed and lastError is null", async () => {
+      installMcpApi({
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "failed",
+          port: null,
+          lastError: null,
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "MCP server failed to start");
+      expect(container.textContent).toContain("Check the logs for details.");
+      expect(container.textContent).not.toContain("Server is starting…");
+    });
+
+    it("transitions the Connection section from ready to failed when a runtime push fires", async () => {
+      let runtimeCb: ((snapshot: unknown) => void) | undefined;
+      const onRuntimeStateChanged = vi.fn((cb: (snapshot: unknown) => void) => {
+        runtimeCb = cb;
+        return vi.fn();
+      });
+      installMcpApi({
+        onRuntimeStateChanged,
+        getRuntimeState: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: "ready",
+          port: 9020,
+          lastError: null,
+        }),
+        getStatus: vi.fn().mockResolvedValue({
+          enabled: true,
+          port: null,
+          configuredPort: 9020,
+          apiKey: "dnt-key-abc123",
+        }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "API key active");
+      expect(container.textContent).toContain("Running on port");
+
+      runtimeCb?.({
+        enabled: true,
+        state: "failed",
+        port: null,
+        lastError: "listen EACCES: permission denied",
+      });
+
+      await waitForContent(container, "MCP server failed to start");
+      expect(container.textContent).toContain("listen EACCES: permission denied");
+      expect(container.textContent).not.toContain("Running on port");
     });
   });
 });

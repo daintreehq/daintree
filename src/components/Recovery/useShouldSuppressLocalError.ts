@@ -8,9 +8,11 @@ import { useGlobalBannerPriority, type GlobalBannerSlot } from "./useGlobalBanne
  *  global recovery cause (see `useGlobalBannerPriority`) suppresses the banner.
  *
  *  - `backend-dependent` — the banner describes a failure whose only recovery
- *    path runs through the backend (spawn, reconnect, restart). Always
- *    suppressed while a global cause is active, because the user can't act on
- *    it until the global cause clears.
+ *    path runs through the backend (spawn, reconnect, restart). Suppressed only
+ *    while a *recovery* global cause is active (see `SLOT_IS_RECOVERY`), because
+ *    the user can't act on it until the backend is healthy again. Advisory
+ *    causes (`github-token`, `cloud-sync`) leave the backend connected, so the
+ *    banner stays visible and actionable.
  *  - `parse-error` — the banner describes a file-format or replay failure
  *    that's independent of host connectivity (e.g. corrupt saved scrollback).
  *    The terminal itself is operational; never suppressed.
@@ -26,11 +28,29 @@ export function useActiveGlobalCause(): GlobalBannerSlot {
   return useGlobalBannerPriority();
 }
 
+/** Classifies each global banner slot as a *recovery* cause (the backend is
+ *  unhealthy or its protection layer is down) versus an *advisory* cause (the
+ *  backend is connected; the banner is informational). Only recovery causes
+ *  suppress `backend-dependent` pane-local errors — under an advisory cause the
+ *  backend is operational, so spawn/reconnect/restart banners stay actionable.
+ *
+ *  Declared as an exhaustive `Record` so adding a slot to `GlobalBannerSlot`
+ *  without classifying it here is a compile error (TS2741) — the suppression
+ *  domain can never silently widen to a new advisory slot. */
+const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
+  "host-crash": true,
+  "watchdog-disabled": true,
+  "safe-mode": true,
+  "restore-confirmation": true,
+  "github-token": false,
+  "cloud-sync": false,
+};
+
 function isSuppressedByGlobalCause(cause: GlobalBannerSlot, category: LocalErrorCategory): boolean {
   if (cause === null) return false;
   switch (category) {
     case "backend-dependent":
-      return true;
+      return SLOT_IS_RECOVERY[cause];
     case "parse-error":
     case "permission-error":
       return false;
@@ -48,10 +68,13 @@ function isSuppressedByGlobalCause(cause: GlobalBannerSlot, category: LocalError
  *  cause activates (so a local banner never races a host-crash banner into
  *  view), and turns false only after `LOCAL_ERROR_SETTLE_MS` of sustained
  *  no-cause — this absorbs `backendStatus` flicker between `"recovering"` and
- *  `"connected"`. Performance mode bypasses the settle window (mirrors raw
- *  state instantly via `getPerformanceModeFloor`). Reduced-motion does NOT
- *  collapse this timer: per the app's policy, CSS owns reduced-motion;
- *  JS timers stay intact.
+ *  `"connected"`. The settle tail applies only when no cause is active
+ *  (`cause === null`); when an advisory cause (`github-token`, `cloud-sync`)
+ *  takes over the slot the backend is already connected, so un-suppression is
+ *  immediate — the tail must not hide a now-actionable pane error (#10038).
+ *  Performance mode bypasses the settle window (mirrors raw state instantly via
+ *  `getPerformanceModeFloor`). Reduced-motion does NOT collapse this timer: per
+ *  the app's policy, CSS owns reduced-motion; JS timers stay intact.
  *
  *  Stacks on top of the 500ms backend-side recoveryTimer in
  *  `src/store/listeners/panel/backendHealth.ts`. The total dead-zone from
@@ -61,14 +84,22 @@ export function useShouldSuppressLocalError(category: LocalErrorCategory): boole
   const rawSuppressed = isSuppressedByGlobalCause(cause, category);
   // `held` tracks the delayed-off tail: once a cause has activated, `held`
   // stays true until the settle window elapses with no cause active. The
-  // returned value is `rawSuppressed || held` so sticky-on is synchronous
-  // with render — passive effects run *after* paint, so relying on the
-  // effect to set state would leak one paint cycle of the local banner.
+  // returned value is `rawSuppressed || (cause === null && held)` so sticky-on
+  // is synchronous with render — passive effects run *after* paint, so relying
+  // on the effect to set state would leak one paint cycle of the local banner.
+  // The `cause === null` guard scopes the tail to true no-cause: an advisory
+  // cause holding the slot un-suppresses synchronously without a paint leak.
   const [held, setHeld] = useState(rawSuppressed);
 
   useEffect(() => {
     if (rawSuppressed) {
       setHeld(true);
+      return;
+    }
+    // An advisory cause holds the slot (backend connected) — drop the tail now
+    // rather than letting a leftover settle timer keep suppression alive.
+    if (cause !== null) {
+      setHeld(false);
       return;
     }
     const delay = getPerformanceModeFloor(LOCAL_ERROR_SETTLE_MS);
@@ -78,7 +109,7 @@ export function useShouldSuppressLocalError(category: LocalErrorCategory): boole
     }
     const timer = setTimeout(() => setHeld(false), delay);
     return () => clearTimeout(timer);
-  }, [rawSuppressed]);
+  }, [rawSuppressed, cause]);
 
-  return rawSuppressed || held;
+  return rawSuppressed || (cause === null && held);
 }

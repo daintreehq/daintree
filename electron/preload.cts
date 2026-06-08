@@ -20,10 +20,13 @@ import type {
   McpBearerIdentity,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
+  McpHelpDisplayImagePayload,
+  McpTurnOutcomeAlertPayload,
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
+import { PERF_MARKS } from "../shared/perf/marks.js";
 import {
   BrokerError,
   RequestResponseBroker,
@@ -43,6 +46,7 @@ import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
+import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -74,6 +78,7 @@ import type {
   TerminalSpawnOptions,
   CopyTreeOptions,
   CopyTreeProgress,
+  CopyTreeTestConfigOptions,
   AppState,
   LogEntry,
   LogFilterOptions,
@@ -92,9 +97,9 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
-  GitHubRateLimitPayload,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   ServiceConnectivityPayload,
   GitStatus,
   KeyAction,
@@ -131,6 +136,7 @@ import type {
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
+  TerminalReliabilityMetricPayload,
 } from "../shared/types/pty-host.js";
 
 type SpawnResultPayload = SpawnResult;
@@ -147,6 +153,24 @@ import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
 
 export type { ElectronAPI };
+
+// Anchor for the per-view preload evaluation span (#9770). This is the first
+// executable statement in the bundled preload entry (esbuild hoists the import
+// `require()`s above it, so module-resolution cost is excluded by construction);
+// everything below — building the API surface and the contextBridge exposure —
+// is measured against it and flushed at preload bottom. Guarded so it is inert
+// in runtimes without the Web Performance API (none in Electron, but cheap).
+const preloadEvalStartMs =
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : 0;
+
+// Monotonic clock reader shared by the preload-eval instrumentation below
+// (#9770). Falls back to 0 where the Web Performance API is unavailable.
+const perfNowMs = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : 0;
 
 // True for packaged production builds. `process.resourcesPath` is undefined in
 // sandboxed preloads (sandbox: true), so the only reliable signal here is the
@@ -176,6 +200,17 @@ const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id=";
 const initialProjectId = process.argv
   .find((a) => a.startsWith(INITIAL_PROJECT_ID_ARG))
   ?.slice(INITIAL_PROJECT_ID_ARG.length);
+
+// Instance role passed from the main process via additionalArguments (#10123),
+// with a process.env fallback for contexts the main process did not seed
+// (process.env is polyfilled even under sandbox: true). Worker instances
+// suppress automatic background GitHub polling; only the exact value "worker"
+// opts in — anything else normalizes to "attended".
+const INSTANCE_ROLE_ARG = "--daintree-instance-role=";
+const rawInstanceRole =
+  process.argv.find((a) => a.startsWith(INSTANCE_ROLE_ARG))?.slice(INSTANCE_ROLE_ARG.length) ??
+  process.env.DAINTREE_INSTANCE_ROLE;
+const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "worker" : "attended";
 
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
@@ -677,10 +712,19 @@ let _eventBusWired = false;
 // from the Suspense *parent* before `AppInner` (the component that owns the
 // subscription) has mounted past its `app:boot` gate. Without a replay buffer
 // the intent would land with no subscriber and be dropped on a slow cold
-// launch. Only latest-wins, single-shot, low-frequency signals belong here —
-// replaying a high-frequency or stale state event to a late subscriber would be
-// wrong.
-const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set(["plugin:deep-link"]);
+// launch. `window:disk-space-status` is replayed for the same reason (#9769):
+// main pushes the current non-normal status once at `did-finish-load`, and the
+// `useDiskSpaceWarnings` subscriber now mounts behind the `isStateLoaded` gate
+// (after the full hydration round-trip), so without buffering the one-shot
+// warning would be dropped on a slow startup and only resurface on the next
+// status *change*. Only latest-wins, single-shot, low-frequency signals belong
+// here — replaying a high-frequency or stale state event to a late subscriber
+// would be wrong. Disk status qualifies: latest-wins and emitted on change
+// (~5-min poll), so the buffered payload always reflects the current state.
+const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
+  "plugin:deep-link",
+  "window:disk-space-status",
+]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown>();
 
 function _ensureEventBusWired(): void {
@@ -782,9 +826,6 @@ const api: ElectronAPI = {
 
     detachIssue: (worktreeId: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_DETACH_ISSUE, { worktreeId }),
-
-    getIssueAssociation: (worktreeId: string): Promise<IssueAssociation | null> =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_GET_ISSUE_ASSOCIATION, worktreeId),
 
     getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> =>
       _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS),
@@ -943,6 +984,10 @@ const api: ElectronAPI = {
     onStatus: (callback: (data: TerminalStatusPayload) => void) =>
       _typedOn(CHANNELS.TERMINAL_STATUS, callback),
 
+    onReliabilityMetric: (
+      callback: (data: TerminalReliabilityMetricPayload) => void
+    ): (() => void) => _eventBusOn("terminal:reliability-metric", callback),
+
     onResourceMetrics: (
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ) => _typedOn(CHANNELS.TERMINAL_RESOURCE_METRICS, callback),
@@ -1074,7 +1119,7 @@ const api: ElectronAPI = {
     getFileTree: (worktreeId: string, dirPath?: string) =>
       _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
 
-    testConfig: (worktreeId: string, options?: CopyTreeOptions) =>
+    testConfig: (worktreeId: string, options?: CopyTreeTestConfigOptions) =>
       _unwrappingInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),
 
     onProgress: (callback: (progress: CopyTreeProgress) => void) =>
@@ -1642,9 +1687,6 @@ const api: ElectronAPI = {
     onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
       _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
 
-    onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, callback),
-
     getRateLimitDetails: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS),
 
     onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void) =>
@@ -1652,6 +1694,9 @@ const api: ElectronAPI = {
 
     onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void) =>
       _typedOn(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, callback),
+
+    onRepoCountsUpdated: (callback: (data: RepoCountsUpdatedPayload) => void) =>
+      _typedOn(CHANNELS.GITHUB_REPO_COUNTS_UPDATED, callback),
 
     getTokenHealth: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_TOKEN_HEALTH),
   },
@@ -1828,6 +1873,8 @@ const api: ElectronAPI = {
         defaultValue: string;
       }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
+    onDialogDismiss: (callback: (payload: { panelId: string }) => void): (() => void) =>
+      _typedOn(CHANNELS.WEBVIEW_DIALOG_DISMISS, callback),
     onFindShortcut: (
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
@@ -2332,7 +2379,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
     unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
-    validateToken: (token: string) => _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, token),
+    validateToken: (payload: { providerId: string; token: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
     setCredential: (providerId: string, credentials: Record<string, string>) =>
       _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),
     getCredentialStatus: (providerId: string) =>
@@ -2349,6 +2397,8 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
     getRepoMetadata: (payload: { cwd: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_METADATA, payload),
+    getCurrentUser: (payload: { cwd: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_CURRENT_USER, payload),
     onRateLimitChanged: (
       callback: (data: import("../shared/types/ipc/forge.js").ForgeRateLimitChangedPayload) => void
     ) => _typedOn(CHANNELS.FORGE_RATE_LIMIT_CHANGED, callback),
@@ -2362,6 +2412,8 @@ const api: ElectronAPI = {
   },
 
   forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
+
+  runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
 
   // Voice Input API
   voiceInput: {
@@ -2427,10 +2479,16 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
     onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
       _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
+    onSessionRevoked: (callback: (payload: { sessionId: string; denialKind: string }) => void) =>
+      _typedOn(CHANNELS.MCP_SESSION_REVOKED, callback),
     onToolCallStarted: (callback: (payload: McpToolCallStartedPayload) => void) =>
       _typedOn(CHANNELS.MCP_TOOL_CALL_STARTED, callback),
     onToolCallSettled: (callback: (payload: McpToolCallSettledPayload) => void) =>
       _typedOn(CHANNELS.MCP_TOOL_CALL_SETTLED, callback),
+    onDisplayImage: (callback: (payload: McpHelpDisplayImagePayload) => void) =>
+      _typedOn(CHANNELS.MCP_HELP_DISPLAY_IMAGE, callback),
+    onTurnOutcomeAlert: (callback: (payload: McpTurnOutcomeAlertPayload) => void) =>
+      _typedOn(CHANNELS.MCP_TURN_OUTCOME_ALERT, callback),
   },
 
   helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
@@ -2617,13 +2675,18 @@ const api: ElectronAPI = {
           pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
           resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
           sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-          startCapture: (payload: { fps?: number; outputPath: string }) =>
-            _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+          startCapture: (payload: {
+            fps?: number;
+            outputPath: string;
+            videoBitsPerSecond?: number;
+            width?: number;
+            height?: number;
+          }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           sendCaptureChunk: (captureId: string, data: Uint8Array) => {
             ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
           },
-          sendCaptureStop: (captureId: string, frameCount: number, error?: string) => {
-            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, frameCount, error });
+          sendCaptureStop: (captureId: string, chunkCount: number, error?: string) => {
+            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, chunkCount, error });
           },
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
@@ -2636,19 +2699,40 @@ const api: ElectronAPI = {
             modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
             selector?: string
           ) => _unwrappingInvoke(CHANNELS.DEMO_PRESS_KEY, { key, code, modifiers, selector }),
+          typeInTerminal: (selector: string, text: string, cps?: number) =>
+            _unwrappingInvoke(CHANNELS.DEMO_TYPE_IN_TERMINAL, { selector, text, cps }),
+          sendKeyToTerminal: (selector: string, key: string) =>
+            _unwrappingInvoke(CHANNELS.DEMO_SEND_KEY_TO_TERMINAL, { selector, key }),
           spotlight: (selector: string, padding?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_SPOTLIGHT, { selector, padding }),
           dismissSpotlight: () => _unwrappingInvoke(CHANNELS.DEMO_DISMISS_SPOTLIGHT),
           annotate: (
             selector: string,
             text: string,
-            position?: "top" | "bottom" | "left" | "right",
+            position?:
+              | "top"
+              | "bottom"
+              | "left"
+              | "right"
+              | "screen-top"
+              | "screen-bottom"
+              | "screen-center"
+              | "lower-third-left"
+              | "lower-third-right"
+              | "top-left"
+              | "top-right"
+              | "bottom-left"
+              | "bottom-right"
+              | "above-cursor"
+              | "below-cursor",
+            size?: "sm" | "md" | "lg" | "xl",
             id?: string
           ) =>
             _unwrappingInvoke(CHANNELS.DEMO_ANNOTATE, {
               selector,
               text,
               position,
+              size,
               id,
             }),
           dismissAnnotation: (id?: string) =>
@@ -2680,13 +2764,23 @@ const api: ElectronAPI = {
 // same-origin route (index.html, and any future route) gets the full surface — using
 // isRecoveryPageUrl as the discriminator keeps the full surface as the safe default.
 const rendererUrl = window.location.href;
+// Sub-span around the `window.electron` contextBridge handoff (#9770). Bracketed
+// tightly around the exposeInMainWorld("electron", …) call in whichever branch
+// runs, so the Sentry bridge exposure and origin-rejection logging are excluded.
+// Defaults to a zero-width span for the untrusted path (no exposure happens).
+let exposeStartMs = perfNowMs();
+let exposeEndMs = exposeStartMs;
 if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
   if (isRecoveryPageUrl(rendererUrl)) {
+    exposeStartMs = perfNowMs();
     contextBridge.exposeInMainWorld("electron", { recovery: api.recovery });
+    exposeEndMs = perfNowMs();
     // __SENTRY_IPC__ is intentionally withheld here: recovery.html has no Sentry
     // renderer SDK and exposing the transport would needlessly widen its surface.
   } else {
+    exposeStartMs = perfNowMs();
     contextBridge.exposeInMainWorld("electron", api);
+    exposeEndMs = perfNowMs();
     // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
     // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
     // forward envelopes to the main process (which owns the real DSN and HTTP
@@ -2856,5 +2950,57 @@ if (initialColorSchemeId) {
 if (initialProjectId) {
   contextBridge.exposeInMainWorld("__DAINTREE_INITIAL_PROJECT__", {
     id: initialProjectId,
+  });
+}
+
+// Surface the instance role so renderer pollers can suppress automatic
+// background GitHub polling in worker instances (#10123). Exposed
+// unconditionally — attended instances get { role: "attended" } so consumers
+// never need to null-guard the global.
+contextBridge.exposeInMainWorld("__DAINTREE_INSTANCE_ROLE__", {
+  role: instanceRole,
+});
+
+// Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —
+// before any renderer page script — so the main process can attribute the
+// `preload.eval` and `preload.exposeInMainWorld` spans to this WebContentsView
+// (via the IPC sender's id). Reuses the existing renderer-marks channel and its
+// rebasing math: the preload shares the renderer frame's `performance.timeOrigin`,
+// so each mark's elapsed value is relative to `preloadEvalStartMs`. Gated on the
+// same runtime flag as the rest of the perf pipeline; `process.env` is polyfilled
+// in the sandboxed preload, and the flag is intentionally NOT esbuild-stripped.
+if (process.env.DAINTREE_PERF_CAPTURE === "1") {
+  const preloadEvalEndMs = perfNowMs();
+  const timestamp = new Date().toISOString();
+  ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, {
+    marks: [
+      {
+        mark: PERF_MARKS.PRELOAD_EVAL_START,
+        timestamp,
+        elapsedMs: 0,
+      },
+      {
+        mark: PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
+        timestamp,
+        elapsedMs: exposeStartMs - preloadEvalStartMs,
+      },
+      {
+        mark: PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
+        timestamp,
+        elapsedMs: exposeEndMs - preloadEvalStartMs,
+        meta: { durationMs: exposeEndMs - exposeStartMs },
+      },
+      {
+        mark: PERF_MARKS.PRELOAD_EVAL_END,
+        timestamp,
+        elapsedMs: preloadEvalEndMs - preloadEvalStartMs,
+        meta: { durationMs: preloadEvalEndMs - preloadEvalStartMs },
+      },
+    ],
+    rendererTimeOrigin:
+      typeof performance !== "undefined" && typeof performance.timeOrigin === "number"
+        ? performance.timeOrigin
+        : 0,
+    rendererT0: preloadEvalStartMs,
   });
 }

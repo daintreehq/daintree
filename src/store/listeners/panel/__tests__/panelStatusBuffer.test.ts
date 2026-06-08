@@ -4,8 +4,10 @@ import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import {
   cancelPanelStatusBuffer,
+  clearHeldDuration,
   enqueueActivityUpdate,
   enqueueFlowStatusUpdate,
+  enqueueHeldDurationUpdate,
   flushPanelStatusBuffer,
 } from "@/store/panelStatusBuffer";
 
@@ -149,17 +151,17 @@ describe("panelStatusBuffer — flow-status batching", () => {
     const setSpy = vi.spyOn(usePanelStore, "setState");
 
     for (let i = 0; i < 5; i++) {
-      enqueueFlowStatusUpdate(`term-${i}`, "suspended", 1000 + i);
+      enqueueFlowStatusUpdate(`term-${i}`, "paused-resource-governor", 1000 + i);
     }
 
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
     for (let i = 0; i < 5; i++) {
       const t = getPtyPanel(`term-${i}`);
-      expect(t?.flowStatus).toBe("suspended");
+      expect(t?.flowStatus).toBe("paused-resource-governor");
       expect(t?.flowStatusTimestamp).toBe(1000 + i);
-      // deriveRuntimeStatus(isVisible=true, flowStatus="suspended", "running") -> "suspended"
-      expect(t?.runtimeStatus).toBe("suspended");
+      // deriveRuntimeStatus(isVisible=true, flowStatus="paused-resource-governor", "running") -> "paused-resource-governor"
+      expect(t?.runtimeStatus).toBe("paused-resource-governor");
     }
   });
 
@@ -189,7 +191,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
     // persisted-store guard which can't see other in-buffer patches.
     seedPanel("term-1", { isVisible: true });
     enqueueFlowStatusUpdate("term-1", "running", 200);
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
@@ -203,7 +205,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
       runtimeStatus: "running",
       isVisible: true,
     });
-    enqueueFlowStatusUpdate("term-1", "suspended", 400);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 400);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.flowStatus).toBe("running");
@@ -212,7 +214,7 @@ describe("panelStatusBuffer — flow-status batching", () => {
 
   it("last-write-wins within a frame for the same terminal", () => {
     seedPanel("term-1", { isVisible: true });
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     enqueueFlowStatusUpdate("term-1", "paused-backpressure", 200);
     raf.flushAll();
     const t = getPtyPanel("term-1");
@@ -228,13 +230,13 @@ describe("panelStatusBuffer — combined flush", () => {
     const setSpy = vi.spyOn(usePanelStore, "setState");
 
     enqueueActivityUpdate("term-1", "Doing", "working", "interactive", 100, undefined);
-    enqueueFlowStatusUpdate("term-2", "suspended", 100);
+    enqueueFlowStatusUpdate("term-2", "paused-resource-governor", 100);
 
     raf.flushAll();
     expect(setSpy).toHaveBeenCalledTimes(1);
 
     expect(getPtyPanel("term-1")?.activityHeadline).toBe("Doing");
-    expect(getPtyPanel("term-2")?.flowStatus).toBe("suspended");
+    expect(getPtyPanel("term-2")?.flowStatus).toBe("paused-resource-governor");
   });
 
   it("same terminal: activity + flow-status patches do not clobber each other", () => {
@@ -243,15 +245,15 @@ describe("panelStatusBuffer — combined flush", () => {
     // the activity-merged draft, not the original state snapshot.
     seedPanel("term-1", { isVisible: true, runtimeStatus: "running" });
     enqueueActivityUpdate("term-1", "Compiling", "working", "interactive", 100, "npm run dev");
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Compiling");
     expect(t?.activityStatus).toBe("working");
     expect(t?.lastCommand).toBe("npm run dev");
-    expect(t?.flowStatus).toBe("suspended");
+    expect(t?.flowStatus).toBe("paused-resource-governor");
     expect(t?.flowStatusTimestamp).toBe(100);
-    expect(t?.runtimeStatus).toBe("suspended");
+    expect(t?.runtimeStatus).toBe("paused-resource-governor");
   });
 });
 
@@ -288,8 +290,75 @@ describe("panelStatusBuffer — lifecycle", () => {
 
     enqueueActivityUpdate("term-1", "A", "working", "interactive", 100, undefined);
     enqueueActivityUpdate("term-2", "B", "working", "interactive", 100, undefined);
-    enqueueFlowStatusUpdate("term-1", "suspended", 100);
+    enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
 
     expect(raf.callbacks).toHaveLength(1);
+  });
+});
+
+describe("panelStatusBuffer — held-duration batching", () => {
+  it("applies per-terminal held duration patches on flush", () => {
+    seedPanel("term-1");
+    enqueueHeldDurationUpdate("term-1", 4000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(4000);
+  });
+
+  it("last-write-wins within a frame for the same terminal", () => {
+    seedPanel("term-1");
+    enqueueHeldDurationUpdate("term-1", 1000);
+    enqueueHeldDurationUpdate("term-1", 2000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(2000);
+  });
+
+  it("clearHeldDuration sets heldDurationMs to undefined", () => {
+    seedPanel("term-1", { heldDurationMs: 5000 });
+    clearHeldDuration("term-1");
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("non-null patch does not clobber a pending null for the same terminal", () => {
+    // A fresh tick reporting the terminal is no longer paused (null)
+    // must win over a stale non-null entry from a previous tick.
+    seedPanel("term-1", { heldDurationMs: 8000 });
+    clearHeldDuration("term-1");
+    enqueueHeldDurationUpdate("term-1", 12000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("clearHeldDuration is a no-op when a null is already buffered", () => {
+    seedPanel("term-1", { heldDurationMs: 5000 });
+    clearHeldDuration("term-1");
+    clearHeldDuration("term-1");
+    enqueueHeldDurationUpdate("term-1", 9999);
+    raf.flushAll();
+    // Second null is a fast-path no-op; the subsequent non-null must
+    // be ignored (null wins). Final value is undefined.
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+  });
+
+  it("combines with activity + flow-status in a single flush", () => {
+    seedPanel("term-1", { isVisible: true });
+    enqueueActivityUpdate("term-1", "Working", "working", "interactive", 100, "cmd");
+    enqueueFlowStatusUpdate("term-1", "paused-backpressure", 100);
+    enqueueHeldDurationUpdate("term-1", 6000);
+    const setSpy = vi.spyOn(usePanelStore, "setState");
+    raf.flushAll();
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    const t = getPtyPanel("term-1");
+    expect(t?.activityHeadline).toBe("Working");
+    expect(t?.flowStatus).toBe("paused-backpressure");
+    expect(t?.heldDurationMs).toBe(6000);
+  });
+
+  it("flush is a no-op when only held-duration buffer is empty", () => {
+    seedPanel("term-1");
+    const setSpy = vi.spyOn(usePanelStore, "setState");
+    // Force a "tick" by enqueuing an empty flush — no buffers populated.
+    flushPanelStatusBuffer();
+    expect(setSpy).not.toHaveBeenCalled();
   });
 });

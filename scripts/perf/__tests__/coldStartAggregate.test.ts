@@ -27,6 +27,35 @@ describe("cold-start aggregate", () => {
     expect(agg.loaf).toEqual({});
   });
 
+  it("computes the window-show phase pairs from main_window_shown", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+          { mark: PERF_MARKS.MAIN_WINDOW_CREATED, timestamp: "t", elapsedMs: 100 },
+          { mark: PERF_MARKS.MAIN_WINDOW_SHOWN, timestamp: "t", elapsedMs: 350 },
+        ],
+      }),
+    ]);
+
+    expect(agg.phaseDurations["boot → main_window_shown"].p50Ms).toBe(350);
+    expect(agg.phaseDurations["main_window_created → main_window_shown"].p50Ms).toBe(250);
+  });
+
+  it("omits the window-show phase pairs when main_window_shown is absent", () => {
+    const agg = aggregate([
+      makeRun({
+        marks: [
+          { mark: PERF_MARKS.APP_BOOT_START, timestamp: "t", elapsedMs: 0 },
+          { mark: PERF_MARKS.MAIN_WINDOW_CREATED, timestamp: "t", elapsedMs: 100 },
+        ],
+      }),
+    ]);
+
+    expect(agg.phaseDurations["boot → main_window_shown"]).toBeUndefined();
+    expect(agg.phaseDurations["main_window_created → main_window_shown"]).toBeUndefined();
+  });
+
   it("groups long-animation-frame blocking time by topScripts[0].sourceURL", () => {
     const agg = aggregate([
       makeRun({
@@ -276,6 +305,99 @@ describe("cold-start aggregate", () => {
     // Degraded run's APP_BOOT_START is not visited for marks/osToAppBoot.
     expect(agg.osToAppBoot).toBeNull();
     expect(agg.marks[PERF_MARKS.RENDERER_READY]).toBeDefined();
+  });
+});
+
+describe("cache-kind bucketing", () => {
+  it("splits successful runs into cold and warm buckets by cacheKind", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 1000, cacheKind: "cold", cacheFileCount: 0 }),
+      makeRun({ index: 1, durationMs: 1200, cacheKind: "cold", cacheFileCount: 0 }),
+      makeRun({ index: 2, durationMs: 800, cacheKind: "warm", cacheFileCount: 42 }),
+      makeRun({ index: 3, durationMs: 820, cacheKind: "warm", cacheFileCount: 44 }),
+    ]);
+
+    expect(agg.byCacheKind.cold).not.toBeNull();
+    expect(agg.byCacheKind.warm).not.toBeNull();
+    expect(agg.byCacheKind.cold!.runs).toBe(2);
+    expect(agg.byCacheKind.warm!.runs).toBe(2);
+    // Warm bucket should be faster than cold here, and its median file count > 0.
+    expect(agg.byCacheKind.warm!.meanMs).toBeLessThan(agg.byCacheKind.cold!.meanMs);
+    expect(agg.byCacheKind.warm!.medianCacheFileCount).toBeGreaterThan(0);
+    expect(agg.byCacheKind.cold!.medianCacheFileCount).toBe(0);
+  });
+
+  it("leaves the warm bucket null when all runs are cold", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 1000, cacheKind: "cold" }),
+      makeRun({ index: 1, durationMs: 1100, cacheKind: "cold" }),
+    ]);
+
+    expect(agg.byCacheKind.cold).not.toBeNull();
+    expect(agg.byCacheKind.cold!.runs).toBe(2);
+    expect(agg.byCacheKind.warm).toBeNull();
+  });
+
+  it("defaults runs without an explicit cacheKind to the cold bucket", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 1000 }),
+      makeRun({ index: 1, durationMs: 1050 }),
+    ]);
+
+    expect(agg.byCacheKind.cold).not.toBeNull();
+    expect(agg.byCacheKind.cold!.runs).toBe(2);
+    expect(agg.byCacheKind.warm).toBeNull();
+  });
+
+  it("excludes failed runs from both cache-kind buckets", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 900, cacheKind: "warm", cacheFileCount: 10 }),
+      makeRun({ index: 1, durationMs: -1, failed: true, cacheKind: "warm" }),
+    ]);
+
+    expect(agg.byCacheKind.warm).not.toBeNull();
+    expect(agg.byCacheKind.warm!.runs).toBe(1);
+  });
+
+  it("excludes degraded runs from cache-kind buckets (wall-clock fallback skews durations)", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 800, cacheKind: "warm", cacheFileCount: 10 }),
+      makeRun({
+        index: 1,
+        durationMs: 9999,
+        degraded: true,
+        cacheKind: "warm",
+        cacheFileCount: 10,
+      }),
+    ]);
+
+    expect(agg.byCacheKind.warm).not.toBeNull();
+    expect(agg.byCacheKind.warm!.runs).toBe(1);
+    expect(agg.byCacheKind.warm!.meanMs).toBe(800);
+  });
+
+  it("guards bucket stats against a malformed (NaN) duration", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 1000, cacheKind: "cold" }),
+      makeRun({ index: 1, durationMs: Number.NaN as unknown as number, cacheKind: "cold" }),
+    ]);
+
+    expect(agg.byCacheKind.cold).not.toBeNull();
+    expect(agg.byCacheKind.cold!.runs).toBe(1);
+    expect(Number.isFinite(agg.byCacheKind.cold!.meanMs)).toBe(true);
+    expect(agg.byCacheKind.cold!.meanMs).toBe(1000);
+  });
+
+  it("computes the bucket median cacheFileCount and ignores missing counts", () => {
+    const agg = aggregate([
+      makeRun({ index: 0, durationMs: 800, cacheKind: "warm", cacheFileCount: 40 }),
+      makeRun({ index: 1, durationMs: 810, cacheKind: "warm", cacheFileCount: 50 }),
+      // No cacheFileCount on this run — excluded from the median, not counted as 0.
+      makeRun({ index: 2, durationMs: 820, cacheKind: "warm" }),
+    ]);
+
+    expect(agg.byCacheKind.warm!.runs).toBe(3);
+    expect(agg.byCacheKind.warm!.medianCacheFileCount).toBe(45);
   });
 });
 

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -8,7 +9,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createSessionServer } from "../sessionServer.js";
+import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore, consumeToken } from "../sessionStore.js";
@@ -175,6 +176,165 @@ async function callTool(
     }
   ) as Promise<{ content: unknown; isError?: boolean; structuredContent?: unknown }>;
 }
+
+async function listTools(server: ReturnType<typeof createSessionServer>) {
+  const handlers = (
+    server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("tools/list");
+  if (!handler) throw new Error("tools/list handler not found");
+  return handler(
+    {
+      method: "tools/list",
+      params: {},
+      jsonrpc: "2.0",
+      id: 1,
+    },
+    {
+      signal: new AbortController().signal,
+      _meta: {},
+      sendNotification: vi.fn(),
+      requestId: 1,
+    }
+  ) as Promise<{ tools: Array<{ name: string }> }>;
+}
+
+function makeManifestEntry(id: string): ActionManifestEntry {
+  return {
+    id: id as ActionId,
+    name: id,
+    title: id,
+    description: `description for ${id}`,
+    category: "test",
+    kind: "query",
+    danger: "safe" as const,
+    enabled: true,
+    requiresArgs: false,
+    inputSchema: { type: "object", properties: {} },
+  };
+}
+
+describe("sessionServer tools/list handler", () => {
+  // tier "external" + fullToolSurface bypasses the per-id allowlist in
+  // shouldExposeTool, so any non-restricted entry surfaces — keeps these tests
+  // decoupled from TIER_ALLOWLISTS membership.
+  function fullSurfaceDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      getFullToolSurface: vi.fn(() => true),
+      ...overrides,
+    });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the live manifest when requestManifest succeeds", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("fresh_tool")]),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("stale_tool")]),
+    });
+    const server = createSessionServer("tools-list-fresh", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    // Fresh result wins over the (different) cache, proving the live path is used.
+    expect(result.tools.map((t) => t.name)).toEqual(["fresh_tool"]);
+  });
+
+  it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rejection = new Error("Manifest request timed out");
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(rejection),
+      getCachedManifest: vi.fn(() => [makeManifestEntry("cached_tool")]),
+    });
+    const server = createSessionServer("tools-list-fallback", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools.map((t) => t.name)).toEqual(["cached_tool"]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    // The rejection must reach the log so operators can diagnose the stale serve.
+    expect(warnSpy.mock.calls[0]).toContain(rejection);
+  });
+
+  it("applies the tier/visibility filter on the cached fallback path", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
+      getCachedManifest: vi.fn(() => [
+        makeManifestEntry("allowed_tool"),
+        { ...makeManifestEntry("restricted_tool"), danger: "restricted" as const },
+      ]),
+    });
+    const server = createSessionServer("tools-list-filtered-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    // shouldExposeTool drops restricted entries even on the cache path.
+    expect(result.tools.map((t) => t.name)).toEqual(["allowed_tool"]);
+  });
+
+  it("fails closed with an McpError when requestManifest rejects and no cache exists", async () => {
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge unavailable")),
+      getCachedManifest: vi.fn(() => null),
+    });
+    const server = createSessionServer("tools-list-failclosed", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(listTools(server)).rejects.toBeInstanceOf(McpError);
+    await expect(listTools(server)).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: expect.stringContaining("Action manifest unavailable"),
+    });
+  });
+
+  it("fails closed even if the session is unpinned after the await (snapshot before async boundary)", async () => {
+    // Pinned session: getCachedManifest returns null while the request is in
+    // flight, then teardown flips it to a foreign manifest. The handler must
+    // use the pre-await snapshot (null) and fail closed — never serve the
+    // foreign cache (#7003 cross-window isolation).
+    let firstCall = true;
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
+      getCachedManifest: vi.fn(() => {
+        if (firstCall) {
+          firstCall = false;
+          return null;
+        }
+        return [makeManifestEntry("foreign_tool")];
+      }),
+    });
+    const server = createSessionServer("tools-list-race", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(listTools(server)).rejects.toBeInstanceOf(McpError);
+    // getCachedManifest was read exactly once — synchronously, before the await.
+    expect(deps.getCachedManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an empty cached manifest as a valid zero-tool surface, not unavailable", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = fullSurfaceDeps({
+      requestManifest: vi.fn().mockRejectedValue(new Error("MCP renderer bridge destroyed")),
+      getCachedManifest: vi.fn(() => []),
+    });
+    const server = createSessionServer("tools-list-empty-cache", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await listTools(server);
+
+    expect(result.tools).toEqual([]);
+  });
+});
 
 describe("sessionServer prompt handler", () => {
   it("renders start_issue prompt with valid string argument", async () => {
@@ -1123,6 +1283,62 @@ describe("CallTool live activity notifications (#9759)", () => {
     );
     // Started must precede settled.
     expect(started.mock.invocationCallOrder[0]).toBeLessThan(settled.mock.invocationCallOrder[0]);
+  });
+
+  it("threads one captured turn id into started, settled, and the audit record (#10067)", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    const appendAuditRecord = vi.fn();
+    // getCurrentTurnId is read once at dispatch start. Returning a fresh value
+    // on a second call would prove a leak; this asserts a single snapshot.
+    const getCurrentTurnId = vi.fn().mockReturnValue("turn-xyz");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({
+      getCurrentTurnId,
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      appendAuditRecord,
+      dispatchAction,
+    });
+    const server = createSessionServer("session-T", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    // One read, threaded to all three consumers end-to-end — none re-reads the
+    // register, so the strip's started/settled rows and the audit record can
+    // never disagree on which turn the call belongs to.
+    expect(getCurrentTurnId).toHaveBeenCalledTimes(1);
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ capturedTurnId: "turn-xyz" }));
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ capturedTurnId: "turn-xyz" }));
+    expect(appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ capturedTurnId: "turn-xyz" })
+    );
+  });
+
+  it("snapshots the turn id at start so started/settled agree across an FSM clear (#10067)", async () => {
+    const started = vi.fn();
+    const settled = vi.fn();
+    // Mirror the active→passive race: the turn id is live at dispatch start but
+    // a later read would return null. Both events must still carry the snapshot.
+    const getCurrentTurnId = vi.fn().mockReturnValueOnce("turn-T1").mockReturnValue(null);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({
+      getCurrentTurnId,
+      notifyToolCallStarted: started,
+      notifyToolCallSettled: settled,
+      dispatchAction,
+    });
+    const server = createSessionServer("session-T2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    const startedTurn = started.mock.calls[0]?.[0]?.capturedTurnId;
+    const settledTurn = settled.mock.calls[0]?.[0]?.capturedTurnId;
+    expect(startedTurn).toBe("turn-T1");
+    expect(settledTurn).toBe("turn-T1");
+    expect(startedTurn).toBe(settledTurn);
   });
 
   it("does not emit started/settled for a pre-dispatch tier rejection", async () => {
@@ -2091,4 +2307,156 @@ describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
       expect(second).toEqual(first);
     }
   );
+});
+
+describe("validateDisplayImageUrl (#9828)", () => {
+  it("accepts an https://daintree.org apex image URL", () => {
+    expect(validateDisplayImageUrl("https://daintree.org/docs/img/panel.png")).toEqual({
+      valid: true,
+    });
+  });
+
+  it("accepts an https subdomain of daintree.org", () => {
+    expect(validateDisplayImageUrl("https://docs.daintree.org/img/panel.png")).toEqual({
+      valid: true,
+    });
+  });
+
+  it("rejects data: URIs", () => {
+    const result = validateDisplayImageUrl("data:image/png;base64,iVBORw0KGgo=");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects blob: URIs", () => {
+    const result = validateDisplayImageUrl("blob:https://daintree.org/abcd");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects http: (non-TLS) URLs", () => {
+    const result = validateDisplayImageUrl("http://daintree.org/img.png");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects a look-alike host that merely ends with the brand string", () => {
+    // `attackerdaintree.org` does NOT end with `.daintree.org` (no leading
+    // dot), so the suffix check correctly refuses it.
+    const result = validateDisplayImageUrl("https://attackerdaintree.org/img.png");
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects an unrelated host", () => {
+    expect(validateDisplayImageUrl("https://evil.example.com/img.png").valid).toBe(false);
+  });
+
+  it("rejects a non-standard port (CSP allows the default 443 only)", () => {
+    expect(validateDisplayImageUrl("https://daintree.org:8443/img.png").valid).toBe(false);
+  });
+
+  it("accepts an explicit default :443 port", () => {
+    expect(validateDisplayImageUrl("https://daintree.org:443/img.png")).toEqual({ valid: true });
+  });
+
+  it("rejects a malformed URL", () => {
+    expect(validateDisplayImageUrl("not a url").valid).toBe(false);
+  });
+
+  it("is case-insensitive on the host", () => {
+    expect(validateDisplayImageUrl("https://DainTree.ORG/img.png")).toEqual({ valid: true });
+  });
+});
+
+describe("help.displayImage short-circuit (#9828)", () => {
+  function helpSessionStore(sessionId: string, helpSessionId: string | null): SessionStore {
+    const store = fakeSessionStore("workbench");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      figureCounters: Map<string, number>;
+      nextFigureNumber: (id: string) => number;
+    };
+    mutable.sessionHelpIdMap = new Map(helpSessionId !== null ? [[sessionId, helpSessionId]] : []);
+    mutable.figureCounters = new Map();
+    mutable.nextFigureNumber = (id: string) => {
+      const next = (mutable.figureCounters.get(id) ?? 0) + 1;
+      mutable.figureCounters.set(id, next);
+      return next;
+    };
+    return store;
+  }
+
+  function parseStructured(result: unknown): Record<string, unknown> | undefined {
+    return (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+  }
+
+  it("assigns a sequential figure number and pushes the figure to the renderer", async () => {
+    const notifyDisplayImage = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: helpSessionStore("sess-1", "help-1"),
+      notifyDisplayImage,
+    });
+    const server = createSessionServer("sess-1", deps);
+    await server.connect(makeMockTransport());
+
+    const first = await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/a.png", caption: "First" },
+    });
+    const second = await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/b.png" },
+    });
+
+    expect(parseStructured(first)).toMatchObject({ figureNumber: 1, figureLabel: "image #1" });
+    expect(parseStructured(second)).toMatchObject({ figureNumber: 2, figureLabel: "image #2" });
+    expect(notifyDisplayImage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        figureNumber: 1,
+        url: "https://daintree.org/a.png",
+        caption: "First",
+      })
+    );
+    // The imageId is a freshly minted UUID, distinct per call.
+    const id1 = parseStructured(first)?.imageId;
+    const id2 = parseStructured(second)?.imageId;
+    expect(typeof id1).toBe("string");
+    expect(id1).not.toBe(id2);
+  });
+
+  it("rejects a non-daintree URL with INVALID_URL and does not notify", async () => {
+    const notifyDisplayImage = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: helpSessionStore("sess-2", "help-2"),
+      notifyDisplayImage,
+    });
+    const server = createSessionServer("sess-2", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "data:image/png;base64,AAAA" },
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).code).toBe("INVALID_URL");
+    expect(notifyDisplayImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a session with no help-session id (e.g. pane token) as not permitted", async () => {
+    const notifyDisplayImage = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: helpSessionStore("sess-3", null),
+      notifyDisplayImage,
+    });
+    const server = createSessionServer("sess-3", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "help.displayImage",
+      arguments: { url: "https://daintree.org/a.png" },
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text).code).toBe("TIER_NOT_PERMITTED");
+    expect(notifyDisplayImage).not.toHaveBeenCalled();
+  });
 });

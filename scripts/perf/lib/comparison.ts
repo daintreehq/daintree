@@ -62,44 +62,7 @@ function exactMannWhitneyPValue(u: number, nA: number, nB: number): number {
   const n = nA + nB;
   const maxU = nA * nB;
 
-  // DP: count ways to achieve each U value
-  // dp[j][k] = count of arrangements of first j items (from combined set)
-  //            where A-rank-sum contributions total k
-  // After filling, count arrangements where A-rank-sum <= U or >= total - U
-  const totalRankSum = (n * (n + 1)) / 2;
-
-  // Build count of distributions of U statistic
-  // f[u] = number of ways to get exactly U
-  const f = new Float64Array(maxU + 1);
-  f[0] = 1;
-
-  for (let rank = 1; rank <= n; rank++) {
-    for (let u = maxU; u >= rank; u--) {
-      f[u] += f[u - rank];
-    }
-    for (let u = 0; u < rank && u <= maxU; u++) {
-      // f[u] unchanged (can't subtract rank)
-    }
-  }
-
-  // f[u] now counts ways to get rank-sum of u for the A group
-  // But we need to restrict to exactly nA items selected
-  // Redo with item count constraint
-  const dp: Float64Array[] = [];
-  dp[0] = new Float64Array(1);
-  dp[0][0] = 1;
-
-  for (let item = 1; item <= n; item++) {
-    const prevMax = (item - 1) * n;
-    const curMax = item * n;
-    const row = new Float64Array(curMax + 1);
-    for (let count = 0; count <= Math.min(item, nA); count++) {
-      // Skip - we rebuild below with proper 2D DP
-    }
-    dp[item] = row;
-  }
-
-  // Simpler 2D DP: ways[c][s] = ways to choose c items from {1..i} with sum s
+  // 2D DP: ways[c][s] = ways to choose c items from {1..i} with sum s
   // Only need current and previous i-level
   let prev = new Map<string, number>();
   prev.set("0,0", 1);

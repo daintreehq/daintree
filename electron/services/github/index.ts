@@ -4,7 +4,11 @@
  * This barrel keeps the existing `electron/services/github/*` import paths
  * working for callers that have not yet migrated to the forge-provider
  * surface — primarily the `window.electron.github.*` IPC handlers in
- * `electron/ipc/handlers/github.ts`. Slated for removal after #8063 lands.
+ * `electron/ipc/handlers/github.ts`. Removal is gated on retiring or
+ * migrating those `window.electron.github.*` IPC handlers to the forge
+ * provider surface; until then this shim preserves singleton identity (see
+ * below) and avoids spreading direct `plugins/builtin/github/main/` imports
+ * across `electron/`.
  *
  * Singleton identity is preserved across the electron main bundle and the
  * loaded plugin bundle because both entries participate in the same esbuild

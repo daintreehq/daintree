@@ -59,8 +59,8 @@ If a run is still in progress when reporting status, give the run URL, elapsed t
 Authoritative files:
 
 - `.github/workflows/nightly.yml` runs `check`, `test`, `build`, `integration-test`, `knip`, `e2e-core`, `e2e-full`, `e2e-online`, `e2e-nightly`, then `publish` when `platform` is empty/all.
-- `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` are three independent per-OS release workflows (#8052), each triggered by the same `v*` tag and each supporting manual dry runs with `dry_run=true`. Each runs checks, unit tests, that OS's `core` + all six (auto-sharded, #8053) `full-*` buckets + `online`, and that OS's `build-daintree` job without publishing to R2, Microsoft Store, or the website. They're independent — fix and re-run only the failing OS('s) workflow.
-- `.github/workflows/e2e.yml` is the unified suite runner. Valid `suite`: `full`, `core`, `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `online`, `nightly`.
+- `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` are three independent per-OS release workflows (#8052), each triggered by the same `v*` tag and each supporting manual dry runs with `dry_run=true`. Each runs checks, unit tests, that OS's `core` + all seven (auto-sharded, #8053) `full-*` buckets + `online`, and that OS's `build-daintree` job without publishing to R2, Microsoft Store, or the website. They're independent — fix and re-run only the failing OS('s) workflow.
+- `.github/workflows/e2e.yml` is the unified suite runner. Valid `suite`: `full`, `core`, `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`, `online`, `nightly`.
 - `.github/workflows/e2e-single.yml` is the preferred CI loop for one failing spec. It accepts `platform`, `suite`, `test_file`, optional `grep`, `workers`, and `retries`.
 - `scripts/ci/run-single-e2e.mjs` validates that a single E2E spec belongs to the selected suite.
 - `docs/e2e-testing.md` and `docs/release.md` explain suite boundaries and dry-run expectations.
@@ -81,10 +81,11 @@ npm run test:e2e:full-presets
 npm run test:e2e:full-platform
 npm run test:e2e:full-panels
 npm run test:e2e:full-resilience
+npm run test:e2e:full-plugins
 npm run test:e2e:online
 npm run test:e2e:nightly
 npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1
-npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=online
+npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online
 ```
 
 For release dry-run E2E work, the multi-project Playwright command above is the required local broad pass: it matches the release-gated `core`, all `full-*`, and `online` projects without pulling in unrelated `nightly` soak or manual `screenshots` jobs. Run it before the next full dry-run dispatch unless the user explicitly opts out or the current failure is only reproducible on another OS.
@@ -147,7 +148,7 @@ Reproduce the smallest failing surface first.
 After the narrow local repro passes, broaden locally before pushing and before redispatching the full workflow unless the user opted out or the failure is only reproducible on another OS:
 
 - Same suite: `npx playwright test --project=<suite>`
-- Release-gated all-e2e: `npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=online`
+- Release-gated all-e2e: `npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online`
 - Nightly target: include `--project=nightly` and keep it serialized.
 
 Suite-to-path mapping:
@@ -159,6 +160,7 @@ Suite-to-path mapping:
 - `e2e/full/platform/**` -> `full-platform`
 - `e2e/full/panels/**` -> `full-panels`
 - `e2e/full/resilience/**` -> `full-resilience`
+- `e2e/full/plugins/**` -> `full-plugins`
 - `e2e/online/**` -> `online`
 - `e2e/nightly/**` -> `nightly`
 

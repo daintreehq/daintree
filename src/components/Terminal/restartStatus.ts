@@ -5,6 +5,7 @@ import type { BackendStatus } from "@/store/panelStore";
 export type RestartBannerVariant =
   | { type: "auto-restarting" }
   | { type: "restarting" }
+  | { type: "session-resume-unavailable" }
   | { type: "exit-error"; exitCode: number }
   | { type: "none" };
 
@@ -19,6 +20,8 @@ export interface RestartBannerInput {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   backendStatus: BackendStatus;
+  /** True when restore fell through to a fresh agent launch (issue #9802). */
+  sessionLostOnRestore?: boolean;
 }
 
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
@@ -34,6 +37,22 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
     !input.spawnError
   ) {
     return { type: "restarting" };
+  }
+
+  // The previous agent session couldn't be resumed and restore fell through to a
+  // fresh launch. Surface it so the user isn't silently dropped into a clean
+  // session (issue #9802). Gated below the in-flight restart states (a live
+  // restart takes precedence) and above exit-error so a lost session is
+  // acknowledged before any prior exit prompt.
+  if (
+    input.sessionLostOnRestore &&
+    !input.isRestarting &&
+    !input.isAutoRestarting &&
+    !input.restartError &&
+    !input.reconnectError &&
+    !input.spawnError
+  ) {
+    return { type: "session-resume-unavailable" };
   }
 
   if (

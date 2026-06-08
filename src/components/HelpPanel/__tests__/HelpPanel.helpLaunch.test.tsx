@@ -75,6 +75,7 @@ const {
     introDismissed: true,
     conversationTouched: false,
     hibernateSessions: {} as Record<string, { sessionId: string; cwd: string; agentId: string }>,
+    figures: [] as unknown[],
     markConversationStarted: vi.fn(),
     setWidth: vi.fn(),
     setOpen: vi.fn(),
@@ -84,6 +85,8 @@ const {
     dismissIntro: vi.fn(),
     setHibernateSession: vi.fn(),
     clearHibernateSession: vi.fn(),
+    addFigure: vi.fn(),
+    clearFigures: vi.fn(),
   },
   panelStoreState: {
     panelIds: [] as string[],
@@ -345,6 +348,12 @@ vi.mock("@/types", () => ({
   TerminalRefreshTier: { BACKGROUND: 0, ACTIVE: 1 },
 }));
 
+// The figure rail pulls the real AppDialog (lightbox) into the module graph,
+// which drags the @/hooks → panelPersistence chain past this suite's store
+// mocks. The rail isn't under test here, so stub it like the other heavy
+// children (XtermAdapter, ConfirmDialog) — its own suite is FigureRail.test.tsx.
+vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
+
 import { HelpPanel } from "../HelpPanel";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 
@@ -358,6 +367,7 @@ function resetState() {
   helpPanelState.introDismissed = true;
   helpPanelState.conversationTouched = false;
   helpPanelState.hibernateSessions = {};
+  helpPanelState.figures = [];
   helpPanelState.markConversationStarted = vi.fn();
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
@@ -367,6 +377,8 @@ function resetState() {
   helpPanelState.dismissIntro = vi.fn();
   helpPanelState.setHibernateSession = vi.fn();
   helpPanelState.clearHibernateSession = vi.fn();
+  helpPanelState.addFigure = vi.fn();
+  helpPanelState.clearFigures = vi.fn();
 
   panelStoreState.panelIds = [];
   panelStoreState.panelsById = {};
@@ -491,7 +503,12 @@ beforeEach(() => {
           onTierNotPermitted: vi.fn(() => () => {}),
           onToolCallStarted: vi.fn(() => () => {}),
           onToolCallSettled: vi.fn(() => () => {}),
+          onDisplayImage: vi.fn(() => () => {}),
+          onSessionRevoked: vi.fn(() => () => {}),
+          onGrantLifecycle: vi.fn(() => () => {}),
+          onTurnOutcomeAlert: vi.fn(() => () => {}),
           setSessionTier: vi.fn().mockResolvedValue({ sessionId: "", tier: "workbench" }),
+          resetDenialCounts: vi.fn().mockResolvedValue(undefined),
           issueGrant: vi.fn().mockResolvedValue({
             sessionId: "",
             toolId: "",

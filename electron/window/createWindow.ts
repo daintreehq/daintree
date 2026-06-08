@@ -20,6 +20,7 @@ import {
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
+import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
@@ -29,12 +30,14 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   injectSkeletonCss,
   resolveInitialColorSchemeId,
+  resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
+  INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
-import { isSmokeTest } from "../setup/environment.js";
+import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import {
   beginWindowRecreating,
@@ -260,8 +263,17 @@ export function setupBrowserWindow(
       navigateOnDragDrop: false,
       v8CacheOptions: "code",
       // Seed the renderer with the persisted theme so first paint applies the
-      // saved scheme instead of a prefers-color-scheme default (#9169).
-      additionalArguments: [`${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`],
+      // saved scheme instead of a prefers-color-scheme default (#9169). The
+      // instance role rides along so worker instances suppress automatic
+      // background GitHub polling (#10123).
+      additionalArguments: [
+        `${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`,
+        `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
+        // Thread the demo-mode flag into renderer argv (Electron does not
+        // forward main-process CLI switches), so window.electron.demo and the
+        // demo overlay components are available when launched with --demo-mode.
+        ...(isDemoMode ? ["--demo-mode"] : []),
+      ],
     },
   });
 
@@ -357,23 +369,26 @@ export function setupBrowserWindow(
     // 5s timeout fallback ensures a hung renderer doesn't leave the window
     // permanently hidden — strictly worse than a brief blank.
     let shown = false;
-    const showOnce = (): void => {
+    const showOnce = (viaFallback = false): void => {
       if (shown) return;
       shown = true;
       if (fallbackTimer) {
         clearTimeout(fallbackTimer);
         fallbackTimer = null;
       }
-      if (!win.isDestroyed()) win.show();
+      if (!win.isDestroyed()) {
+        markPerformance(PERF_MARKS.MAIN_WINDOW_SHOWN, viaFallback ? { fallback: true } : undefined);
+        win.show();
+      }
     };
     let fallbackTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       fallbackTimer = null;
       console.warn(
         `[MAIN] dom-ready not received after ${SHOW_FALLBACK_MS}ms — showing window anyway`
       );
-      showOnce();
+      showOnce(true);
     }, SHOW_FALLBACK_MS);
-    appWebContents.once("dom-ready", showOnce);
+    appWebContents.once("dom-ready", () => showOnce(false));
     win.once("closed", () => {
       if (fallbackTimer) {
         clearTimeout(fallbackTimer);
@@ -432,13 +447,14 @@ export function setupBrowserWindow(
 
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
-    const allowedPartitions = ["persist:browser", "persist:dev-preview"];
     // Dev-preview webviews now load the stable proxy origin (dp-*.localhost), which
     // isLocalhostUrl rejects — accept it explicitly (#9100).
     const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+    const partition = params.partition ?? "";
     const isValidPartition =
-      allowedPartitions.includes(params.partition || "") ||
-      (params.partition?.startsWith("persist:dev-preview-") ?? false);
+      isBrowserPartition(partition) ||
+      partition === "persist:dev-preview" ||
+      partition.startsWith("persist:dev-preview-");
 
     if (!isAllowedLocalhostUrl || !isValidPartition) {
       console.warn(

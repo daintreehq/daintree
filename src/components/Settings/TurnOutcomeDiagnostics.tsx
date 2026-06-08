@@ -4,7 +4,12 @@ import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { logError } from "@/utils/logger";
-import type { AssistantTurnRecord, McpAuditRecord, TurnOutcomeClass } from "@shared/types";
+import {
+  type AssistantTurnRecord,
+  type McpLogRecord,
+  type TurnOutcomeClass,
+  isAuditRecord,
+} from "@shared/types";
 
 const OUTCOME_LABEL: Record<TurnOutcomeClass, string> = {
   answered: "Answered",
@@ -50,7 +55,7 @@ interface PerToolRollup {
 }
 
 interface TurnOutcomeDiagnosticsProps {
-  auditRecords?: McpAuditRecord[];
+  auditRecords?: McpLogRecord[];
 }
 
 export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsProps) {
@@ -138,6 +143,9 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
     const map = new Map<string, Set<string>>();
     if (!auditRecords) return map;
     for (const r of auditRecords) {
+      // Grant lifecycle records (#8442) carry no `helpSessionId` or
+      // `toolId` join key relevant to the per-tool rollup; skip them.
+      if (!isAuditRecord(r)) continue;
       // Turn records carry the HELP session id; audit records carry the MCP
       // transport id in `sessionId` and the help id in `helpSessionId` —
       // key on the latter or the rollup join below never matches.

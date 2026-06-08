@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const attempts = Number.parseInt(process.env.NPM_CI_RETRY_ATTEMPTS ?? "3", 10) || 3;
+const attempts = Number.parseInt(process.env.NPM_CI_RETRY_ATTEMPTS ?? "5", 10) || 5;
 const baseDelayMs = Number.parseInt(process.env.NPM_CI_RETRY_DELAY_MS ?? "15000", 10);
 const npmBin = "npm";
 const npmArgs = ["ci", ...process.argv.slice(2)];
@@ -29,6 +29,7 @@ export const TRANSIENT_PATTERNS = [
   /eai_again/i,
   /enotfound/i,
   /ehostunreach/i,
+  /enetunreach/i,
   /socket\s+hang\s+up/i,
   /\b429\b/i,
   /\b502\b/i,

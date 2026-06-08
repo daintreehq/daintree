@@ -147,6 +147,67 @@ describe("WebviewDialogService adversarial", () => {
     expect(firstCallback).toHaveBeenCalledWith(true, "yes");
   });
 
+  it("NAVIGATION_CANCELS_PENDING_ONLY_OWN_GUEST", async () => {
+    const guestOne = createGuest();
+    const guestTwo = createGuest();
+    guestRegistry.set(1, guestOne);
+    guestRegistry.set(2, guestTwo);
+
+    const callbackOne = vi.fn();
+    const callbackTwo = vi.fn();
+
+    const { getWebviewDialogService } = await import("../WebviewDialogService.js");
+    const service = getWebviewDialogService();
+
+    service.registerPanel(1, "panel-1");
+    service.registerPanel(2, "panel-2");
+    service.registerDialog("dialog-1", 1, callbackOne);
+    service.registerDialog("dialog-2", 2, callbackTwo);
+
+    // Simulate a navigation/crash on guest one (the protocols.ts handler calls this).
+    service.cancelPendingForGuest(1);
+
+    expect(callbackOne).toHaveBeenCalledTimes(1);
+    expect(callbackOne).toHaveBeenCalledWith(false);
+    expect(callbackTwo).not.toHaveBeenCalled();
+
+    // A second cancel for the same guest must be a no-op (no double callback).
+    service.cancelPendingForGuest(1);
+    expect(callbackOne).toHaveBeenCalledTimes(1);
+
+    // Guest two's dialog is untouched and still resolvable.
+    service.resolveDialog("dialog-2", true, "confirmed");
+    expect(callbackTwo).toHaveBeenCalledTimes(1);
+    expect(callbackTwo).toHaveBeenCalledWith(true, "confirmed");
+  });
+
+  it("CANCEL_SWALLOWS_THROWING_CALLBACK", async () => {
+    const guest = createGuest();
+    guestRegistry.set(1, guest);
+
+    const throwingCallback = vi.fn(() => {
+      throw new Error("guest already gone");
+    });
+    const survivingCallback = vi.fn();
+
+    const { getWebviewDialogService } = await import("../WebviewDialogService.js");
+    const service = getWebviewDialogService();
+
+    service.registerPanel(1, "panel-1");
+    service.registerDialog("dialog-throws", 1, throwingCallback);
+    service.registerDialog("dialog-ok", 1, survivingCallback);
+
+    // A throwing callback (e.g. crashed guest) must not abort cancellation of the rest.
+    expect(() => service.cancelPendingForGuest(1)).not.toThrow();
+    expect(throwingCallback).toHaveBeenCalledTimes(1);
+    expect(survivingCallback).toHaveBeenCalledTimes(1);
+    expect(survivingCallback).toHaveBeenCalledWith(false);
+
+    // Both dialogs are cleared — resolving them afterwards is a no-op.
+    service.resolveDialog("dialog-ok", true);
+    expect(survivingCallback).toHaveBeenCalledTimes(1);
+  });
+
   it("REJECTED_OAUTH_PROMISE_ONE_SHOT", async () => {
     const { getWebviewDialogService } = await import("../WebviewDialogService.js");
     const service = getWebviewDialogService();

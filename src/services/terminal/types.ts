@@ -28,6 +28,7 @@ export interface ManagedTerminal {
   imageAddon: ImageAddon | null;
   searchAddon: SearchAddon;
   fileLinksDisposable: IDisposable | null;
+  imageLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
   // Currently-hovered link (tracked via xterm addon hover/leave callbacks).
   // Read synchronously by the right-click context menu so it reflects the
@@ -45,6 +46,9 @@ export interface ManagedTerminal {
   // Last time forceXtermReflow() ran for this terminal — used to throttle the
   // IntersectionObserver unpause reflow across write/heartbeat/focus triggers.
   lastReflowAt?: number;
+  // Last time the reconciliation watchdog issued a repair for this terminal —
+  // per-terminal cooldown so a persistently-diverging layer never repair-loops.
+  lastWatchdogRepairAt?: number;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;
@@ -98,6 +102,21 @@ export interface ManagedTerminal {
   // Render backpressure / synchronization hints
   pendingWrites?: number;
   needsWake?: boolean;
+  // Lifetime flag (#10309): set true the first time a wake successfully replays
+  // a serialized snapshot. Gates the wake-decline data-loss marker so a fresh
+  // terminal — which legitimately wakes with no snapshot (serialize() returns
+  // "" and is coerced to null) — is not falsely marked as having dropped
+  // output. Only a terminal that previously restored and then woke with a null
+  // snapshot represents a genuine gap. Never reset on tier transitions or in
+  // clearWakeState; it is a property of the instance, cleared only on teardown.
+  everWoken?: boolean;
+
+  // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
+  // (performance.now()) just before terminal.open() in attach(); the first real
+  // write reads it to emit TERMINAL_FIRST_WRITE with an open→first-byte delta.
+  // hasEmittedFirstWriteMark gates that mark to once per terminal.
+  terminalOpenStartedAt?: number;
+  hasEmittedFirstWriteMark?: boolean;
 
   // One-shot flag (#9702): a fullWakeForVisibilityRestore was requested while
   // this terminal was mid-attach (isAttaching) and skipped to avoid racing the
@@ -142,9 +161,10 @@ export interface ManagedTerminal {
   isSerializedRestoreInProgress: boolean;
   deferredOutput: Array<string | Uint8Array>;
 
-  // Deferred scrollback restore state — prevents double-restore and tracks lifecycle
+  // Background scrollback restore state — prevents double-restore and tracks
+  // lifecycle. Restores are queued ("pending"), replay asynchronously
+  // ("in-progress"), then settle to "done" (or reset to "none" on bail/failure).
   scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
-  scrollbackRestoreDisposable?: { dispose: () => void };
   // Out-of-band failure channel set by TerminalRestoreController catch blocks
   // when the deferred restore replay fails (write timeout, parse error). The
   // scheduler reads this after fetchAndRestore() resolves to surface the

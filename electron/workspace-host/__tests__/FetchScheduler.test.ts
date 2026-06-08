@@ -298,15 +298,24 @@ describe("FetchScheduler", () => {
     });
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
 
-    await scheduler.triggerNow();
-    // Two update emits: in-flight start, and post-completion.
-    expect(host.onUpdate).toHaveBeenCalledTimes(2);
-    // No throw escapes — failure is swallowed.
+    // Pin random so the rescheduled focused-tier fetch lands at exactly 30s
+    // (mid jitter window 22.5-37.5s) and a 3rd can't fire inside the 46s
+    // advance: next reschedule would be at 30 + 30 = 60s > 46s.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
-    // After the rejected fetch resolves, the next-cadence timer is armed.
-    // (Focused tier 30-45s.)
-    await vi.advanceTimersByTimeAsync(46_000);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    try {
+      await scheduler.triggerNow();
+      // Two update emits: in-flight start, and post-completion.
+      expect(host.onUpdate).toHaveBeenCalledTimes(2);
+      // No throw escapes — failure is swallowed.
+
+      // After the rejected fetch resolves, the next-cadence timer is armed.
+      // (Focused tier 22.5-37.5s; pinned to 30s.)
+      await vi.advanceTimersByTimeAsync(46_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("clearTimer() cancels an armed timer without disposing", async () => {

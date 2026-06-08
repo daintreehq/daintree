@@ -1,0 +1,11 @@
+{
+  "agentId": "goose",
+  "settleMs": 8000,
+  "idleDebounceMs": 6000,
+  "promptFastPathMinQuietMs": 6000,
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 10550, "state": "completed", "trigger": "pattern" },
+    { "atMs": 11050, "state": "idle", "trigger": "pattern" }
+  ]
+}

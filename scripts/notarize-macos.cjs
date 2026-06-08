@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { execFileSync } = require("child_process");
+const { resignHelpers } = require("./resign-helpers-macos.cjs");
 
 const NOTARIZATION_STATE_FILE = ".notarization-state.json";
 const WAIT_TIMEOUT_SECONDS = 1800;
@@ -48,6 +49,12 @@ function zipApp(appPath) {
 
 exports.default = async function afterSign(context) {
   if (process.platform !== "darwin") return;
+
+  // Re-sign the spawned helper executables with empty entitlements before
+  // notarization (#9775). This is a signing concern independent of
+  // notarization, so it runs even when DAINTREE_SKIP_NOTARIZATION is set. The
+  // function self-guards on CSC_LINK and platform.
+  await resignHelpers(context);
 
   if (process.env.DAINTREE_SKIP_NOTARIZATION === "true") {
     console.log("[notarize-macos] Skipping notarization (DAINTREE_SKIP_NOTARIZATION=true)");

@@ -56,15 +56,16 @@ function makeMockBridge(impl: ForgeProviderImpl) {
   // namespacedId argument so existing `expect(impl.X).toHaveBeenCalledWith(...)`
   // assertions keep matching the original (provider-shaped) signature.
   return {
-    // Explicit return-type annotation so `.mockResolvedValue(null)` is allowed
-    // for the unresolved variant; the default resolves to a real provider.
+    // Explicit return-type annotation so the unresolved variant can swap in a
+    // "not-ready"/"no-match" miss; the default resolves to a real provider.
     resolveProvider: vi.fn<
       (_opts: {
         remoteUrl: string | null;
         forgeProviderOverride: string | null;
         globalDefaultProviderId: string | null;
-      }) => Promise<ForgeResolveProviderResult | null>
+      }) => Promise<ForgeResolveProviderResult>
     >(async () => ({
+      status: "resolved",
       namespacedId: "daintree.github.github",
       repo: makeMockRepoRef(),
     })),
@@ -99,11 +100,6 @@ function makeMockBridge(impl: ForgeProviderImpl) {
       await impl.clearPullRequestCaches?.();
     }),
     handleResult: vi.fn(),
-    // Default to lease-granted so existing tests (single-window assumption)
-    // behave exactly as they did before the cross-window lease landed.
-    acquirePollLease: vi.fn(async () => true),
-    releasePollLease: vi.fn(),
-    handleLeaseResult: vi.fn(),
     dispose: vi.fn(),
   };
 }
@@ -137,6 +133,7 @@ function mockForgeProviderResolved(
     buildIssuesUrl: vi.fn(),
     buildPRsUrl: vi.fn(),
     buildCommitsUrl: vi.fn(),
+    createIssue: vi.fn(),
     assignIssue: vi.fn(),
     unassignIssue: vi.fn(),
     validateToken: vi.fn(),
@@ -163,12 +160,18 @@ function mockForgeProviderResolved(
 
 function mockForgeProviderUnresolved(opts?: {
   getConfig?: (key: string) => Promise<string | null>;
+  /**
+   * Miss discrimination (#9997): "not-ready" (default) mimics the cold-start
+   * race where the plugin scan hasn't settled; "no-match" is the definitive
+   * "no provider matches this remote" answer that pauses polling.
+   */
+  status?: "not-ready" | "no-match";
 }) {
-  // No impl behind the bridge — `resolveProvider` returns null so the service
+  // No impl behind the bridge — `resolveProvider` misses so the service
   // takes the "no forge provider resolved" branch.
   const placeholderImpl = makeMockEmptyImpl();
   const bridge = makeMockBridge(placeholderImpl);
-  bridge.resolveProvider.mockResolvedValue(null);
+  bridge.resolveProvider.mockResolvedValue({ status: opts?.status ?? "not-ready" });
   lastMockBridge = bridge;
   vi.doMock("../../workspace-host/forgeBridge.js", () => ({
     getForgeBridge: () => bridge,
@@ -215,6 +218,7 @@ function makeMockEmptyImpl(): ForgeProviderImpl {
     buildIssuesUrl: vi.fn(),
     buildPRsUrl: vi.fn(),
     buildCommitsUrl: vi.fn(),
+    createIssue: vi.fn(),
     assignIssue: vi.fn(),
     unassignIssue: vi.fn(),
     validateToken: vi.fn(),
@@ -276,6 +280,84 @@ describe("PullRequestService", () => {
       repo: "testrepo",
     });
     expect(detected[0].issueNumber).toBeUndefined();
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("preserves the declined PR state through detection (#9981)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    mockForgeProviderResolved(async () =>
+      makeMockForgePR({ state: "declined", rawState: "DECLINED" })
+    );
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/declined" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+
+    // Phase-1 detection and the phase-2 CI enrichment re-emit both carry
+    // "declined" — the enrichment must not revert it from a stale capture.
+    expect(detected.length).toBeGreaterThanOrEqual(2);
+    expect(detected.every((p) => p.prState === "declined")).toBe(true);
+
+    unsubscribe();
+    pullRequestService.destroy();
+  });
+
+  it("re-emits a declined state when revalidation finds the PR declined (#9981)", async () => {
+    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    const mockImpl = mockForgeProviderResolved(async () => makeMockForgePR({ state: "open" }));
+    const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+      const map = new Map<number, ForgePR | null>();
+      for (const n of prNumbers) {
+        map.set(n, makeMockForgePR({ number: n, state: "declined", rawState: "DECLINED" }));
+      }
+      return map;
+    });
+    mockImpl.batchLookups = { findPRsByNumbers };
+
+    const { pullRequestService } = await import("../PullRequestService.js");
+    const { events } = await import("../events.js");
+
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+    pullRequestService.initialize("/repo");
+    events.emit(
+      "sys:worktree:update",
+      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+    );
+
+    await pullRequestService.refresh();
+    await flushLoaders();
+    // Detection (and the fire-and-forget CI enrichment re-emit) carry "open".
+    expect(detected.length).toBeGreaterThanOrEqual(1);
+    expect(detected.every((p) => p.prState === "open")).toBe(true);
+    const countBeforeRevalidation = detected.length;
+
+    // The open → declined transition must surface — previously the collapse
+    // meant the declined state itself never reached the event.
+    await (
+      pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+    ).revalidateResolvedPRs();
+    await flushLoaders();
+
+    const reemits = detected.slice(countBeforeRevalidation);
+    // Every re-emit carries the new state — a spurious "open"/"closed" emit
+    // alongside the correct one would mask the regression.
+    expect(reemits.length).toBeGreaterThanOrEqual(1);
+    expect(reemits.every((p) => p.prState === "declined")).toBe(true);
 
     unsubscribe();
     pullRequestService.destroy();
@@ -1269,6 +1351,371 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
+  describe("transient lookup failures (#9994)", () => {
+    it("preserves PR rows and counts one error when a per-branch lookup fails transiently", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved(async () => {
+        throw new Error("network timeout");
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      // Transient failure is NOT authoritative absence: no spurious clear,
+      // and the failure counts toward the circuit breaker.
+      expect(cleared).toHaveLength(0);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("trips the circuit breaker after three consecutive failing cycles", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved(async () => {
+        throw new Error("network timeout");
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detectionStates: DaintreeEventMap["sys:pr:detection-state"][] = [];
+      const unsubscribe = events.on("sys:pr:detection-state", (payload) =>
+        detectionStates.push(payload)
+      );
+
+      // This service runs in the workspace-host UtilityProcess, where ui:notify has
+      // no consumer, so the breaker trip must NOT emit it — the ambient
+      // detection-state path is the only signal. Guard against the dead emit
+      // returning (#9976).
+      const notifications: DaintreeEventMap["ui:notify"][] = [];
+      const unsubNotify = events.on("ui:notify", (payload) => notifications.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      for (let cycle = 0; cycle < 3; cycle++) {
+        svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+        await svc.checkForPRs();
+      }
+
+      expect(svc.consecutiveErrors).toBe(3);
+      expect(detectionStates).toContainEqual(expect.objectContaining({ tripped: true }));
+      expect(notifications).toHaveLength(0);
+
+      unsubNotify();
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("resets consecutiveErrors once a cycle completes without lookup failures", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      let failing = true;
+      mockForgeProviderResolved(async () => {
+        if (failing) throw new Error("network timeout");
+        return makeMockForgePR();
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      for (let cycle = 0; cycle < 2; cycle++) {
+        svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+        await svc.checkForPRs();
+      }
+      expect(svc.consecutiveErrors).toBe(2);
+
+      failing = false;
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      expect(svc.consecutiveErrors).toBe(0);
+      expect(detected).toHaveLength(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("keeps an existing PR row when its branch lookup later fails transiently", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      let failing = false;
+      mockForgeProviderResolved(async () => {
+        if (failing) throw new Error("network timeout");
+        return makeMockForgePR();
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, unknown>;
+        consecutiveErrors: number;
+      };
+      expect(svc.detectedPRs.has("wt-1")).toBe(true);
+
+      // refresh() re-queries every worktree; the lookup now fails transiently.
+      // The detected row must survive — this is the #9994 regression scenario.
+      failing = true;
+      await pullRequestService.refresh();
+
+      expect(cleared).toHaveLength(0);
+      expect(svc.detectedPRs.has("wt-1")).toBe(true);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("treats a non-Error rejection as transient, not confirmed absence", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved(() => Promise.reject({ code: "ETIMEDOUT" }));
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+
+      const svc = pullRequestService as unknown as { consecutiveErrors: number };
+      expect(cleared).toHaveLength(0);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("clears the row and deletes the detectedPRs entry on a confirmed no-PR result", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      let prGone = false;
+      mockForgeProviderResolved(async () => (prGone ? null : makeMockForgePR()));
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubscribe = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, unknown>;
+        consecutiveErrors: number;
+      };
+      expect(svc.detectedPRs.has("wt-1")).toBe(true);
+
+      // refresh() empties resolvedWorktrees but keeps detectedPRs, so the
+      // confirmed-absent path must delete the stale entry alongside the clear
+      // (otherwise a PENDING entry keeps the revalidation boost armed).
+      prGone = true;
+      await pullRequestService.refresh();
+
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0]).toMatchObject({ worktreeId: "wt-1", branchName: "feature/a" });
+      expect(svc.detectedPRs.has("wt-1")).toBe(false);
+      expect(svc.consecutiveErrors).toBe(0);
+
+      unsubscribe();
+      pullRequestService.destroy();
+    });
+
+    it("handles a mixed cycle: detected, confirmed-absent, and failed branches independently", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      const mockImpl = mockForgeProviderResolved();
+      mockImpl.findPRByBranch = vi.fn(async (_repo: RepoRef, branch: string) => {
+        if (branch === "feature/a") return makeMockForgePR({ number: 1, headRef: branch });
+        if (branch === "feature/b") return null;
+        throw new Error("socket hang up");
+      });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const unsubDetected = events.on("sys:pr:detected", (payload) => detected.push(payload));
+      const unsubCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-a", branch: "feature/a" })
+      );
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-b", branch: "feature/b" })
+      );
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-c", branch: "feature/c" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        detectedPRs: Map<string, unknown>;
+        consecutiveErrors: number;
+        lastCheckAt: number;
+      };
+
+      // Seed a previously-detected PR on the branch that is about to fail —
+      // the failing lookup must leave it untouched.
+      const priorPR = {
+        number: 3,
+        title: "Prior PR",
+        url: "https://github.com/o/r/pull/3",
+        state: "open",
+        isDraft: false,
+        providerId: "daintree.github.github",
+        stagnantPollCount: 0,
+      };
+      svc.detectedPRs.set("wt-c", priorPR);
+
+      await svc.resolveProvider();
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      // Detected branch resolves, confirmed-absent branch clears, failed
+      // branch is skipped entirely (row preserved) — and the cycle counts a
+      // single error.
+      expect(detected.map((d) => d.worktreeId)).toContain("wt-a");
+      expect(detected.map((d) => d.worktreeId)).not.toContain("wt-c");
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0].worktreeId).toBe("wt-b");
+      expect(svc.detectedPRs.get("wt-c")).toBe(priorPR);
+      expect(svc.consecutiveErrors).toBe(1);
+
+      unsubDetected();
+      unsubCleared();
+      pullRequestService.destroy();
+    });
+
+    it("routes mid-cycle failures to the rate-limit pause instead of the breaker when a limit is active", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      const mockImpl = mockForgeProviderResolved(async () => {
+        throw new Error("API rate limit exceeded");
+      });
+      // First gate consult (top of cycle) sees budget remaining; the
+      // post-error consult sees the exhausted limit that landed mid-cycle.
+      mockImpl.getRateLimit = vi
+        .fn()
+        .mockResolvedValueOnce({ limit: 5000, remaining: 100, resetAt: null })
+        .mockResolvedValue({ limit: 5000, remaining: 0, resetAt: Date.now() + 60_000 });
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
+      const notifications: DaintreeEventMap["ui:notify"][] = [];
+      const unsubCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
+      const unsubNotify = events.on("ui:notify", (payload) => notifications.push(payload));
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        resolveProvider: () => Promise<void>;
+        consecutiveErrors: number;
+        nextRetryAt: number;
+        lastCheckAt: number;
+      };
+
+      await svc.resolveProvider();
+      // A pre-existing streak is cleared by the pause: the prior failures were
+      // likely the same rate limit before the gate caught it, so carrying them
+      // over would leave the breaker on a hair trigger after the pause.
+      svc.consecutiveErrors = 2;
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+
+      // Rate-limit pause, not circuit breaker: streak cleared, no clear event,
+      // no breaker trip or toast, polling deferred until the limit resets.
+      expect(svc.consecutiveErrors).toBe(0);
+      expect(svc.nextRetryAt).toBeGreaterThan(Date.now());
+      expect(cleared).toHaveLength(0);
+      expect(pullRequestService.getStatus().detectionStateTripped).toBe(false);
+      expect(notifications).toHaveLength(0);
+
+      unsubCleared();
+      unsubNotify();
+      pullRequestService.destroy();
+    });
+  });
+
   it("no-ops when no forge provider is resolved (null linkage, no toast, no error)", async () => {
     const clearPRCaches = vi.fn();
     vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
@@ -1294,6 +1741,247 @@ describe("PullRequestService", () => {
 
     unsubscribe();
     pullRequestService.destroy();
+  });
+
+  describe("no-match provider pause (#9997)", () => {
+    it("keeps retrying on the 5s cold-start cap while resolution reports not-ready", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "not-ready" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      const callsAfterStart = bridge.resolveProvider.mock.calls.length;
+      expect(callsAfterStart).toBeGreaterThan(0);
+
+      // The transient miss keeps the cold-start catch-up cap: each 5s tick
+      // re-attempts resolution.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterStart + 1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterStart + 2);
+
+      pullRequestService.destroy();
+    });
+
+    it("pauses polling entirely on a definitive no-match (no 5s spin)", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      const callsAfterStart = bridge.resolveProvider.mock.calls.length;
+      expect(callsAfterStart).toBeGreaterThan(0);
+
+      // Definitive miss: no timer is armed, so hours of fake time produce
+      // zero further resolution attempts (the bug was a 5s loop forever).
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterStart);
+
+      pullRequestService.destroy();
+    });
+
+    it("re-arms a no-match pause when main pushes forge:provider-registry-updated", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhilePaused = bridge.resolveProvider.mock.calls.length;
+
+      // A plugin registered a forge provider that matches now.
+      bridge.resolveProvider.mockResolvedValue({
+        status: "resolved",
+        namespacedId: "daintree.github.github",
+        repo: makeMockRepoRef(),
+      });
+      bridge.findPRByBranch.mockResolvedValue(null);
+      pullRequestService.notifyForgeProviderRegistryUpdated();
+
+      // Debounced wake-up re-resolves and resumes the poll loop.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsWhilePaused + 1);
+      expect(pullRequestService.getProviderContext()).toMatchObject({
+        providerId: "daintree.github.github",
+        owner: "testowner",
+        repo: "testrepo",
+      });
+
+      pullRequestService.destroy();
+    });
+
+    it("leaves an already-resolved provider untouched on forge:provider-registry-updated", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderResolved();
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.refresh();
+      const callsAfterRefresh = bridge.resolveProvider.mock.calls.length;
+
+      pullRequestService.notifyForgeProviderRegistryUpdated();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterRefresh);
+      expect(pullRequestService.getProviderContext()).not.toBeNull();
+
+      pullRequestService.destroy();
+    });
+
+    it("transitions from not-ready retries to a no-match pause when the scan settles mid-session", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "not-ready" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      const callsAfterStart = bridge.resolveProvider.mock.calls.length;
+
+      // Plugin scan finishes between ticks — the next retry gets the
+      // definitive answer and the loop must pause instead of spinning on.
+      bridge.resolveProvider.mockResolvedValue({ status: "no-match" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const callsAtNoMatch = bridge.resolveProvider.mock.calls.length;
+      expect(callsAtNoMatch).toBe(callsAfterStart + 1);
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAtNoMatch);
+
+      pullRequestService.destroy();
+    });
+
+    it("is harmless when forge:provider-registry-updated arrives before start()", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      pullRequestService.notifyForgeProviderRegistryUpdated();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(bridge.resolveProvider).not.toHaveBeenCalled();
+
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+      await pullRequestService.start(0);
+      expect(bridge.resolveProvider).toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("does not re-resolve when a worktree update fires while paused on no-match", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhilePaused = bridge.resolveProvider.mock.calls.length;
+
+      // New candidate triggers the debounced check, but the cached no-match
+      // must keep blocking resolution (no fresh git-config spawns, #9997).
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/other" })
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(bridge.resolveProvider.mock.calls.length).toBe(callsWhilePaused);
+
+      pullRequestService.destroy();
+    });
+
+    it("re-resolves after a no-match when forge settings change (setForgeSettings + refresh)", async () => {
+      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+      mockForgeProviderUnresolved({ status: "no-match" });
+      const bridge = lastMockBridge!;
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
+      );
+
+      await pullRequestService.start(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const callsWhilePaused = bridge.resolveProvider.mock.calls.length;
+
+      // Mirrors WorkspaceService.updateForgeSettings: settings push then refresh.
+      bridge.resolveProvider.mockResolvedValue({
+        status: "resolved",
+        namespacedId: "daintree.github.github",
+        repo: makeMockRepoRef(),
+      });
+      bridge.findPRByBranch.mockResolvedValue(null);
+      pullRequestService.setForgeSettings({
+        forgeProviderOverride: "daintree.github.github",
+        forgeDefaultProviderId: null,
+      });
+      await pullRequestService.refresh();
+
+      expect(bridge.resolveProvider.mock.calls.length).toBeGreaterThan(callsWhilePaused);
+      expect(pullRequestService.getProviderContext()).not.toBeNull();
+
+      pullRequestService.destroy();
+    });
   });
 
   it("skips polling when provider reports remaining: 0 with a future resetAt", async () => {
@@ -1433,56 +2121,6 @@ describe("PullRequestService", () => {
     await pullRequestService.refresh();
 
     expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
-
-    pullRequestService.destroy();
-  });
-
-  it("skips checkForPRs when a sibling window holds the poll lease (#9055)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
-    const mockImpl = mockForgeProviderResolved();
-    // Deny the lease — simulates a sibling Electron window already polling
-    // this project. The service must short-circuit without calling ANY forge
-    // provider methods; PR events still propagate from the elected host
-    // through main → renderer fan-out.
-    lastMockBridge!.acquirePollLease.mockResolvedValue(false);
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
-    const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
-
-    pullRequestService.initialize("/repo");
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
-    );
-
-    await pullRequestService.refresh();
-
-    // None of the provider's PR-fetching methods are called when the lease is denied.
-    expect(mockImpl.findPRByBranch).not.toHaveBeenCalled();
-    expect(mockImpl.findPRsByBranches).toBeUndefined();
-    expect(mockImpl.getPR).not.toHaveBeenCalled();
-    expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
-    expect(detected).toHaveLength(0);
-
-    unsubscribe();
-    pullRequestService.destroy();
-  });
-
-  it("releases the poll lease on stop (#9055)", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-    mockForgeProviderResolved();
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-
-    pullRequestService.initialize("/repo");
-    pullRequestService.stop();
-
-    expect(lastMockBridge!.releasePollLease).toHaveBeenCalled();
 
     pullRequestService.destroy();
   });
@@ -1849,6 +2487,319 @@ describe("PullRequestService", () => {
       clearTimeout(svc.revalidationTimer);
       svc.revalidationTimer = null;
       pullRequestService.destroy();
+    });
+  });
+
+  describe("CI enrichment gating (#10124)", () => {
+    const ROLE_ENV = "DAINTREE_INSTANCE_ROLE";
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.resetModules();
+      vi.clearAllMocks();
+      lastMockBridge = null;
+    });
+
+    function makeDetectedPR(overrides?: {
+      number?: number;
+      ciStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      stagnantPollCount?: number;
+    }) {
+      return {
+        number: overrides?.number ?? 42,
+        title: "Test PR",
+        url: "https://github.com/o/r/pull/42",
+        state: "open" as const,
+        isDraft: false,
+        ciStatus: overrides?.ciStatus,
+        providerId: "daintree.github.github",
+        stagnantPollCount: overrides?.stagnantPollCount ?? 0,
+      };
+    }
+
+    // Worker instances never own a focused window, so enrichment must default
+    // off — set before the singleton is imported so the field initializer reads
+    // it. withRole restores the prior env regardless of assertion outcome.
+    async function withRole<T>(role: string | undefined, fn: () => Promise<T>): Promise<T> {
+      const prev = process.env[ROLE_ENV];
+      if (role === undefined) delete process.env[ROLE_ENV];
+      else process.env[ROLE_ENV] = role;
+      try {
+        return await fn();
+      } finally {
+        if (prev === undefined) delete process.env[ROLE_ENV];
+        else process.env[ROLE_ENV] = prev;
+      }
+    }
+
+    it("initializes enrichment disabled for the worker role", async () => {
+      await withRole("worker", async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const svc = pullRequestService as any;
+
+        expect(svc.ciEnrichmentEnabled).toBe(false);
+        pullRequestService.destroy();
+      });
+    });
+
+    it("initializes enrichment enabled for attended (non-worker) instances", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const svc = pullRequestService as any;
+
+        expect(svc.ciEnrichmentEnabled).toBe(true);
+        pullRequestService.destroy();
+      });
+    });
+
+    it("skips the getCIStatuses batch entirely on worker instances", async () => {
+      await withRole("worker", async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+        const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+          const map = new Map<string, ForgePR | null>();
+          for (const branch of branches)
+            map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+          return map;
+        });
+        const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+        const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+          const map = new Map<number, CIStatus | null>();
+          for (const n of prNumbers) map.set(n, makeMockCIStatus());
+          return map;
+        });
+        mockImpl.batchLookups = { getCIStatuses };
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.initialize("/repo");
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+        );
+
+        await pullRequestService.refresh();
+        await flushLoaders();
+
+        // The expensive enrichment fan-out never runs...
+        expect(getCIStatuses).not.toHaveBeenCalled();
+        expect(mockImpl.getCIStatus).not.toHaveBeenCalled();
+
+        // ...and the detection emit omits the loading flag: there is no phase-2
+        // coming, so a held "loading" would spin forever (#6240).
+        const detection = detected.find((d) => d.prNumber === 7);
+        expect(detection).toBeDefined();
+        expect(detection?.isCiStatusLoading).toBeUndefined();
+        expect(detection?.prCiStatus).toBeUndefined();
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("clears in-flight CI and collapses the boost when enrichment is disabled", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+        svc.boostExpiresAt = Date.now() + 15 * 60 * 1000;
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        // PENDING is cleared to undefined (unknown), never SUCCESS (#6240).
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBeUndefined();
+        // No PENDING entry left → boost collapses so cadence decays to baseline.
+        expect(svc.boostExpiresAt).toBeNull();
+
+        // The re-emit drops the dot: absent CI fields + no loading flag mean the
+        // host full-replaces to "no checks" rather than holding the stale dot.
+        const clear = detected.find((d) => d.worktreeId === "wt-1" && d.prNumber === 7);
+        expect(clear).toBeDefined();
+        expect(clear?.prCiStatus).toBeUndefined();
+        expect(clear?.ciStatus).toBeUndefined();
+        expect(clear?.isCiStatusLoading).toBeUndefined();
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("leaves terminal CI states untouched and emits nothing for them on disable", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "SUCCESS" }));
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        // SUCCESS is already correct for the renderer — no sweep, no noise emit.
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("SUCCESS");
+        expect(detected).toHaveLength(0);
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("is idempotent — a second disable does not re-sweep or re-emit", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+        const afterFirst = detected.length;
+        // Re-seed a PENDING entry: if the second call still swept, it would emit.
+        svc.detectedPRs.get("wt-1").ciStatus = "PENDING";
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        expect(afterFirst).toBe(1);
+        expect(detected).toHaveLength(afterFirst);
+        // The re-seeded value is left alone — the no-op early-returns before sweep.
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("PENDING");
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
+    });
+
+    it("does not write CI back when enrichment is disabled mid-flight", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+
+        let resolveCi: (m: Map<number, CIStatus | null>) => void = () => {};
+        const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+          const map = new Map<string, ForgePR | null>();
+          for (const branch of branches)
+            map.set(branch, makeMockForgePR({ number: 7, headRef: branch }));
+          return map;
+        });
+        const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+        const getCIStatuses = vi.fn(
+          (_repo: RepoRef, _prNumbers: number[]) =>
+            new Promise<Map<number, CIStatus | null>>((resolve) => {
+              resolveCi = resolve;
+            })
+        );
+        mockImpl.batchLookups = { getCIStatuses };
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+        );
+        await pullRequestService.refresh();
+        await flushLoaders();
+
+        // Enrichment is dispatched but still pending. Disable, then let it land.
+        expect(getCIStatuses).toHaveBeenCalledTimes(1);
+        pullRequestService.setCIEnrichmentEnabled(false);
+        resolveCi(new Map([[7, makeMockCIStatus()]]));
+        await flushLoaders();
+
+        // The stale in-flight result is discarded — the PR keeps no CI status.
+        const pr = svc.detectedPRs.get("wt-1");
+        expect(pr?.ciStatus).toBeUndefined();
+
+        pullRequestService.destroy();
+      });
+    });
+
+    it("keeps worker instances disabled even when asked to re-enable", async () => {
+      await withRole("worker", async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const svc = pullRequestService as any;
+
+        // A stray focus signal must not flip a worker back on.
+        pullRequestService.setCIEnrichmentEnabled(true);
+        expect(svc.ciEnrichmentEnabled).toBe(false);
+
+        pullRequestService.destroy();
+      });
+    });
+
+    it("does not blank a SUCCESS worktree that shares a PR number with a swept one", async () => {
+      await withRole(undefined, async () => {
+        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+        mockForgeProviderResolved();
+
+        const { pullRequestService } = await import("../PullRequestService.js");
+        const { events } = await import("../events.js");
+        const svc = pullRequestService as any;
+
+        pullRequestService.initialize("/repo");
+        svc.repoRef = makeMockRepoRef();
+        // Two distinct PR objects coincidentally numbered 42: one PENDING (to be
+        // swept), one SUCCESS (must survive untouched).
+        svc.detectedPRs.set("wt-pending", makeDetectedPR({ number: 42, ciStatus: "PENDING" }));
+        svc.detectedPRs.set("wt-success", makeDetectedPR({ number: 42, ciStatus: "SUCCESS" }));
+
+        const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+        const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+        pullRequestService.setCIEnrichmentEnabled(false);
+
+        // The SUCCESS entry keeps its status and is never re-emitted as cleared.
+        expect(svc.detectedPRs.get("wt-success").ciStatus).toBe("SUCCESS");
+        expect(detected.some((d) => d.worktreeId === "wt-success")).toBe(false);
+        // The PENDING entry was swept and re-emitted without a CI status.
+        expect(svc.detectedPRs.get("wt-pending").ciStatus).toBeUndefined();
+        expect(detected.some((d) => d.worktreeId === "wt-pending")).toBe(true);
+
+        unsubscribe();
+        pullRequestService.destroy();
+      });
     });
   });
 });

@@ -24,6 +24,7 @@ import type {
   WorktreeLifecycleStatus,
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
+  WslGitEligibility,
 } from "./worktree.js";
 import type { Credentials, RepoRef } from "./forge.js";
 import type { GitHubPRCIStatus } from "./github.js";
@@ -227,14 +228,21 @@ export interface WorktreeSnapshot {
   /** Distro name parsed from the WSL UNC mount, when `isWslPath` is true. */
   wslDistro?: string;
 
-  /** Whether `wslDistro` matches the WSL default distro (gates "Enable" UI). */
-  wslGitEligible?: boolean;
+  /**
+   * WSL git eligibility: `'eligible'` matches the default distro (gates "Enable"
+   * UI), `'ineligible'` is a confirmed mismatch, `'unprobed'`/absent means the
+   * probe hasn't resolved or failed.
+   */
+  wslGitEligible?: WslGitEligibility;
 
   /** User has opted in to WSL-routed git for this worktree. */
   wslGitOptIn?: boolean;
 
   /** User dismissed the WSL git suggestion banner without opting in. */
   wslGitDismissed?: boolean;
+
+  /** POSIX path inside the WSL distro (mirrors `Worktree.wslPosixPath`). */
+  wslPosixPath?: string;
 
   /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
   repoState?: RepoState;
@@ -326,7 +334,7 @@ export type WorkspaceHostRequest =
   | { type: "get-all-states"; requestId: string }
   | { type: "get-monitor"; requestId: string; worktreeId: string }
   // Worktree operations
-  | { type: "set-active"; requestId: string; worktreeId: string }
+  | { type: "set-active"; requestId: string; worktreeId: string; silent?: boolean }
   | { type: "refresh"; requestId: string; worktreeId?: string }
   | { type: "refresh-on-wake"; requestId: string }
   | { type: "refresh-prs"; requestId: string }
@@ -374,9 +382,14 @@ export type WorkspaceHostRequest =
       enabled: boolean;
       dismissed: boolean;
     }
+  // Re-probe the WSL default distro on demand and refresh eligibility (Windows only)
+  | { type: "reprobe-wsl"; worktreeId: string }
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }
+  // GitHub rate-limit fetch-throttle multiplier relayed from main, where the
+  // forge HTTP calls (and thus rate-limit observations) live post-#8870.
+  | { type: "apply-fetch-throttle"; multiplier: number }
   // Health check
   | { type: "health-check" }
   // Lifecycle
@@ -418,6 +431,10 @@ export type WorkspaceHostRequest =
   | { type: "has-resource-config"; requestId: string; rootPath: string }
   // Forge credential propagation
   | { type: "update-forge-credentials"; providerId: string; credentials: Credentials | null }
+  // A forge provider descriptor was registered in main's plugin registry
+  // (startup scan or runtime install/enable). Hosts paused on a "no-match"
+  // resolution re-evaluate their provider on receipt (#9997).
+  | { type: "forge:provider-registry-updated" }
   // User-triggered retry of auth-suspended fetches (e.g. clicking the auth-failed sync badge)
   | { type: "retry-auth-fetch" }
   // Project environment variable propagation
@@ -456,15 +473,6 @@ export type WorkspaceHostRequest =
       forgeRequestId: string;
       ok: false;
       error: string;
-    }
-  // Forge poll-lease acquire response (main → workspace-host). Correlated to a
-  // prior `forge:poll-lease-acquire` event by `requestId`. `acquired === true`
-  // means the workspace-host now holds (or renewed) the lease and may proceed
-  // with the poll cycle; `false` means a sibling host already holds it.
-  | {
-      type: "forge:poll-lease-result";
-      requestId: string;
-      acquired: boolean;
     };
 
 /**
@@ -491,11 +499,18 @@ export type ForgeRpcMethod =
   | "getRateLimit"
   | "clearPullRequestCaches";
 
-/** Result shape for `resolveProvider` — used by typed parsing of `forge:rpc-result.value`. */
-export interface ForgeResolveProviderResult {
-  namespacedId: string;
-  repo: RepoRef;
-}
+/**
+ * Result shape for `resolveProvider` — used by typed parsing of
+ * `forge:rpc-result.value`. Discriminated so the workspace-host can tell a
+ * transient miss from a permanent one (#9997): `"not-ready"` means the plugin
+ * registry hasn't finished its startup scan yet (retry soon), `"no-match"`
+ * means the scan is complete and no registered provider matches this project's
+ * remote (stop polling until forge settings or the plugin registry change).
+ */
+export type ForgeResolveProviderResult =
+  | { status: "resolved"; namespacedId: string; repo: RepoRef }
+  | { status: "no-match" }
+  | { status: "not-ready" };
 
 /**
  * Events sent from Workspace Host → Main.
@@ -568,6 +583,25 @@ export type WorkspaceHostEvent =
   // Spontaneous updates (no requestId - these are pushed events)
   | { type: "worktree-update"; worktree: WorktreeSnapshot; epoch: string; seq: number }
   | { type: "worktree-removed"; worktreeId: string; epoch: string; seq: number }
+  // Host-originated active-worktree change. Emitted from the host's authoritative
+  // `setActiveWorktree` writer so the per-view renderer's WorktreeStoreContext
+  // learns the new active id in the same tick as any accompanying
+  // `worktree-removed` (auto-switch in `runTopologyReconcile` and
+  // `deleteWorktree`). Separate surface from the legacy
+  // `CHANNELS.WORKTREE_ACTIVATED` echo path that PR #3603's `silent` flag
+  // suppresses for renderer-initiated IPC.
+  // `silent` is propagated from the originating `set-active` request; when
+  // true, the main-process router must skip the plugin-bus emit so callers
+  // that explicitly marked the activation silent (the renderer IPC path)
+  // do not double-notify subscribers that the legacy
+  // `CHANNELS.WORKTREE_ACTIVATED` path already suppresses.
+  | {
+      type: "worktree-activated";
+      worktreeId: string;
+      epoch: string;
+      seq: number;
+      silent?: boolean;
+    }
   // Per-worktree lifecycle setup failure surfaced to the renderer's error
   // banner. Emitted from sites that previously swallowed errors to
   // `console.warn` (the `createWorktree` async tail and the
@@ -590,6 +624,17 @@ export type WorkspaceHostEvent =
   // Clears the one-shot degradation guards so a later relapse can re-signal,
   // and hides the persistent degraded indicator in the renderer.
   | { type: "watcher-recovered" }
+  // Fired when the topology watcher goes "dark": either the `@parcel/watcher`
+  // subscribe() rejected at cold start (no events will ever arrive), or a 5s
+  // pending-event safety valve expired without the watcher delivering the
+  // matching event (the watcher missed a worktree-tree mutation the app itself
+  // produced). Both mean the worktree list may silently drift out of date.
+  // One-shot per dark period; clears via `topology-watcher-recovered`.
+  | { type: "topology-watcher-dark" }
+  // Fired when a topology reconcile completes successfully after a dark period,
+  // restoring confidence that the worktree list is current. Independent of the
+  // recursive-watcher `watcher-recovered` signal.
+  | { type: "topology-watcher-recovered" }
   // PR events
   | {
       type: "pr-detected";
@@ -710,22 +755,18 @@ export type WorkspaceHostEvent =
       namespacedId?: string;
       args: unknown[];
     }
-  // Per-project poll lease acquire (workspace-host → main). Main answers with
-  // `forge:poll-lease-result` keyed by `requestId`. Holding the lease means
-  // this workspace-host is the elected poller for the project this cycle; a
-  // denial means a sibling window already polls and this one should skip.
-  // The lease key is the workspace-host's `projectPath`, known to main from
-  // the `WorkspaceHostProcess` instance — the event carries no path because
-  // main must not trust a workspace-host's self-reported identity (#4670).
+  // WSL git opt-in entry is no longer reachable from the live worktree set
+  // (#9926). Fired both on individual worktree removal (via the host's
+  // `removeMonitor` chokepoint) and as a bulk self-heal pass at the end of
+  // `loadProject` for any persisted keys not present in the freshly-listed
+  // worktree set. Fire-and-forget — the persistent store prune is idempotent
+  // (batched read-mutate-set) so a duplicate clear after a missed delivery
+  // is a no-op. The host emits the raw `monitor.id` (no normalization); main
+  // does a case-insensitive lookup on win32 to handle legacy mixed-case
+  // persisted keys.
   | {
-      type: "forge:poll-lease-acquire";
-      requestId: string;
-    }
-  // Per-project poll lease release (workspace-host → main, fire-and-forget).
-  // Best-effort cooperative release on `stop()`; the lease also drops on host
-  // dispose and after the TTL, so a missed release never wedges siblings.
-  | {
-      type: "forge:poll-lease-release";
+      type: "clear-wsl-git-opt-in";
+      worktreeId: string;
     };
 
 /** Configuration for WorkspaceClient */

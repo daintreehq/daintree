@@ -35,9 +35,21 @@ export interface RepoStatsAndPageSnapshot {
   prs: RepoConnectionPage<GitHubPR>;
 }
 
-export interface RepoStatsResult {
-  stats: RepoStats | null;
-  error?: string;
+/**
+ * Last successful REST count fetch (`fetchRestCounts`), stored as one atomic
+ * entry. The counts and the ETags they were observed under must live together:
+ * a `304` on one leg is only usable if the value that ETag validated is still
+ * available, and a mixed `304`/`200` response pair must never combine a fresh
+ * count with one from a different baseline.
+ */
+export interface RestCountsSnapshot {
+  /** `open_issues_count` from `GET /repos/{owner}/{repo}` — open issues + open PRs combined. */
+  combinedCount: number;
+  prCount: number;
+  repoEtag: string | null;
+  prEtag: string | null;
+  /** Wall-clock ms when these counts were committed — arbitrates freshness against the page snapshot's stats. */
+  lastUpdated: number;
 }
 
 export interface LinkedPR {

@@ -4,6 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -12,7 +13,7 @@ interface UpstreamSyncBadgeProps {
   lastFetchedAt: number | null | undefined;
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
-  isGitHubProvider: boolean;
+  hasAuthFailedSignIn: boolean;
   containerGapClass: string;
   baseBranchName?: string | null;
   baseAheadCount?: number | null;
@@ -30,7 +31,7 @@ export function UpstreamSyncBadge({
   lastFetchedAt,
   fetchAuthFailed,
   fetchNetworkFailed,
-  isGitHubProvider,
+  hasAuthFailedSignIn,
   containerGapClass,
   baseBranchName,
   baseAheadCount,
@@ -100,12 +101,12 @@ export function UpstreamSyncBadge({
     });
     void actionService.dispatch(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
       { source: "user" }
     );
   }, []);
 
-  if (fetchAuthFailed && isGitHubProvider) {
+  if (fetchAuthFailed && hasAuthFailedSignIn) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>

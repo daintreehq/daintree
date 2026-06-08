@@ -53,6 +53,178 @@ describe("createMockHost", () => {
     expect(h1).not.toHaveBeenCalled();
   });
 
+  describe("registerAction validation", () => {
+    it("rejects null/undefined/non-object descriptors", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          null as unknown as Parameters<typeof host.registerAction>[0],
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow("registerAction: descriptor must be an object");
+      expect(() =>
+        host.registerAction(
+          undefined as unknown as Parameters<typeof host.registerAction>[0],
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor must be an object/);
+      expect(() =>
+        host.registerAction(
+          "greet" as unknown as Parameters<typeof host.registerAction>[0],
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor must be an object/);
+    });
+
+    it("rejects non-function handlers", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          sampleAction,
+          null as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow("registerAction: handler must be a function");
+    });
+
+    it("rejects missing or empty descriptor.id", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, id: "" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow("registerAction: descriptor.id must be a non-empty string");
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, id: undefined as unknown as string },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor\.id must be a non-empty string/);
+    });
+
+    it("rejects a descriptor.id that already starts with the plugin prefix", () => {
+      const host = createMockHost({ pluginId: "daintree.hello" });
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, id: "daintree.hello.greet" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/must not include the plugin prefix/);
+    });
+
+    it("accepts a descriptor.id that merely contains the plugin id as a substring", () => {
+      // Substring ≠ prefix: "hello.greet" against pluginId "daintree.hello"
+      // is not a prefixed form, so the host namespaces it to
+      // "daintree.hello.hello.greet". The real PluginService enforces the
+      // startsWith check, not a containment check.
+      const host = createMockHost({ pluginId: "daintree.hello" });
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, id: "hello.greet" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).not.toThrow();
+      expect(host.registeredActions).toHaveLength(1);
+    });
+
+    it("accepts a descriptor.id where the FULL plugin id appears as a substring but not a prefix", () => {
+      // Stronger than the "hello.greet" test: the entire plugin id
+      // "daintree.hello" is contained in the descriptor id, but the id does
+      // not start with the plugin prefix. Catches a regression to a
+      // `includes(pluginId)` check, which would silently reject this case.
+      const host = createMockHost({ pluginId: "daintree.hello" });
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, id: "x.daintree.hello.greet" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).not.toThrow();
+      expect(host.registeredActions).toHaveLength(1);
+    });
+
+    it("rejects a namespaced id that violates the id-format regex", () => {
+      // The production regex requires a dot in the namespaced id
+      // (`{pluginId}.{actionId}`). "Bad Id" — when namespaced against
+      // `daintree.hello` becomes `daintree.hello.Bad Id`, which contains a
+      // space and uppercase middle characters that fail the regex.
+      const host = createMockHost({ pluginId: "daintree.hello" });
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, id: "Bad Id" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/is invalid/);
+    });
+
+    it("rejects a non-string/empty/whitespace-only title", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, title: "" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow("registerAction: descriptor.title must be a non-empty string");
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, title: "   " },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor\.title must be a non-empty string/);
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, title: 42 as unknown as string },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor\.title must be a non-empty string/);
+    });
+
+    it("rejects a non-string description", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, description: 42 as unknown as string },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow("registerAction: descriptor.description must be a string");
+    });
+
+    it("rejects a non-string/empty/whitespace-only category", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, category: "" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow("registerAction: descriptor.category must be a non-empty string");
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, category: "   " },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor\.category must be a non-empty string/);
+    });
+
+    it("rejects an unknown kind", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, kind: "bogus" as unknown as "command" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor\.kind/);
+    });
+
+    it("rejects a danger outside the safe|confirm set", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerAction(
+          { ...sampleAction, danger: "restricted" as unknown as "safe" },
+          vi.fn() as unknown as Parameters<typeof host.registerAction>[1]
+        )
+      ).toThrow(/descriptor\.danger/);
+    });
+  });
+
   it("records registerHandler calls", () => {
     const host = createMockHost();
     const handler = vi.fn();
@@ -125,6 +297,121 @@ describe("createMockHost", () => {
     expect(host.registeredForgeProviders).toHaveLength(0);
   });
 
+  describe("registerForgeProvider", () => {
+    it("replaces a prior registration with the same id (replace-by-id)", () => {
+      const host = createMockHost();
+      const impl1 = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      const impl2 = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      host.registerForgeProvider({ id: "ghe" }, impl1);
+      host.registerForgeProvider({ id: "ghe" }, impl2);
+      expect(host.registeredForgeProviders).toHaveLength(1);
+      expect(host.registeredForgeProviders[0]?.impl).toBe(impl2);
+    });
+
+    it("makes the prior disposer inert when the id is re-registered with a different impl", () => {
+      // Matches `unregisterForgeProviderImpl(pluginId, contributionId, expected)`
+      // semantics: a stale disposer (captured against the first impl) must not
+      // remove the second impl that has overwritten the slot.
+      const host = createMockHost();
+      const impl1 = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      const impl2 = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      const dispose1 = host.registerForgeProvider({ id: "ghe" }, impl1);
+      const dispose2 = host.registerForgeProvider({ id: "ghe" }, impl2);
+      dispose1(); // stale — should no-op
+      expect(host.registeredForgeProviders).toHaveLength(1);
+      expect(host.registeredForgeProviders[0]?.impl).toBe(impl2);
+      dispose2(); // fresh — should remove
+      expect(host.registeredForgeProviders).toHaveLength(0);
+    });
+
+    it("removes the active entry when the same impl is re-registered and the prior disposer fires", () => {
+      // Pinned case: if the second registration passes the same impl, the
+      // identity guard's `currentImpl === capturedImpl` check matches and the
+      // prior disposer does remove. This mirrors the production
+      // `expected` argument's identity comparison, not a "newer wins" rule.
+      const host = createMockHost();
+      const impl = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      const dispose1 = host.registerForgeProvider({ id: "ghe" }, impl);
+      const dispose2 = host.registerForgeProvider({ id: "ghe" }, impl);
+      expect(host.registeredForgeProviders).toHaveLength(1);
+      dispose1();
+      expect(host.registeredForgeProviders).toHaveLength(0);
+      // The second disposer is now stale (its identity-guard misses) — it
+      // must be a no-op, not a throw.
+      expect(() => dispose2()).not.toThrow();
+      expect(host.registeredForgeProviders).toHaveLength(0);
+    });
+
+    it("disposer is idempotent (calling twice is a no-op)", () => {
+      const host = createMockHost();
+      const impl = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      const dispose = host.registerForgeProvider({ id: "ghe" }, impl);
+      dispose();
+      dispose();
+      expect(host.registeredForgeProviders).toHaveLength(0);
+    });
+
+    it("rejects null/non-object descriptors", () => {
+      const host = createMockHost();
+      const impl = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      expect(() =>
+        host.registerForgeProvider(
+          null as unknown as Parameters<typeof host.registerForgeProvider>[0],
+          impl
+        )
+      ).toThrow(/descriptor must be an object/);
+      expect(() =>
+        host.registerForgeProvider(
+          "ghe" as unknown as Parameters<typeof host.registerForgeProvider>[0],
+          impl
+        )
+      ).toThrow(/descriptor must be an object/);
+    });
+
+    it("rejects missing or empty descriptor.id", () => {
+      const host = createMockHost();
+      const impl = { parseRemote: vi.fn() } as unknown as Parameters<
+        typeof host.registerForgeProvider
+      >[1];
+      expect(() => host.registerForgeProvider({ id: "" }, impl)).toThrow(
+        "registerForgeProvider: descriptor.id must be a non-empty string"
+      );
+      // Boundary: "0" is a non-empty string and should be accepted — pins
+      // against a `!descriptor.id` regression.
+      expect(() => host.registerForgeProvider({ id: "0" }, impl)).not.toThrow();
+    });
+
+    it("rejects null/non-object impls", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerForgeProvider(
+          { id: "ghe" },
+          null as unknown as Parameters<typeof host.registerForgeProvider>[1]
+        )
+      ).toThrow(/impl must be an object/);
+      expect(() =>
+        host.registerForgeProvider(
+          { id: "ghe" },
+          "not-an-object" as unknown as Parameters<typeof host.registerForgeProvider>[1]
+        )
+      ).toThrow(/impl must be an object/);
+    });
+  });
+
   it("registers file-decoration providers and unregisters via disposer", () => {
     const host = createMockHost();
     const impl = { provideDecorations: vi.fn(async () => ({})) };
@@ -132,6 +419,99 @@ describe("createMockHost", () => {
     expect(host.registeredFileDecorationProviders).toHaveLength(1);
     dispose();
     expect(host.registeredFileDecorationProviders).toHaveLength(0);
+  });
+
+  describe("registerFileDecorationProvider", () => {
+    it("replaces a prior registration with the same id (replace-by-id)", () => {
+      const host = createMockHost();
+      const impl1 = { provideDecorations: vi.fn(async () => ({})) };
+      const impl2 = { provideDecorations: vi.fn(async () => ({})) };
+      host.registerFileDecorationProvider({ id: "hello" }, impl1);
+      host.registerFileDecorationProvider({ id: "hello" }, impl2);
+      expect(host.registeredFileDecorationProviders).toHaveLength(1);
+      expect(host.registeredFileDecorationProviders[0]?.impl).toBe(impl2);
+    });
+
+    it("makes the prior disposer inert when the id is re-registered with a different impl", () => {
+      const host = createMockHost();
+      const impl1 = { provideDecorations: vi.fn(async () => ({})) };
+      const impl2 = { provideDecorations: vi.fn(async () => ({})) };
+      const dispose1 = host.registerFileDecorationProvider({ id: "hello" }, impl1);
+      const dispose2 = host.registerFileDecorationProvider({ id: "hello" }, impl2);
+      dispose1(); // stale — should no-op
+      expect(host.registeredFileDecorationProviders).toHaveLength(1);
+      expect(host.registeredFileDecorationProviders[0]?.impl).toBe(impl2);
+      dispose2(); // fresh — should remove
+      expect(host.registeredFileDecorationProviders).toHaveLength(0);
+    });
+
+    it("removes the active entry when the same impl is re-registered and the prior disposer fires", () => {
+      const host = createMockHost();
+      const impl = { provideDecorations: vi.fn(async () => ({})) };
+      const dispose1 = host.registerFileDecorationProvider({ id: "hello" }, impl);
+      const dispose2 = host.registerFileDecorationProvider({ id: "hello" }, impl);
+      expect(host.registeredFileDecorationProviders).toHaveLength(1);
+      dispose1();
+      expect(host.registeredFileDecorationProviders).toHaveLength(0);
+      // The second disposer is now stale — must be a no-op, not a throw.
+      expect(() => dispose2()).not.toThrow();
+      expect(host.registeredFileDecorationProviders).toHaveLength(0);
+    });
+
+    it("disposer is idempotent (calling twice is a no-op)", () => {
+      const host = createMockHost();
+      const impl = { provideDecorations: vi.fn(async () => ({})) };
+      const dispose = host.registerFileDecorationProvider({ id: "hello" }, impl);
+      dispose();
+      dispose();
+      expect(host.registeredFileDecorationProviders).toHaveLength(0);
+    });
+
+    it("rejects null/non-object descriptors", () => {
+      const host = createMockHost();
+      const impl = { provideDecorations: vi.fn(async () => ({})) };
+      expect(() =>
+        host.registerFileDecorationProvider(
+          null as unknown as Parameters<typeof host.registerFileDecorationProvider>[0],
+          impl
+        )
+      ).toThrow(/descriptor must be an object/);
+    });
+
+    it("rejects missing or empty descriptor.id", () => {
+      const host = createMockHost();
+      const impl = { provideDecorations: vi.fn(async () => ({})) };
+      expect(() => host.registerFileDecorationProvider({ id: "" }, impl)).toThrow(
+        "registerFileDecorationProvider: descriptor.id must be a non-empty string"
+      );
+      // Boundary: "0" is a non-empty string and should be accepted.
+      expect(() => host.registerFileDecorationProvider({ id: "0" }, impl)).not.toThrow();
+    });
+
+    it("rejects impls missing the provideDecorations function", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerFileDecorationProvider(
+          { id: "hello" },
+          {} as unknown as Parameters<typeof host.registerFileDecorationProvider>[1]
+        )
+      ).toThrow(/provideDecorations/);
+      expect(() =>
+        host.registerFileDecorationProvider({ id: "hello" }, {
+          provideDecorations: "not a fn",
+        } as unknown as Parameters<typeof host.registerFileDecorationProvider>[1])
+      ).toThrow(/provideDecorations/);
+    });
+
+    it("rejects null/non-object impls", () => {
+      const host = createMockHost();
+      expect(() =>
+        host.registerFileDecorationProvider(
+          { id: "hello" },
+          null as unknown as Parameters<typeof host.registerFileDecorationProvider>[1]
+        )
+      ).toThrow(/provideDecorations/);
+    });
   });
 
   describe("settings", () => {

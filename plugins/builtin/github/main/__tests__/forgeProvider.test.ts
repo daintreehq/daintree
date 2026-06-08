@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
 import type { ShouldBlockResult } from "../GitHubRateLimitService.js";
@@ -45,6 +46,7 @@ import {
   prTooltipCache,
 } from "../GitHubCaches.js";
 import { GitHubAuth } from "../GitHubAuth.js";
+import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
@@ -554,6 +556,160 @@ describe("listIssues caching", () => {
   });
 });
 
+function issueSearchResponse() {
+  return {
+    search: {
+      issueCount: 1,
+      pageInfo: { hasNextPage: false, endCursor: null },
+      nodes: [
+        {
+          number: 9,
+          title: "Search hit",
+          bodyText: "body",
+          state: "OPEN",
+          url: "https://github.com/owner/repo/issues/9",
+          author: { login: "user", avatarUrl: "" },
+          assignees: { nodes: [] },
+          labels: { nodes: [] },
+          createdAt: "2025-01-01T00:00:00Z",
+          updatedAt: "2025-01-01T00:00:00Z",
+          closedAt: null,
+        },
+      ],
+    },
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+}
+
+describe("listIssues search", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  it("routes a search term to SEARCH_QUERY with is:issue and a state qualifier", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    const page = await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" });
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    const [query, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { searchQuery: string; type: string },
+    ];
+    expect(query).toContain("SearchItems");
+    expect(variables.type).toBe("ISSUE");
+    expect(variables.searchQuery).toBe(
+      "repo:owner/repo is:issue state:open sort:created-desc flaky"
+    );
+    expect(page.items[0]?.number).toBe(9);
+    expect(page.items[0]?.state).toBe("open");
+    expect(page.totalCount).toBe(1);
+  });
+
+  it("maps the state filter into the query string and omits it for 'all'", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "closed", search: "flaky" });
+    await githubForgeProvider.listIssues(repo, { state: "all", search: "flaky" });
+
+    const queries = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as { searchQuery: string }).searchQuery
+    );
+    expect(queries[0]).toBe("repo:owner/repo is:issue state:closed sort:created-desc flaky");
+    expect(queries[1]).toBe("repo:owner/repo is:issue sort:created-desc flaky");
+  });
+
+  it("maps opts.sort 'updated' to sort:updated-desc", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky", sort: "updated" });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toBe("repo:owner/repo is:issue state:open sort:updated-desc flaky");
+  });
+
+  it("truncates the free-text term so the query stays within GitHub's 256-char cap", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "x".repeat(400) });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery.length).toBeLessThanOrEqual(256);
+    expect(searchQuery.startsWith("repo:owner/repo is:issue state:open sort:created-desc x")).toBe(
+      true
+    );
+  });
+
+  it("does not coalesce concurrent calls with different search terms", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(issueSearchResponse()).mockResolvedValueOnce({
+      search: {
+        issueCount: 1,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [
+          {
+            number: 11,
+            title: "Other hit",
+            bodyText: "",
+            state: "OPEN",
+            url: "https://github.com/owner/repo/issues/11",
+            author: { login: "user", avatarUrl: "" },
+            assignees: { nodes: [] },
+            labels: { nodes: [] },
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: "2025-01-01T00:00:00Z",
+            closedAt: null,
+          },
+        ],
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.listIssues(repo, { state: "open", search: "abc" }),
+      githubForgeProvider.listIssues(repo, { state: "open", search: "def" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(a.items[0]?.number).toBe(9);
+    expect(b.items[0]?.number).toBe(11);
+  });
+
+  it("does not write search results into the forge issue list cache", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" });
+
+    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+
+    // A following unfiltered list call misses the cache and issues its own query.
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    const list = await githubForgeProvider.listIssues(repo, { state: "open" });
+    expect(list.items[0]?.number).toBe(5);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent identical search calls into a single query", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" }),
+      githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(a.items[0]?.number).toBe(9);
+    expect(b.items[0]?.number).toBe(9);
+  });
+
+  it("ignores a whitespace-only search term and uses the list path", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+
+    const page = await githubForgeProvider.listIssues(repo, { state: "open", search: "   " });
+
+    const [query] = mockGraphQLClient.mock.calls[0] as [string];
+    expect(query).not.toContain("SearchItems");
+    expect(page.items[0]?.number).toBe(5);
+  });
+});
+
 describe("getPR tooltip pre-warm", () => {
   beforeEach(() => mockGraphQLClient.mockReset());
 
@@ -1015,5 +1171,420 @@ describe("getReviewThreads", () => {
     const result = await githubForgeProvider.reviews!.getReviewThreads(repo, 1);
     expect(mockGraphQLClient).toHaveBeenCalledTimes(MAX_REVIEW_THREAD_PAGES);
     expect(result).toHaveLength(MAX_REVIEW_THREAD_PAGES);
+  });
+});
+
+describe("createIssue", () => {
+  const restIssueResponse = {
+    number: 7,
+    title: "Add dark mode",
+    body: "Body text",
+    state: "open",
+    html_url: "https://github.com/owner/repo/issues/7",
+    user: { login: "octocat", avatar_url: "https://avatars/u" },
+    assignees: [{ login: "octocat", avatar_url: "https://avatars/u" }],
+    labels: [{ name: "enhancement", color: "a2eeef" }],
+    created_at: "2025-01-02T03:04:05Z",
+    updated_at: "2025-01-02T03:04:05Z",
+    closed_at: null,
+  };
+
+  function mockFetchOk(body: unknown = restIssueResponse) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: vi.fn().mockResolvedValue(body),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("test-token");
+  });
+
+  it("POSTs to the issues endpoint with bearer auth and API version headers", async () => {
+    const fetchMock = mockFetchOk();
+
+    await githubForgeProvider.createIssue(repo, { title: "Add dark mode" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/repos/owner/repo/issues");
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer test-token");
+    expect(headers.Accept).toBe("application/vnd.github+json");
+    expect(headers["X-GitHub-Api-Version"]).toBe("2022-11-28");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("normalizes the REST response into a forge Issue", async () => {
+    mockFetchOk();
+
+    const issue = await githubForgeProvider.createIssue(repo, { title: "Add dark mode" });
+
+    expect(issue).toMatchObject({
+      number: 7,
+      title: "Add dark mode",
+      body: "Body text",
+      state: "open",
+      url: "https://github.com/owner/repo/issues/7",
+      author: { login: "octocat", avatarUrl: "https://avatars/u" },
+      assignees: [{ login: "octocat", avatarUrl: "https://avatars/u" }],
+      labels: [{ name: "enhancement", color: "a2eeef" }],
+    });
+    expect(issue.createdAt).toBe(Date.parse("2025-01-02T03:04:05Z"));
+    expect(issue.closedAt).toBeNull();
+  });
+
+  it("only sends body and labels when provided", async () => {
+    const fetchMock = mockFetchOk();
+
+    await githubForgeProvider.createIssue(repo, {
+      title: "With labels",
+      body: "Explanation",
+      labels: ["bug", "ui"],
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      title: "With labels",
+      body: "Explanation",
+      labels: ["bug", "ui"],
+    });
+  });
+
+  it("omits empty body and label arrays from the request", async () => {
+    const fetchMock = mockFetchOk();
+
+    await githubForgeProvider.createIssue(repo, { title: "Bare", labels: [] });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({ title: "Bare" });
+  });
+
+  it("throws when no token is configured", async () => {
+    // getToken returns "" / null when unset; either is falsy for the guard.
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("");
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /token not configured/i
+    );
+  });
+
+  it("throws when the title is blank", async () => {
+    mockFetchOk();
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "   " })).rejects.toThrow(
+      /title is required/i
+    );
+  });
+
+  it("surfaces a dedicated message when issues are disabled (HTTP 410)", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: false,
+        status: 410,
+        text: vi.fn().mockResolvedValue("Issues are disabled"),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /issues are disabled/i
+    );
+  });
+
+  it("includes the HTTP status in the error for other failures", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: vi.fn().mockResolvedValue('{"message":"Validation failed"}'),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(/HTTP 422/);
+  });
+
+  it("rejects when the response body cannot be parsed as JSON", async () => {
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: vi.fn().mockRejectedValue(new Error("invalid json")),
+      });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /invalid json/i
+    );
+  });
+
+  it("rejects a malformed success body missing number or html_url", async () => {
+    mockFetchOk({ title: "only a title" });
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toThrow(
+      /missing issue number or URL/i
+    );
+  });
+
+  it("propagates a TimeoutError from the transport", async () => {
+    const timeoutError = new Error("aborted");
+    timeoutError.name = "TimeoutError";
+    (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
+      .fn()
+      .mockRejectedValue(timeoutError);
+
+    await expect(githubForgeProvider.createIssue(repo, { title: "x" })).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+  });
+});
+
+function parseBuiltUrl(s: string) {
+  const url = new URL(s);
+  return { path: url.pathname, q: url.searchParams.get("q") };
+}
+
+describe("buildIssuesUrl", () => {
+  it("returns the bare /issues path with no q param when no options are given", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("returns the bare /issues path with no q param when options is empty", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, {}));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("passes a query through to q without a state qualifier", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { query: "bug" }));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("bug");
+  });
+
+  // Regression for #9986: the previous implementation gated the `is:<state>`
+  // qualifier on `query` being truthy, so `{ state: "closed" }` alone returned
+  // the bare /issues URL and silently dropped the filter.
+  it("applies the state filter as a q qualifier even when no query is given", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { state: "closed" })
+    );
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("is:closed");
+  });
+
+  it("treats an empty-string query as absent and still applies the state filter", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "", state: "closed" })
+    );
+    expect(q).toBe("is:closed");
+  });
+
+  it("appends the state qualifier after the query when both are present", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "closed" })
+    );
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBe("bug is:closed");
+  });
+
+  it("treats state: 'all' as a no-op when given alone", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { state: "all" }));
+    expect(path).toBe("/owner/repo/issues");
+    expect(q).toBeNull();
+  });
+
+  it("treats state: 'all' as a no-op even when combined with a query", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "all" })
+    );
+    expect(q).toBe("bug");
+  });
+});
+
+describe("buildPRsUrl", () => {
+  it("returns the bare /pulls path with no q param when no options are given", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("returns the bare /pulls path with no q param when options is empty", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, {}));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("passes a query through to q without a state qualifier", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { query: "bug" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("bug");
+  });
+
+  // Regression for #9986: see buildIssuesUrl counterpart.
+  it("applies the state filter as a q qualifier even when no query is given", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "closed" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("is:closed");
+  });
+
+  it("applies state: 'merged' as a q qualifier on its own", () => {
+    // PRs only — issues never use "merged" upstream, but the builder must
+    // round-trip whatever the caller supplies.
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "merged" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("is:merged");
+  });
+
+  it("treats an empty-string query as absent and still applies the state filter", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "", state: "merged" })
+    );
+    expect(q).toBe("is:merged");
+  });
+
+  it("appends the state qualifier after the query when both are present", () => {
+    const { path, q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "closed" })
+    );
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBe("bug is:closed");
+  });
+
+  it("treats state: 'all' as a no-op when given alone", () => {
+    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "all" }));
+    expect(path).toBe("/owner/repo/pulls");
+    expect(q).toBeNull();
+  });
+
+  it("treats state: 'all' as a no-op even when combined with a query", () => {
+    const { q } = parseBuiltUrl(
+      githubForgeProvider.buildPRsUrl(repo, { query: "bug", state: "all" })
+    );
+    expect(q).toBe("bug");
+  });
+});
+
+describe("buildPRFileUrl", () => {
+  // GitHub's "Files changed" deep-link uses a `#diff-<sha256-of-utf8-path>`
+  // anchor. The hash is over the raw UTF-8 path bytes (not URL-encoded) and
+  // the URL must NOT use the legacy `?file=<path>` query — github.com
+  // doesn't honor it. The renderer never reconstructs this URL; the
+  // decoration provider calls into here.
+  function parseDeepLink(url: string): {
+    origin: string;
+    pathname: string;
+    hash: string;
+    search: string;
+  } {
+    const parsed = new URL(url);
+    return {
+      origin: parsed.origin,
+      pathname: parsed.pathname,
+      hash: parsed.hash,
+      search: parsed.search,
+    };
+  }
+
+  it("returns a /pull/<n>/files URL with a #diff-<sha256> fragment", () => {
+    const url = githubForgeProvider.buildPRFileUrl!(repo, 42, "src/a.ts");
+    const { pathname, hash, search } = parseDeepLink(url);
+    expect(pathname).toBe("/owner/repo/pull/42/files");
+    expect(search).toBe(""); // The legacy `?file=` shape must NOT be used
+    expect(hash).toMatch(/^#diff-[0-9a-f]{64}$/);
+  });
+
+  it("hashes the path as raw UTF-8 bytes, not URL-encoded form", () => {
+    // The SHA-256 of "src/has space.ts" must match the raw-byte form.
+    // If the implementation accidentally URL-encodes first, the hash will
+    // diverge from the github.com anchor (which hashes the raw path).
+    const path = "src/has space.ts";
+    const url = githubForgeProvider.buildPRFileUrl!(repo, 1, path);
+    const { hash } = parseDeepLink(url);
+    const rawHash = createHash("sha256").update(path, "utf8").digest("hex");
+    const encodedHash = createHash("sha256").update(encodeURIComponent(path), "utf8").digest("hex");
+    expect(hash).toBe(`#diff-${rawHash}`);
+    // Sanity: URL-encoded form would produce a DIFFERENT hash. If the
+    // implementation encoded the path first, the raw-hash assertion above
+    // would fail — this is just a documentation of why those two are
+    // expected to differ.
+    expect(rawHash).not.toBe(encodedHash);
+  });
+
+  it("produces different hashes for different paths", () => {
+    const url1 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/a.ts");
+    const url2 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/b.ts");
+    expect(parseDeepLink(url1).hash).not.toBe(parseDeepLink(url2).hash);
+  });
+
+  it("produces the same hash for the same path on different PR numbers", () => {
+    const url1 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/a.ts");
+    const url2 = githubForgeProvider.buildPRFileUrl!(repo, 999, "src/a.ts");
+    const hash1 = parseDeepLink(url1).hash;
+    const hash2 = parseDeepLink(url2).hash;
+    expect(hash1).toBe(hash2);
+    // Path component is the only thing that should differ
+    expect(parseDeepLink(url1).pathname).toBe("/owner/repo/pull/1/files");
+    expect(parseDeepLink(url2).pathname).toBe("/owner/repo/pull/999/files");
+  });
+
+  it("uses the well-known SHA-256 of 'src/a.ts' as the anchor", () => {
+    // Locks the algorithm: any future change to the hash function or input
+    // encoding would break this fixture.
+    const expected = createHash("sha256").update("src/a.ts", "utf8").digest("hex");
+    const url = githubForgeProvider.buildPRFileUrl!(repo, 42, "src/a.ts");
+    expect(parseDeepLink(url).hash).toBe(`#diff-${expected}`);
+  });
+});
+
+describe("getRateLimit", () => {
+  afterEach(() => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({ blocked: false } as never);
+  });
+
+  it("includes throttleMultiplier when not blocked so the bridge path carries throttle state", async () => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({
+      blocked: false,
+      kind: null,
+      throttleMultiplier: 3,
+    } as never);
+
+    await expect(githubForgeProvider.getRateLimit!()).resolves.toEqual({
+      limit: null,
+      remaining: null,
+      resetAt: null,
+      throttleMultiplier: 3,
+    });
+  });
+
+  it("defaults throttleMultiplier to 1 when the state omits it", async () => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({
+      blocked: false,
+      kind: null,
+    } as never);
+
+    const info = await githubForgeProvider.getRateLimit!();
+    expect(info.throttleMultiplier).toBe(1);
+  });
+
+  it("includes throttleMultiplier and the secondary flag when blocked", async () => {
+    vi.mocked(gitHubRateLimitService.getState).mockReturnValue({
+      blocked: true,
+      kind: "secondary",
+      resetAt: 123,
+      throttleMultiplier: 8,
+    } as never);
+
+    await expect(githubForgeProvider.getRateLimit!()).resolves.toEqual({
+      limit: null,
+      remaining: 0,
+      resetAt: 123,
+      secondaryThrottled: true,
+      throttleMultiplier: 8,
+    });
   });
 });

@@ -15,6 +15,7 @@ import {
 import { GridShell } from "./GridShell";
 import { GridScrollbar, GRID_SCROLLBAR_GUTTER_PX } from "./GridScrollbar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
+import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
 import type { ContentGridContext } from "./useContentGridContext";
 
@@ -67,6 +68,7 @@ export function ContentGridDefault({
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
+        <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">
           <SortableContext id="grid-container" items={ctx.panelIds} strategy={rectSortingStrategy}>
             <GridShell

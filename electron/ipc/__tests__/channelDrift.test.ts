@@ -79,6 +79,8 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "demo:exec-start-capture",
   "demo:exec-stop-capture",
   "demo:exec-wait-for-idle",
+  "demo:exec-send-key-to-terminal",
+  "demo:exec-type-in-terminal",
 
   // fire-and-forget — renderer→main `ipcRenderer.send` handled by
   // `ipcMain.on(CHANNELS.ERROR_RETRY_CANCEL)` in errorHandlers.ts.
@@ -90,11 +92,6 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "event-inspector:unsubscribe",
   "telemetry:preview-subscribe",
   "telemetry:preview-unsubscribe",
-
-  // fire-and-forget — main→renderer push handled outside the typed event
-  // bus (httpLifecycle.ts uses `webContents.send`); the renderer surface is
-  // currently main-internal only.
-  "mcp-server:session-revoked",
 
   // fire-and-forget — renderer→main `ipcRenderer.send` for notification
   // bookkeeping (acknowledge/mute/sync paths in the notification store).
@@ -345,6 +342,52 @@ describe("IPC channel drift guardrails", () => {
         "to electron/ipc/channels.ts or, if intentional, to INVOKE_MAP_CHANNEL_ALLOWLIST " +
         "with a documented reason."
     ).toEqual([]);
+  });
+
+  it("no IpcInvokeMap key appears in GeneratedIpcInvokeMap (half-migrated channels)", async () => {
+    const mapsSrc = await readFile(MAPS_TS, "utf8");
+    const generatedSrc = await readFile(GENERATED_TS, "utf8");
+    const handMaintained = extractKeysFromBlock(mapsSrc, "export interface IpcInvokeMap");
+    const generated = extractKeysFromBlock(generatedSrc, "export interface GeneratedIpcInvokeMap");
+
+    expect(handMaintained.size).toBeGreaterThan(0);
+    expect(generated.size).toBeGreaterThan(0);
+
+    const duplicates = [...handMaintained].filter((k) => generated.has(k)).sort();
+
+    expect(
+      duplicates,
+      "These channels appear in both IpcInvokeMap (maps.ts) and GeneratedIpcInvokeMap " +
+        "(generated.ts). A defineIpcNamespace migration was left half-done — delete the " +
+        "hand-written entry from maps.ts once codegen owns the channel, and lower the count " +
+        "in ipc-handwritten-baseline.json to match."
+    ).toEqual([]);
+  });
+
+  it("duplicate guard fires when a hand-written key is re-introduced (negative control)", () => {
+    // Proves the intersection logic above would actually catch a regression,
+    // independent of the live files' current clean state.
+    const mapsSrc = [
+      "export interface IpcInvokeMap {",
+      '  "project:clone-cancel": {',
+      "    args: [];",
+      "    result: void;",
+      "  };",
+      "}",
+    ].join("\n");
+    const generatedSrc = [
+      "export interface GeneratedIpcInvokeMap {",
+      '  "project:clone-cancel": {',
+      "    args: [];",
+      "    result: void;",
+      "  };",
+      "}",
+    ].join("\n");
+    const handMaintained = extractKeysFromBlock(mapsSrc, "export interface IpcInvokeMap");
+    const generated = extractKeysFromBlock(generatedSrc, "export interface GeneratedIpcInvokeMap");
+    const duplicates = [...handMaintained].filter((k) => generated.has(k)).sort();
+
+    expect(duplicates).toEqual(["project:clone-cancel"]);
   });
 
   it("every IpcEventMap key resolves to a declared CHANNELS value", async () => {

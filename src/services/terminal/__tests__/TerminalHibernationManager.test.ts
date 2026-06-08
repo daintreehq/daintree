@@ -52,10 +52,21 @@ vi.mock("../TerminalAddonManager", () => ({
   })),
 }));
 
+// Captures the onDataLoss (3rd) constructor arg of the most recently
+// constructed parser handler so tests can assert the wake path re-wires it
+// (#9907).
+let lastParserOnDataLoss: ((droppedBytes: number) => void) | undefined;
+
 vi.mock("../TerminalParserHandler", () => ({
   TerminalParserHandler: class {
     dispose = vi.fn();
-    constructor(_managed: unknown, _onResize: () => void) {}
+    constructor(
+      _managed: unknown,
+      _onResize: () => void,
+      onDataLoss?: (droppedBytes: number) => void
+    ) {
+      lastParserOnDataLoss = onDataLoss;
+    }
   },
 }));
 
@@ -157,8 +168,8 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     clearResizeJob: vi.fn(),
     clearSettledTimer: vi.fn(),
     applyDeferredResize: vi.fn(),
-    openLink: vi.fn(),
-    getCwdProvider: vi.fn(() => undefined),
+    drawDataLossMarker: vi.fn(),
+    ensureDeferredAddons: vi.fn(),
     onHibernationChanged: vi.fn(),
     getIsBackgrounded: vi.fn(() => false),
     onBufferModeChange: vi.fn(),
@@ -240,6 +251,44 @@ describe("TerminalHibernationManager", () => {
       managed.pendingWrites = 2;
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should no-op for a non-agent terminal with writes in flight (#9912)", () => {
+      // No runtimeAgentId — previously the non-agent early-return skipped
+      // the pendingWrites guard entirely, letting dispose() fire mid-write.
+      managed.runtimeAgentId = undefined;
+      managed.pendingWrites = 2;
+      manager.hibernate("t1");
+      // Full no-op: no teardown side effects, not just an unset flag.
+      expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
+    });
+
+    it("should no-op for a resting-state agent with writes in flight (#9912)", () => {
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "completed";
+      managed.pendingWrites = 1;
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
+    });
+
+    it("should no-op for a backgrounded active agent with writes in flight (#9912)", () => {
+      // Direct hibernate() path (not the eligibility facade): the burst
+      // guard must precede the backgrounded bypass.
+      managed.launchAgentId = "claude";
+      managed.runtimeAgentId = "claude";
+      managed.canonicalAgentState = "working";
+      managed.lastWriteAt = Date.now() - 1000;
+      managed.pendingWrites = 1;
+      (deps.getIsBackgrounded as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
     });
 
     it("should hibernate a working agent that has been silent past AGENT_IDLE_SILENCE_MS", () => {
@@ -463,10 +512,37 @@ describe("TerminalHibernationManager", () => {
       expect(onWriteParsedReflow).toHaveBeenCalledWith(managed);
     });
 
+    it("re-wires the data-loss callback to deps.drawDataLossMarker (#9907)", () => {
+      lastParserOnDataLoss = undefined;
+      manager.unhibernate("t1");
+
+      // The wake path must pass the onDataLoss callback as the 3rd parser
+      // arg, mirroring getOrCreate(); without it, post-wake data-loss
+      // markers stop rendering.
+      expect(lastParserOnDataLoss).toBeTypeOf("function");
+      lastParserOnDataLoss!(512);
+      expect(deps.drawDataLossMarker).toHaveBeenCalledWith("t1", 512);
+    });
+
     it("should reset lastReflowAt so next reflow fires immediately", () => {
       managed.lastReflowAt = 99999;
       manager.unhibernate("t1");
       expect(managed.lastReflowAt).toBe(0);
+    });
+
+    it("should reset stranded pendingWrites so hibernation stays reachable (#9912)", () => {
+      // A mid-write dispose drops the old terminal's write callbacks, so the
+      // counter can be stuck > 0 entering the wake path. The fresh Terminal
+      // has no queued writes — the wake must zero it.
+      managed.pendingWrites = 5;
+      manager.unhibernate("t1");
+      expect(managed.pendingWrites).toBe(0);
+    });
+
+    it("should keep pendingWrites at 0 on wake when nothing was stranded (#9912)", () => {
+      managed.pendingWrites = 0;
+      manager.unhibernate("t1");
+      expect(managed.pendingWrites).toBe(0);
     });
 
     it("notifies onHibernationChanged after the flag is cleared", () => {
@@ -528,6 +604,16 @@ describe("TerminalHibernationManager", () => {
       managed.runtimeAgentId = undefined;
       expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
         true
+      );
+    });
+
+    it("rejects BACKGROUND for a non-agent terminal with writes in flight (#9912)", () => {
+      // Keeps the eligibility facade and the direct hibernate() guard in
+      // lockstep should the two paths ever diverge.
+      managed.runtimeAgentId = undefined;
+      managed.pendingWrites = 1;
+      expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(
+        false
       );
     });
 

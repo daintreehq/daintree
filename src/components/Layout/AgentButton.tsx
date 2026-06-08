@@ -34,7 +34,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { ChevronDown, PanelBottom, Unplug } from "lucide-react";
+import { ChevronDown, PanelBottom } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import {
@@ -48,12 +48,14 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 import { resolveEffectivePresetId } from "@shared/types";
 import {
   getDominantAgentState,
   agentStateDotColor,
 } from "@/components/Worktree/AgentStatusIndicator";
+import { STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
 
@@ -274,13 +276,24 @@ export function AgentButton({
   // because the CLI itself will prompt for sign-in on first run.
   const signInUnconfirmed = isAgentUnauthenticated(availability);
 
+  // Same gate the corner dot uses (issue #9823, #5900). When a dot renders,
+  // dominantState is one of {waiting, directing} — STATE_LABELS has a human
+  // word for every dot-bearing state, so the suffix is always meaningful.
+  // Moved above the tooltip/aria ternaries so they can consume it.
+  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+  const visibleStateSuffix = dotColor ? ` — ${STATE_LABELS[dominantState!]}` : "";
+  // Suppress the at-rest split-button seam when the chevron is gated — the
+  // chevron blocks clicks in these states anyway (issue #8131), so a seam
+  // would advertise a control that isn't usable.
+  const showSeam = !isLoading && isLaunchable;
+
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   const tooltipLabel = isLoading
     ? `Checking ${config.name} CLI…`
     : isLaunchable
       ? signInUnconfirmed
-        ? `Start ${config.name}${presetSegment} — sign-in not detected`
-        : `Start ${config.name}${presetSegment}${tooltipDetails}`
+        ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
+        : `Start ${config.name}${presetSegment}${visibleStateSuffix}${tooltipDetails}`
       : needsSetup
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;
@@ -300,7 +313,7 @@ export function AgentButton({
   const ariaLabel = isLoading
     ? `Checking ${config.name} CLI`
     : isLaunchable
-      ? `Start ${config.name}`
+      ? `Start ${config.name}${visibleStateSuffix}`
       : needsSetup
         ? `Configure ${config.name}`
         : `Install ${config.name} CLI`;
@@ -324,6 +337,10 @@ export function AgentButton({
     }
   };
 
+  // Per-agent unpin: agent IDs read pin state from agentSettingsStore
+  // (tri-state — see isAgentToolbarVisible / #7673), not from
+  // pinnedButtons. The wrapper's default toggleButtonVisibility writes
+  // to the wrong store, so override it here.
   const handleUnpinFromToolbar = () => {
     void setAgentPinned(type, false);
   };
@@ -339,22 +356,17 @@ export function AgentButton({
     void useAgentSettingsStore.getState().updateWorktreePreset(type, activeWorktreeId, presetId);
   };
 
-  const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
   const toolbarBrandColor = getBrandColorHex(type);
   const iconElement = (
     <div className="relative">
       <BrandMark brandColor={toolbarBrandColor}>
         <config.icon brandColor={toolbarBrandColor} />
       </BrandMark>
-      {isSessionActive && dotColor && (
-        <span
-          className={cn(
-            "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
-            dotColor
-          )}
-          aria-hidden="true"
-        />
-      )}
+      <span
+        className={cn("toolbar-pip toolbar-badge", dotColor)}
+        data-visible={!!(isSessionActive && dotColor)}
+        aria-hidden="true"
+      />
     </div>
   );
 
@@ -422,10 +434,7 @@ export function AgentButton({
             </ContextMenuSub>
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={handleUnpinFromToolbar}>
-            <Unplug className="mr-2 h-3.5 w-3.5" />
-            Unpin from Toolbar
-          </ContextMenuItem>
+          <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
           <ContextMenuActionItem
             actionId="app.settings.openTab"
             args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
@@ -446,7 +455,7 @@ export function AgentButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <span className="inline-flex">
+        <span className="inline-flex group/agent-split">
           <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <Button
@@ -465,6 +474,7 @@ export function AgentButton({
                 onBlur={hover.onBlur}
                 className={cn(
                   "toolbar-agent-button text-daintree-text rounded-r-none border-r border-transparent relative",
+                  showSeam && "toolbar-agent-split-seam",
                   needsSetup && "opacity-70",
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
@@ -720,10 +730,7 @@ export function AgentButton({
           </ContextMenuSub>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={handleUnpinFromToolbar}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
         <ContextMenuActionItem
           actionId="app.settings.openTab"
           args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}

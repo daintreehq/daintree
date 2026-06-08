@@ -11,6 +11,7 @@ import {
   slashCommandsClient,
   systemClient,
 } from "@/clients";
+import { cancelContextInjection } from "@/hooks/useContextInjection";
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("system.openExternal", () =>
@@ -244,7 +245,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       description: "Apply a unified diff patch to the filesystem",
       category: "artifacts",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
       scope: "renderer",
       argsSchema: z.object({
         patchContent: z.string(),
@@ -368,6 +371,12 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      // Clears renderer injection state and cancels the active injection by
+      // UUID, then sweeps any other in-flight CopyTree operations
+      // (generate/copy-file). An injection started between these two calls
+      // would be swept too — accepted: both are user-initiated cancels and
+      // the window is a single microtask turn.
+      cancelContextInjection();
       await copyTreeClient.cancel();
     },
   }));

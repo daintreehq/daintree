@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
@@ -10,6 +10,10 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +32,10 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
   const removePanel = usePanelStore((s) => s.removePanel);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  // Re-render when a plugin loads/unloads mid-session so the trashed terminal's
+  // icon/name pick up the updated registry (#9879). Subscription is the
+  // mechanism; the value itself is read via getEffectiveAgentConfig below.
+  useSyncExternalStore(subscribeToPluginAgentRegistry, getPluginAgentRegistrySnapshot);
 
   const isOrphan = !!terminal.worktreeId && !worktreeName;
 

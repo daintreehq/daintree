@@ -717,6 +717,21 @@ export class ProjectStore {
     return this.stateManager.saveProjectState(projectId, state);
   }
 
+  async enqueueProjectStateUpdate(
+    projectId: string,
+    updater: (existing: ProjectState | null) => ProjectState | null | Promise<ProjectState | null>
+  ): Promise<void> {
+    return this.stateManager.enqueueProjectStateUpdate(projectId, async (existing) => {
+      const updated = await updater(existing);
+      if (updated !== null) {
+        // Same contract as saveProjectState: invalidate before the write so an
+        // in-flight prefetch can't clobber the cache with pre-mutation state.
+        invalidatePrefetchCache(projectId);
+      }
+      return updated;
+    });
+  }
+
   async getProjectState(projectId: string): Promise<ProjectState | null> {
     return this.stateManager.getProjectState(projectId);
   }

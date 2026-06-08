@@ -10,7 +10,17 @@ export function loadWebviewUrl(
     "catch" in result &&
     typeof result.catch === "function"
   ) {
-    result.catch(() => {
+    (result as { catch: (fn: (err: unknown) => void) => void }).catch((err: unknown) => {
+      // ERR_ABORTED (-3) fires when a pending load is superseded by a new
+      // navigation — benign, so don't surface it as a load failure (#9940).
+      if (
+        err &&
+        typeof err === "object" &&
+        "errorCode" in err &&
+        (err as { errorCode: unknown }).errorCode === -3
+      ) {
+        return;
+      }
       onRejected?.();
     });
   }

@@ -15,7 +15,6 @@ export const CHANNELS = {
   WORKTREE_DELETE: "worktree:delete",
   WORKTREE_ATTACH_ISSUE: "worktree:attach-issue",
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
-  WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
   WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
@@ -154,11 +153,11 @@ export const CHANNELS = {
   GITHUB_GET_PRS_BY_NUMBERS: "github:get-prs-by-numbers",
   GITHUB_GET_PR_REVIEW_THREADS: "github:get-pr-review-threads",
   GITHUB_LIST_REMOTES: "github:list-remotes",
-  GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
   GITHUB_GET_RATE_LIMIT_DETAILS: "github:get-rate-limit-details",
   GITHUB_TOKEN_HEALTH_CHANGED: "github:token-health-changed",
   GITHUB_GET_TOKEN_HEALTH: "github:get-token-health",
   GITHUB_REPO_STATS_AND_PAGE_UPDATED: "github:repo-stats-and-page-updated",
+  GITHUB_REPO_COUNTS_UPDATED: "github:repo-counts-updated",
   GITHUB_GET_FIRST_PAGE_CACHE: "github:get-first-page-cache",
   GITHUB_RESOLVE_AUTHOR_AVATAR: "github:resolve-author-avatar",
 
@@ -366,6 +365,7 @@ export const CHANNELS = {
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
+  WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
   WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
@@ -408,6 +408,7 @@ export const CHANNELS = {
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
   WORKTREE_CONFIG_SET_WSL_GIT: "worktree-config:set-wsl-git",
   WORKTREE_CONFIG_DISMISS_WSL_BANNER: "worktree-config:dismiss-wsl-banner",
+  WORKTREE_CONFIG_REPROBE_WSL: "worktree-config:reprobe-wsl",
 
   WINDOW_TOGGLE_FULLSCREEN: "window:toggle-fullscreen",
   WINDOW_RELOAD: "window:reload",
@@ -570,6 +571,15 @@ export const CHANNELS = {
    */
   MCP_SERVER_LIST_ACTIVE_CLIENTS: "mcp-server:list-active-clients",
   MCP_SERVER_GET_AUDIT_RECORDS: "mcp-server:get-audit-records",
+  /**
+   * Sibling of `MCP_SERVER_GET_AUDIT_RECORDS` that returns the full
+   * `McpLogRecord` union (dispatch + grant lifecycle). Used by the
+   * audit-log viewer and the NDJSON export. Dispatch-only consumers
+   * (latency table, recent-calls popover, activity strip) keep using
+   * the dispatch channel so their `result`/`durationMs` reads stay
+   * type-safe — see #10027.
+   */
+  MCP_SERVER_GET_LOG_RECORDS: "mcp-server:get-log-records",
   MCP_SERVER_CLEAR_AUDIT_LOG: "mcp-server:clear-audit-log",
   MCP_SERVER_SET_AUDIT_ENABLED: "mcp-server:set-audit-enabled",
   MCP_SERVER_SET_AUDIT_MAX_RECORDS: "mcp-server:set-audit-max-records",
@@ -639,11 +649,25 @@ export const CHANNELS = {
    */
   MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
   /**
+   * Reset the per-`(sessionId, toolId)` denial counters for a session without
+   * touching its grants. Fired when the user dismisses the tier-mismatch
+   * banner so the next out-of-tier call re-arms the banner instead of being
+   * silently suppressed by the abuse policy. Caller-pin checked.
+   */
+  MCP_SERVER_RESET_DENIAL_COUNTS: "mcp-server:reset-denial-counts",
+  /**
    * List the external bearers currently connected to the local MCP server.
    * Returns only the display suffix and token hash — never the raw token.
    * Backs the "External clients" row on the MCP Server settings tab (#8778).
    */
   MCP_SERVER_LIST_ACTIVE_BEARERS: "mcp-server:list-active-bearers",
+  /**
+   * Read-only inventory of the renderer-pinned help-session bearers (the
+   * Daintree Assistant's own internal MCP connections). Backs the separate
+   * "Daintree Assistant connections" row on the MCP Server settings tab,
+   * which has no disconnect control (#10036).
+   */
+  MCP_SERVER_LIST_HELP_SESSION_BEARERS: "mcp-server:list-help-session-bearers",
   /**
    * Disconnect a single external bearer by its token hash: revoke every
    * session it owns and evict it from the live register. One bearer only —
@@ -668,6 +692,20 @@ export const CHANNELS = {
    * so the activity strip can dim to a glyph. Targeted send — never broadcast.
    */
   MCP_TOOL_CALL_SETTLED: "mcp-server:tool-call-settled",
+  /**
+   * Push channel: the assistant invoked the `help.displayImage` MCP tool
+   * (#9828). Carries the validated daintree.org image URL plus the
+   * session-assigned figure number so the Assistant panel can render the
+   * figure inline. Targeted at the pinned WebContents — never broadcast.
+   */
+  MCP_HELP_DISPLAY_IMAGE: "mcp-server:help-display-image",
+  /**
+   * Push channel: a turn for the help-session pinned to this renderer
+   * classified as `agent-stuck` or `reasoning-loop` (#10018). Drives the
+   * Assistant footer's ambient outcome pip — a Tier 1 indicator, never a
+   * toast. Targeted at the pinned WebContents — never broadcast.
+   */
+  MCP_TURN_OUTCOME_ALERT: "mcp-server:turn-outcome-alert",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
@@ -691,6 +729,7 @@ export const CHANNELS = {
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
   HELP_ASSISTANT_SET_SETTINGS: "help-assistant:set-settings",
+  HELP_ASSISTANT_GET_LIVE_SESSION_STATUS: "help-assistant:get-live-session-status",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
@@ -761,6 +800,10 @@ export const CHANNELS = {
   DEMO_EXEC_DRAG: "demo:exec-drag",
   DEMO_PRESS_KEY: "demo:press-key",
   DEMO_EXEC_PRESS_KEY: "demo:exec-press-key",
+  DEMO_TYPE_IN_TERMINAL: "demo:type-in-terminal",
+  DEMO_EXEC_TYPE_IN_TERMINAL: "demo:exec-type-in-terminal",
+  DEMO_SEND_KEY_TO_TERMINAL: "demo:send-key-to-terminal",
+  DEMO_EXEC_SEND_KEY_TO_TERMINAL: "demo:exec-send-key-to-terminal",
   DEMO_SPOTLIGHT: "demo:spotlight",
   DEMO_EXEC_SPOTLIGHT: "demo:exec-spotlight",
   DEMO_DISMISS_SPOTLIGHT: "demo:dismiss-spotlight",
@@ -799,6 +842,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUE: "forge:get-issue",
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
+  FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
 
   // Forge audit log channels — separate prefix from `forge:*` so the codegen
@@ -810,6 +854,13 @@ export const CHANNELS = {
   FORGE_AUDIT_CLEAR_LOG: "forge-audit:clear-log",
   FORGE_AUDIT_EXPORT_LOG: "forge-audit:export-log",
   FORGE_AUDIT_SET_ENABLED: "forge-audit:set-enabled",
+
+  // Run history channels — durable recipe/fleet automation outcomes (#9949).
+  // Dedicated `run-history:*` prefix so codegen produces a `runHistory`
+  // renderer namespace.
+  RUN_HISTORY_GET_RECORDS: "run-history:get-records",
+  RUN_HISTORY_APPEND: "run-history:append",
+  RUN_HISTORY_CLEAR: "run-history:clear",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",

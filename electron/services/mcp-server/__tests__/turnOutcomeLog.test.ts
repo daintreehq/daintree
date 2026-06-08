@@ -543,6 +543,89 @@ describe("TurnOutcomeService.handleTransition", () => {
   });
 });
 
+describe("TurnOutcomeService.setNotifyTurnOutcomeAlert", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires the alert callback for agent-stuck with the help-session id", () => {
+    const f = makeFixture();
+    const alert = vi.fn();
+    f.service.setNotifyTurnOutcomeAlert(alert);
+    f.service.handleTransition(
+      makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
+    );
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith("agent-stuck", "session-1", undefined);
+  });
+
+  it("fires the alert callback for reasoning-loop with the turn id", () => {
+    const now = Date.now();
+    const auditRecords = [
+      makeAuditRecord({ id: "r1", timestamp: now, toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r2", timestamp: now, toolId: "agent.getState", argsSummary: "{}" }),
+      makeAuditRecord({ id: "r3", timestamp: now, toolId: "agent.getState", argsSummary: "{}" }),
+    ];
+    const f = makeFixture({ auditRecords });
+    const alert = vi.fn();
+    f.service.setNotifyTurnOutcomeAlert(alert);
+    // Enter active to mint a turn id, then close the turn so the loop classifies.
+    f.service.handleTransition(
+      makeTransition({ previousState: "idle", state: "working", trigger: "input", timestamp: now })
+    );
+    f.service.appendOutput("term-1", "Looping through agent.getState repeatedly without progress.");
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output", timestamp: now })
+    );
+    expect(alert).toHaveBeenCalledTimes(1);
+    const [outcome, helpSessionId, turnId] = alert.mock.calls[0]!;
+    expect(outcome).toBe("reasoning-loop");
+    expect(helpSessionId).toBe("session-1");
+    expect(typeof turnId).toBe("string");
+  });
+
+  it("does not fire the alert callback for non-alertable outcomes", () => {
+    const f = makeFixture();
+    const alert = vi.fn();
+    f.service.setNotifyTurnOutcomeAlert(alert);
+    f.service.appendOutput("term-1", "Done — the file was updated and the tests pass cleanly.");
+    f.service.handleTransition(
+      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
+    );
+    expect(f.service.getRecords()[0]?.outcome).toBe("answered");
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it("respects the stuck debounce — no second alert without an intervening active turn", () => {
+    const f = makeFixture();
+    const alert = vi.fn();
+    f.service.setNotifyTurnOutcomeAlert(alert);
+    f.service.handleTransition(
+      makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
+    );
+    f.service.handleTransition(
+      makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
+    );
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it("never blocks record persistence when the alert callback throws", () => {
+    const f = makeFixture();
+    f.service.setNotifyTurnOutcomeAlert(() => {
+      throw new Error("renderer gone");
+    });
+    expect(() =>
+      f.service.handleTransition(
+        makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
+      )
+    ).not.toThrow();
+    expect(f.service.getRecords()[0]?.outcome).toBe("agent-stuck");
+  });
+});
+
 describe("TurnOutcomeService.recordDirectOutcome", () => {
   beforeEach(() => {
     vi.useFakeTimers();

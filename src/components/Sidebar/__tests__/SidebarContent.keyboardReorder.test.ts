@@ -22,15 +22,21 @@ describe("SidebarContent keyboard reorder announcement — issue #8013", () => {
       expect(source).toContain("worktreesRef.current = worktrees;");
     });
 
-    it("resolves the moved row's display name, falling back to its id", () => {
+    it("resolves the moved row's headline through issueTitle → branch → name, falling back to its id", () => {
+      // Mirrors the drag-cancel announcer and DndProvider.resolveWorktreeLabel
+      // so keyboard reorder speaks the headline shown on the card, not the bare
+      // name (issue #10317).
       expect(source).toMatch(
-        /worktreesRef\.current\.find\(\(w\)\s*=>\s*w\.id\s*===\s*worktreeId\)\?\.name\s*\?\?\s*worktreeId/
+        /const\s+wt\s*=\s*worktreesRef\.current\.find\(\(w\)\s*=>\s*w\.id\s*===\s*worktreeId\)/
+      );
+      expect(source).toMatch(
+        /const\s+label\s*=\s*wt\?\.issueTitle\s*\?\?\s*wt\?\.branch\s*\?\?\s*wt\?\.name\s*\?\?\s*worktreeId/
       );
     });
 
-    it("announces the worktree name alongside the position", () => {
+    it("announces the worktree headline alongside the position", () => {
       expect(source).toContain(
-        "`Moved '${name}' to position ${targetIdx + 1} of ${visible.length}`"
+        "`Moved '${label}' to position ${targetIdx + 1} of ${visible.length}`"
       );
       expect(source).not.toMatch(/`Moved to position \$\{targetIdx \+ 1\}/);
     });

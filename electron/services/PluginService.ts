@@ -89,6 +89,8 @@ import {
   unregisterForgeProviderImpls,
   unregisterForgeProviders,
 } from "./forgeProviderRegistry.js";
+import { buildStoredCredentials } from "./forge/forgeCredentialUtils.js";
+import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import {
   registerFileDecorationProviderImpl,
   registerFileDecorationProviders,
@@ -656,6 +658,17 @@ export class PluginService {
   }
 
   /**
+   * Whether the manifest scan phase ({@link initialize}) has settled. Forge
+   * provider descriptors register at scan-time, so once this is true a
+   * hostname-match miss in `resolveForgeProvider` is a definitive "no
+   * provider matches" rather than a cold-start race (#9997). Distinct from
+   * {@link waitForInit}, which also waits for startup activation.
+   */
+  get isPluginScanComplete(): boolean {
+    return this.initialized;
+  }
+
+  /**
    * Stop forwarding shared registry events to the renderer. Intended for
    * tests that need a clean teardown — production code holds a single
    * `pluginService` singleton for the app lifetime. Also drops any pending
@@ -1068,6 +1081,10 @@ export class PluginService {
 
     if (manifest.contributes.forgeProviders.length > 0) {
       registerForgeProviders(manifest.name, manifest.contributes.forgeProviders);
+      // Wake workspace-hosts whose PR polling paused on a "no provider
+      // matches" resolution so they re-evaluate against the new descriptor
+      // (#9997). Covers both the startup scan and runtime install/enable.
+      this.workspaceClient?.notifyForgeProviderRegistryUpdated();
     }
 
     if (manifest.contributes.fileDecorationProviders.length > 0) {
@@ -1754,6 +1771,25 @@ export class PluginService {
         }
 
         registerForgeProviderImpl(pluginId, contributionId, impl);
+
+        // Replay the persisted credential into the freshly bound impl so a
+        // cold start, plugin reload, or dev-mode rescan reaches the provider
+        // authenticated (#9983) — the store is the durable source of truth but
+        // nothing pushed it back into the impl on bind. Synchronous (the
+        // revoked guard above already holds), and wrapped in try/catch because
+        // a plugin's `setCredentials` throwing must not abort activation.
+        const replayId = makeForgeProviderId(pluginId, contributionId);
+        const storedCredentials = buildStoredCredentials(replayId);
+        if (storedCredentials) {
+          try {
+            impl.setCredentials?.(storedCredentials);
+          } catch (err) {
+            console.warn(
+              `[PluginService] registerForgeProvider: setCredentials replay failed for "${replayId}":`,
+              err
+            );
+          }
+        }
 
         let disposed = false;
         const dispose = (): void => {

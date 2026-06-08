@@ -406,6 +406,140 @@ describe("useCrashRecoveryGate", () => {
     expect(storeState.visible).toBe(false);
   });
 
+  it("transitions to failed state when auto-restore resolve rejects", async () => {
+    // The IPC handler now rejects when `restoreBackup()` returns false
+    // (no snapshot, zero-match filter, no restorable content, or apply
+    // exception). The gate must (a) keep the dialog mounted so the user
+    // can retry and the "Recovery failed" banner renders, and (b) skip
+    // the false-positive "Session restored" confirmation. The recovery
+    // source is preserved on disk by the service, so the user can retry.
+    const resolve = vi.fn(async () => {
+      throw new Error("Crash recovery restore failed");
+    });
+    installElectronStub({ resolve });
+    const pendingCrash = { ...mockCrash, crashCount: 1 };
+
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(
+        makeBootResult({
+          crashPending: pendingCrash,
+          crashConfig: { autoRestoreOnCrash: true },
+        })
+      )
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.status).toBe("failed");
+    if (result.current.state.status === "failed") {
+      expect(result.current.state.crash).toEqual(pendingCrash);
+      expect(result.current.state.config).toEqual({ autoRestoreOnCrash: true });
+      expect(result.current.state.errorMessage).toBe("Crash recovery restore failed");
+    }
+    const storeState = useRestoreConfirmationStore.getState();
+    expect(storeState.visible).toBe(false);
+  });
+
+  it("uses the fallback error message when reject is a non-Error without a message property", async () => {
+    // `formatErrorMessage` accepts Error instances and plain string throws,
+    // returning their message. Only an opaque non-Error, non-string rejection
+    // triggers the fallback string.
+    const resolve = vi.fn(async () => {
+      throw { unexpected: "shape" };
+    });
+    installElectronStub({ resolve });
+
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
+        })
+      )
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.status).toBe("failed");
+    if (result.current.state.status === "failed") {
+      expect(result.current.state.errorMessage).toBe("Crash recovery restore failed");
+    }
+  });
+
+  it("fires crashRecovery.resolve exactly once when auto-restore fails under StrictMode double-mount", async () => {
+    // The hasProcessed ref must continue to guard against a duplicate
+    // auto-restore IPC even on the failure path — a fast-failing restore
+    // must not be retried by a StrictMode remount.
+    const resolve = vi.fn(async () => {
+      throw new Error("Crash recovery restore failed");
+    });
+    installElectronStub({ resolve });
+
+    renderHook(
+      () =>
+        useCrashRecoveryGate(
+          makeBootResult({
+            crashPending: { ...mockCrash, crashCount: 1 },
+            crashConfig: { autoRestoreOnCrash: true },
+          })
+        ),
+      { wrapper: StrictMode }
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("updateConfig patches local config in failed state so the auto-restore switch reflects the change", async () => {
+    // After an auto-restore failure, the user can toggle the auto-restore
+    // switch in the dialog. The dialog's local config must update so the
+    // switch position matches the persisted value (not the stale boot config).
+    const resolve = vi.fn(async () => {
+      throw new Error("Crash recovery restore failed");
+    });
+    installElectronStub({ resolve });
+
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
+        })
+      )
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.status).toBe("failed");
+
+    await act(async () => {
+      await result.current.updateConfig({ autoRestoreOnCrash: false });
+    });
+
+    expect(result.current.state.status).toBe("failed");
+    if (result.current.state.status === "failed") {
+      expect(result.current.state.config.autoRestoreOnCrash).toBe(false);
+    }
+  });
+
   describe("perf instrumentation", () => {
     beforeEach(() => {
       window.__DAINTREE_PERF_MARKS__ = [];

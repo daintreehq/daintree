@@ -164,6 +164,41 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </div>
   ),
+  DropdownMenuActionItem: ({
+    actionId,
+    args,
+    children,
+    onSelect,
+    ...props
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: React.ReactNode;
+    onSelect?: (e: Event) => void;
+  } & React.HTMLAttributes<HTMLDivElement>) => (
+    <div
+      role="menuitem"
+      data-action-id={actionId}
+      data-args={JSON.stringify(args)}
+      onClick={() => {
+        const fakeEvent = {
+          defaultPrevented: false,
+          preventDefault: () => {
+            (fakeEvent as { defaultPrevented: boolean }).defaultPrevented = true;
+          },
+        };
+        onSelect?.(fakeEvent as unknown as Event);
+        if (!fakeEvent.defaultPrevented) {
+          // Tests don't introspect the dispatch — they only need this row to
+          // exist so the ToolbarContextMenuItems wrapper renders.
+        }
+      }}
+      tabIndex={0}
+      {...props}
+    >
+      {children}
+    </div>
+  ),
   DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="menu-label">{children}</div>
   ),
@@ -226,9 +261,12 @@ vi.mock("@/hooks/usePluginToolbarButtons", () => ({
 
 vi.mock("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  closestCenter: vi.fn(),
+  DragOverlay: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  closestCorners: vi.fn(),
+  pointerWithin: vi.fn(),
   KeyboardSensor: vi.fn(),
   PointerSensor: vi.fn(),
+  useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
   useSensor: vi.fn(),
   useSensors: () => [],
 }));
@@ -244,7 +282,13 @@ vi.mock("@dnd-kit/sortable", () => ({
     transition: null,
     isDragging: false,
   }),
-  verticalListSortingStrategy: vi.fn(),
+  rectSortingStrategy: vi.fn(),
+  arrayMove: <T,>(arr: T[], from: number, to: number): T[] => {
+    const next = arr.slice();
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item as T);
+    return next;
+  },
 }));
 
 vi.mock("@dnd-kit/utilities", () => ({ CSS: { Transform: { toString: () => "" } } }));
@@ -255,6 +299,31 @@ vi.mock("@/components/Settings/SettingsSection", () => ({
 
 vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
   SettingsSwitchCard: () => null,
+}));
+
+// Render the switch as a plain role="switch" button so these cross-store sync
+// assertions stay decoupled from Radix internals (and so `aria-checked`
+// reflects the derived visibility state).
+vi.mock("@/components/Settings/SettingsSwitch", () => ({
+  SettingsSwitch: ({
+    checked,
+    onCheckedChange,
+    "aria-label": ariaLabel,
+  }: {
+    checked: boolean;
+    onCheckedChange: (next: boolean) => void;
+    "aria-label"?: string;
+  }) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onCheckedChange(!checked)}
+    >
+      {ariaLabel}
+    </button>
+  ),
 }));
 
 import { AgentTrayButton } from "@/components/Layout/AgentTrayButton";
@@ -303,11 +372,9 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     tray.unmount();
 
     const settings = render(<ToolbarSettingsTab />);
-    const claudeCheckbox = settings.getByLabelText(
-      "Toggle Claude Agent visibility"
-    ) as HTMLInputElement;
-    expect(claudeCheckbox.checked).toBe(true);
-    fireEvent.click(claudeCheckbox);
+    const claudeSwitch = settings.getByLabelText("Toggle Claude agent visibility");
+    expect(claudeSwitch.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(claudeSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
     settings.unmount();
 
@@ -331,10 +398,8 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
 
     // Initial Settings render: gemini unchecked.
     const settings = render(<ToolbarSettingsTab />);
-    const geminiCheckboxA = settings.getByLabelText(
-      "Toggle Gemini Agent visibility"
-    ) as HTMLInputElement;
-    expect(geminiCheckboxA.checked).toBe(false);
+    const geminiSwitchA = settings.getByLabelText("Toggle Gemini agent visibility");
+    expect(geminiSwitchA.getAttribute("aria-checked")).toBe("false");
     settings.unmount();
 
     // User clicks the pin indicator in the tray for gemini.
@@ -346,10 +411,8 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     // Re-render Settings — gemini is now checked because the shared store
     // picked up the tray's write.
     const settings2 = render(<ToolbarSettingsTab />);
-    const geminiCheckboxB = settings2.getByLabelText(
-      "Toggle Gemini Agent visibility"
-    ) as HTMLInputElement;
-    expect(geminiCheckboxB.checked).toBe(true);
+    const geminiSwitchB = settings2.getByLabelText("Toggle Gemini agent visibility");
+    expect(geminiSwitchB.getAttribute("aria-checked")).toBe("true");
   });
 
   it("undefined-pin agent with ready availability renders checked and toggles to false", () => {
@@ -358,11 +421,9 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     sharedAvailability = { claude: "ready" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);
-    const claudeCheckbox = settings.getByLabelText(
-      "Toggle Claude Agent visibility"
-    ) as HTMLInputElement;
-    expect(claudeCheckbox.checked).toBe(true);
-    fireEvent.click(claudeCheckbox);
+    const claudeSwitch = settings.getByLabelText("Toggle Claude agent visibility");
+    expect(claudeSwitch.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(claudeSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
   });
 
@@ -371,17 +432,15 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     sharedAvailability = { gemini: "missing" } as unknown as CliAvailability;
 
     const settings = render(<ToolbarSettingsTab />);
-    const geminiCheckbox = settings.getByLabelText(
-      "Toggle Gemini Agent visibility"
-    ) as HTMLInputElement;
-    expect(geminiCheckbox.checked).toBe(false);
-    fireEvent.click(geminiCheckbox);
+    const geminiSwitch = settings.getByLabelText("Toggle Gemini agent visibility");
+    expect(geminiSwitch.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(geminiSwitch);
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
   });
 
   it("Settings checkbox toggles for agent IDs never touch toolbarPreferencesStore.pinnedButtons", () => {
     const settings = render(<ToolbarSettingsTab />);
-    fireEvent.click(settings.getByLabelText("Toggle Claude Agent visibility"));
+    fireEvent.click(settings.getByLabelText("Toggle Claude agent visibility"));
     fireEvent.click(settings.getByLabelText("Toggle Terminal visibility"));
 
     // Agent -> setAgentPinned; non-agent -> toggleButtonVisibility.

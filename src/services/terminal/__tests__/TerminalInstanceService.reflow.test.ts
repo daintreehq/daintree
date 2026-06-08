@@ -7,6 +7,7 @@ vi.mock("@/clients", () => ({
     resize: vi.fn(),
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
+    onTierChanged: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("@/clients", () => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
   appClient: { getHydrationState: vi.fn() },
@@ -204,11 +206,14 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(history2).toBeGreaterThan(history1);
   });
 
-  it("skips agent terminals (WebGL — immune)", () => {
+  it("reflows agent terminals — the xterm pause gate is renderer-agnostic", () => {
     const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
+    expect(managed.runtimeAgentId).toBe("claude");
+
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed).length).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
+
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
   it("skips hibernated terminals", () => {

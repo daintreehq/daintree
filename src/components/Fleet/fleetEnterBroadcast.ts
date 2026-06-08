@@ -3,7 +3,10 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { usePanelStore } from "@/store/panelStore";
+import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
 import {
   executeFleetBroadcast,
@@ -21,6 +24,33 @@ let activeBroadcastController: AbortController | null = null;
 export function cancelActiveBroadcast(): void {
   activeBroadcastController?.abort();
   useFleetBroadcastProgressStore.getState().cancel();
+}
+
+/**
+ * Run a fleet broadcast through the shared single-flight controller so it
+ * participates in the same coordination as the Enter path: a newer broadcast
+ * pre-empts an older one (they share `fleetBroadcastProgressStore`, which only
+ * tracks one run), and `cancelActiveBroadcast` (the ribbon Cancel button) can
+ * abort it. Callers own their own result handling; this only manages the
+ * controller lifecycle and the cooperative `signal`.
+ */
+export async function runManagedFleetBroadcast(
+  draft: string,
+  targetIds: string[],
+  perTargetOverrides?: Record<string, string>
+): Promise<FleetExecutionResult> {
+  // A newer broadcast pre-empts the in-flight one — leaving a stale controller
+  // would race two runs against the shared progress store. Abort then take over.
+  activeBroadcastController?.abort();
+  const controller = new AbortController();
+  activeBroadcastController = controller;
+  try {
+    return await executeFleetBroadcast(draft, targetIds, perTargetOverrides, controller.signal);
+  } finally {
+    if (activeBroadcastController === controller) {
+      activeBroadcastController = null;
+    }
+  }
 }
 
 function plural(count: number, singular: string, pluralForm: string): string {
@@ -63,6 +93,42 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
     return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
   }
   return `Broadcast sent to ${plural(result.successCount, "terminal", "terminals")}`;
+}
+
+/**
+ * Record a completed fleet broadcast in the durable run history (#9949).
+ * Fire-and-forget: a thrown IPC error must never disrupt the broadcast UX, so
+ * we `void` + `.catch`. Pane titles are snapshotted from the live registry so
+ * the record stays legible after a terminal closes. Only resolved results are
+ * recorded — `runManagedFleetBroadcast` always resolves (cancellation surfaces
+ * as `cancelled: true`), so a throw here would be an unexpected crash, not an
+ * automation outcome.
+ */
+function recordFleetRunHistory(
+  draft: string,
+  targetCount: number,
+  result: FleetExecutionResult,
+  durationMs: number
+): void {
+  const panelsById = usePanelStore.getState().panelsById;
+  safeFireAndForget(
+    window.electron.runHistory.append({
+      kind: "fleet",
+      draftPreview: draft,
+      targetCount,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      cancelled: result.cancelled,
+      durationMs,
+      perTarget: result.perTarget.map((t) => ({
+        terminalId: t.terminalId,
+        title: getNarrowPanel(panelsById, t.terminalId)?.title,
+        status: t.status,
+        reason: t.reason,
+      })),
+    }),
+    { context: "Failed to record fleet run history" }
+  );
 }
 
 /**
@@ -152,26 +218,19 @@ export function tryFleetBroadcastFromEditor(
     const overridesArg =
       Object.keys(effectiveOverrides).length > 0 ? effectiveOverrides : undefined;
 
-    // A second Enter while a broadcast is in-flight should pre-empt the
-    // first — leaving a stale controller would race two runs against the
-    // shared progress store. Abort then take over.
-    activeBroadcastController?.abort();
-    const controller = new AbortController();
-    activeBroadcastController = controller;
+    // Re-check eligibility at dispatch time. Panes that disarmed,
+    // trashed, or lost their PTY between Enter-press and dispatch must
+    // not still receive bytes just because the snapshot marked them
+    // eligible. `effectiveTargets` already filtered against
+    // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
+    // filter so disposed PTYs are dropped too.
+    const eligibleTargets = filterEligibleIds(effectiveTargets);
+    const startedAt = Date.now();
     try {
-      // Re-check eligibility at dispatch time. Panes that disarmed,
-      // trashed, or lost their PTY between Enter-press and dispatch must
-      // not still receive bytes just because the snapshot marked them
-      // eligible. `effectiveTargets` already filtered against
-      // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
-      // filter so disposed PTYs are dropped too.
-      const eligibleTargets = filterEligibleIds(effectiveTargets);
-      const result = await executeFleetBroadcast(
-        text,
-        eligibleTargets,
-        overridesArg,
-        controller.signal
-      );
+      // A second Enter while a broadcast is in-flight pre-empts the first;
+      // the shared controller lets the ribbon Cancel button abort it too.
+      const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
+      recordFleetRunHistory(text, eligibleTargets.length, result, Date.now() - startedAt);
       if (result.failureCount > 0) {
         logWarn("[fleetEnterBroadcast] broadcast had rejections", {
           failureCount: result.failureCount,
@@ -232,11 +291,9 @@ export function tryFleetBroadcastFromEditor(
         window.electron?.notification?.playUiEvent("context-injected").catch(() => {});
       }
     } finally {
-      if (activeBroadcastController === controller) {
-        activeBroadcastController = null;
-      }
       // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
       // Clear them so the next broadcast starts from the resolved defaults.
+      // Controller teardown is owned by `runManagedFleetBroadcast`.
       useFleetTargetOverridesStore.getState().clear();
       onSent();
     }

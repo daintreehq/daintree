@@ -19,15 +19,14 @@ describe("Skip permissions toggle gating", () => {
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("amp", "--dangerously-allow-all");
   });
 
-  it("opencode, kiro, goose, crush, qwen, mistral, kimi, and aider have no DEFAULT_DANGEROUS_ARGS entry", () => {
+  it("opencode, goose, mistral, and copilot have no DEFAULT_DANGEROUS_ARGS entry", () => {
+    // opencode: --dangerously-skip-permissions exists only on the run
+    // subcommand, not the TUI launch. mistral routes auto-approve through
+    // the --agent presets. copilot opts out via supports.permissionBypass.
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("opencode");
-    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("kiro");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("goose");
-    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("crush");
-    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("qwen");
     expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("mistral");
-    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("kimi");
-    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("aider");
+    expect(DEFAULT_DANGEROUS_ARGS).not.toHaveProperty("copilot");
   });
 
   it("gating expression matches expected agents", () => {
@@ -42,24 +41,19 @@ describe("Skip permissions toggle gating", () => {
 
     expect(agentsWithToggle).toEqual([
       "claude",
+      "aider",
       "gemini",
       "antigravity",
       "codex",
       "cursor",
       "amp",
-      "interpreter",
-    ]);
-    expect(agentsWithoutToggle).toEqual([
-      "opencode",
-      "aider",
-      "copilot",
-      "goose",
       "crush",
       "qwen",
       "kimi",
-      "mistral",
+      "interpreter",
       "kiro",
     ]);
+    expect(agentsWithoutToggle).toEqual(["opencode", "copilot", "goose", "mistral"]);
   });
 
   it("all dangerous args are non-empty strings starting with --", () => {

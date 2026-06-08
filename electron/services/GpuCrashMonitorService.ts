@@ -7,6 +7,8 @@ import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 import { createLogger } from "../utils/logger.js";
 import { closeTelemetry } from "./TelemetryService.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
+import { getCrashRecoveryService } from "./CrashRecoveryService.js";
+import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
 
 const GPU_DISABLED_FLAG = "gpu-disabled.flag";
 const GPU_ANGLE_FALLBACK_FLAG = "gpu-angle-fallback.flag";
@@ -75,6 +77,37 @@ export function clearGpuAngleFallbackFlag(userDataPath: string): void {
   const flagPath = path.join(userDataPath, GPU_ANGLE_FALLBACK_FLAG);
   if (fs.existsSync(flagPath)) {
     fs.unlinkSync(flagPath);
+  }
+}
+
+// Issue #10065: GPU-mitigation exits (soft ANGLE fallback, nuclear disable,
+// and their respective crash-loop hard-stops) all go through `app.exit(0)`
+// which skips the `before-quit` cleanup chain. Without the three clean-exit
+// markers, the next boot treats the deliberate relaunch as a crash:
+// `running.lock` is left on disk, `crash-loop-state.json` keeps
+// `cleanExit: false` (accumulating strikes toward safe mode), and
+// `PanelSuspectLedger` never advances its decay counters. Mirror the
+// AutoUpdater #9638 pattern: each marker in its own try/catch so a single
+// failure cannot skip the next (lesson #7158). Markers are synchronous
+// `writeFileSync` calls, so they commit before any `app.relaunch()` or
+// `app.exit(0)` we return to.
+type GpuMitigationPath = "angle-fallback" | "nuclear-disable";
+
+function writeCleanGpuMitigationMarkers(path: GpuMitigationPath): void {
+  try {
+    getCrashRecoveryService().cleanupOnExit();
+  } catch (err) {
+    logger.error("gpu-mitigation-cleanup-on-exit-failed", err, { path });
+  }
+  try {
+    getCrashLoopGuard().markCleanExit();
+  } catch (err) {
+    logger.error("gpu-mitigation-mark-clean-exit-failed", err, { path });
+  }
+  try {
+    getPanelSuspectLedger().markCleanLaunch();
+  } catch (err) {
+    logger.error("gpu-mitigation-mark-clean-launch-failed", err, { path });
   }
 }
 
@@ -161,13 +194,30 @@ class GpuCrashMonitorService {
             path: "angle-fallback",
             crashCount: effectiveCount,
           });
-          await closeTelemetry();
+          writeCleanGpuMitigationMarkers("angle-fallback");
+          try {
+            await closeTelemetry();
+          } catch (err) {
+            // Hard-stop has no queued relaunch, so a telemetry rejection
+            // would skip the exit and hang the process. Match the shutdown.ts
+            // pattern (L497-501): log and fall through to app.exit(0).
+            logger.error("gpu-mitigation-close-telemetry-failed", err, {
+              path: "angle-fallback",
+            });
+          }
           app.exit(0);
           return;
         }
         logger.warn("gpu-crash-soft-fallback", { crashCount: effectiveCount });
+        writeCleanGpuMitigationMarkers("angle-fallback");
         app.relaunch();
-        await closeTelemetry();
+        try {
+          await closeTelemetry();
+        } catch (err) {
+          logger.error("gpu-mitigation-close-telemetry-failed", err, {
+            path: "angle-fallback",
+          });
+        }
         app.exit(0);
         return;
       }
@@ -191,13 +241,27 @@ class GpuCrashMonitorService {
             path: "nuclear-disable",
             crashCount: effectiveCount,
           });
-          await closeTelemetry();
+          writeCleanGpuMitigationMarkers("nuclear-disable");
+          try {
+            await closeTelemetry();
+          } catch (err) {
+            logger.error("gpu-mitigation-close-telemetry-failed", err, {
+              path: "nuclear-disable",
+            });
+          }
           app.exit(0);
           return;
         }
         logger.warn("gpu-crash-nuclear-disable", { crashCount: effectiveCount });
+        writeCleanGpuMitigationMarkers("nuclear-disable");
         app.relaunch();
-        await closeTelemetry();
+        try {
+          await closeTelemetry();
+        } catch (err) {
+          logger.error("gpu-mitigation-close-telemetry-failed", err, {
+            path: "nuclear-disable",
+          });
+        }
         app.exit(0);
       }
     });

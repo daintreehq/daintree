@@ -21,7 +21,12 @@ import {
   clampZoom,
   type LoadError,
 } from "./browserUtils";
-import { initializeBrowserHistory } from "./historyUtils";
+import {
+  goBackBrowserHistory,
+  goForwardBrowserHistory,
+  initializeBrowserHistory,
+  pushBrowserHistory,
+} from "./historyUtils";
 import { actionService } from "@/services/ActionService";
 import { WebviewDialog } from "./WebviewDialog";
 import { FindBar } from "./FindBar";
@@ -34,6 +39,8 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
+import { buildBrowserPartition } from "@shared/utils/partitionUtils";
+import { notify } from "@/lib/notify";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -107,7 +114,15 @@ export function BrowserPane({
   const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
   const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
-  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const storeProjectId = useProjectStore((state) => state.currentProject?.id);
+  // Per-project Chromium session partition so cookies/localStorage/IndexedDB are
+  // isolated between projects sharing an origin (e.g. localhost:3000) (#9965).
+  // `currentProject` resolves asynchronously, but Electron ignores `partition`
+  // changes once the <webview> is attached — so fall back to the project id seeded
+  // synchronously by preload (mirrors projectStore.getLocationProjectId) to attach
+  // with the correct partition on first render rather than persist:browser-default.
+  const projectId = storeProjectId ?? window.__DAINTREE_INITIAL_PROJECT__?.id;
+  const webviewPartition = useMemo(() => buildBrowserPartition(projectId), [projectId]);
   const devServerLoadTimeout = useProjectSettingsStore(
     (state) => state.settings?.devServerLoadTimeout
   );
@@ -170,6 +185,21 @@ export function BrowserPane({
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
+  // Seed value for the webview `src` attribute, captured once at mount. We never
+  // re-bind `src` to navigation-driven state: Electron's SrcAttribute observer
+  // treats any same-or-different value write as a fresh loadURL, turning guest
+  // navigations into redundant full reloads (#9940). All post-mount navigation
+  // goes through imperative loadURL calls instead.
+  const initialUrlRef = useRef<string>(history.present);
+  // When `webviewPartition` changes the `key` remounts the <webview> as a fresh
+  // element, so its seed `src` must be the URL the user is currently on — not the
+  // URL captured at first component mount (#9940). Re-seed during render, before
+  // the JSX `src={initialUrlRef.current}` is read for the remounting element.
+  const lastPartitionRef = useRef<string>(webviewPartition);
+  if (lastPartitionRef.current !== webviewPartition) {
+    lastPartitionRef.current = webviewPartition;
+    initialUrlRef.current = history.present;
+  }
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
 
@@ -188,12 +218,13 @@ export function BrowserPane({
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSlowLoad, setIsSlowLoad] = useState(false);
   const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const screenshotInFlightRef = useRef(false);
 
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
-  const canGoBack = navSnapshot?.canGoBack ?? history.past.length > 0;
-  const canGoForward = navSnapshot?.canGoForward ?? history.future.length > 0;
+  const canGoBack = Boolean(navSnapshot?.canGoBack) || history.past.length > 0;
+  const canGoForward = Boolean(navSnapshot?.canGoForward) || history.future.length > 0;
   const backEntry = navSnapshot
     ? (navSnapshot.entries
         .filter((e) => e.index < navSnapshot.activeIndex)
@@ -263,25 +294,40 @@ export function BrowserPane({
     return () => clearTimeout(timer);
   }, [blockedNav]);
 
-  const handleRenderProcessGone = useCallback((details: { reason: string; exitCode: number }) => {
-    const now = Date.now();
-    const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
-    timestamps.push(now);
-    crashTimestampsRef.current = timestamps;
+  const handleRenderProcessGone = useCallback(
+    (details: { reason: string; exitCode: number }) => {
+      const now = Date.now();
+      const timestamps = crashTimestampsRef.current.filter((ts) => now - ts < 60_000);
+      timestamps.push(now);
+      crashTimestampsRef.current = timestamps;
 
-    // Clear any stale load-error overlay (z-30, absolute inset-0) — without
-    // this it would occlude the crash banner, which is an in-flow element.
-    setLoadError(null);
-    setCrashDetails(details);
-    setCrashState("crashed");
+      // Clear any stale load-error overlay (z-30, absolute inset-0) — without
+      // this it would occlude the crash banner, which is an in-flow element.
+      setLoadError(null);
+      setCrashDetails(details);
+      setCrashState("crashed");
 
-    // Auto-reload silently on the first crash within the 60s window so a
-    // one-off renderer fault recovers transparently. A second crash within
-    // the window leaves the banner up so the user can act.
-    if (timestamps.length < 2) {
-      crashReloadRef.current();
-    }
-  }, []);
+      // Auto-reload silently on the first crash within the 60s window so a
+      // one-off renderer fault recovers transparently. A second crash within
+      // the window leaves the banner up so the user can act.
+      if (timestamps.length < 2) {
+        crashReloadRef.current();
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Page crashed repeatedly",
+          message: `The browser page crashed (${details.reason}) twice within 60 seconds. Auto-recovery stopped. Use Reload to recover.`,
+          priority: "high",
+          duration: 0,
+          context: { eventKind: "recovery", panelId: id },
+          supersedeKey: `browser-pane-crash-loop:${id}`,
+          correlationId: id,
+        });
+      }
+    },
+    [id]
+  );
 
   useWebviewEvents({
     webviewElement,
@@ -307,7 +353,7 @@ export function BrowserPane({
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setPendingApproval(null);
-      setHistory((prev) => ({ ...prev, present: url }));
+      setHistory((prev) => pushBrowserHistory(prev, url));
       setIsLoading(true);
       setLoadError(null);
       lastSetUrlRef.current = url;
@@ -385,26 +431,60 @@ export function BrowserPane({
   }, []);
 
   const handleBack = useCallback(() => {
-    isInitialRestoredLoadRef.current = false;
-    setBlockedNav(null);
-    setIsLoading(true);
-    setLoadError(null);
     const webview = webviewRef.current;
-    if (webview && isWebviewReady && webview.canGoBack()) {
+    // Only mutate state once we know navigation will actually fire — otherwise no
+    // load event ever clears isLoading (stuck spinner) and a no-op Back would
+    // wrongly flip the initial-restored-load heuristic / dismiss banners.
+    if (!webview || !isWebviewReady) return;
+
+    if (webview.canGoBack()) {
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
       webview.goBack();
+      return;
     }
-  }, [isWebviewReady]);
+
+    if (history.past.length > 0) {
+      const nextHistory = goBackBrowserHistory(history);
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
+      setHistory(nextHistory);
+      lastSetUrlRef.current = nextHistory.present;
+      loadWebviewUrl(webview, nextHistory.present);
+    }
+  }, [history, isWebviewReady]);
 
   const handleForward = useCallback(() => {
-    isInitialRestoredLoadRef.current = false;
-    setBlockedNav(null);
-    setIsLoading(true);
-    setLoadError(null);
     const webview = webviewRef.current;
-    if (webview && isWebviewReady && webview.canGoForward()) {
+    // Only mutate state once we know navigation will actually fire — otherwise no
+    // load event ever clears isLoading (stuck spinner) and a no-op Forward would
+    // wrongly flip the initial-restored-load heuristic / dismiss banners.
+    if (!webview || !isWebviewReady) return;
+
+    if (webview.canGoForward()) {
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
       webview.goForward();
+      return;
     }
-  }, [isWebviewReady]);
+
+    if (history.future.length > 0) {
+      const nextHistory = goForwardBrowserHistory(history);
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
+      setHistory(nextHistory);
+      lastSetUrlRef.current = nextHistory.present;
+      loadWebviewUrl(webview, nextHistory.present);
+    }
+  }, [history, isWebviewReady]);
 
   const handleReload = useCallback(() => {
     setBlockedNav(null);
@@ -505,7 +585,7 @@ export function BrowserPane({
         // Webview detached
       }
     }
-    setLoadError({ kind: "cancelled", message: "Load cancelled." });
+    setLoadError({ kind: "cancelled", message: "Load cancelled" });
   }, []);
 
   const handleRetryFromError = useCallback(() => {
@@ -549,12 +629,21 @@ export function BrowserPane({
       return;
     }
     if (!url || url === "about:blank") return;
+    if (screenshotInFlightRef.current) return;
+    screenshotInFlightRef.current = true;
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
       await window.electron.clipboard.writeImage(pngData);
-    } catch (err) {
-      logError("[BrowserPane] Screenshot capture failed", err);
+    } catch {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Screenshot failed",
+        message: "Couldn't copy the screenshot to clipboard",
+      });
+    } finally {
+      screenshotInFlightRef.current = false;
     }
   }, [isWebviewReady]);
 
@@ -608,12 +697,17 @@ export function BrowserPane({
 
   const handleGoToHistoryIndex = useCallback(
     async (index: number) => {
-      const entry = navSnapshot?.entries[index];
+      // Entries are filtered upstream but keep their original Chromium stack
+      // position in `.index`, so the array is sparse — match on the field, not
+      // the array position.
+      const entry = navSnapshot?.entries.find((e) => e.index === index);
       if (!entry) return;
 
       const result = normalizeBrowserUrl(entry.url, { allowedHosts });
+      if (result.error || !result.url) return;
+
       if (result.requiresConfirmation && result.hostname) {
-        setPendingApproval({ url: result.url!, hostname: result.hostname, historyIndex: index });
+        setPendingApproval({ url: result.url, hostname: result.hostname, historyIndex: index });
         return;
       }
 
@@ -696,6 +790,7 @@ export function BrowserPane({
       isLoading={showLoadingOverlay}
       zoomFactor={zoomFactor}
       isWebviewReady={isWebviewReady}
+      validateUrl={(url) => normalizeBrowserUrl(url, { allowedHosts })}
       onNavigate={(url) =>
         void actionService.dispatch("browser.navigate", { terminalId: id, url }, { source: "user" })
       }
@@ -831,14 +926,14 @@ export function BrowserPane({
                 <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                 <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
                   {loadError.kind === "timeout"
-                    ? "Page Load Timed Out"
+                    ? "Page load timed out"
                     : loadError.kind === "cancelled"
-                      ? "Load Cancelled"
+                      ? "Load cancelled"
                       : loadError.kind === "cert"
-                        ? "Certificate Error"
+                        ? "Certificate error"
                         : loadError.kind === "network"
-                          ? "Connection Failed"
-                          : "Unable to Display Page"}
+                          ? "Connection failed"
+                          : "Unable to display page"}
                 </h3>
                 <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                   {loadError.message}
@@ -950,10 +1045,23 @@ export function BrowserPane({
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {showLoadingOverlay && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg z-10 gap-3">
-                  <Spinner size="2xl" className="text-status-info" />
+                  {/* aria-busy on the status wrapper suppresses inner live regions,
+                      so the slow-load escalation announces via the sibling
+                      aria-live span below (SkeletonHint pattern). */}
+                  <div role="status" aria-busy="true" aria-label="Loading…">
+                    <span className="sr-only">Loading…</span>
+                    <Spinner size="2xl" className="text-status-info" />
+                  </div>
+                  <span className="sr-only" aria-live="polite" aria-atomic="true">
+                    {isSlowLoad
+                      ? "Loading is taking longer than usual. Select Cancel to stop."
+                      : ""}
+                  </span>
                   {isSlowLoad && (
                     <>
-                      <p className="text-xs text-daintree-text/50">Taking longer than usual...</p>
+                      <p aria-hidden="true" className="text-xs text-daintree-text/50">
+                        Taking longer than usual...
+                      </p>
                       <Button
                         onClick={handleCancelLoad}
                         variant="ghost"
@@ -970,8 +1078,14 @@ export function BrowserPane({
               {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
                 ref={setWebviewNode}
-                src={currentUrl}
-                partition="persist:browser"
+                // Remount if the partition ever changes after attach (e.g. a window
+                // seeded only via ?projectId= where the store resolves later) so the
+                // webview never keeps a stale cross-project session (#9965).
+                key={webviewPartition}
+                // Seed-only: never re-bind to navigation state (#9940). On a
+                // key-driven remount the ref re-initializes to the current URL.
+                src={initialUrlRef.current}
+                partition={webviewPartition}
                 // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                 allowpopups=""
                 className={cn(

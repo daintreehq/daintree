@@ -89,6 +89,33 @@ describe("routeHostEvent", () => {
     expect(dataListener).not.toHaveBeenCalled();
   });
 
+  it("forwards heapMb and externalMb on host-memory-warning", () => {
+    const { deps, emitter } = makeDeps();
+    const warningListener = vi.fn();
+    emitter.on("host-memory-warning", warningListener);
+
+    const handled = routeHostEvent(
+      {
+        type: "host-memory-warning",
+        isWarning: true,
+        utilizationPercent: 75,
+        heapMb: 300,
+        externalMb: 276,
+        timestamp: 1000,
+      } as PtyHostEvent,
+      deps
+    );
+
+    expect(handled).toBe(true);
+    expect(warningListener).toHaveBeenCalledWith({
+      isWarning: true,
+      utilizationPercent: 75,
+      heapMb: 300,
+      externalMb: 276,
+      timestamp: 1000,
+    });
+  });
+
   it("delegates domain events to bridgePtyEvent first", () => {
     const { deps } = makeDeps();
     const agentStateEvents: unknown[] = [];
@@ -185,6 +212,26 @@ describe("routeHostEvent", () => {
     const { deps, brokerCalls } = makeDeps();
     routeHostEvent({ type: "snapshot", id: "t1", requestId: "req-1", snapshot: null }, deps);
     expect(brokerCalls).toEqual([{ requestId: "req-1", result: null }]);
+  });
+
+  it("resolves broker with the snapshot for flow-control-snapshot events", () => {
+    const { deps, brokerCalls } = makeDeps();
+    const snapshot = {
+      timestamp: 1,
+      terminals: [],
+      queueDepth: [],
+      totalPendingBytes: 0,
+      stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
+      resourceGovernor: {
+        isThrottling: false,
+        isWarning: false,
+        activeProfile: "balanced" as const,
+        smoothedUtilizationPercent: null,
+        throttleDurationMs: 0,
+      },
+    };
+    routeHostEvent({ type: "flow-control-snapshot", requestId: "req-fc", snapshot }, deps);
+    expect(brokerCalls).toEqual([{ requestId: "req-fc", result: snapshot }]);
   });
 
   it("resolves broker with terminalIds default for terminals-for-project", () => {

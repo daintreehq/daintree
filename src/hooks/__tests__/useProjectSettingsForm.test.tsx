@@ -11,9 +11,11 @@ const {
   mockDisableInRepoSettings,
   mockProjects,
   mockIsLoading,
+  mockRefresh,
 } = vi.hoisted(() => ({
   mockSettings: { value: null as ProjectSettings | null },
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
+  mockRefresh: vi.fn().mockResolvedValue(undefined),
   mockUpdateProject: vi.fn().mockResolvedValue(undefined),
   mockEnableInRepoSettings: vi.fn(),
   mockDisableInRepoSettings: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock("@/hooks/useProjectSettings", () => ({
     saveSettings: mockSaveSettings,
     isLoading: mockIsLoading.value,
     error: null,
+    refresh: mockRefresh,
   }),
 }));
 
@@ -341,6 +344,34 @@ describe("useProjectSettingsForm", () => {
     expect(typeof result.current.enableInRepoSettings).toBe("function");
     expect(typeof result.current.disableInRepoSettings).toBe("function");
     expect(typeof result.current.flush).toBe("function");
+    expect(typeof result.current.refreshProjectSettings).toBe("function");
+  });
+
+  it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {
+    mockIsLoading.value = true;
+    mockSettings.value = null;
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+
+    expect(result.current.projectIsLoading).toBe(true);
+    expect(result.current.projectIsInitialized).toBe(false);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("exposes refreshProjectSettings that delegates to useProjectSettings.refresh", async () => {
+    const { result } = renderOpenForm("proj-1");
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await result.current.refreshProjectSettings();
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("initializes correctly when settings are already loaded at dialog open", async () => {

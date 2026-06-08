@@ -8,7 +8,7 @@ import React, {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Settings } from "lucide-react";
+import { Settings, OctagonAlert, RotateCcw, Hourglass, Folders } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -27,9 +27,13 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { useGridScrollRoot } from "./GridScrollRootContext";
+import { isStaleHiddenReading } from "./visibilityReadingGuard";
 import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
+import { InlineStatusBanner } from "./InlineStatusBanner";
+import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
+import { useContextInjection } from "@/hooks/useContextInjection";
 import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
@@ -441,6 +445,7 @@ function TerminalPaneComponent({
         exitBehavior: pty?.exitBehavior,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
+        sessionLostOnRestore: pty?.sessionLostOnRestore ?? false,
       };
     })
   );
@@ -452,6 +457,7 @@ function TerminalPaneComponent({
     exitBehavior,
     isTrashedOrRemoved,
     spawnStatus,
+    sessionLostOnRestore,
   } = terminalState;
   // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
   // read-only broadcast view. Prop takes precedence over the stored flag so
@@ -540,6 +546,20 @@ function TerminalPaneComponent({
     restartKey,
   });
 
+  const { showBanner: showForceResumeStall, resetQueue: resetForceResumeQueue } =
+    useForceResumeCycleWatchdog(id);
+
+  const {
+    cancel: cancelInjection,
+    isInjecting,
+    isPendingInjection,
+    injectionStatus,
+    progress: injectionProgress,
+  } = useContextInjection(id);
+  // Single gate across waiting → injecting so the banner doesn't flicker on
+  // the phase transition; fast injections (<400ms) show nothing.
+  const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
+
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
     if (isTrashedOrRemoved && autoRestartTimerRef.current !== null) {
@@ -626,9 +646,27 @@ function TerminalPaneComponent({
     const gen = terminalInstanceService.getAttachGeneration(id);
 
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      (entries) => {
+        // Under load a single callback can batch multiple entries for the same
+        // element; only the most recent reading reflects current geometry.
+        const entry = entries[entries.length - 1];
+
         // Don't update visibility during drag - CSS transforms cause false negatives
         if (isDraggingRef.current || !entry) return;
+
+        // Suppress stale `false` readings that would freeze a visible terminal
+        // at the BACKGROUND tier (#9780). Confirm against fresh element and root
+        // geometry, read before any write to avoid a redundant layout reflow.
+        if (
+          isStaleHiddenReading(
+            entry,
+            () => containerRef.current?.getBoundingClientRect(),
+            () =>
+              gridScrollRoot?.getBoundingClientRect() ??
+              new DOMRect(0, 0, window.innerWidth, window.innerHeight)
+          )
+        )
+          return;
 
         updateVisibility(id, entry.isIntersecting);
         terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
@@ -1127,6 +1165,7 @@ function TerminalPaneComponent({
     reconnectError,
     spawnError,
     backendStatus,
+    sessionLostOnRestore,
   });
   // Backend-dependent banners (restart / spawn / reconnect) describe failures
   // whose only recovery path runs through the host, so they're hidden while
@@ -1293,6 +1332,52 @@ function TerminalPaneComponent({
           variant={restartBannerVariant}
           onRestart={handleRestart}
           onDismiss={() => setDismissedRestartPrompt(true)}
+        />
+      </BannerSlot>
+
+      <BannerSlot visible={!suppressBackendDependent && showForceResumeStall}>
+        <InlineStatusBanner
+          icon={OctagonAlert}
+          severity="error"
+          title="Terminal output stalled"
+          description="Output keeps backing up faster than it can render. Reset the queue to recover."
+          action={{
+            id: "reset-force-resume-queue",
+            label: "Reset queue",
+            icon: RotateCcw,
+            onClick: resetForceResumeQueue,
+          }}
+        />
+      </BannerSlot>
+
+      <BannerSlot visible={showInjectionBanner}>
+        <InlineStatusBanner
+          icon={injectionStatus === "waiting" ? Hourglass : Folders}
+          severity={injectionStatus === "waiting" ? "neutral" : "info"}
+          title={injectionStatus === "waiting" ? "Waiting for agent" : "Injecting context"}
+          description={
+            injectionStatus === "waiting" ? "Context will inject when the agent is idle" : undefined
+          }
+          contextLine={injectionStatus === "injecting" ? injectionProgress?.message : undefined}
+          role="status"
+          ariaLive="polite"
+          action={{
+            id: "cancel-context-injection",
+            label: "Cancel",
+            onClick: cancelInjection,
+          }}
+          descriptionExtras={
+            injectionStatus === "injecting" ? (
+              <div className="mt-1.5 h-0.5 w-full rounded bg-daintree-border/60">
+                <div
+                  className="h-full rounded bg-status-info/60 transition-[width] duration-150 ease-out"
+                  style={{
+                    width: `${Math.min(Math.max((injectionProgress?.progress ?? 0) * 100, 0), 100)}%`,
+                  }}
+                />
+              </div>
+            ) : undefined
+          }
         />
       </BannerSlot>
 

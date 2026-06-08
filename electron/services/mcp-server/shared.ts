@@ -180,6 +180,7 @@ export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const MCP_RATE_LIMITED_CODE = "MCP_RATE_LIMITED";
+export const INVALID_URL_CODE = "INVALID_URL";
 
 /**
  * Application-level convention: codes here flag transient failures that a
@@ -479,6 +480,9 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
   ["forge.assignIssue", RATE_LIMIT_TIERS.mutation],
+  // Not a git mutation, but capped at the mutation tier (10/min) so a runaway
+  // model can't flood the assistant panel's figure rail with images (#9828).
+  ["help.displayImage", RATE_LIMIT_TIERS.mutation],
 ] as Array<[string, RateLimitConfig]>);
 
 /**

@@ -1,15 +1,8 @@
-import { useState, useEffect } from "react";
-import {
-  FolderX,
-  Plus,
-  Trash2,
-  AlertTriangle,
-  Play,
-  Check,
-  Settings,
-  FileCode,
-} from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { FolderX, Plus, Trash2, AlertTriangle, Play, Check, FileCode } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useSkeletonGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import { copyTreeClient } from "@/clients/copyTreeClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -19,10 +12,12 @@ import { logError } from "@/utils/logger";
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
+
+const FILE_PREVIEW_COUNT = 10;
 
 function parsePositiveInt(value: string): number | undefined {
   if (!value) return undefined;
@@ -50,9 +45,19 @@ export function ContextTab({
 }: ContextTabProps) {
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
+  const [showAllFiles, setShowAllFiles] = useState(false);
+
+  const testingSkeletonGate = useSkeletonGate(isTestingConfig);
+  const showTestingSkeleton = useSkeletonFloor(testingSkeletonGate);
+
+  // Invalidation token for in-flight dry-runs: bumped when the tab closes or a
+  // new run starts, so a late-resolving testConfig promise can't write a stale
+  // result onto a closed/superseded tab.
+  const runIdRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen) {
+      runIdRef.current++;
       setTestConfigResult(null);
       setIsTestingConfig(false);
     }
@@ -70,48 +75,38 @@ export function ContextTab({
       return;
     }
 
+    const runId = ++runIdRef.current;
     setIsTestingConfig(true);
     setTestConfigResult(null);
+    setShowAllFiles(false);
 
     try {
-      const testOptions: import("@/types").CopyTreeOptions = {};
+      // Send the complete form state so the dry run reflects exactly what is
+      // on screen: a value when set, an explicit null when cleared. null (not
+      // undefined — structured clone drops undefined keys) blocks the
+      // saved-settings back-fill in the main process for that field.
+      const excludePatterns = [...excludedPaths, ...(copyTreeSettings.alwaysExclude ?? [])]
+        .map((p) => p.trim())
+        .filter(Boolean);
+      const alwaysPatterns = (copyTreeSettings.alwaysInclude ?? [])
+        .map((p) => p.trim())
+        .filter(Boolean);
 
-      if (excludedPaths.length > 0) {
-        const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
-        if (sanitizedPaths.length > 0) {
-          testOptions.exclude = sanitizedPaths;
-        }
-      }
-
-      if (copyTreeSettings.maxContextSize !== undefined) {
-        testOptions.maxTotalSize = copyTreeSettings.maxContextSize;
-      }
-      if (copyTreeSettings.maxFileSize !== undefined) {
-        testOptions.maxFileSize = copyTreeSettings.maxFileSize;
-      }
-      if (copyTreeSettings.charLimit !== undefined) {
-        testOptions.charLimit = copyTreeSettings.charLimit;
-      }
-      if (copyTreeSettings.strategy === "modified") {
-        testOptions.sort = "modified";
-      }
-      if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-        const sanitized = copyTreeSettings.alwaysInclude.map((p) => p.trim()).filter(Boolean);
-        if (sanitized.length > 0) {
-          testOptions.always = sanitized;
-        }
-      }
-      if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-        const sanitized = copyTreeSettings.alwaysExclude.map((p) => p.trim()).filter(Boolean);
-        if (sanitized.length > 0) {
-          testOptions.exclude = [...(testOptions.exclude || []), ...sanitized];
-        }
-      }
+      const testOptions: import("@/types").CopyTreeTestConfigOptions = {
+        exclude: excludePatterns.length > 0 ? excludePatterns : null,
+        always: alwaysPatterns.length > 0 ? alwaysPatterns : null,
+        maxTotalSize: copyTreeSettings.maxContextSize ?? null,
+        maxFileSize: copyTreeSettings.maxFileSize ?? null,
+        charLimit: copyTreeSettings.charLimit ?? null,
+        sort: copyTreeSettings.strategy === "modified" ? "modified" : null,
+      };
 
       const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
+      if (runIdRef.current !== runId) return;
       setTestConfigResult(result);
     } catch (error) {
       logError("Failed to test config", error);
+      if (runIdRef.current !== runId) return;
       setTestConfigResult({
         includedFiles: 0,
         includedSize: 0,
@@ -119,20 +114,22 @@ export function ContextTab({
         error: formatErrorMessage(error, "Failed to test configuration"),
       });
     } finally {
-      setIsTestingConfig(false);
+      if (runIdRef.current === runId) {
+        setIsTestingConfig(false);
+      }
     }
   };
 
   return (
     <>
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-excluded-paths" className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FolderX className="h-4 w-4" />
-          Excluded Paths
+          Excluded paths
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
           Glob patterns to exclude from monitoring and context injection (e.g., node_modules/**,
-          dist/**, .git/**).
+          dist/**, .git/**)
         </p>
 
         <div className="space-y-2">
@@ -182,16 +179,16 @@ export function ContextTab({
             className="w-full"
           >
             <Plus />
-            Add Path Pattern
+            Add path pattern
           </Button>
         </div>
       </div>
 
       {/* CopyTree Settings */}
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-copy-tree" className="mb-6 pb-6 border-b border-daintree-border">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FileCode className="h-4 w-4" />
-          Context Generation Settings
+          Context generation settings
         </h3>
         <p className="text-xs text-daintree-text/60 mb-4">
           Configure how CopyTree generates context for AI agents. These settings apply when
@@ -203,7 +200,7 @@ export function ContextTab({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                Max Context Size (bytes)
+                Max context size (bytes)
               </label>
               <input
                 type="number"
@@ -221,7 +218,7 @@ export function ContextTab({
             </div>
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                Max File Size (bytes)
+                Max file size (bytes)
               </label>
               <input
                 type="number"
@@ -243,7 +240,7 @@ export function ContextTab({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                Char Limit (per file)
+                Char limit (per file)
               </label>
               <input
                 type="number"
@@ -263,7 +260,7 @@ export function ContextTab({
             </div>
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
-                File Priority Strategy
+                File priority strategy
               </label>
               <select
                 value={copyTreeSettings.strategy ?? ""}
@@ -287,11 +284,11 @@ export function ContextTab({
           {/* Always Include Patterns */}
           <div>
             <label className="block text-xs text-daintree-text/60 mb-1">
-              Always Include (glob patterns)
+              Always include (glob patterns)
             </label>
             <p className="text-xs text-daintree-text/40 mb-2">
               Files matching these patterns will always be included, even if they would otherwise be
-              excluded.
+              excluded
             </p>
             <div className="space-y-2">
               {(copyTreeSettings.alwaysInclude || []).map((pattern, index) => (
@@ -342,7 +339,7 @@ export function ContextTab({
                 className="w-full"
               >
                 <Plus />
-                Add Include Pattern
+                Add include pattern
               </Button>
             </div>
           </div>
@@ -350,10 +347,10 @@ export function ContextTab({
           {/* Always Exclude Patterns */}
           <div>
             <label className="block text-xs text-daintree-text/60 mb-1">
-              Always Exclude (glob patterns)
+              Always exclude (glob patterns)
             </label>
             <p className="text-xs text-daintree-text/40 mb-2">
-              Additional exclusion patterns beyond the default excluded paths above.
+              Additional exclusion patterns beyond the default excluded paths above
             </p>
             <div className="space-y-2">
               {(copyTreeSettings.alwaysExclude || []).map((pattern, index) => (
@@ -404,7 +401,7 @@ export function ContextTab({
                 className="w-full"
               >
                 <Plus />
-                Add Exclude Pattern
+                Add exclude pattern
               </Button>
             </div>
           </div>
@@ -413,7 +410,7 @@ export function ContextTab({
           <div className="mt-6 pt-4 border-t border-daintree-border">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-medium text-daintree-text/80">Test Configuration</h4>
+                <h4 className="text-sm font-medium text-daintree-text/80">Test configuration</h4>
                 <p className="text-xs text-daintree-text/40">
                   Preview what files would be included with current settings
                 </p>
@@ -421,23 +418,27 @@ export function ContextTab({
               <Button
                 variant="outline"
                 onClick={handleTestConfig}
-                disabled={isTestingConfig || worktrees.length === 0}
+                loading={isTestingConfig}
+                disabled={worktrees.length === 0}
               >
-                {isTestingConfig ? (
-                  <>
-                    <Settings className="h-4 w-4 animate-spin" />
-                    Testing...
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4" />
-                    Test Config
-                  </>
-                )}
+                <Play className="h-4 w-4" />
+                Test config
               </Button>
             </div>
 
-            {testConfigResult && (
+            {showTestingSkeleton && (
+              <Skeleton
+                label="Running test configuration"
+                className="mt-4 p-4 rounded-[var(--radius-md)] border border-daintree-border space-y-3"
+              >
+                <SkeletonBone immediate className="h-4 w-2/3" />
+                <SkeletonBone immediate className="h-3 w-1/2" />
+                <SkeletonBone immediate className="h-3 w-2/3" />
+                <SkeletonBone immediate className="h-3 w-1/3" />
+              </Skeleton>
+            )}
+
+            {testConfigResult && !showTestingSkeleton && (
               <div
                 className={cn(
                   "mt-4 p-4 rounded-[var(--radius-md)] border",
@@ -462,20 +463,42 @@ export function ContextTab({
                         ({formatBytes(testConfigResult.includedSize)})
                       </span>
                     </div>
-                    <div className="text-xs text-daintree-text/60 space-y-1">
-                      <p>
-                        Excluded by pattern:{" "}
-                        <span className="font-mono">{testConfigResult.excluded.byPattern}</span>
-                      </p>
-                      <p>
-                        Excluded by size:{" "}
-                        <span className="font-mono">{testConfigResult.excluded.bySize}</span>
-                      </p>
-                      <p>
-                        Excluded by truncation:{" "}
-                        <span className="font-mono">{testConfigResult.excluded.byTruncation}</span>
-                      </p>
-                    </div>
+                    {testConfigResult.files && testConfigResult.files.length > 0 && (
+                      <div className="space-y-1">
+                        <ul className="max-h-60 overflow-y-auto space-y-1">
+                          {(showAllFiles
+                            ? testConfigResult.files
+                            : testConfigResult.files.slice(0, FILE_PREVIEW_COUNT)
+                          ).map((file) => (
+                            <li
+                              key={file.path}
+                              className="flex items-center justify-between gap-2 text-xs"
+                            >
+                              <span
+                                className="font-mono text-daintree-text/80 truncate"
+                                title={file.path}
+                              >
+                                {file.path}
+                              </span>
+                              <span className="text-daintree-text/40 shrink-0">
+                                {formatBytes(file.size)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        {testConfigResult.files.length > FILE_PREVIEW_COUNT && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllFiles((value) => !value)}
+                            className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+                          >
+                            {showAllFiles
+                              ? "Show fewer"
+                              : `Show ${testConfigResult.files.length - FILE_PREVIEW_COUNT} more`}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

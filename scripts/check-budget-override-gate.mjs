@@ -3,8 +3,13 @@
 // Linked-issue gate for the budget override labels. Each budget category has a
 // dedicated `*-override` label that lets a PR intentionally accept a regression
 // instead of refreshing the baseline. To keep that escape hatch auditable, this
-// gate fails CI when any override label is applied without a tracking issue
+// gate fails when run if any override label is applied without a tracking issue
 // referenced in the PR body (`Fixes #N` / `Resolves #N` / `Closes #N`).
+//
+// This gate is not wired into any workflow pre-1.0 (see the dormancy note in
+// .github/workflows/ci.yml) — the budgets it guards are dormant, so the gate is
+// too. The wiring below describes how it is designed to run once budgets gate CI
+// again post-1.0.
 //
 // Reads the PR body and label names from the environment (injected by the CI
 // workflow) rather than the shell, so PR-body metacharacters never reach a

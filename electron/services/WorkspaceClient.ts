@@ -242,6 +242,19 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  /**
+   * Broadcast that a forge provider descriptor was registered (startup scan
+   * or runtime plugin install/enable) so hosts whose PR polling paused on a
+   * "no provider matches" resolution re-evaluate (#9997). Fire-and-forget,
+   * mirroring the polling-control sends above.
+   */
+  notifyForgeProviderRegistryUpdated(): void {
+    if (this.isDisposed) return;
+    for (const entry of this.pool.entries.values()) {
+      entry.host.send({ type: "forge:provider-registry-updated" });
+    }
+  }
+
   setPRPollCadence(focused: boolean): void {
     for (const entry of this.pool.entries.values()) {
       entry.host.send({ type: "set-pr-poll-cadence", focused });
@@ -256,6 +269,12 @@ export class WorkspaceClient extends EventEmitter {
         enabled,
         dismissed,
       });
+    }
+  }
+
+  reprobeWsl(worktreeId: string): void {
+    for (const entry of this.pool.entries.values()) {
+      entry.host.send({ type: "reprobe-wsl", worktreeId });
     }
   }
 
@@ -319,6 +338,12 @@ export class WorkspaceClient extends EventEmitter {
 
   setLogLevelOverrides(overrides: Record<string, string>): void {
     this.pool.setLogLevelOverrides(overrides);
+  }
+
+  // ── Fetch throttle ──
+
+  relayFetchThrottle(multiplier: number): void {
+    this.pool.relayFetchThrottle(multiplier);
   }
 
   // ── State queries ──
@@ -418,6 +443,16 @@ export class WorkspaceClient extends EventEmitter {
           type: "set-active",
           requestId,
           worktreeId,
+          // Propagate the silent flag so the host's `worktree-activated` event
+          // carries the same gating intent. Every successful `set-active`
+          // round-trips a `worktree-activated` event back to the main-process
+          // router (`WorkspaceHostEventRouter`), which is the SOLE plugin-bus
+          // source — it suppresses the emit when silent. We do NOT emit
+          // `worktree-activated` here ourselves; doing so double-fired
+          // `PluginService.onDidChangeActiveWorktree` (#9945). The
+          // `CHANNELS.WORKTREE_ACTIVATED` legacy renderer echo below is a
+          // separate surface and is still gated by this same flag.
+          silent: options?.silent,
         });
         accepted = true;
         break;
@@ -427,25 +462,20 @@ export class WorkspaceClient extends EventEmitter {
     }
 
     if (accepted && !options?.silent) {
+      // Legacy renderer echo only. The plugin-bus `worktree-activated` emit is
+      // owned solely by `WorkspaceHostEventRouter`, fed by the host round-trip
+      // — emitting it here too double-fired plugin subscribers (#9945).
       if (windowId !== undefined) {
         const entry = this.pool.resolveEntryForWindow(windowId);
         if (entry) {
           sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, {
             worktreeId,
           });
-          this.emit("worktree-activated", {
-            worktreeId,
-            projectPath: entry.projectPath,
-          });
         }
       } else {
         for (const entry of this.pool.entries.values()) {
           sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, {
             worktreeId,
-          });
-          this.emit("worktree-activated", {
-            worktreeId,
-            projectPath: entry.projectPath,
           });
         }
       }

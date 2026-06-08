@@ -27,6 +27,24 @@ test.describe.serial("Core: Project Pulse", () => {
     await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_LONG });
   });
 
+  test("legend is visible below the heatmap with Less and More labels", async () => {
+    const { window } = ctx;
+    const legend = window.locator(SEL.pulse.legend);
+    await expect(legend).toBeVisible({ timeout: T_MEDIUM });
+    await expect(legend).toContainText("Less", { timeout: T_SHORT });
+    await expect(legend).toContainText("More", { timeout: T_SHORT });
+  });
+
+  test("heatmap is described by a screen-reader-only intensity scale (issue #9819)", async () => {
+    const { window } = ctx;
+    const heatmap = window.locator(SEL.pulse.heatmap);
+    const describedBy = await heatmap.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const description = window.locator(`#${describedBy}`);
+    await expect(description).toHaveCount(1);
+    await expect(description).toHaveText(/Heat intensity from no commits to many commits/);
+  });
+
   test("card header shows project name and default range", async () => {
     const { window } = ctx;
     const title = window.getByText(/pulse-test.*Project Pulse/i);

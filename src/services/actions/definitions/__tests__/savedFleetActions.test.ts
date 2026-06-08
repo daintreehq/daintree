@@ -697,3 +697,186 @@ describe("fleet.deleteNamedFleet", () => {
     expect(saveSettingsMock).not.toHaveBeenCalled();
   });
 });
+
+describe("fleet.recallNamedFleet race recovery (in-memory atomic)", () => {
+  beforeEach(() => {
+    resetState();
+    vi.clearAllMocks();
+  });
+
+  // Hydrate the in-memory store — mirrors what happens after project load.
+  // Tests that exercise the in-memory path (race tests) seed the store directly
+  // so we don't depend on the cold-start IPC read.
+  function seedInMemory(scopes: FleetSavedScope[]): void {
+    useProjectSettingsStore.setState({
+      projectId: "proj-1",
+      settings: { runCommands: [], fleetSavedScopes: scopes },
+    });
+  }
+
+  it("two concurrent recalls of different scopes each land their stamp", async () => {
+    const a: FleetSavedScope = {
+      kind: "snapshot",
+      id: "a",
+      name: "A",
+      terminalIds: ["p-a"],
+      createdAt: 1,
+    };
+    const b: FleetSavedScope = {
+      kind: "snapshot",
+      id: "b",
+      name: "B",
+      terminalIds: ["p-b"],
+      createdAt: 1,
+    };
+    seedPanels([makeAgent("p-a"), makeAgent("p-b")]);
+    seedInMemory([a, b]);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [a, b] });
+
+    const registry = await buildRegistry();
+    await Promise.all([
+      run(registry, "fleet.recallNamedFleet", { id: "a" }),
+      run(registry, "fleet.recallNamedFleet", { id: "b" }),
+    ]);
+
+    // Both scopes should have stamps, not just the last writer.
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    const stampedA = inMemory.find((s) => s.id === "a") as FleetSavedScope | undefined;
+    const stampedB = inMemory.find((s) => s.id === "b") as FleetSavedScope | undefined;
+    expect(stampedA?.lastUsedAt).toBeGreaterThan(0);
+    expect(stampedA?.usageHistory).toHaveLength(1);
+    expect(stampedB?.lastUsedAt).toBeGreaterThan(0);
+    expect(stampedB?.usageHistory).toHaveLength(1);
+  });
+
+  it("a recall followed by a save preserves both the new scope and the recall's stamp", async () => {
+    // Sequential (not Promise.all) — verifies the in-memory atomic pattern
+    // when recall lands first and a later save reads the freshest snapshot.
+    // Truly concurrent recall+save is covered by the test below.
+    const target: FleetSavedScope = {
+      kind: "snapshot",
+      id: "target",
+      name: "Target",
+      terminalIds: ["p-target"],
+      createdAt: 1,
+    };
+    seedPanels([makeAgent("p-target")]);
+    seedInMemory([target]);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [target] });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "target" });
+    await run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "New Fleet" });
+
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    expect(inMemory).toHaveLength(2);
+    const stampedTarget = inMemory.find((s) => s.id === "target") as FleetSavedScope;
+    const newScope = inMemory.find((s) => s.id !== "target") as FleetSavedScope;
+    expect(stampedTarget.lastUsedAt).toBeGreaterThan(0);
+    expect(stampedTarget.usageHistory).toHaveLength(1);
+    expect(newScope.name).toBe("New Fleet");
+    expect(newScope.lastUsedAt).toBeUndefined();
+  });
+
+  it("a recall and a save fired concurrently both land in the in-memory store", async () => {
+    const target: FleetSavedScope = {
+      kind: "snapshot",
+      id: "target",
+      name: "Target",
+      terminalIds: ["p-target"],
+      createdAt: 1,
+    };
+    seedPanels([makeAgent("p-target")]);
+    seedInMemory([target]);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [target] });
+
+    const registry = await buildRegistry();
+    await Promise.all([
+      run(registry, "fleet.recallNamedFleet", { id: "target" }),
+      run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "New Fleet" }),
+    ]);
+
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    expect(inMemory).toHaveLength(2);
+    const stampedTarget = inMemory.find((s) => s.id === "target") as FleetSavedScope;
+    const newScope = inMemory.find((s) => s.id !== "target") as FleetSavedScope;
+    expect(stampedTarget.lastUsedAt).toBeGreaterThan(0);
+    expect(stampedTarget.usageHistory).toHaveLength(1);
+    expect(newScope.name).toBe("New Fleet");
+  });
+
+  it("uses the in-memory store when hydrated, never invoking getSettings", async () => {
+    const target: FleetSavedScope = {
+      kind: "snapshot",
+      id: "target",
+      name: "Target",
+      terminalIds: ["p-target"],
+      createdAt: 1,
+    };
+    seedPanels([makeAgent("p-target")]);
+    seedInMemory([target]);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [target] });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.recallNamedFleet", { id: "target" });
+
+    expect(getSettingsMock).not.toHaveBeenCalled();
+    expect(saveSettingsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("fleet.saveNamedFleet race recovery (in-memory atomic)", () => {
+  beforeEach(() => {
+    resetState();
+    vi.clearAllMocks();
+  });
+
+  function seedInMemory(scopes: FleetSavedScope[]): void {
+    useProjectSettingsStore.setState({
+      projectId: "proj-1",
+      settings: { runCommands: [], fleetSavedScopes: scopes },
+    });
+  }
+
+  it("two concurrent saves both land (no clobbering when in-memory is hydrated)", async () => {
+    seedPanels([makeAgent("p1"), makeAgent("p2")]);
+    useFleetArmingStore.getState().armIds(["p1", "p2"]);
+    seedInMemory([]);
+    saveSettingsMock.mockResolvedValue(undefined);
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [] });
+
+    const registry = await buildRegistry();
+    await Promise.all([
+      run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "First" }),
+      run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "Second" }),
+    ]);
+
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    expect(inMemory).toHaveLength(2);
+    const names = inMemory.map((s) => s.name).sort();
+    expect(names).toEqual(["First", "Second"]);
+  });
+
+  it("rolls back the in-memory append when saveSettings rejects (no phantom fleet)", async () => {
+    seedPanels([makeAgent("p1")]);
+    useFleetArmingStore.getState().armIds(["p1"]);
+    seedInMemory([]);
+    saveSettingsMock.mockRejectedValue(new Error("disk full"));
+    getSettingsMock.mockResolvedValue({ runCommands: [], fleetSavedScopes: [] });
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "Will fail" });
+
+    // The in-memory store must not retain the failed append — otherwise the
+    // user sees a row that won't be on disk after a reload.
+    const inMemory = useProjectSettingsStore.getState().settings?.fleetSavedScopes ?? [];
+    expect(inMemory).toHaveLength(0);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Couldn't save fleet" })
+    );
+  });
+});

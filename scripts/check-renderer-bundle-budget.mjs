@@ -7,14 +7,17 @@
 // configured threshold (default 5%).
 //
 // Usage:
-//   node scripts/check-renderer-bundle-budget.mjs                              # check mode (CI)
+//   node scripts/check-renderer-bundle-budget.mjs                              # check mode (local, not wired to CI pre-1.0)
 //   node scripts/check-renderer-bundle-budget.mjs --threshold 0.10            # allow 10% growth
 //   node scripts/check-renderer-bundle-budget.mjs --update                    # write current report as new baseline
 //   node scripts/check-renderer-bundle-budget.mjs --update --force            # bypass the shrinkage guard
 //
-// There is no override flag: an intentional regression is accepted by applying
+// This budget is not wired into CI pre-1.0 (see .github/workflows/ci.yml) — it
+// runs locally on demand. There is no override flag: when the budget is
+// reintroduced as a CI gate, an intentional regression is accepted by applying
 // the `renderer-bundle-override` label to the PR with a linked tracking issue
-// (enforced by scripts/check-budget-override-gate.mjs in CI).
+// (the label is checked by scripts/check-budget-override-gate.mjs, which is also
+// dormant until budgets gate CI again).
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -164,7 +167,7 @@ function main() {
   } else {
     console.error(
       `\n[check-renderer-bundle-budget] FAILED — ${comparison.failures.length} regression(s) exceed +${(args.threshold * 100).toFixed(0)}% threshold. ` +
-        `If the change is intentional, run \`npm run renderer-bundle-budget:update\` to refresh the baseline, or apply the \`renderer-bundle-override\` label to the PR with a linked tracking issue (\`Fixes #N\`, \`Resolves #N\`, or \`Closes #N\` in the PR body).`
+        `If the change is intentional, run \`npm run renderer-bundle-budget:update\` to refresh the baseline.`
     );
     process.exit(1);
   }

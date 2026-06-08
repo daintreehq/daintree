@@ -2,7 +2,7 @@ import { type SVGProps } from "react";
 import { Flame } from "lucide-react";
 
 const STREAK_TIERS = [
-  { min: 240, color: "var(--color-accent-primary)" },
+  { min: 240, color: "#9333EA" },
   { min: 120, color: "#C026D3" },
   { min: 60, color: "#DC2626" },
   { min: 30, color: "#EF4444" },

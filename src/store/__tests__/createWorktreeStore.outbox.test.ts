@@ -610,8 +610,6 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       worktreeId,
       issueNumber,
       issueTitle: `Issue ${issueNumber}`,
-      issueState: "OPEN" as const,
-      issueUrl: `https://example.com/${issueNumber}`,
     });
 
     describe("entry creation + success path", () => {

@@ -109,6 +109,8 @@ export function FileViewerModal({
   const [content, setContent] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
+  // Renderer-local failures (SVG sanitization, image decode) that have no FileReadErrorCode
+  const [displayErrorMessage, setDisplayErrorMessage] = useState<string | null>(null);
   const diffViewType = usePreferencesStore((s) => s.diffViewType);
   const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
   const [diffCopied, setDiffCopied] = useState(false);
@@ -123,6 +125,10 @@ export function FileViewerModal({
   const currentHunkIndexRef = useRef<number>(-1);
   const [activeHunkIndex, setActiveHunkIndex] = useState<number>(-1);
   const [hunkCount, setHunkCount] = useState<number>(0);
+  // Bumped whenever a file's collapse state is toggled inside DiffViewer, so the
+  // hunk-counting effect re-scans the DOM whose hunk rows just appeared (expand)
+  // or disappeared (collapse). See #10013.
+  const [collapseRevision, setCollapseRevision] = useState(0);
   const hunkRatiosRef = useRef<Map<number, number>>(new Map());
   const observerGenerationRef = useRef(0);
   const observerDisposedRef = useRef(false);
@@ -145,6 +151,7 @@ export function FileViewerModal({
       setContent(null);
       setLoadState("loading");
       setErrorCode(null);
+      setDisplayErrorMessage(null);
       setDiffCopied(false);
       setSanitizedSvg(null);
       requestRef.current++;
@@ -158,6 +165,7 @@ export function FileViewerModal({
     const requestId = ++requestRef.current;
     setLoadState("loading");
     setErrorCode(null);
+    setDisplayErrorMessage(null);
     hasSwitchedToDiffRef.current = false;
     currentHunkIndexRef.current = -1;
 
@@ -176,7 +184,7 @@ export function FileViewerModal({
             setSanitizedSvg(sanitized.svg);
             setLoadState("svg");
           } else {
-            setErrorCode("INVALID_PATH");
+            setDisplayErrorMessage(sanitized.error);
             setLoadState("error");
           }
         } else {
@@ -217,7 +225,7 @@ export function FileViewerModal({
   }, [filePath, initialLine, initialCol]);
 
   const handleImageError = useCallback(() => {
-    setErrorCode("NOT_FOUND");
+    setDisplayErrorMessage("Unable to display image");
     setLoadState("error");
   }, []);
 
@@ -464,7 +472,11 @@ export function FileViewerModal({
       observerDisposedRef.current = true;
       observer.disconnect();
     };
-  }, [isOpen, mode, diff, diffViewType]);
+  }, [isOpen, mode, diff, diffViewType, collapseRevision]);
+
+  const handleDiffToggleCollapse = useCallback(() => {
+    setCollapseRevision((r) => r + 1);
+  }, []);
 
   return (
     <AppDialog
@@ -684,9 +696,11 @@ export function FileViewerModal({
               </div>
             )}
 
-            {loadState === "error" && errorCode && (
+            {loadState === "error" && (displayErrorMessage || errorCode) && (
               <div className="flex flex-col items-center justify-center h-64 gap-3">
-                <p className="text-sm text-muted-foreground">{ERROR_MESSAGES[errorCode]}</p>
+                <p className="text-sm text-muted-foreground">
+                  {displayErrorMessage ?? (errorCode ? ERROR_MESSAGES[errorCode] : "")}
+                </p>
                 {imageFile ? (
                   <button
                     type="button"
@@ -694,7 +708,7 @@ export function FileViewerModal({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
                   >
                     <ImageIcon className="w-3.5 h-3.5" />
-                    Open in Image Viewer
+                    Open in image viewer
                   </button>
                 ) : (
                   <button
@@ -703,7 +717,7 @@ export function FileViewerModal({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    Open in Editor
+                    Open in editor
                   </button>
                 )}
               </div>
@@ -739,6 +753,7 @@ export function FileViewerModal({
             viewType={diffViewType}
             rootPath={rootPath}
             onRetry={onRetryDiff}
+            onToggleCollapse={handleDiffToggleCollapse}
           />
         )}
 

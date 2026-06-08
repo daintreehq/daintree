@@ -154,7 +154,16 @@ class NotificationService {
       this.activeNotifications.delete(notification);
     };
     notification.once("close", cleanup);
-    notification.once("failed", cleanup);
+    notification.once("failed", (_event, error) => {
+      // Electron 42 routes macOS notifications through UNNotification, which
+      // silently emits "failed" on unsigned dev builds instead of displaying.
+      // Surface it as a diagnostic — signed release builds never hit this.
+      console.warn(
+        "[NotificationService] native notification failed (unsigned macOS dev build?):",
+        error
+      );
+      cleanup();
+    });
 
     notification.show();
   }
@@ -175,7 +184,16 @@ class NotificationService {
       this.activeNotifications.delete(notification);
     };
     notification.once("close", cleanup);
-    notification.once("failed", cleanup);
+    notification.once("failed", (_event, error) => {
+      // Electron 42 routes macOS notifications through UNNotification, which
+      // silently emits "failed" on unsigned dev builds instead of displaying.
+      // Surface it as a diagnostic — signed release builds never hit this.
+      console.warn(
+        "[NotificationService] native notification failed (unsigned macOS dev build?):",
+        error
+      );
+      cleanup();
+    });
 
     notification.once("click", () => {
       cleanup();

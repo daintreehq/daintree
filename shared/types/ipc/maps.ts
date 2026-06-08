@@ -25,6 +25,7 @@ import type {
 import type { TerminalActivityPayload } from "./terminal.js";
 import type {
   AgentStateChangePayload,
+  AgentStateTransitionDroppedPayload,
   AgentDetectedPayload,
   AgentExitedPayload,
   AgentFallbackTriggeredPayload,
@@ -83,10 +84,10 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
-  GitHubRateLimitPayload,
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
@@ -143,7 +144,7 @@ import type {
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
 } from "./system.js";
-import type { CloneRepoOptions, CloneRepoProgressEvent, CloneRepoResult } from "./gitClone.js";
+import type { CloneRepoProgressEvent } from "./gitClone.js";
 import type { AppAgentConfig } from "../appAgent.js";
 import type { GeneratedIpcInvokeMap } from "./generated.js";
 import type {
@@ -156,6 +157,7 @@ import type {
   Page,
   RepoMetadata,
   ListOptions,
+  ForgeUser,
 } from "../forge.js";
 import type { ForgeRateLimitChangedPayload, ForgeTokenHealthChangedPayload } from "./forge.js";
 
@@ -1166,7 +1168,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "forge:validate-token": {
-    args: [token: string];
+    args: [payload: { providerId: string; token: string }];
     result: AuthValidation;
   };
   "forge:set-credential": {
@@ -1200,6 +1202,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "forge:get-repo-metadata": {
     args: [payload: { cwd: string }];
     result: RepoMetadata;
+  };
+  "forge:get-current-user": {
+    args: [payload: { cwd: string }];
+    result: ForgeUser | null;
   };
   "forge:classify-push-error": {
     args: [payload: { cwd: string; stderr: string }];
@@ -1373,16 +1379,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Global env channels
   // Global recipe channels
   // Help channels
-  // Project clone channels
-  "project:clone-repo": {
-    args: [options: CloneRepoOptions];
-    result: CloneRepoResult;
-  };
-  "project:clone-cancel": {
-    args: [];
-    result: void;
-  };
-
   // Bulk project stats
   "project:get-bulk-stats": {
     args: [projectIds: string[]];
@@ -1550,6 +1546,7 @@ export interface IpcEventMap {
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
+  "agent:state-transition-dropped": AgentStateTransitionDroppedPayload;
   "agent:all-clear": { timestamp: number };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
@@ -1585,9 +1582,6 @@ export interface IpcEventMap {
   "issue:detected": IssueDetectedPayload;
   "issue:not-found": IssueNotFoundPayload;
 
-  // GitHub rate-limit state push
-  "github:rate-limit-changed": GitHubRateLimitPayload;
-
   // GitHub token health state push (expiry/revocation detection)
   "github:token-health-changed": GitHubTokenHealthPayload;
 
@@ -1601,6 +1595,10 @@ export interface IpcEventMap {
   // after every successful poll. Lets renderers prime githubResourceCache
   // for the (open, created) default-filter cache key with no click-time fetch.
   "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
+
+  // Count-only stats push from the cheap REST background poll (issue #10122).
+  // No page items — the dropdown loads its own first page on open.
+  "github:repo-counts-updated": RepoCountsUpdatedPayload;
 
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;
@@ -1667,6 +1665,18 @@ export interface IpcEventMap {
   };
 
   /**
+   * Targeted push: a help-session was revoked by the abuse policy after
+   * exceeding the denial threshold. Sent to the pinned WebContents so the
+   * renderer can surface why the session ended and offer a new-session
+   * recovery action. `denialKind` records what tripped the policy
+   * (`"auth401"`, `"tierMismatch"`, …).
+   */
+  "mcp-server:session-revoked": {
+    sessionId: string;
+    denialKind: string;
+  };
+
+  /**
    * Targeted push: a grant lifecycle event for an MCP tool approval.
    * Sent to the pinned WebContents so the renderer can track grant state.
    */
@@ -1682,6 +1692,17 @@ export interface IpcEventMap {
    * settled. Carries the audit-aligned outcome for the activity strip (#9759).
    */
   "mcp-server:tool-call-settled": import("./mcpServer.js").McpToolCallSettledPayload;
+  /**
+   * Targeted push: the assistant invoked `help.displayImage`. Carries the
+   * validated image URL and session-assigned figure number (#9828).
+   */
+  "mcp-server:help-display-image": import("./mcpServer.js").McpHelpDisplayImagePayload;
+  /**
+   * Targeted push: a turn for the pinned help session classified as
+   * `agent-stuck` or `reasoning-loop` (#10018). Drives the Assistant footer's
+   * ambient outcome pip — Tier 1, never a toast.
+   */
+  "mcp-server:turn-outcome-alert": import("./mcpServer.js").McpTurnOutcomeAlertPayload;
 
   // Error events
   "error:notify": ErrorRecord;
@@ -1789,6 +1810,12 @@ export interface IpcEventMap {
     type: "alert" | "confirm" | "prompt";
     message: string;
     defaultValue: string;
+  };
+
+  // Webview dialogs dismissed — guest navigated away or its renderer crashed,
+  // invalidating any pending dialog overlays for the panel
+  "webview:dialog-dismiss": {
+    panelId: string;
   };
 
   // Webview find-in-page shortcut forwarded from guest
@@ -1944,6 +1971,11 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // Run history changed (main → renderer, #9949). Carries the full newest-first
+  // snapshot so every live window updates without a reload after a recipe/fleet
+  // run is recorded or the log is cleared.
+  "run-history:update": import("./runHistory.js").RunHistoryRecord[];
+
   // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
   // primary window once it has painted; the renderer opens the Plugin Manager
   // (URL pre-filled for install, or scrolled to the plugin for open). Routing
@@ -1996,6 +2028,7 @@ export type IpcEventBusMap = Pick<
   IpcEventMap,
   // Agent lifecycle (global broadcast)
   | "agent:state-changed"
+  | "agent:state-transition-dropped"
   | "agent:all-clear"
   | "agent:detected"
   | "agent:exited"
@@ -2037,6 +2070,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:decorations-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Run history changed (global broadcast)
+  | "run-history:update"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
   // Terminal lifecycle (non-data) — exit, spawn-result, backend crash/ready

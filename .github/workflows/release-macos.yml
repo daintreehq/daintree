@@ -244,7 +244,7 @@ jobs:
             spctl --assess --type execute --verbose --ignore-cache --no-cache "$app" || true
           done
 
-      - name: Verify macOS signing audit (TeamIdentifier + hardened runtime)
+      - name: Verify macOS signing audit (TeamIdentifier + hardened runtime + helper entitlements)
         # No skip_notarization guard: signing is a code-signing property that must
         # be validated even when notarization is manually disabled.
         shell: bash
@@ -272,6 +272,7 @@ jobs:
             codesign --verify --deep --strict --verbose=4 "$app"
             scripts/ci/verify-team-identifier.sh "$app" "$EXPECTED_TEAM_ID"
             scripts/ci/verify-hardened-runtime.sh "$app"
+            scripts/ci/verify-helper-entitlements.sh "$app"
           done
 
       - name: Validate update metadata (macOS)

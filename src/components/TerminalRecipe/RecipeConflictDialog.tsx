@@ -70,8 +70,15 @@ function RecipeConflictDialogInner() {
 }
 
 export function RecipeConflictDialog() {
+  // Reset the boundary on each new request so a crashed inner dialog recovers
+  // when the next conflict arrives (#9918).
+  const requestSeq = useRecipeConflictStore((s) => s.requestSeq);
   return (
-    <ErrorBoundary variant="component" componentName="RecipeConflictDialog">
+    <ErrorBoundary
+      variant="component"
+      componentName="RecipeConflictDialog"
+      resetKeys={[requestSeq]}
+    >
       <RecipeConflictDialogInner />
     </ErrorBoundary>
   );

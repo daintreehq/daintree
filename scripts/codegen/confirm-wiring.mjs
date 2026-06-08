@@ -50,6 +50,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "recipe.run",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  "artifact.applyPatch",
 ]);
 
 // Actions with a ConfirmDialog-family component co-located in the same source file
@@ -87,6 +88,7 @@ const BYPASS_WIRED = new Set([
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
+  "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
 ]);
 
 // Text tokens identifying a ConfirmDialog-family component in a source file.

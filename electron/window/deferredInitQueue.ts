@@ -1,5 +1,8 @@
 import { markPerformance } from "../utils/performance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { notifyError } from "../ipc/errorHandlers.js";
+import { trackEvent } from "../services/TelemetryService.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export type DeferredTask = {
   name: string;
@@ -22,8 +25,18 @@ const drainedSenderIds = new Set<number>();
 // cycle's state. Without this, a stale `drainNext` could fire against an
 // empty `tasks[]` and mark the fresh queue as "drained" before any work runs.
 let generation = 0;
+// Set once by `haltDeferredQueue()` when shutdown begins (`before-quit`).
+// Process-lifetime: never cleared by `resetDeferredQueue()`, because on quit
+// the last-window-close reset fires before `before-quit` and must not be able
+// to undo the halt. Once halted, no deferred task may start — the services
+// they would initialize are being torn down.
+let halted = false;
 
 export function registerDeferredTask(task: DeferredTask): void {
+  if (halted) {
+    console.warn(`[DeferredInit] Task "${task.name}" dropped — queue halted for shutdown`);
+    return;
+  }
   if (drainState !== "idle") {
     console.warn(
       `[DeferredInit] Task "${task.name}" registered after drain started — running immediately`
@@ -31,10 +44,10 @@ export function registerDeferredTask(task: DeferredTask): void {
     try {
       const res = task.run();
       if (res instanceof Promise) {
-        res.catch((err) => console.error(`[DeferredInit] Late task "${task.name}" failed:`, err));
+        res.catch((err) => reportDeferredTaskFailure(task.name, err));
       }
     } catch (err) {
-      console.error(`[DeferredInit] Late task "${task.name}" threw:`, err);
+      reportDeferredTaskFailure(task.name, err);
     }
     return;
   }
@@ -42,6 +55,7 @@ export function registerDeferredTask(task: DeferredTask): void {
 }
 
 export function finalizeDeferredRegistration(fallbackMs: number = DEFAULT_FALLBACK_MS): void {
+  if (halted) return;
   if (registrationComplete) return;
   registrationComplete = true;
 
@@ -64,6 +78,7 @@ export function finalizeDeferredRegistration(fallbackMs: number = DEFAULT_FALLBA
 }
 
 export function signalFirstInteractive(webContentsId: number | null): void {
+  if (halted) return;
   if (webContentsId !== null) {
     if (drainedSenderIds.has(webContentsId)) return;
     drainedSenderIds.add(webContentsId);
@@ -112,7 +127,55 @@ export function resetDeferredQueue(): void {
   drainedSenderIds.clear();
 }
 
+/**
+ * Surface a deferred-init task failure beyond the console. These failures are
+ * otherwise invisible — a background service is silently absent for the rest of
+ * the session — so route them through the shared error infrastructure
+ * (persisted `ErrorRecord` + renderer broadcast) and telemetry. Both
+ * `notifyError` and `trackEvent` are safe to call here (no throw, no-op before
+ * their respective services initialize), and neither alters the queue's
+ * failure-isolation guarantee: the caller still advances to the next task.
+ */
+function reportDeferredTaskFailure(taskName: string, err: unknown): void {
+  // Reporting is best-effort and must never throw: the synchronous drain catch
+  // calls this immediately before `scheduleNext()`, so a throw here would strand
+  // the queue in "draining" forever. Guard the whole body — a non-Error thrown
+  // value (`String(err)`) or a store-write failure inside `notifyError` must not
+  // break failure isolation.
+  try {
+    const message = formatErrorMessage(err, "unknown error");
+    console.error(`[DeferredInit] Task "${taskName}" failed:`, err);
+    notifyError(new Error(`Deferred task "${taskName}" failed: ${message}`, { cause: err }), {
+      source: "deferred-init",
+    });
+    trackEvent("deferred_init_task_failed", { taskName });
+  } catch (reportErr) {
+    console.error(`[DeferredInit] Failed to report failure for task "${taskName}":`, reportErr);
+  }
+}
+
+/**
+ * Permanently stop the queue for shutdown. Called synchronously at the start
+ * of `before-quit`, before the first await, so pending `setImmediate` drain
+ * callbacks observe the halt instead of re-initializing services the cleanup
+ * chain is tearing down. Idempotent; never undone by `resetDeferredQueue()`.
+ */
+export function haltDeferredQueue(): void {
+  halted = true;
+  if (fallbackTimer) {
+    clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  }
+}
+
+/** Test-only: full reset including the process-lifetime `halted` latch. */
+export function __resetDeferredQueueForTests(): void {
+  resetDeferredQueue();
+  halted = false;
+}
+
 function doDrain(): void {
+  if (halted) return;
   if (drainState !== "idle") return;
   drainState = "draining";
 
@@ -128,7 +191,7 @@ function doDrain(): void {
 }
 
 function drainNext(index: number, startedAt: number, drainGen: number): void {
-  if (drainGen !== generation) return; // queue was reset — abandon this chain
+  if (drainGen !== generation || halted) return; // queue was reset or halted — abandon this chain
   if (index >= tasks.length) {
     drainState = "drained";
     const elapsed = Date.now() - startedAt;
@@ -148,14 +211,14 @@ function drainNext(index: number, startedAt: number, drainGen: number): void {
     if (result instanceof Promise) {
       result
         .catch((err) => {
-          console.error(`[DeferredInit] Task "${task.name}" failed:`, err);
+          reportDeferredTaskFailure(task.name, err);
         })
         .finally(scheduleNext);
     } else {
       scheduleNext();
     }
   } catch (err) {
-    console.error(`[DeferredInit] Task "${task.name}" threw:`, err);
+    reportDeferredTaskFailure(task.name, err);
     scheduleNext();
   }
 }

@@ -84,6 +84,11 @@ vi.mock("../../setup/protocols.js", () => ({
   getDistPath: vi.fn(() => "/dist"),
 }));
 
+vi.mock("../../setup/environment.js", () => ({
+  isDemoMode: false,
+  isSmokeTest: false,
+}));
+
 vi.mock("../../../shared/config/devServer.js", () => ({
   getDevServerUrl: vi.fn(() => "http://localhost:5173"),
 }));
@@ -114,8 +119,18 @@ vi.mock("../skeletonCss.js", () => ({
   injectSkeletonProjectIdentity: vi.fn(),
   INITIAL_COLOR_SCHEME_ARG: "--daintree-initial-color-scheme-id",
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
+  INSTANCE_ROLE_ARG: "--daintree-instance-role",
+  resolveInstanceRole: vi.fn(() => "attended"),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
+}));
+
+// ProjectViewManager imports isDemoMode from setup/environment.js, whose
+// module-level side effects (deepLinkUrlQueue app.on, userData setPath) need
+// the real electron app API the partial mock above does not provide.
+vi.mock("../../setup/environment.js", () => ({
+  isDemoMode: false,
+  isSmokeTest: false,
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
@@ -146,12 +161,27 @@ vi.mock("../../utils/logger.js", () => ({
   })),
 }));
 
-const mockGetAll = vi.fn<() => Array<{ projectId?: string; agentState?: string }>>(() => []);
-vi.mock("../../services/PtyManager.js", () => ({
-  getPtyManager: vi.fn(() => ({ getAll: mockGetAll })),
-}));
+// PtyClient-shaped mock injected via initAgentStateCache (#10054). The
+// terminal registry lives in the pty-host; hasActiveAgent() reads an
+// instance-level cache seeded from this mock, not the dead main-process
+// getPtyManager() singleton.
+const mockGetAllTerminals = vi.fn<
+  () => Promise<Array<{ id: string; projectId?: string; agentState?: string }>>
+>(async () => []);
+// Capture the latest handler per event so reseed tests can invoke them
+// (spawn-result / host-crash). initAgentStateCache overwrites per call, so the
+// map holds the current manager's handlers.
+const ptyClientHandlers = new Map<string, (...args: unknown[]) => void>();
+const mockPtyClient = {
+  getAllTerminalsAsync: mockGetAllTerminals,
+  on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+    ptyClientHandlers.set(event, handler);
+  }),
+  off: vi.fn(),
+};
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { events } from "../../services/events.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
@@ -180,8 +210,8 @@ describe("ProjectViewManager — eviction safety", () => {
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
-    mockGetAll.mockReset();
-    mockGetAll.mockReturnValue([]);
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
@@ -285,10 +315,11 @@ describe("ProjectViewManager — eviction safety", () => {
 
     // proj-a (oldest) has an active agent. Eviction must skip it and evict proj-b instead
     // once we go over the limit with proj-c.
-    mockGetAll.mockReturnValue([
-      { projectId: "proj-a", agentState: "working" },
-      { projectId: "proj-b", agentState: "idle" },
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "working" },
+      { id: "t-b", projectId: "proj-b", agentState: "idle" },
     ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
 
     const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = wcBEntry?.view.webContents as ReturnType<typeof createMockWebContents> | undefined;
@@ -301,6 +332,105 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(remaining).not.toContain("proj-b");
     expect(wcA.close).not.toHaveBeenCalled();
     expect(wcB?.close).toHaveBeenCalled();
+  });
+
+  it("protects a view after a live agent:state-changed event marks it active (#10054)", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // Seed proj-a's terminal as idle (so projectByTerminal knows t-a → proj-a),
+    // then flip it to "working" purely via the event bus — the path the cache
+    // relies on between host re-seeds.
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "idle" },
+      { id: "t-b", projectId: "proj-b", agentState: "idle" },
+    ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+    events.emit("agent:state-changed", {
+      terminalId: "t-a",
+      state: "working",
+      previousState: "idle",
+      trigger: "output",
+      confidence: 1,
+      timestamp: 0,
+    } as never);
+
+    const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = wcBEntry?.view.webContents as ReturnType<typeof createMockWebContents> | undefined;
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).toContain("proj-a");
+    expect(remaining).not.toContain("proj-b");
+    expect(wcA.close).not.toHaveBeenCalled();
+    expect(wcB?.close).toHaveBeenCalled();
+  });
+
+  it("host-crash reseed clears a stale active-agent entry (#10054)", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // Seed proj-a as working, then simulate a host crash that comes back with an
+    // empty registry — the reseed must drop the stale "working" entry so proj-a
+    // is no longer protected.
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "working" },
+    ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+    mockGetAllTerminals.mockResolvedValue([]);
+    await ptyClientHandlers.get("host-crash")?.();
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    // proj-a is the LRU and no longer protected, so it is evicted.
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("re-invoking initAgentStateCache tears down prior listeners (#10054)", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+    mockPtyClient.off.mockClear();
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+    // The second call must unsubscribe the first call's PtyClient listeners
+    // before re-subscribing, so it doesn't leak or double-fire.
+    expect(mockPtyClient.off).toHaveBeenCalledWith("spawn-result", expect.any(Function));
+    expect(mockPtyClient.off).toHaveBeenCalledWith("host-crash", expect.any(Function));
   });
 
   it("falls back to evicting an active-agent view when all candidates are protected", async () => {
@@ -321,10 +451,11 @@ describe("ProjectViewManager — eviction safety", () => {
 
     // Both background candidates have active agents — fallback must evict the LRU
     // (proj-a) and emit a telemetry event rather than let the pool grow unbounded.
-    mockGetAll.mockReturnValue([
-      { projectId: "proj-a", agentState: "directing" },
-      { projectId: "proj-b", agentState: "working" },
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "directing" },
+      { id: "t-b", projectId: "proj-b", agentState: "working" },
     ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
 
@@ -357,11 +488,12 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.switchTo("proj-c", "/path/c");
 
     // All three cached projects have active agents.
-    mockGetAll.mockReturnValue([
-      { projectId: "proj-a", agentState: "working" },
-      { projectId: "proj-b", agentState: "directing" },
-      { projectId: "proj-c", agentState: "waiting" },
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "working" },
+      { id: "t-b", projectId: "proj-b", agentState: "directing" },
+      { id: "t-c", projectId: "proj-c", agentState: "waiting" },
     ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
 
     // Tightening the limit to 1 must evict the two LRU views (proj-a, then proj-b)
     // in order, and each forced eviction is emitted as a telemetry event.
@@ -542,7 +674,10 @@ describe("ProjectViewManager — eviction safety", () => {
         memory: { privateBytes: 100 * 1024 },
       },
     ] as unknown as Electron.ProcessMetric[]);
-    mockGetAll.mockReturnValue([{ projectId: "proj-a", agentState: "working" }]);
+    mockGetAllTerminals.mockResolvedValue([
+      { id: "t-a", projectId: "proj-a", agentState: "working" },
+    ]);
+    await managerWithLimit.initAgentStateCache(mockPtyClient as never);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
 
@@ -709,8 +844,8 @@ describe("ProjectViewManager — telemetry", () => {
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
-    mockGetAll.mockReset();
-    mockGetAll.mockReturnValue([]);
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
@@ -1197,8 +1332,8 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
   beforeEach(() => {
     nextWebContentsId = 100;
     vi.clearAllMocks();
-    mockGetAll.mockReset();
-    mockGetAll.mockReturnValue([]);
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
     win = createMockWindow();
   });
 
@@ -1420,8 +1555,8 @@ describe("ProjectViewManager — listener cleanup", () => {
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
-    mockGetAll.mockReset();
-    mockGetAll.mockReturnValue([]);
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();
@@ -1660,8 +1795,8 @@ describe("ProjectViewManager — low-memory eviction", () => {
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
-    mockGetAll.mockReset();
-    mockGetAll.mockReturnValue([]);
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
     win = createMockWindow();

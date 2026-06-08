@@ -266,3 +266,18 @@ export interface RepoStatsAndPagePayload {
   /** Wall-clock timestamp when the poll completed (ms). */
   fetchedAt: number;
 }
+
+/**
+ * Lightweight count-only push, broadcast when a background poll refreshed the
+ * toolbar counts via the cheap REST path (issue #10122) — no first-page items
+ * to ship. `RepoStatsAndPagePayload` keeps its full semantics: it fires only
+ * when a poll produced actual page data.
+ */
+export interface RepoCountsUpdatedPayload {
+  /** Absolute project path the payload corresponds to. */
+  projectPath: string;
+  /** Combined stats (counts + freshness metadata) — same shape useRepositoryStats already consumes. */
+  stats: RepositoryStats;
+  /** Wall-clock timestamp when the poll completed (ms). */
+  fetchedAt: number;
+}

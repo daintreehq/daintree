@@ -38,7 +38,7 @@ vi.mock("@shared/theme", () => ({
   },
   getAppThemeWarnings: () => [],
   applyAccentOverrideToScheme: (scheme: unknown) => scheme,
-  accentOverrideHasLowContrast: vi.fn(() => false),
+  accentOverrideHasLowContrast: vi.fn((): AccentContrastFailure | null => null),
   resolveAppTheme: (id: string, customSchemes: { id: string }[]) => {
     const map: Record<string, { id: string; name: string; type: string; tokens: object }> = {
       "theme-a": { id: "theme-a", name: "Theme A", type: "dark", tokens: {} },
@@ -76,7 +76,7 @@ vi.mock("@/config/appColorSchemes", () => {
   };
 });
 
-import { accentOverrideHasLowContrast } from "@shared/theme";
+import { accentOverrideHasLowContrast, type AccentContrastFailure } from "@shared/theme";
 import { AppThemePicker } from "../AppThemePicker";
 
 describe("AppThemePicker shuffle button", () => {
@@ -303,27 +303,49 @@ describe("AppThemePicker accent contrast warning", () => {
     });
   });
 
-  it("shows a warning naming the active theme when an override has low contrast", () => {
-    vi.mocked(accentOverrideHasLowContrast).mockReturnValue(true);
+  it("shows a surface warning naming the active theme and ratio when contrast is low", () => {
+    vi.mocked(accentOverrideHasLowContrast).mockReturnValue({
+      mode: "surface",
+      worstRatio: 3.8,
+      worstSurface: "surface-panel",
+    });
     storeState.accentColorOverride = "#ffffff";
 
     render(<AppThemePicker />);
-    expect(screen.getByText("Low contrast on Theme A")).toBeTruthy();
+    // Surface copy names the theme and the two-decimal ratio, and keeps the
+    // "Low contrast" substring the E2E selector matches on.
+    expect(screen.getByText(/Low contrast.*3\.80:1 on Theme A surfaces/)).toBeTruthy();
+  });
+
+  it("shows a foreground-specific warning when button text is illegible on the accent", () => {
+    vi.mocked(accentOverrideHasLowContrast).mockReturnValue({
+      mode: "foreground",
+      worstRatio: 2.1,
+      worstSurface: null,
+    });
+    storeState.accentColorOverride = "#ffffff";
+
+    render(<AppThemePicker />);
+    expect(screen.getByText(/Low contrast.*button text scores only 2\.10:1/)).toBeTruthy();
   });
 
   it("does not show the warning when there is no accent override", () => {
-    vi.mocked(accentOverrideHasLowContrast).mockReturnValue(true);
+    vi.mocked(accentOverrideHasLowContrast).mockReturnValue({
+      mode: "surface",
+      worstRatio: 3.8,
+      worstSurface: "surface-panel",
+    });
     storeState.accentColorOverride = null;
 
     render(<AppThemePicker />);
-    expect(screen.queryByText(/Low contrast on/)).toBeNull();
+    expect(screen.queryByText(/Low contrast/)).toBeNull();
   });
 
   it("does not show the warning when the override has sufficient contrast", () => {
-    vi.mocked(accentOverrideHasLowContrast).mockReturnValue(false);
+    vi.mocked(accentOverrideHasLowContrast).mockReturnValue(null);
     storeState.accentColorOverride = "#000000";
 
     render(<AppThemePicker />);
-    expect(screen.queryByText(/Low contrast on/)).toBeNull();
+    expect(screen.queryByText(/Low contrast/)).toBeNull();
   });
 });

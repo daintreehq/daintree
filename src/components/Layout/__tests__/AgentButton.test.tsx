@@ -17,7 +17,7 @@
  *    choices and warrants the picker.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
 
@@ -44,13 +44,15 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
 }));
 
+const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: Object.assign(
-    (selector: (s: { settings: AgentSettings | null }) => unknown) =>
-      selector({ settings: mockSettings }),
+    (selector: (s: Record<string, unknown>) => unknown) =>
+      selector({ settings: mockSettings, setAgentPinned: setAgentPinnedMock }),
     {
       getState: () => ({
-        setAgentPinned: vi.fn(),
+        setAgentPinned: setAgentPinnedMock,
         updateWorktreePreset: updateWorktreePresetMock,
         updateAgent: updateAgentMock,
       }),
@@ -351,6 +353,12 @@ vi.mock("lucide-react", () => ({
   ChevronDown: () => <span data-testid="chevron-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
+  // terminalStateConfig.tsx (imported transitively for STATE_LABELS — #9823)
+  // needs Circle and CheckCircle2 to satisfy its import graph. The icon
+  // components themselves are not exercised in these tests, so a stub is
+  // sufficient.
+  Circle: () => null,
+  CheckCircle2: () => null,
 }));
 
 import { AgentButton } from "../AgentButton";
@@ -902,10 +910,11 @@ describe("AgentButton preset UX", () => {
       );
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
-      expect(badge).not.toBeNull();
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge!.className).toMatch(/bg-state-waiting/);
     });
 
-    it("does not render the badge span when the helper returns null (passive state)", () => {
+    it("hides the badge span when the helper returns null (passive state)", () => {
       mockSettings = settingsWith({ claude: {} });
       mockPanelsById = { "panel-1": activePanel("working") };
       mockPanelIds = ["panel-1"];
@@ -919,10 +928,10 @@ describe("AgentButton preset UX", () => {
       );
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
-      expect(badge).toBeNull();
+      expect(badge?.getAttribute("data-visible")).toBe("false");
     });
 
-    it("does not render the badge span when there is no active session", () => {
+    it("hides the badge span when there is no active session", () => {
       mockSettings = settingsWith({ claude: {} });
       mockDominantState = null;
       mockDotColor = "bg-state-waiting";
@@ -932,7 +941,263 @@ describe("AgentButton preset UX", () => {
       );
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
-      expect(badge).toBeNull();
+      expect(badge?.getAttribute("data-visible")).toBe("false");
+    });
+
+    it("propagates the 'waiting' state word to the launch tooltip and aria-label (issue #9823)", () => {
+      // WCAG 1.4.1: the corner dot is aria-hidden, so screen readers would
+      // learn nothing about the actionable state without verbal copy. The
+      // suffix follows the established `— <state>` em-dash convention
+      // (#8173) and reuses STATE_LABELS for the wording.
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "waiting";
+      mockDotColor = "bg-state-waiting";
+
+      const { container, getAllByRole, getAllByTestId, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toContain("— waiting");
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary?.getAttribute("aria-label")).toBe("Start Claude — waiting");
+
+      // Combined dot+suffix invariant — the suffix is only meaningful when
+      // the dot is also painting. A regression that decouples the two (e.g.
+      // dot removed, suffix kept) would mislead screen readers into thinking
+      // a state is actionable when it isn't visible to the user.
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge).not.toBeNull();
+    });
+
+    it("propagates the 'directing' state word to the launch tooltip and aria-label (issue #9823)", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockPanelsById = { "panel-1": activePanel("directing") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "directing";
+      mockDotColor = "bg-state-working";
+
+      const { getAllByRole, getAllByTestId, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toContain("— directing");
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary?.getAttribute("aria-label")).toBe("Start Claude — directing");
+    });
+
+    it("orders state suffix before sign-in suffix when both apply (issue #9823 + #8173)", () => {
+      // The sign-in-not-detected and state suffixes are independent cues
+      // that can co-occur (a launchable agent with a session in `waiting`
+      // and a passive auth probe that came back empty). The issue contract
+      // locks the order: state first, sign-in caveat second. The two
+      // em-dashes are the densest form the project uses, but the order is
+      // a regression target — a swap would read as the sign-in being a
+      // sub-cause of the state instead of a parallel caveat.
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "waiting";
+      mockDotColor = "bg-state-waiting";
+
+      const { getAllByTestId } = render(
+        <AgentButton
+          type="claude"
+          availability={"unauthenticated" as unknown as CliAvailability[string]}
+        />
+      );
+
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toBe("Start Claude · Blue — waiting — sign-in not detected");
+    });
+
+    it("omits the state suffix in passive states (no dot → no verbal state)", () => {
+      // working is a passive state — agentStateDotColor returns null so the
+      // dot doesn't render. The verbal-state suffix must mirror that gate,
+      // otherwise we'd add words to a control that has no visible state.
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockPanelsById = { "panel-1": activePanel("working") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+      mockDominantState = "working";
+      mockDotColor = null;
+
+      const { getAllByRole, getAllByTestId, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toBeDefined();
+      expect(launchTooltip).not.toContain("— working");
+      expect(launchTooltip).not.toContain("— directing");
+      expect(launchTooltip).not.toContain("— waiting");
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary?.getAttribute("aria-label")).toBe("Start Claude");
+    });
+
+    it("omits the state suffix when there is no active session", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockDominantState = null;
+      mockDotColor = "bg-state-waiting";
+
+      const { getAllByRole, getAllByTestId, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const tooltipTexts = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      const launchTooltip = tooltipTexts.find((t) => t.startsWith("Start "));
+      expect(launchTooltip).toBe("Start Claude · Blue");
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary?.getAttribute("aria-label")).toBe("Start Claude");
+    });
+  });
+
+  describe("split-button seam class (issue #9823)", () => {
+    // The seam is implemented as a custom toolbar.css class, not a Tailwind
+    // utility, because .border-divider resolves to the plain --border-divider
+    // alias and skips the --toolbar-divider override chain. The chevron's
+    // open-state suppression lives in CSS via the :has() group selector and
+    // is asserted in Toolbar.responsive.test.ts as a CSS source guard.
+
+    it("applies toolbar-agent-split-seam to the primary half when ready + 1 preset", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
+      expect(primary).toBeTruthy();
+      expect(primary!.className).toContain("toolbar-agent-split-seam");
+      // The seam paints the right border of the primary half; the chevron
+      // would never carry the class because the divider would be on the
+      // wrong side and would clash with the chevron's own armed-state
+      // ring. Pin this so a future refactor that propagates the class via
+      // a shared string doesn't silently double-paint.
+      expect(chevron!.className).not.toContain("toolbar-agent-split-seam");
+    });
+
+    it("applies toolbar-agent-split-seam when ready + multiple presets", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [
+        { id: "user-blue", name: "Blue" },
+        { id: "user-red", name: "Red" },
+      ];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
+      expect(primary!.className).toContain("toolbar-agent-split-seam");
+      expect(chevron!.className).not.toContain("toolbar-agent-split-seam");
+    });
+
+    it("omits the seam class while the agent is loading (availability === undefined)", () => {
+      // Loading disables both halves (#8131) — advertising a seam here would
+      // claim a usable chevron when neither half is clickable.
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={undefined} />
+      );
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary).toBeTruthy();
+      expect(primary!.className).not.toContain("toolbar-agent-split-seam");
+    });
+
+    it("omits the seam class when the CLI is missing", () => {
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
+      );
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary!.className).not.toContain("toolbar-agent-split-seam");
+    });
+
+    it("omits the seam class when the CLI is installed but not launchable (needs setup)", () => {
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton
+          type="claude"
+          availability={"installed" as unknown as CliAvailability[string]}
+        />
+      );
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary!.className).not.toContain("toolbar-agent-split-seam");
+    });
+
+    it("does not apply the seam class in the no-presets (plain button) branch", () => {
+      // The seam is only meaningful on the split-button JSX — the plain
+      // button branch doesn't render a chevron and shouldn't carry the
+      // class even when launchable.
+      mockMergedPresetsFn = () => [];
+      mockSettings = settingsWith({ claude: {} });
+
+      const { getByRole } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const button = getByRole("button");
+      expect(button.className).not.toContain("toolbar-agent-split-seam");
+    });
+
+    it("keeps border-r and border-transparent in the className so geometry is constant", () => {
+      // The seam is a color swap, not a layout shift. `border-r` stays in
+      // both states so the 1px width is constant; the color moves between
+      // `border-transparent` and the toolbar-divider token.
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockSettings = settingsWith({ claude: {} });
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary!.className).toContain("border-r");
+      expect(primary!.className).toContain("border-transparent");
+      expect(primary!.className).toContain("toolbar-agent-split-seam");
     });
   });
 
@@ -1311,5 +1576,75 @@ describe("AgentButton preset UX", () => {
       // accessible name.
       expect(primary!.getAttribute("aria-label")).toBe("Start Claude");
     });
+  });
+});
+
+describe("AgentButton right-click unpin — issue #9825", () => {
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    updateWorktreePresetMock.mockClear();
+    updateAgentMock.mockClear();
+    setAgentPinnedMock.mockClear();
+    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockActiveWorktreeId = null;
+    mockCcrPresetsByAgent = {};
+    mockMergedPresetsFn = () => [];
+    mockCliDetails = {};
+    mockDominantState = null;
+    mockDotColor = "";
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [];
+  });
+
+  it("routes the no-presets branch's unpin to setAgentPinned (not pinnedButtons)", () => {
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    // The new wrapper routes the unpin via onUnpin override for agent IDs.
+    // The "Unpin from toolbar" item lives in the right-click content; find
+    // it and click it.
+    const items = screen.getAllByTestId("context-menu-item");
+    const unpin = items.find((el) => el.textContent?.includes("Unpin from toolbar"));
+    expect(unpin, "no Unpin-from-toolbar menu item rendered").toBeTruthy();
+    fireEvent.click(unpin!);
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("routes the has-presets branch's unpin to setAgentPinned", () => {
+    mockMergedPresetsFn = (id: string) => [
+      { id: `${id}-blue`, name: "Blue" },
+      { id: `${id}-green`, name: "Green" },
+    ];
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const items = screen.getAllByTestId("context-menu-item");
+    const unpin = items.find((el) => el.textContent?.includes("Unpin from toolbar"));
+    expect(unpin).toBeTruthy();
+    fireEvent.click(unpin!);
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("exposes the Customize toolbar… entry on the right-click content for both branches", () => {
+    const { rerender } = render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const itemsNoPresets = screen.getAllByTestId("context-menu-item");
+    const customizeNoPresets = itemsNoPresets.find((el) =>
+      el.textContent?.includes("Customize toolbar")
+    );
+    expect(customizeNoPresets, "Customize entry missing in no-presets branch").toBeTruthy();
+
+    mockMergedPresetsFn = (id: string) => [{ id: `${id}-blue`, name: "Blue" }];
+    rerender(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const itemsHasPresets = screen.getAllByTestId("context-menu-item");
+    const customizeHasPresets = itemsHasPresets.find((el) =>
+      el.textContent?.includes("Customize toolbar")
+    );
+    expect(customizeHasPresets, "Customize entry missing in has-presets branch").toBeTruthy();
   });
 });

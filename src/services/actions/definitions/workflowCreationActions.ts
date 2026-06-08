@@ -1,14 +1,16 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
+import type { ActionContext } from "@shared/types/actions";
 // eslint-disable-next-line no-restricted-imports
-import { worktreeClient, githubClient, copyTreeClient } from "@/clients";
+import { worktreeClient, copyTreeClient, forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
 
 export function registerWorkflowCreationActions(
@@ -53,7 +55,7 @@ export function registerWorkflowCreationActions(
             .positive()
             .optional()
             .describe(
-              "GitHub issue number to link with the worktree. Mutually exclusive with pullRequestNumber."
+              "Issue number to link with the worktree. Mutually exclusive with pullRequestNumber."
             ),
           pullRequestNumber: z
             .number()
@@ -61,7 +63,7 @@ export function registerWorkflowCreationActions(
             .positive()
             .optional()
             .describe(
-              "GitHub pull request number to check out. Resolves the PR's head branch automatically and creates the worktree on it. Mutually exclusive with issueNumber."
+              "Pull request number to check out. Resolves the PR's head branch automatically and creates the worktree on it. Mutually exclusive with issueNumber."
             ),
           assignToSelf: z
             .boolean()
@@ -80,22 +82,27 @@ export function registerWorkflowCreationActions(
         worktreePath: z.string(),
         branch: z.string(),
         recipeLaunched: z.boolean(),
+        spawnedTerminalCount: z.number().int().nonnegative(),
+        failedTerminalCount: z.number().int().nonnegative(),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
       }),
-      run: async ({
-        branchName,
-        baseBranch,
-        recipeId,
-        fromRemote,
-        useExistingBranch,
-        issueNumber,
-        pullRequestNumber,
-        assignToSelf,
-        spawnedBy,
-        focusPolicy,
-      }) => {
+      run: async (
+        {
+          branchName,
+          baseBranch,
+          recipeId,
+          fromRemote,
+          useExistingBranch,
+          issueNumber,
+          pullRequestNumber,
+          assignToSelf,
+          spawnedBy,
+          focusPolicy,
+        },
+        ctx: ActionContext
+      ) => {
         if (issueNumber !== undefined && pullRequestNumber !== undefined) {
           throw new Error("issueNumber and pullRequestNumber are mutually exclusive");
         }
@@ -125,18 +132,18 @@ export function registerWorkflowCreationActions(
         let effectiveFromRemote: boolean;
 
         if (pullRequestNumber !== undefined) {
-          const pr = await githubClient.getPRByNumber(rootPath, pullRequestNumber);
+          const pr = await forgeClient.getPR(rootPath, pullRequestNumber);
           if (!pr) {
             throw new Error(`Pull request #${pullRequestNumber} not found in ${rootPath}`);
           }
-          if (!pr.headRefName) {
+          if (!pr.headRef?.trim()) {
             throw new Error(
               `Pull request #${pullRequestNumber} has no head branch — cannot create worktree`
             );
           }
-          await worktreeClient.fetchPRBranch(rootPath, pullRequestNumber, pr.headRefName);
-          effectiveBranch = pr.headRefName;
-          effectiveBase = pr.headRefName;
+          await worktreeClient.fetchPRBranch(rootPath, pullRequestNumber, pr.headRef);
+          effectiveBranch = pr.headRef;
+          effectiveBase = pr.headRef;
           effectiveUseExisting = true;
           effectiveFromRemote = false;
         } else {
@@ -182,6 +189,8 @@ export function registerWorkflowCreationActions(
         }
 
         let recipeLaunched = false;
+        let spawnedTerminalCount = 0;
+        let failedTerminalCount = 0;
         if (recipeId) {
           try {
             const recipeContext = {
@@ -190,15 +199,26 @@ export function registerWorkflowCreationActions(
               issueNumber,
               prNumber: pullRequestNumber,
             };
-            if (spawnedBy === undefined && focusPolicy === undefined) {
-              await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, recipeContext);
-            } else {
-              await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, recipeContext, {
+            // Forward dispatchSource so runRecipeWithResults applies the
+            // agent-source terminal cap to MCP-driven worktree+recipe combos,
+            // matching recipe.run.
+            const results = await useRecipeStore
+              .getState()
+              .runRecipeWithResults(recipeId, path, worktreeId, recipeContext, {
                 spawnedBy,
                 focusPolicy,
+                dispatchSource: ctx.dispatchSource,
               });
-            }
-            recipeLaunched = true;
+            // "Launched" means at least one terminal actually spawned — a run
+            // where every terminal was dropped (e.g. panel limit) must not
+            // report success to agent callers.
+            recipeLaunched = results.spawned.length > 0;
+            spawnedTerminalCount = results.spawned.length;
+            failedTerminalCount = results.failed.length;
+            notifyRecipeSpawnFailures(results, {
+              recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
+              projectId: currentProject.id,
+            });
           } catch (err) {
             throw partialSuccessError(
               `Recipe ${recipeId} failed to run: ${formatErrorMessage(err, "unknown error")}`,
@@ -207,6 +227,8 @@ export function registerWorkflowCreationActions(
                 worktreePath: path,
                 branch: effectiveBranch,
                 recipeLaunched: false,
+                spawnedTerminalCount: 0,
+                failedTerminalCount: 0,
                 assignedToSelf: false,
                 assignedUsername: null,
                 assignmentError: null,
@@ -220,20 +242,20 @@ export function registerWorkflowCreationActions(
         let assignmentError: string | null = null;
         if (issueNumber && effectiveAssignToSelf) {
           try {
-            const username = (await githubClient.getConfig()).username;
-            if (username) {
+            const user = await forgeClient.getCurrentUser(rootPath);
+            if (user) {
               try {
-                await githubClient.assignIssue(rootPath, issueNumber, username);
+                await forgeClient.assignIssue(rootPath, issueNumber, user.login);
                 assignedToSelf = true;
-                assignedUsername = username;
+                assignedUsername = user.login;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
             } else {
-              assignmentError = "No GitHub username configured";
+              assignmentError = "No forge viewer available";
             }
           } catch (err) {
-            assignmentError = formatErrorMessage(err, "Failed to read GitHub config");
+            assignmentError = formatErrorMessage(err, "Failed to read forge viewer");
           }
         }
 
@@ -242,6 +264,8 @@ export function registerWorkflowCreationActions(
           worktreePath: path,
           branch: effectiveBranch,
           recipeLaunched,
+          spawnedTerminalCount,
+          failedTerminalCount,
           assignedToSelf,
           assignedUsername,
           assignmentError,
@@ -255,13 +279,13 @@ export function registerWorkflowCreationActions(
       id: "workflow.startWorkOnIssue",
       title: "Start Work on Issue",
       description:
-        "Fetch a GitHub issue, create a worktree with a derived branch, launch an agent, and inject context.",
+        "Fetch an issue, create a worktree with a derived branch, launch an agent, and inject context.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        issueNumber: z.number().int().positive().describe("GitHub issue number to start work on"),
+        issueNumber: z.number().int().positive().describe("Issue number to start work on"),
         agentId: z
           .string()
           .min(1)
@@ -303,22 +327,27 @@ export function registerWorkflowCreationActions(
         branch: z.string(),
         terminalId: z.string().nullable(),
         recipeLaunched: z.boolean(),
+        spawnedTerminalCount: z.number().int().nonnegative(),
+        failedTerminalCount: z.number().int().nonnegative(),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
         contextInjected: z.boolean(),
       }),
-      run: async ({
-        issueNumber,
-        agentId,
-        branchName,
-        baseBranch,
-        recipeId,
-        assignToSelf,
-        injectContext,
-        spawnedBy,
-        focusPolicy,
-      }) => {
+      run: async (
+        {
+          issueNumber,
+          agentId,
+          branchName,
+          baseBranch,
+          recipeId,
+          assignToSelf,
+          injectContext,
+          spawnedBy,
+          focusPolicy,
+        },
+        ctx: ActionContext
+      ) => {
         const currentProject = useProjectStore.getState().currentProject;
         if (!currentProject) {
           throw new Error("No active project");
@@ -327,9 +356,9 @@ export function registerWorkflowCreationActions(
         const effectiveAssignToSelf =
           assignToSelf ?? usePreferencesStore.getState().assignWorktreeToSelf;
 
-        const issue = await githubClient.getIssueByNumber(rootPath, issueNumber);
+        const issue = await forgeClient.getIssue(rootPath, issueNumber);
         if (!issue) {
-          throw new Error(`GitHub issue #${issueNumber} not found in ${rootPath}`);
+          throw new Error(`Issue #${issueNumber} not found in ${rootPath}`);
         }
 
         const derivedBranch =
@@ -377,6 +406,8 @@ export function registerWorkflowCreationActions(
         }
 
         let recipeLaunched = false;
+        let spawnedTerminalCount = 0;
+        let failedTerminalCount = 0;
         if (recipeId) {
           try {
             const recipeContext = {
@@ -384,19 +415,26 @@ export function registerWorkflowCreationActions(
               branchName: availableBranch,
               issueNumber: issue.number,
             };
-            if (spawnedBy === undefined && focusPolicy === undefined) {
-              await useRecipeStore
-                .getState()
-                .runRecipe(recipeId, worktreePath, worktreeId, recipeContext);
-            } else {
-              await useRecipeStore
-                .getState()
-                .runRecipe(recipeId, worktreePath, worktreeId, recipeContext, {
-                  spawnedBy,
-                  focusPolicy,
-                });
-            }
-            recipeLaunched = true;
+            // Forward dispatchSource so runRecipeWithResults applies the
+            // agent-source terminal cap to MCP-driven worktree+recipe combos,
+            // matching recipe.run.
+            const results = await useRecipeStore
+              .getState()
+              .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext, {
+                spawnedBy,
+                focusPolicy,
+                dispatchSource: ctx.dispatchSource,
+              });
+            // "Launched" means at least one terminal actually spawned — a run
+            // where every terminal was dropped (e.g. panel limit) must not
+            // report success to agent callers.
+            recipeLaunched = results.spawned.length > 0;
+            spawnedTerminalCount = results.spawned.length;
+            failedTerminalCount = results.failed.length;
+            notifyRecipeSpawnFailures(results, {
+              recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
+              projectId: currentProject.id,
+            });
           } catch (err) {
             throw partialSuccessError(
               `Recipe ${recipeId} failed to run: ${formatErrorMessage(err, "unknown error")}`,
@@ -409,6 +447,8 @@ export function registerWorkflowCreationActions(
                 branch: availableBranch,
                 terminalId: null,
                 recipeLaunched: false,
+                spawnedTerminalCount: 0,
+                failedTerminalCount: 0,
                 assignedToSelf: false,
                 assignedUsername: null,
                 assignmentError: null,
@@ -443,6 +483,8 @@ export function registerWorkflowCreationActions(
               branch: availableBranch,
               terminalId: null,
               recipeLaunched,
+              spawnedTerminalCount,
+              failedTerminalCount,
               assignedToSelf: false,
               assignedUsername: null,
               assignmentError: null,
@@ -460,6 +502,8 @@ export function registerWorkflowCreationActions(
             branch: availableBranch,
             terminalId: null,
             recipeLaunched,
+            spawnedTerminalCount,
+            failedTerminalCount,
             assignedToSelf: false,
             assignedUsername: null,
             assignmentError: null,
@@ -483,20 +527,20 @@ export function registerWorkflowCreationActions(
         let assignmentError: string | null = null;
         if (effectiveAssignToSelf) {
           try {
-            const username = (await githubClient.getConfig()).username;
-            if (username) {
+            const user = await forgeClient.getCurrentUser(rootPath);
+            if (user) {
               try {
-                await githubClient.assignIssue(rootPath, issue.number, username);
+                await forgeClient.assignIssue(rootPath, issue.number, user.login);
                 assignedToSelf = true;
-                assignedUsername = username;
+                assignedUsername = user.login;
               } catch (err) {
                 assignmentError = formatErrorMessage(err, "Failed to assign issue");
               }
             } else {
-              assignmentError = "No GitHub username configured";
+              assignmentError = "No forge viewer available";
             }
           } catch (err) {
-            assignmentError = formatErrorMessage(err, "Failed to read GitHub config");
+            assignmentError = formatErrorMessage(err, "Failed to read forge viewer");
           }
         }
 
@@ -509,6 +553,8 @@ export function registerWorkflowCreationActions(
           branch: availableBranch,
           terminalId,
           recipeLaunched,
+          spawnedTerminalCount,
+          failedTerminalCount,
           assignedToSelf,
           assignedUsername,
           assignmentError,

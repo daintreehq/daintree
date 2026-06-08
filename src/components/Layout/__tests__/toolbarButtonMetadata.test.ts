@@ -54,10 +54,11 @@ describe("TOOLBAR_BUTTON_METADATA — registry coverage", () => {
   it("uses the canonical agent display name for built-in agent labels", () => {
     // Drift guard for the original issue (#7668): the agent-tray icon and
     // labels must come from the same source the AgentButton renders so the
-    // Settings list and the overflow dropdown stay in sync.
+    // Settings list and the overflow dropdown stay in sync. Sentence-cased
+    // per #9825 (lowercase "agent" suffix).
     for (const id of BUILT_IN_AGENT_IDS) {
       const meta = TOOLBAR_BUTTON_METADATA[id as AnyToolbarButtonId];
-      expect(meta?.label, `agent "${id}" missing label`).toMatch(/Agent$/);
+      expect(meta?.label, `agent "${id}" missing label`).toMatch(/agent$/);
     }
   });
 });

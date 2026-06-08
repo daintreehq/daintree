@@ -6,7 +6,7 @@ import { usePortalStore } from "@/store/portalStore";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
 import { logError } from "@/utils/logger";
-import { getPortalBoundsWithRetry } from "./portalHelpers";
+import { getPortalBoundsWithRetry, showPortalTabIfNoOverlay } from "./portalHelpers";
 
 const argsSchema = z
   .object({
@@ -151,7 +151,7 @@ export function registerDevPreviewActions(
           activeTabId: tabId,
         }));
         if (bounds) {
-          await window.electron.portal.show({ tabId, bounds });
+          await showPortalTabIfNoOverlay(tabId, bounds);
         }
       } catch (error) {
         logError("Failed to promote dev preview to portal", error);

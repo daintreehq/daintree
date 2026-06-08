@@ -38,6 +38,14 @@ describe("artifactParser", () => {
     ]);
   });
 
+  it("extracts a code block with content far larger than the worker's 5KB window", () => {
+    const body = "const x = 1; // padding\n".repeat(500); // ~12KB
+    const blocks = extractCodeBlocks("```typescript\n" + body + "```\n");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.language).toBe("typescript");
+    expect(blocks[0]!.content).toBe(body.trim());
+  });
+
   it("extracts unified diff patches", () => {
     const input = [
       "diff --git a/src/a.ts b/src/a.ts",
@@ -54,6 +62,226 @@ describe("artifactParser", () => {
     expect(patches).toHaveLength(1);
     expect(patches[0]).toContain("+++ b/src/a.ts");
     expect(patches[0]).toContain("+new");
+  });
+
+  it("rejects Markdown horizontal rule followed by bulleted list (#9998)", () => {
+    // The exact issue-9998 false positive: a `---` Markdown HR followed by
+    // list items. The new heuristic must not emit any patch artifact.
+    const input = ["---", "- item one", "- item two", "- item three"].join("\n");
+    expect(extractPatches(input)).toEqual([]);
+  });
+
+  it("rejects YAML front matter with --- delimiters and no hunks (#9998)", () => {
+    const input = ["---", "title: My Doc", "author: Greg", "---", "", "Body."].join("\n");
+    expect(extractPatches(input)).toEqual([]);
+  });
+
+  it("rejects --- a/file opener with no +++ within lookahead window (#9998)", () => {
+    // A `--- a/<file>` line that is followed by non-diff prose (no `+++ b/`
+    // target header) must not be promoted to a diff. This is the case where
+    // an agent's prose happens to mention a file path in a `---` line.
+    const input = [
+      "--- a/src/file.ts",
+      "+ some addition",
+      "+ another addition",
+      "+ a third line",
+    ].join("\n");
+    expect(extractPatches(input)).toEqual([]);
+  });
+
+  it("accepts plain unified diff without diff --git preamble", () => {
+    // Standard `git apply` / `diff -u` format: just the header pair + body.
+    const input = ["--- a/file.txt", "+++ b/file.txt", "@@ -1 +1 @@", "-old", "+new"].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- a/file.txt");
+    expect(patches[0]).toContain("+++ b/file.txt");
+  });
+
+  it("extracts diff body that follows a git format-patch envelope", () => {
+    // The `From <sha>` envelope line is not a Tier 1 trigger on its own —
+    // the downstream `diff --git` opens the patch block. The test pins the
+    // behavior so a future change to the parser doesn't accidentally make
+    // envelope lines alone emit a patch artifact.
+    const input = [
+      "From abcdef1234567890abcdef1234567890abcdef12 Mon Sep 17 00:00:00 2001",
+      "Subject: [PATCH] Fix thing",
+      "",
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "-- ",
+      "2.34.1",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("@@ -1 +1 @@");
+  });
+
+  it("accepts combined diff with @@@ hunk header", () => {
+    // `git diff -c` / `--cc` produces combined diffs with `@@@` (3+ `@`) hunk
+    // headers and multiple `---` source headers before the target. The
+    // `diff --combined` preamble is dropped (it doesn't match a body line)
+    // and the block restarts on the first `--- a/<file>`.
+    const input = [
+      "diff --combined file.txt",
+      "index abc,def..ghi",
+      "--- a/file.txt",
+      "--- a/file.txt",
+      "+++ b/file.txt",
+      "@@@ -1,1 -1,1 +1,1 @@@",
+      "  unchanged",
+      " -old1",
+      " -old2",
+      " +new1",
+      " +new2",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- a/file.txt");
+    expect(patches[0]).toContain("+++ b/file.txt");
+    expect(patches[0]).toContain("@@@ -1,1 -1,1 +1,1 @@@");
+  });
+
+  it("rejects diff --git snippets that lack an @@ hunk header", () => {
+    // A real `diff --git` preamble but no hunk — the hunk check at commit
+    // time is the structural guard that `git apply` would also apply.
+    const input = ["diff --git a/x b/x", "index abc..def 100644", "--- a/x"].join("\n");
+    expect(extractPatches(input)).toEqual([]);
+  });
+
+  it("rejects prose that contains @@ but not as a real hunk header (#9998)", () => {
+    // `@@user` and `@@@handle` are prose-shaped, not hunk headers — the
+    // anchored `-\d+` requirement in the hunk regex stops them.
+    const input = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@user mentioned this in chat",
+      "+ some body line",
+      "+ another body line",
+    ].join("\n");
+    expect(extractPatches(input)).toEqual([]);
+  });
+
+  it("preserves \\ No newline at end of file marker (#9998)", () => {
+    // `git diff` emits `\ No newline at end of file` after the last line of
+    // a file that lacks a trailing newline. `git apply` requires this marker
+    // and will reject a patch that drops it. The parser must treat the `\`-
+    // prefixed line as a body line, not as prose that closes the block.
+    const input = [
+      "--- a/file",
+      "+++ b/file",
+      "@@ -1 +1 @@",
+      "-line1",
+      "\\ No newline at end of file",
+      "+line2",
+      "\\ No newline at end of file",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("\\ No newline at end of file");
+    expect(patches[0]).toContain("+line2");
+  });
+
+  it("extracts multiple back-to-back diff blocks", () => {
+    // Two `diff --git` hunks separated by a single line break — both must
+    // be emitted as independent patches, in order.
+    const input = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -1 +1 @@",
+      "-old1",
+      "+new1",
+      "diff --git a/y b/y",
+      "--- a/y",
+      "+++ b/y",
+      "@@ -1 +1 @@",
+      "-old2",
+      "+new2",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(2);
+    expect(patches[0]).toContain("+new1");
+    expect(patches[1]).toContain("+new2");
+    // The 2nd block's `diff --git` header sits on the line that ends the 1st
+    // block. The opener must be re-evaluated after finalize() so it isn't
+    // dropped (the `--- a/y` line independently re-opens the body, which would
+    // mask the loss if only the body were checked).
+    expect(patches[0]).toContain("diff --git a/x b/x");
+    expect(patches[1]).toContain("diff --git a/y b/y");
+  });
+
+  it("extracts a new file diff with --- /dev/null", () => {
+    // `git diff` for a newly added file shows `--- /dev/null` as the source
+    // header. The opener is `--- /dev/null` (passes `isUnifiedOpener` — the
+    // path-like token is `/`), and `+++ b/new` corroborates it.
+    const input = [
+      "--- /dev/null",
+      "+++ b/new.txt",
+      "@@ -0,0 +1,3 @@",
+      "+line1",
+      "+line2",
+      "+line3",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- /dev/null");
+    expect(patches[0]).toContain("+++ b/new.txt");
+  });
+
+  it("extracts a deleted file diff with +++ /dev/null", () => {
+    // Mirror of the new-file case: `+++ /dev/null` marks a deleted file.
+    const input = [
+      "--- a/old.txt",
+      "+++ /dev/null",
+      "@@ -1,3 +0,0 @@",
+      "-line1",
+      "-line2",
+      "-line3",
+    ].join("\n");
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("--- a/old.txt");
+    expect(patches[0]).toContain("+++ /dev/null");
+  });
+
+  it("splits multi-file diffs at diff lines, not mid-patch --- lines", () => {
+    const input = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1 +1 @@",
+      "-old a",
+      "+new a",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "--- a/src/b.ts",
+      "+++ b/src/b.ts",
+      "@@ -1 +1 @@",
+      "-old b",
+      "+new b",
+    ].join("\n");
+
+    const patches = extractPatches(input);
+    expect(patches).toHaveLength(2);
+    expect(patches[0]).toContain("+new a");
+    expect(patches[0]).not.toContain("+new b");
+    expect(patches[1]).toContain("+new b");
+  });
+
+  it("extracts a patch with a body far larger than the worker's 5KB window", () => {
+    let patch = "diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n@@ -1,500 +1,500 @@\n";
+    for (let i = 0; i < 500; i++) {
+      patch += `+const generated${i} = ${i};\n`;
+    }
+    const patches = extractPatches(patch + "done\n");
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toContain("+const generated0 = 0;");
+    expect(patches[0]).toContain("+const generated499 = 499;");
   });
 
   it("extracts patch filename from +++ line", () => {

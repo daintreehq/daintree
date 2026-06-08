@@ -14,11 +14,6 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
-import {
-  acquirePollLease,
-  releaseAllLeasesForHolder,
-  releasePollLease,
-} from "./forgePollLeaseService.js";
 import { createLogger } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -96,6 +91,11 @@ export class WorkspaceHostProcess extends EventEmitter {
   /** Replayed on every `ready` — the child's message listener isn't attached
    * until after `ready`, so pushing at fork time would silently drop. */
   private logLevelOverridesCache: Record<string, string> = {};
+
+  /** Last GitHub fetch-throttle multiplier relayed from main. Replayed on
+   * every `ready` (initial + restarts) so a host restart doesn't silently
+   * revert monitor fetch cadence to the unthrottled default. */
+  private fetchThrottleMultiplierCache = 1;
 
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
@@ -236,6 +236,17 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
   }
 
+  /**
+   * Update the cached fetch-throttle multiplier and push immediately if
+   * initialized. On restart, `ready` replays the cached value automatically.
+   */
+  relayFetchThrottle(multiplier: number): void {
+    this.fetchThrottleMultiplierCache = multiplier;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "apply-fetch-throttle", multiplier: this.fetchThrottleMultiplierCache });
+    }
+  }
+
   pauseHealthCheck(): void {
     if (this.isHealthCheckPaused) return;
     this.isHealthCheckPaused = true;
@@ -346,10 +357,6 @@ export class WorkspaceHostProcess extends EventEmitter {
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
-
-    // Free any forge poll-leases this host held so siblings can take over
-    // immediately rather than waiting up to FORGE_POLL_LEASE_TTL_MS (#9055).
-    releaseAllLeasesForHolder(this.serviceName);
 
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
@@ -575,12 +582,6 @@ export class WorkspaceHostProcess extends EventEmitter {
       this.flushHostOutputBuffers();
       logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
 
-      // Crashed host can't send the cooperative release. Free its leases now
-      // so a sibling can take over without waiting for FORGE_POLL_LEASE_TTL_MS
-      // to expire. The same serviceName identifies the restarted host, so
-      // when it re-acquires after `ready`, the lease entry is already gone.
-      releaseAllLeasesForHolder(this.serviceName);
-
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval);
         this.healthCheckInterval = null;
@@ -792,6 +793,14 @@ export class WorkspaceHostProcess extends EventEmitter {
         // Replay cached log-level overrides on every ready (initial + restarts).
         this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
 
+        // Replay the cached fetch-throttle multiplier on every ready — a
+        // restarted host would otherwise run unthrottled until the next
+        // rate-limit state change, which can be hours away.
+        this.send({
+          type: "apply-fetch-throttle",
+          multiplier: this.fetchThrottleMultiplierCache,
+        });
+
         if (this.readyResolve) {
           this.readyResolve();
           this.readyResolve = null;
@@ -890,24 +899,6 @@ export class WorkspaceHostProcess extends EventEmitter {
         );
         break;
 
-      // Per-project poll-lease arbitration (#9055). The lease key is this
-      // host's `projectPath` and the holder identity is the unique
-      // `serviceName` — both derived in main, never trusted from the
-      // workspace-host's own report.
-      case "forge:poll-lease-acquire": {
-        const acquired = acquirePollLease(this.projectPath, this.serviceName);
-        this.send({
-          type: "forge:poll-lease-result",
-          requestId: event.requestId,
-          acquired,
-        });
-        break;
-      }
-
-      case "forge:poll-lease-release":
-        releasePollLease(this.projectPath, this.serviceName);
-        break;
-
       // Spontaneous events - re-emit for the manager to route
       case "worktree-update":
       case "worktree-removed":
@@ -919,6 +910,8 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "inotify-limit-reached":
       case "emfile-limit-reached":
       case "watcher-recovered":
+      case "topology-watcher-dark":
+      case "topology-watcher-recovered":
       case "forge-rate-limit-changed":
       case "forge-token-health-changed":
         this.emit("host-event", event);

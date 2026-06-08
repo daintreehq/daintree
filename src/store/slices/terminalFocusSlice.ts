@@ -91,6 +91,23 @@ export interface TerminalFocusSlice {
   pingSeq: number;
   preMaximizeLayout: PreMaximizeLayoutSnapshot | null;
   setFocused: (id: string | null, shouldPing?: boolean) => void;
+  /**
+   * Synthetic boot-time focus: lands an initial `focusedId` without
+   * corrupting persistence. Mirrors the grid branch of `setFocused` (the
+   * post-hydration picker only ever targets grid panels) but skips
+   * `stampLastActive` (which would overwrite the per-panel recency that
+   * `panelRestorePhase` uses to promote each worktree's most-recently-
+   * focused panel) and skips `terminalInstanceService.wake` (the panel
+   * is already woken by the restore pipeline). The orchestrator's
+   * `trackTerminalFocus` and `selectWorktree({ source: "focus" })`
+   * subscriptions still fire — `lastFocusedTerminalByWorktree` is
+   * runtime-only and has no other writer, so the boot pick must seed it
+   * for future worktree switches to restore last-focus. Callers MUST wrap
+   * this in `suppressMruRecording(true)/(false)` if the MRU subscription
+   * should not re-prepend the boot pick to `mruList` (see
+   * `useAppHydration`).
+   */
+  setBootFocus: (id: string) => void;
   pingTerminal: (id: string) => void;
   toggleMaximize: (
     id: string,
@@ -106,6 +123,17 @@ export interface TerminalFocusSlice {
     getPanelGroup: (panelId: string) => { id: string; panelIds: string[] } | undefined,
     getTerminal: (id: string) => CarrierPanel | undefined
   ) => void;
+  /**
+   * Atomically clear `maximizedId`, `maximizeTarget`, and `preMaximizeLayout`.
+   * Use this when the underlying panel (or the whole panel grid) is being
+   * removed — trash, group trash, reset, project switch, fleet scope exit.
+   * The three fields must move together in those paths: dropping only the
+   * id strands a stale target and the next `toggleMaximize` treats the
+   * target as an unmaximize request (#9935). Plain `toggleMaximize`
+   * unmaximize is intentionally NOT routed through this — it preserves
+   * `preMaximizeLayout` so the next maximize can reuse the snapshot.
+   */
+  clearMaximize: () => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
@@ -211,6 +239,24 @@ export const createTerminalFocusSlice =
         }
       },
 
+      setBootFocus: (id) => {
+        // Bare focus commit — the boot pick is always a grid panel (the picker
+        // in `useAppHydration` filters `location === "grid"`), so the dock
+        // branch of `setFocused` is unreachable here. Skips `stampLastActive`
+        // (no disk write to per-panel recency), `terminalInstanceService.wake`
+        // (the restore pipeline already woke it), and `pingTerminal` (no
+        // user intent to visualize). `previousFocusedId` only moves when focus
+        // actually changes — the `null → bootPick` transition preserves the
+        // existing `previousFocusedId: null` (no real prior focus existed).
+        const previousFocusedId = get().focusedId;
+        const focusActuallyChanged = id !== previousFocusedId;
+        set({
+          focusedId: id,
+          activeDockTerminalId: null,
+          ...(focusActuallyChanged && { previousFocusedId }),
+        });
+      },
+
       pingTerminal: (id) => {
         if (pingTimeout) clearTimeout(pingTimeout);
         set((state) => ({ pingedId: id, pingSeq: state.pingSeq + 1 }));
@@ -297,7 +343,23 @@ export const createTerminalFocusSlice =
 
       validateMaximizeTarget: (getPanelGroup, getTerminal) => {
         const state = get();
-        if (!state.maximizeTarget || !state.maximizedId) return;
+        // Only skip when the target itself is null — a dangling target with a
+        // null id is exactly the case #9935 asks us to self-heal. The
+        // group-shrink downgrade and the trash/removed clear both run below.
+        if (!state.maximizeTarget) return;
+        if (!state.maximizedId) {
+          // Dangling target without a backing id — the trio can no longer
+          // resolve to a real panel, so clear all three defensively. The
+          // wrapper-level fix in `trashPanel` / `trashPanelGroup` covers the
+          // common case; this is a safety net for any future path that
+          // nulls `maximizedId` without touching `maximizeTarget`.
+          set({
+            maximizedId: null,
+            maximizeTarget: null,
+            preMaximizeLayout: null,
+          });
+          return;
+        }
 
         let shouldClear = false;
 
@@ -333,6 +395,13 @@ export const createTerminalFocusSlice =
 
       clearPreMaximizeLayout: () =>
         set({
+          preMaximizeLayout: null,
+        }),
+
+      clearMaximize: () =>
+        set({
+          maximizedId: null,
+          maximizeTarget: null,
           preMaximizeLayout: null,
         }),
 

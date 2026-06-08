@@ -23,6 +23,7 @@ export type WebviewLoadErrorCode =
   | "name_not_resolved"
   | "internet_disconnected"
   | "connection_refused"
+  | "proxy_error"
   | "cert"
   | "ssl_protocol"
   | "failed";
@@ -32,6 +33,29 @@ export interface WebviewLoadError {
   message: string;
   errorCode?: number;
   validatedURL?: string;
+}
+
+// Sentence-case headings for the webview load-error overlay.
+export function webviewLoadErrorHeading(code: WebviewLoadErrorCode): string {
+  switch (code) {
+    case "timeout":
+      return "Page load timed out";
+    case "aborted":
+      return "Load cancelled";
+    case "connection_refused":
+      return "Dev server unreachable";
+    case "proxy_error":
+      return "Dev server unavailable";
+    case "name_not_resolved":
+      return "Couldn't resolve address";
+    case "internet_disconnected":
+      return "No internet connection";
+    case "cert":
+    case "ssl_protocol":
+      return "Certificate error";
+    default:
+      return "Page load failed";
+  }
 }
 
 // Chromium net error codes — see net/base/net_error_list.h
@@ -104,6 +128,24 @@ export function useDevPreviewLoadLifecycle({
   const failLoadRetryRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryCountRef = useRef<number>(0);
 
+  // Latched synchronously by handleDidFrameNavigate when a main-frame HTTP 5xx
+  // (e.g. the dev-preview proxy's 502 for a down/unregistered upstream) commits.
+  // Read in the same event-loop tick by handleDidNavigate and handleDidFinishLoad
+  // so a TCP-successful-but-error-page load doesn't clear the error overlay and
+  // render the raw text/plain proxy body. A plain ref (not state) is required:
+  // the three events fire sequentially within one microtask pump.
+  const pendingHttpErrorRef = useRef(false);
+
+  // Bounded auto-retry for a proxy 5xx. The dev server can restart in place
+  // (e.g. config-change full reload) while Daintree still reports status
+  // "running", so the webview never remounts and there's no recovery signal
+  // other than re-hitting the stable proxy origin. Reload with exponential
+  // backoff until the upstream answers or the cap is reached; after the cap the
+  // overlay's manual recovery actions take over. Mirrors the connection-refused
+  // retry below.
+  const proxyRetryRef = useRef<NodeJS.Timeout | null>(null);
+  const proxyRetryCountRef = useRef<number>(0);
+
   // Mirror the active preset/rotation/DPR into refs so handleDidFinishLoad can
   // re-apply overrides after cross-origin navigation without the load-listener
   // effect depending on these values (which would tear down/rebuild load timers
@@ -147,7 +189,13 @@ export function useDevPreviewLoadLifecycle({
       clearTimeout(failLoadRetryRef.current);
       failLoadRetryRef.current = null;
     }
+    if (proxyRetryRef.current) {
+      clearTimeout(proxyRetryRef.current);
+      proxyRetryRef.current = null;
+    }
     failLoadRetryCountRef.current = 0;
+    proxyRetryCountRef.current = 0;
+    pendingHttpErrorRef.current = false;
     setReconnectAttempt(0);
   }, []);
 
@@ -202,7 +250,13 @@ export function useDevPreviewLoadLifecycle({
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
       }
+      if (proxyRetryRef.current) {
+        clearTimeout(proxyRetryRef.current);
+        proxyRetryRef.current = null;
+      }
       failLoadRetryCountRef.current = 0;
+      proxyRetryCountRef.current = 0;
+      pendingHttpErrorRef.current = false;
       if (reason === "clean-exit") return;
       setWebviewCrashed({ reason, exitCode });
       setWebviewLoadError(null);
@@ -215,6 +269,16 @@ export function useDevPreviewLoadLifecycle({
       setWebviewCrashed(null);
       setReconnectAttempt(0);
       setIsSlowLoad(false);
+      // Fresh navigation: drop any stale HTTP-error latch. did-frame-navigate,
+      // which fires after this for the same navigation, re-sets it if needed.
+      pendingHttpErrorRef.current = false;
+      // Cancel a pending proxy auto-retry — this load supersedes it. The retry
+      // count is intentionally preserved so a still-failing upstream keeps
+      // walking up the backoff; it resets only on a genuine successful load.
+      if (proxyRetryRef.current) {
+        clearTimeout(proxyRetryRef.current);
+        proxyRetryRef.current = null;
+      }
       if (slowLoadTimeoutRef.current) {
         clearTimeout(slowLoadTimeoutRef.current);
       }
@@ -268,9 +332,6 @@ export function useDevPreviewLoadLifecycle({
 
     const handleDidFinishLoad = () => {
       setIsLoading(false);
-      setWebviewLoadError(null);
-      setWebviewCrashed(null);
-      setReconnectAttempt(0);
       setIsSlowLoad(false);
       if (slowLoadTimeoutRef.current) {
         clearTimeout(slowLoadTimeoutRef.current);
@@ -280,10 +341,28 @@ export function useDevPreviewLoadLifecycle({
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
       }
+
+      // A main-frame 5xx (proxy 502) was committed via did-frame-navigate: the
+      // network load finished, but the rendered body is the proxy's error page.
+      // Keep the overlay (skip the error clear + emulation re-apply) and consume
+      // the latch so the next genuine successful load clears the overlay.
+      if (pendingHttpErrorRef.current) {
+        pendingHttpErrorRef.current = false;
+        return;
+      }
+
+      setWebviewLoadError(null);
+      setWebviewCrashed(null);
+      setReconnectAttempt(0);
       failLoadRetryCountRef.current = 0;
+      proxyRetryCountRef.current = 0;
       if (failLoadRetryRef.current) {
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
+      }
+      if (proxyRetryRef.current) {
+        clearTimeout(proxyRetryRef.current);
+        proxyRetryRef.current = null;
       }
 
       // Device emulation and the UA override do NOT persist across
@@ -322,8 +401,6 @@ export function useDevPreviewLoadLifecycle({
     const handleDidFailLoad = (e: Electron.DidFailLoadEvent) => {
       // Ignore aborted loads (e.g., navigation interrupted by another navigation)
       if (e.errorCode === -3) return;
-      // Ignore cancellations
-      if (e.errorCode === -6) return;
       // Ignore subframe failures — they don't affect the main-frame load state
       if (!e.isMainFrame) return;
 
@@ -450,9 +527,14 @@ export function useDevPreviewLoadLifecycle({
         }
       }
 
-      // Catch-all for unhandled error codes (-2 ERR_FAILED, -7 ERR_TIMED_OUT,
-      // -104 ERR_CONNECTION_FAILED, and any other unexpected codes).
+      // Catch-all for unhandled error codes (-2 ERR_FAILED, -6 ERR_FILE_NOT_FOUND,
+      // -7 ERR_TIMED_OUT, -104 ERR_CONNECTION_FAILED, and any other unexpected codes).
       // Without this branch the webview shows a blank white screen with no error.
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
+      failLoadRetryCountRef.current = 0;
       const desc = e.errorDescription || `Error code ${e.errorCode}`;
       setWebviewLoadError({
         code: "failed",
@@ -462,13 +544,87 @@ export function useDevPreviewLoadLifecycle({
       });
     };
 
+    const handleDidFrameNavigate = (e: Electron.DidFrameNavigateEvent) => {
+      // did-frame-navigate is the only renderer-side <webview> event carrying
+      // httpResponseCode. The dev-preview proxy self-generates exactly one status
+      // — HTTP 502 — when the upstream dev server is down or unregistered
+      // (DevPreviewProxyService.send502); every other response (including an app
+      // 500/503/504) is forwarded upstream untouched and must render normally so
+      // developers can see their own error pages. Because TCP succeeds for the
+      // 502, did-fail-load never fires and did-finish-load would otherwise render
+      // the raw text/plain 502 body. Latch a main-frame 502 here and surface the
+      // styled overlay; the guards in did-navigate/did-finish-load keep it from
+      // being cleared. 4xx (bootstrap 403/405) and other 5xx pass through.
+      if (!e.isMainFrame) return;
+      if (e.httpResponseCode !== 502) return;
+      pendingHttpErrorRef.current = true;
+      setIsLoading(false);
+      setIsSlowLoad(false);
+      setReconnectAttempt(0);
+      failLoadRetryCountRef.current = 0;
+      if (failLoadRetryRef.current) {
+        clearTimeout(failLoadRetryRef.current);
+        failLoadRetryRef.current = null;
+      }
+      if (slowLoadTimeoutRef.current) {
+        clearTimeout(slowLoadTimeoutRef.current);
+        slowLoadTimeoutRef.current = null;
+      }
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+
+      // Schedule a bounded auto-retry. proxyRetryCountRef persists across the
+      // reload (did-start-loading clears the timer, not the count), so repeated
+      // 502 responses walk up the backoff and stop at the cap.
+      const PROXY_MAX_RETRIES = 5;
+      if (proxyRetryRef.current) {
+        clearTimeout(proxyRetryRef.current);
+        proxyRetryRef.current = null;
+      }
+      const attempt = proxyRetryCountRef.current;
+      const willRetry = attempt < PROXY_MAX_RETRIES;
+
+      setWebviewLoadError({
+        code: "proxy_error",
+        message: willRetry
+          ? "The dev server isn't responding. It may be restarting — the preview reloads automatically once it's back."
+          : "The dev server isn't responding. Restart it or reload the preview to try again.",
+        errorCode: e.httpResponseCode,
+        validatedURL: e.url || undefined,
+      });
+
+      if (willRetry) {
+        proxyRetryCountRef.current = attempt + 1;
+        const delayMs = Math.min(1000 * 2 ** attempt, 16000);
+        proxyRetryRef.current = setTimeout(() => {
+          proxyRetryRef.current = null;
+          try {
+            webview.reload();
+          } catch {
+            // Webview detached
+          }
+        }, delayMs);
+      }
+    };
+
     const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
       const navigatedUrl = e.url;
       // Suppress about:blank navigations triggered by eviction
       if (navigatedUrl === "about:blank" && evictingRef.current) return;
       setBlockedNav({ type: "DISMISS" });
-      setWebviewLoadError(null);
-      setReconnectAttempt(0);
+      // A main-frame 5xx (proxy 502) was just committed via did-frame-navigate;
+      // keep the overlay rather than clearing it for this "successful" load.
+      if (!pendingHttpErrorRef.current) {
+        setWebviewLoadError(null);
+        setReconnectAttempt(0);
+        proxyRetryCountRef.current = 0;
+        if (proxyRetryRef.current) {
+          clearTimeout(proxyRetryRef.current);
+          proxyRetryRef.current = null;
+        }
+      }
       // A confirmed new main-frame navigation means we're past any previous failure;
       // reset the retry budget so stale exhaustion doesn't block future attempts.
       failLoadRetryCountRef.current = 0;
@@ -502,6 +658,7 @@ export function useDevPreviewLoadLifecycle({
       "render-process-gone",
       handleRenderProcessGone as unknown as EventListener
     );
+    webview.addEventListener("did-frame-navigate", handleDidFrameNavigate);
     webview.addEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
     webview.addEventListener(
       "did-navigate-in-page",
@@ -518,6 +675,7 @@ export function useDevPreviewLoadLifecycle({
         "render-process-gone",
         handleRenderProcessGone as unknown as EventListener
       );
+      webview.removeEventListener("did-frame-navigate", handleDidFrameNavigate);
       webview.removeEventListener("did-navigate", handleDidNavigate as unknown as EventListener);
       webview.removeEventListener(
         "did-navigate-in-page",
@@ -527,6 +685,10 @@ export function useDevPreviewLoadLifecycle({
       if (failLoadRetryRef.current) {
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
+      }
+      if (proxyRetryRef.current) {
+        clearTimeout(proxyRetryRef.current);
+        proxyRetryRef.current = null;
       }
       if (slowLoadTimeoutRef.current) {
         clearTimeout(slowLoadTimeoutRef.current);
@@ -648,6 +810,9 @@ export function useDevPreviewLoadLifecycle({
       }
       if (failLoadRetryRef.current) {
         clearTimeout(failLoadRetryRef.current);
+      }
+      if (proxyRetryRef.current) {
+        clearTimeout(proxyRetryRef.current);
       }
     };
   }, []);

@@ -125,17 +125,25 @@ describe("setupPermissionLockdown", () => {
     _resetPermissionLockdownForTesting();
   });
 
-  it("configures handlers on default, browser, portal, and daintree-app sessions", () => {
+  it("configures handlers on default, portal, and daintree-app sessions eagerly", () => {
     setupPermissionLockdown();
 
     expect(defaultSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(defaultSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
-    expect(browserSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
-    expect(browserSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     expect(portalSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(portalSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     expect(daintreeAppSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(daintreeAppSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not eagerly configure the browser session — it is locked down lazily per project", () => {
+    setupPermissionLockdown();
+
+    // Browser sessions are now per-project (persist:browser-*) and created on
+    // demand at will-attach-webview time, so they are locked down via the
+    // session-created handler rather than eagerly here (#9965).
+    expect(browserSession.setPermissionRequestHandler).not.toHaveBeenCalled();
+    expect(browserSession.setPermissionCheckHandler).not.toHaveBeenCalled();
   });
 
   describe("default session (trusted)", () => {
@@ -209,9 +217,18 @@ describe("setupPermissionLockdown", () => {
   });
 
   describe("browser session (untrusted)", () => {
-    it("denies all permissions via request handler", () => {
+    // Browser sessions are per-project (persist:browser-*) and locked down lazily
+    // via the session-created handler, so drive a dynamic session through it.
+    function lockdownDynamicBrowserSession(partition = "persist:browser-myproject") {
       setupPermissionLockdown();
-      const handler = getRequestHandler(browserSession);
+      const dynamicBrowserSession = createMockSession();
+      Object.defineProperty(dynamicBrowserSession, "partition", { value: partition });
+      sessionCreatedListeners[0](dynamicBrowserSession);
+      return dynamicBrowserSession;
+    }
+
+    it("denies all permissions via request handler", () => {
+      const handler = getRequestHandler(lockdownDynamicBrowserSession());
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
       expect(testPermissionRequest(handler, "clipboard-sanitized-write")).toBe(false);
       expect(testPermissionRequest(handler, "media")).toBe(false);
@@ -220,8 +237,7 @@ describe("setupPermissionLockdown", () => {
     });
 
     it("denies all permissions via check handler", () => {
-      setupPermissionLockdown();
-      const handler = getCheckHandler(browserSession);
+      const handler = getCheckHandler(lockdownDynamicBrowserSession());
       expect(handler(mockWebContents, "clipboard-read", "http://localhost:3000", {})).toBe(false);
       expect(handler(mockWebContents, "media", "http://localhost:3000", {})).toBe(false);
     });
@@ -314,11 +330,11 @@ describe("setupPermissionLockdown", () => {
       expect(testPermissionRequest(handler, "media")).toBe(false);
     });
 
-    it("locks down dynamically created browser partitions", () => {
+    it("locks down dynamically created per-project browser partitions", () => {
       setupPermissionLockdown();
       const dynamicBrowserSession = createMockSession();
       Object.defineProperty(dynamicBrowserSession, "partition", {
-        value: "persist:browser",
+        value: "persist:browser-myproject",
       });
 
       sessionCreatedListeners[0](dynamicBrowserSession);
@@ -328,6 +344,19 @@ describe("setupPermissionLockdown", () => {
 
       const handler = getRequestHandler(dynamicBrowserSession);
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
+    });
+
+    it("locks down the legacy bare browser partition via session-created", () => {
+      setupPermissionLockdown();
+      const legacyBrowserSession = createMockSession();
+      Object.defineProperty(legacyBrowserSession, "partition", {
+        value: "persist:browser",
+      });
+
+      sessionCreatedListeners[0](legacyBrowserSession);
+
+      expect(legacyBrowserSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+      expect(legacyBrowserSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     });
 
     it("does not double-lock daintree-app partition via session-created (eagerly locked)", () => {
@@ -492,13 +521,20 @@ describe("setupPermissionLockdown", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       setupPermissionLockdown();
 
-      const handler = getRequestHandler(browserSession);
+      const dynamicBrowserSession = createMockSession();
+      Object.defineProperty(dynamicBrowserSession, "partition", {
+        value: "persist:browser-myproject",
+      });
+      sessionCreatedListeners[0](dynamicBrowserSession);
+
+      const handler = getRequestHandler(dynamicBrowserSession);
       testPermissionRequest(handler, "media", "http://example.com");
 
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("[SECURITY] Permission denied: media")
       );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("session=browser"));
+      // The untrusted lockdown labels denials with the dynamic partition string.
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("session=persist:browser-"));
       warnSpy.mockRestore();
     });
 

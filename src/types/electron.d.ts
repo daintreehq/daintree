@@ -44,6 +44,8 @@ declare global {
     __DAINTREE_INITIAL_THEME__?: { colorSchemeId: string };
     /** Destination project id seeded by preload, replacing the `?projectId=` query string (#9162). */
     __DAINTREE_INITIAL_PROJECT__?: { id: string };
+    /** Instance role seeded by preload — worker instances suppress automatic background GitHub polling (#10123). */
+    __DAINTREE_INSTANCE_ROLE__?: { role: "attended" | "worker" };
     __daintreeDispatchAction?: (
       actionId: string,
       args?: unknown,

@@ -1,18 +1,21 @@
 // eager-import-allow: sets up custom protocols (daintree, plugin) and security headers (CSP) eagerly on startup
-import { app, protocol, net, session } from "electron";
+import { app, protocol, session } from "electron";
 import { getWindowForWebContents, getAppWebContents } from "../window/webContentsRegistry.js";
 import path from "path";
 import fs from "fs/promises";
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "url";
 import {
   resolveAppUrlToDistPath,
   getMimeType,
   buildHeaders,
   isImmutableAppAsset,
   isNotModified,
+  setAppPermissionsPolicy,
 } from "../utils/appProtocol.js";
-import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../shared/config/permissionsPolicy.js";
+import {
+  DAINTREE_APP_PERMISSIONS_POLICY,
+  buildAppPermissionsPolicy,
+} from "../../shared/config/permissionsPolicy.js";
 import {
   classifyPartition,
   getDaintreeAppCSP,
@@ -26,6 +29,7 @@ import {
   isDevPreviewProxyUrl,
   isSafeNavigationUrl,
 } from "../../shared/utils/urlUtils.js";
+import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -76,6 +80,16 @@ function createAppProtocolHandler(distPath: string) {
       });
     }
 
+    // stat() succeeds on directories, so guard before the 304 short-circuit:
+    // without this a directory URL carrying If-Modified-Since would return 304
+    // instead of falling through to the open/read 404 path.
+    if (!stats.isFile()) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: buildHeaders("text/plain"),
+      });
+    }
+
     const ifModifiedSince = request.headers.get("If-Modified-Since");
     if (isNotModified(ifModifiedSince, stats.mtime)) {
       return new Response(null, {
@@ -84,31 +98,56 @@ function createAppProtocolHandler(distPath: string) {
       });
     }
 
+    // Read the bytes directly off disk instead of round-tripping through
+    // net.fetch(). Custom-scheme responses never enter Chromium's HTTP disk
+    // cache, so the fetch path added a Chromium network-stack hop plus a second
+    // in-memory copy on every asset load for no caching benefit. No O_NOFOLLOW:
+    // unlike daintree-file:// / plugin://, resolveAppUrlToDistPath does lexical
+    // (path.resolve + startsWith) containment with no realpath, so there is no
+    // realpath/open TOCTOU window for the flag to close — adding it would imply
+    // a defense that isn't set up here. dist assets are application-owned.
+    let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      const fileUrl = pathToFileURL(filePath).toString();
-      const response = await net.fetch(fileUrl);
-
-      if (!response.ok) {
+      fileHandle = await fs.open(filePath, fs.constants.O_RDONLY);
+    } catch (err) {
+      const errCode = (err as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT" || errCode === "EISDIR") {
         return new Response("Not Found", {
           status: 404,
           headers: buildHeaders("text/plain"),
         });
       }
-
-      const mimeType = getMimeType(filePath);
-      const headers = buildHeaders(mimeType, { stats, filePath });
-      const buffer = await response.arrayBuffer();
-
-      return new Response(buffer, {
-        status: 200,
-        headers: headers,
-      });
-    } catch (err) {
       console.error("[MAIN] Error serving file:", filePath, err);
       return new Response("Internal Server Error", {
         status: 500,
         headers: buildHeaders("text/plain"),
       });
+    }
+
+    try {
+      const buffer = await fileHandle.readFile();
+      return new Response(buffer, {
+        status: 200,
+        headers: buildHeaders(getMimeType(filePath), { stats, filePath }),
+      });
+    } catch (err) {
+      // fs.open on a directory succeeds on macOS/Linux; the EISDIR only surfaces
+      // here at readFile. Map it to 404 like the open path so a directory URL
+      // never returns a 500.
+      if ((err as NodeJS.ErrnoException).code === "EISDIR") {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildHeaders("text/plain"),
+        });
+      }
+      console.error("[MAIN] Error serving file:", filePath, err);
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: buildHeaders("text/plain"),
+      });
+    } finally {
+      // Swallow close errors so they don't mask a preceding readFile failure.
+      await fileHandle.close().catch(() => {});
     }
   };
 }
@@ -491,8 +530,20 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   }
 }
 
-export function registerAppProtocol(distPath: string): void {
+export function registerAppProtocol(
+  distPath: string,
+  options: { allowDisplayCapture?: boolean } = {}
+): void {
   cachedDistPath = distPath;
+  // Demo mode records the renderer via getDisplayMedia(), which the default
+  // `display-capture=()` Permissions-Policy blocks. Relax it to `(self)` only
+  // when the caller opts in (demo mode, itself gated on `!app.isPackaged`), so
+  // production keeps the deny-by-default posture. The flag is threaded from
+  // main.ts rather than imported here to keep this module decoupled from the
+  // heavyweight environment module (and its eager app.getPath side effects).
+  if (options.allowDisplayCapture) {
+    setAppPermissionsPolicy(buildAppPermissionsPolicy({ allowDisplayCapture: true }));
+  }
   protocol.handle("app", createAppProtocolHandler(distPath));
 }
 
@@ -608,8 +659,12 @@ export function setupWebviewCSP(): void {
   // dev-preview partitions are wired dynamically via will-attach-webview below.
   applyCSP("persist:daintree");
 
-  // Singleton for the browser partition session — used for identity comparison in navigation handlers.
-  const browserSession = session.fromPartition("persist:browser");
+  // Browser panel sessions are per-project (persist:browser-*) and created lazily,
+  // so navigation handlers below discriminate by the webContents' partition string
+  // rather than against a single cached session object.
+  const isBrowserPanelContents = (contents: Electron.WebContents): boolean =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron typing gap: Session.partition is not exposed
+    isBrowserPartition((contents.session as any)?.partition ?? "");
 
   // Monitor for dynamic dev-preview partitions
   app.on("web-contents-created", (_event, contents) => {
@@ -618,7 +673,7 @@ export function setupWebviewCSP(): void {
       const panelId = dialogService.getPanelId(contents.id);
       if (!panelId) return;
 
-      const isDevPreview = contents.session !== browserSession;
+      const isDevPreview = !isBrowserPanelContents(contents);
       if (
         isDevPreview &&
         looksLikeOAuthUrl(url) &&
@@ -674,7 +729,7 @@ export function setupWebviewCSP(): void {
         // the blocked-nav banner so the user can use "Sign in via Browser" (loopback flow).
         // Without this, window.open() OAuth popups bypass the banner and go straight
         // to the system browser, losing the PKCE sessionStorage state.
-        const isDevPreview = contents.session !== browserSession;
+        const isDevPreview = !isBrowserPanelContents(contents);
         if (url && isDevPreview && looksLikeOAuthUrl(url)) {
           notifyBlockedNavigation(url);
           return { action: "deny" };
@@ -696,7 +751,7 @@ export function setupWebviewCSP(): void {
       // Browser partition allows cross-origin http/https for OAuth/OIDC flows.
       // Dev-preview and other partitions remain restricted to localhost only.
       contents.on("will-navigate", (event, navigationUrl) => {
-        const isBrowserPanel = contents.session === browserSession;
+        const isBrowserPanel = isBrowserPanelContents(contents);
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(navigationUrl)
@@ -711,7 +766,7 @@ export function setupWebviewCSP(): void {
       });
 
       contents.on("will-redirect", (event, redirectUrl) => {
-        const isBrowserPanel = contents.session === browserSession;
+        const isBrowserPanel = isBrowserPanelContents(contents);
 
         const blocked = isBrowserPanel
           ? !isSafeNavigationUrl(redirectUrl)
@@ -724,6 +779,19 @@ export function setupWebviewCSP(): void {
           notifyBlockedNavigation(redirectUrl);
         }
       });
+
+      // Resolve and cache the guest's parent window. On the `destroyed` event the
+      // guest's hostWebContents is no longer reachable, so dismiss-on-destroy falls
+      // back to the reference captured while the guest was alive — populated when a
+      // dialog is first intercepted below (a dialog can only be pending if this ran).
+      let cachedParentWindow: Electron.BrowserWindow | null = null;
+      const resolveParentWindow = (): Electron.BrowserWindow | null => {
+        if (!contents.isDestroyed()) {
+          const live = getWindowForWebContents(contents.hostWebContents ?? contents);
+          if (live) cachedParentWindow = live;
+        }
+        return cachedParentWindow && !cachedParentWindow.isDestroyed() ? cachedParentWindow : null;
+      };
 
       // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests.
       // Electron 40+ emits "js-dialog" but its TS types omit it from the overload union.
@@ -752,8 +820,8 @@ export function setupWebviewCSP(): void {
             return;
           }
 
-          const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-          if (parentWindow && !parentWindow.isDestroyed()) {
+          const parentWindow = resolveParentWindow();
+          if (parentWindow) {
             getAppWebContents(parentWindow).send("webview:dialog-request", {
               dialogId,
               panelId,
@@ -791,6 +859,29 @@ export function setupWebviewCSP(): void {
 
       contents.on("unresponsive", notifyUnresponsive);
       contents.on("responsive", notifyResponsive);
+
+      // Dismiss any pending JS dialogs when the guest navigates to a new document,
+      // its renderer crashes, or it is destroyed (e.g. the <webview> is remounted on
+      // a partition change). Chromium discards the native dialog state in all three
+      // cases, so the stored callback would otherwise leak and the renderer overlay
+      // would survive a page that no longer exists. did-navigate fires only for
+      // cross-document main-frame navigations (same-document hash/pushState changes
+      // emit did-navigate-in-page and are correctly ignored). The destroyed path
+      // relies on the cached parent window since hostWebContents is gone by then.
+      const dismissPendingDialogs = () => {
+        const dialogService = getWebviewDialogService();
+        const panelId = dialogService.getPanelId(contents.id);
+        dialogService.cancelPendingForGuest(contents.id);
+        if (!panelId) return;
+        const parentWindow = resolveParentWindow();
+        if (parentWindow) {
+          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
+        }
+      };
+
+      contents.on("did-navigate", dismissPendingDialogs);
+      contents.on("render-process-gone", dismissPendingDialogs);
+      contents.once("destroyed", dismissPendingDialogs);
 
       // Intercept find-in-page (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) and reload
       // (Cmd/Ctrl+R) shortcuts from webview guests. When the guest has focus

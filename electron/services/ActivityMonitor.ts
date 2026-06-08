@@ -24,6 +24,7 @@ import {
   AGENT_OUTPUT_ACTIVITY_LINE_COUNT,
   AgentActivityTemperature,
   type AgentActivityObservationResult,
+  type AgentActivitySignalKind,
 } from "./pty/AgentActivityTemperature.js";
 import {
   detectPrompt,
@@ -45,15 +46,14 @@ const PROMPT_HISTORY_FALLBACK_MS = 3000;
 const WORKING_HOLD_MS = 1500;
 const SPINNER_ACTIVE_MS = 1500;
 const COMPLETION_HOLD_MS = 500;
+// Minimum output quiet before the simple-output polling cycle scans for
+// completion patterns — the non-simple path gets the same protection from its
+// working-signal gates (recent output suppresses completion detection), so a
+// cost summary printed mid-stream doesn't read as a finished session (#9873).
+const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
-// Claude Code emits OSC 9;4 state=0 between every tool call (the "remove
-// progress" marker). Without debouncing, a brief state=0 → state=1 flicker
-// would act on idle prematurely. 200ms is comfortably above Claude's
-// inter-tool gap upper bound and well under the 8s IDLE_DEBOUNCE_MS, so it
-// suppresses flicker without delaying real idle detection.
-const OSC_IDLE_DEBOUNCE_MS = 200;
 
 export interface ProcessStateValidator {
   hasActiveChildren(): boolean;
@@ -144,7 +144,6 @@ export class ActivityMonitor {
   private state: "busy" | "idle" = "idle";
   private isDisposed = false;
   private debounceTimer: NodeJS.Timeout | null = null;
-  private oscIdleTimer: NodeJS.Timeout | null = null;
   private readonly IDLE_DEBOUNCE_MS: number;
   private readonly PROMPT_FAST_PATH_MIN_QUIET_MS: number;
   private readonly MAX_WORKING_SILENCE_MS: number;
@@ -197,6 +196,9 @@ export class ActivityMonitor {
   private lastActivityTimestamp = Date.now();
   private lastDataTimestamp = Date.now();
   private lastOutputActivityAt = 0;
+  // Latched when simple-output data matches isStatusLineRewrite — lets the
+  // polling cycle classify visible-content changes as indicator-driven (#9874).
+  private lastStatusRewriteAt = 0;
   private lastWorkingIndicatorTimestamp = 0;
   private promptStableSince = 0;
 
@@ -402,6 +404,59 @@ export class ActivityMonitor {
     return lowerInput.includes("esc to interrupt") || lowerInput.includes("esc to cancel");
   }
 
+  // Raw-stream compiled-pattern tier, shared by the simple and non-simple
+  // `onData` paths (#9873): feeds the rolling pattern buffer, checks
+  // boot-complete patterns across chunk boundaries, and promotes/refreshes
+  // busy on working-pattern matches.
+  private detectPatternsFromData(data: string, now: number): void {
+    this.patternBuf.update(data);
+    const bufferText = stripAnsi(this.patternBuf.getText());
+    const lowerBuffer = bufferText.toLowerCase();
+
+    // Check for boot-complete patterns in the rolling buffer
+    if (!this.bootDetector.hasExitedBootState) {
+      if (this.bootDetector.check(bufferText, false, 0, Infinity)) {
+        // Boot detected via pattern in rolling buffer
+        this.fireBootComplete(now);
+      }
+    }
+
+    // Check for working patterns in the rolling buffer
+    const patternResult = this.patternDetector
+      ? this.patternDetector.detect(bufferText, { alreadyStripped: true })
+      : undefined;
+    if (patternResult) {
+      this.lastPatternResult = patternResult;
+      this.lastPatternResultAt = now;
+    }
+    const isWorking = patternResult
+      ? patternResult.isWorking
+      : this.isEscInterruptFallback(lowerBuffer);
+
+    if (
+      isWorking &&
+      !this.isResizeSuppressed(now) &&
+      !this.isFocusSuppressed(now) &&
+      (this.state === "busy" ||
+        this.inputTracker.pendingInputUntil > 0 ||
+        !this.inputTracker.isRecentUserInput(now))
+    ) {
+      if (this.state === "busy" || this.inputTracker.pendingInputUntil > 0) {
+        this.becomeBusy({
+          trigger: "pattern",
+          patternConfidence: patternResult?.confidence ?? 0.9,
+        });
+      } else {
+        if (this.workingSignalDebouncer.shouldTriggerRecovery(now, true)) {
+          this.becomeBusy({
+            trigger: "pattern",
+            patternConfidence: patternResult?.confidence ?? 0.9,
+          });
+        }
+      }
+    }
+  }
+
   onInput(data: string): void {
     if (this.isDisposed) return;
     const now = Date.now();
@@ -444,8 +499,25 @@ export class ActivityMonitor {
           this.fireBootComplete(now);
         }
       }
+      // Semantic status-line rewrites (spinner, retry countdown, elapsed-time
+      // counter) are strong liveness evidence even at 1Hz cadence (#9874).
+      const isIndicatorRewrite = isStatusLineRewrite(data);
+      if (isIndicatorRewrite) {
+        this.lastStatusRewriteAt = now;
+      }
+      // Compiled-pattern tier (#9873): feed the rolling buffer and act on
+      // working patterns with the same echo/cosmetic guards the non-simple
+      // path uses. Completion and waiting-reason detection run in the
+      // polling cycle's idle paths.
+      if (!this.inputTracker.isLikelyUserEcho(data, now) && !isIndicatorRewrite) {
+        this.detectPatternsFromData(data, now);
+      }
       if (!this.getVisibleLines) {
-        this.noteSimpleOutputSnapshot(createVisibleContentSnapshot(stripAnsi(data)), now);
+        this.noteSimpleOutputSnapshot(
+          createVisibleContentSnapshot(stripAnsi(data)),
+          now,
+          isIndicatorRewrite ? "indicator" : "content"
+        );
       }
       return;
     }
@@ -464,52 +536,7 @@ export class ActivityMonitor {
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
     if (data && this.getVisibleLines && !isLikelyUserEcho && !isCosmeticRedraw) {
-      this.patternBuf.update(data);
-      const bufferText = stripAnsi(this.patternBuf.getText());
-      const lowerBuffer = bufferText.toLowerCase();
-
-      // Check for boot-complete patterns in the rolling buffer
-      if (!this.bootDetector.hasExitedBootState) {
-        if (this.bootDetector.check(bufferText, false, 0, Infinity)) {
-          // Boot detected via pattern in rolling buffer
-          this.fireBootComplete(now);
-        }
-      }
-
-      // Check for working patterns in the rolling buffer
-      const patternResult = this.patternDetector
-        ? this.patternDetector.detect(bufferText, { alreadyStripped: true })
-        : undefined;
-      if (patternResult) {
-        this.lastPatternResult = patternResult;
-        this.lastPatternResultAt = now;
-      }
-      const isWorking = patternResult
-        ? patternResult.isWorking
-        : this.isEscInterruptFallback(lowerBuffer);
-
-      if (
-        isWorking &&
-        !this.isResizeSuppressed(now) &&
-        !this.isFocusSuppressed(now) &&
-        (this.state === "busy" ||
-          this.inputTracker.pendingInputUntil > 0 ||
-          !this.inputTracker.isRecentUserInput(now))
-      ) {
-        if (this.state === "busy" || this.inputTracker.pendingInputUntil > 0) {
-          this.becomeBusy({
-            trigger: "pattern",
-            patternConfidence: patternResult?.confidence ?? 0.9,
-          });
-        } else {
-          if (this.workingSignalDebouncer.shouldTriggerRecovery(now, true)) {
-            this.becomeBusy({
-              trigger: "pattern",
-              patternConfidence: patternResult?.confidence ?? 0.9,
-            });
-          }
-        }
-      }
+      this.detectPatternsFromData(data, now);
     }
 
     if (!data || isLikelyUserEcho) {
@@ -718,9 +745,13 @@ export class ActivityMonitor {
     return createVisibleContentSnapshot(this.getVisibleLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT));
   }
 
-  private noteSimpleOutputSnapshot(snapshot: VisibleContentSnapshot, now: number): void {
+  private noteSimpleOutputSnapshot(
+    snapshot: VisibleContentSnapshot,
+    now: number,
+    signalKind?: AgentActivitySignalKind
+  ): void {
     this.applySimpleOutputTemperature(
-      this.simpleOutputTemperature.observeSnapshot(now, snapshot),
+      this.simpleOutputTemperature.observeSnapshot(now, snapshot, { signalKind }),
       now
     );
   }
@@ -749,10 +780,7 @@ export class ActivityMonitor {
     }
 
     if (this.state === "busy" && result.stateHint === "idle" && now >= this.workingHoldUntil) {
-      this.state = "idle";
-      this.idleSince = now;
-      this.patternBuf.clear();
-      this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+      this.transitionSimpleToIdle(now);
     }
   }
 
@@ -784,10 +812,6 @@ export class ActivityMonitor {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
-    if (this.oscIdleTimer) {
-      clearTimeout(this.oscIdleTimer);
-      this.oscIdleTimer = null;
-    }
     this.completionTimer.dispose();
     this.inputTracker.reset();
     this.outputVolumeDetector.reset();
@@ -808,6 +832,7 @@ export class ActivityMonitor {
     this.workingHoldUntil = 0;
     this.lastDataTimestamp = 0;
     this.lastOutputActivityAt = 0;
+    this.lastStatusRewriteAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
     this.promptStableSince = 0;
   }
@@ -858,10 +883,6 @@ export class ActivityMonitor {
   // untouched — this is a heartbeat, not a permanent hold (lesson #4974).
   onOscProgressWorking(now: number = Date.now()): void {
     if (this.isDisposed) return;
-    if (this.oscIdleTimer) {
-      clearTimeout(this.oscIdleTimer);
-      this.oscIdleTimer = null;
-    }
     this.lastActivityTimestamp = now;
     this.lastDataTimestamp = now;
     if (this.state !== "busy") {
@@ -876,25 +897,52 @@ export class ActivityMonitor {
     this.resetDebounceTimer();
   }
 
-  // OSC 9;4 state=0 (#8701). Claude Code emits this between every tool call,
-  // not just on completion, so the signal needs a 200ms debounce: any state=1/3
-  // arriving inside that window cancels the timer (handled in
-  // `onOscProgressWorking` above). Once the debounce elapses without
-  // interruption, the OSC heartbeat has truly stopped — but we do NOT force
-  // idle here. The existing `lastActivityTimestamp`-driven idle path in the
-  // simpleOutputState polling cycle (line 893) takes over via natural decay
-  // (working signals stop refreshing the timestamp, so the 8s gate eventually
-  // fires). Mutating `workingHoldUntil` directly here would risk clobbering
-  // holds set by other signal paths.
+  // OSC 9;4 state=0 (#8701). Intentionally advisory — a no-op by design.
+  // Claude Code emits state=0 between every tool call, not just on completion,
+  // so it cannot be an authoritative idle trigger: forcing idle here would
+  // flicker working→idle→working on every tool boundary. We deliberately do
+  // not act on it (and in particular do not mutate `workingHoldUntil`, which
+  // would risk clobbering holds set by other signal paths). Real idle is left
+  // to the `lastActivityTimestamp`-driven gate in the simpleOutputState polling
+  // cycle: once working signals (OSC state=1/3 or output) stop refreshing the
+  // timestamp, the 8s IDLE_DEBOUNCE_MS gate fires via natural decay. The method
+  // is kept as the documented sink for `Osc94Parser`'s onIdle callback.
   onOscProgressIdle(_now: number = Date.now()): void {
     if (this.isDisposed) return;
-    if (this.oscIdleTimer) {
-      clearTimeout(this.oscIdleTimer);
+  }
+
+  // Called by `TerminalProcess.noteAgentOutputActivity` immediately after it
+  // promotes the agent FSM to working via its direct
+  // `agentStateService.handleActivityState("busy")` path (#9875). That path
+  // bypasses this monitor entirely, leaving the private `state` at "idle" —
+  // and every idle path that can transition the FSM working→waiting gates on
+  // `state === "busy"`, so the FSM would otherwise strand in working with the
+  // watchdog (which only fires from waiting) never arming. Mirrors
+  // `becomeBusy`'s bookkeeping but deliberately skips `onStateChange`: the FSM
+  // transition already happened at the call site, and re-emitting "busy" here
+  // would double-fire the transition.
+  notifyExternalPromotion(now: number = Date.now()): void {
+    if (this.isDisposed) return;
+    // Defense-in-depth: the call site already gates on focus suppression, but
+    // keep the guard so any future caller inherits it (#8865).
+    if (this.isFocusSuppressed(now)) return;
+    this.lastActivityTimestamp = now;
+    this.lastDataTimestamp = now;
+    this.recordWorkingSignal(now);
+    this.resetDebounceTimer();
+    this.waitingWatchdog.reset();
+    this.cosmeticRecoveryDebouncer.reset();
+    this.structuralRecoveryDebouncer.reset();
+    this.completionTimer.reset();
+    // Discard the temperature snapshot so its quiet clock restarts from the
+    // promotion (same rationale as `notifyFocus`). A stale `quietStartedAt`
+    // from the pre-promotion lull would otherwise hint "idle" at the first
+    // poll after the 1.5s working hold and bounce the FSM straight back.
+    this.simpleOutputTemperature.reset();
+    if (this.state !== "busy") {
+      this.state = "busy";
+      this.idleSince = now;
     }
-    this.oscIdleTimer = setTimeout(() => {
-      this.oscIdleTimer = null;
-    }, OSC_IDLE_DEBOUNCE_MS);
-    this.oscIdleTimer.unref?.();
   }
 
   notifyResize(suppressionMs = 500): void {
@@ -989,25 +1037,56 @@ export class ActivityMonitor {
         const lines = this.getVisibleLines(50);
         const strippedText = stripAnsi(lines.join(" "));
         const timeSinceBoot = now - this.bootDetector.pollingStartTime;
-        if (this.bootDetector.check(strippedText, false, timeSinceBoot, this.POLLING_MAX_BOOT_MS)) {
+        // A visible prompt exits boot early — parity with the non-simple boot
+        // check, and what lets restart-resumed sessions (boot re-entered with
+        // an already-settled screen) go idle without waiting out the boot
+        // timeout (#9873). History scan unlocks after the same 3s the
+        // non-simple prompt path uses.
+        const promptResult = detectPrompt(
+          lines,
+          this.promptDetectorConfig,
+          this.getCursorLine?.() ?? null,
+          { allowHistoryScan: timeSinceBoot >= PROMPT_HISTORY_FALLBACK_MS }
+        );
+        if (
+          this.bootDetector.check(
+            strippedText,
+            promptResult.isPrompt,
+            timeSinceBoot,
+            this.POLLING_MAX_BOOT_MS
+          )
+        ) {
           this.fireBootComplete(now);
+        } else {
+          return; // Still booting, stay busy — parity with the non-simple guard (#9873)
         }
       }
 
       const snapshot = this.captureSimpleOutputSnapshot();
       if (snapshot !== undefined) {
-        this.noteSimpleOutputSnapshot(snapshot, now);
+        // Classify the polled change as indicator-driven when status-line
+        // rewrite data arrived recently — the data path can't feed the
+        // temperature directly here (it gates on !getVisibleLines), so the
+        // latched timestamp is the correlation signal (#9874).
+        const indicatorActive =
+          this.lastStatusRewriteAt > 0 && now - this.lastStatusRewriteAt <= SPINNER_ACTIVE_MS;
+        this.noteSimpleOutputSnapshot(snapshot, now, indicatorActive ? "indicator" : "content");
+      }
+
+      // Completion detection runs every cycle while busy — mirrors the
+      // non-simple path so simple-output agents reach `completed` (with
+      // extracted cost/tokens) before any idle path fires (#9873).
+      if (this.trySimpleCompletion(now)) {
+        return;
       }
 
       if (
         this.state === "busy" &&
+        !this.completionTimer.emitted &&
         now - this.lastActivityTimestamp >= this.IDLE_DEBOUNCE_MS &&
         now >= this.workingHoldUntil
       ) {
-        this.state = "idle";
-        this.idleSince = now;
-        this.patternBuf.clear();
-        this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+        this.transitionSimpleToIdle(now);
       }
       return;
     }
@@ -1208,10 +1287,10 @@ export class ActivityMonitor {
     // exit busy immediately rather than waiting the full IDLE_DEBOUNCE_MS. This keeps
     // the idle transition snappy after the prompt appears, even when IDLE_DEBOUNCE_MS
     // has been raised to cover LLM API call silence gaps.
-    // Default: 3s quiet to avoid premature idle during inter-tool-call gaps (Claude
-    // bursts with 1-3s pauses, Codex has 3-5s gaps — Issue #3606). Agents with
-    // deterministic completion markers (e.g. Cursor, 700ms) can use a lower value
-    // via promptFastPathMinQuietMs in AgentDetectionConfig.
+    // The quiet requirement guards against premature idle during inter-tool-call
+    // gaps (Claude bursts with 1-3s pauses, Codex has 3-5s gaps — Issue #3606).
+    // buildActivityMonitorOptions floors promptFastPathMinQuietMs to the effective
+    // idle debounce (>= 8s), so sub-floor per-agent values are not honored.
     if (
       this.state === "busy" &&
       !this.completionTimer.emitted &&
@@ -1352,6 +1431,71 @@ export class ActivityMonitor {
     });
   }
 
+  // Completion-pattern scan for simple-output monitors (#9873). Returns true
+  // when a completion was detected and the completed transition was emitted.
+  // Gated on output quiet so a cost line scrolling past mid-stream doesn't
+  // end the session early.
+  private trySimpleCompletion(now: number): boolean {
+    if (
+      this.state !== "busy" ||
+      this.completionTimer.emitted ||
+      this.completionPatterns.length === 0 ||
+      !this.getVisibleLines ||
+      // Quiet on both clocks: lastActivityTimestamp only moves on visible
+      // snapshot changes, so raw PTY bytes streaming past a static viewport
+      // must also block the scan via lastDataTimestamp.
+      now - Math.max(this.lastActivityTimestamp, this.lastDataTimestamp) <
+        SIMPLE_COMPLETION_MIN_QUIET_MS ||
+      now < this.workingHoldUntil
+    ) {
+      return false;
+    }
+    const completionResult = detectCompletion(
+      this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount),
+      this.completionPatterns,
+      this.completionConfidence,
+      this.promptDetectorConfig.promptScanLineCount
+    );
+    if (!completionResult.isCompletion) {
+      return false;
+    }
+    this.transitionToCompleted(
+      completionResult.confidence,
+      completionResult.extractedCost,
+      completionResult.extractedTokens
+    );
+    return true;
+  }
+
+  // Simple-output busy→idle transition shared by the polling idle gate, the
+  // activity-temperature idle hint, and the debounce-timer backstop (#9873).
+  // Runs completion detection first so agents with completionPatterns reach
+  // `completed` (with extracted cost/tokens) instead of plain idle, and
+  // attaches a waiting reason to the idle emission. While a completion hold
+  // is pending, the idle emission is left to the completion timer.
+  private transitionSimpleToIdle(now: number): void {
+    if (this.completionTimer.emitted) return;
+    if (this.trySimpleCompletion(now)) return;
+    this.state = "idle";
+    this.idleSince = now;
+    this.patternBuf.clear();
+    let waitingReason: WaitingReason | undefined;
+    if (this.getVisibleLines) {
+      const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
+      const promptResult = detectPrompt(
+        lines,
+        this.promptDetectorConfig,
+        this.getCursorLine?.() ?? null,
+        { allowHistoryScan: true }
+      );
+      waitingReason = classifyWaitingReason(lines, promptResult.isPrompt);
+    }
+    this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+      trigger: "timeout",
+      waitingReason,
+    });
+  }
+
   private becomeBusyFromPattern(confidence: number, now: number): void {
     this.becomeBusy({ trigger: "pattern", patternConfidence: confidence }, now);
   }
@@ -1409,16 +1553,22 @@ export class ActivityMonitor {
           return;
         }
 
+        // During the polling boot window, idle is owned by the polling
+        // cycle's boot guard — stay busy and re-arm (#9873). Monitors
+        // without polling have no boot lifecycle and skip this.
+        if (this.pollingInterval && !this.bootDetector.hasExitedBootState) {
+          this.debounceTimer = null;
+          this.resetDebounceTimer();
+          return;
+        }
+
         const now = Date.now();
         if (
           this.state === "busy" &&
           now - this.lastActivityTimestamp >= this.IDLE_DEBOUNCE_MS &&
           now >= this.workingHoldUntil
         ) {
-          this.state = "idle";
-          this.idleSince = now;
-          this.patternBuf.clear();
-          this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+          this.transitionSimpleToIdle(now);
         }
         this.debounceTimer = null;
       }, this.IDLE_DEBOUNCE_MS);

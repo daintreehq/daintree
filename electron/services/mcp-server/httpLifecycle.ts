@@ -21,10 +21,12 @@ import type {
 } from "./shared.js";
 import type {
   ActiveBearerRecord,
+  HelpSessionBearerRecord,
   McpActiveClientInfo,
   McpBearerIdentity,
   McpIssueGrantResult,
   McpRevokeSessionGrantsResult,
+  McpTurnOutcomeAlertPayload,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
   extractBearerToken,
@@ -83,6 +85,14 @@ export interface HttpLifecycleDeps {
     options?: { maxTimeoutMs?: number }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
+  // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
+  // the pinned `getCachedManifest` closure return the session's own window's
+  // cached manifest instead of always re-fetching on every CallTool dispatch.
+  // Optional for backward-compat with test fixtures that don't wire help
+  // routing (mirrors `requestManifestForWebContents`).
+  getCachedManifestForWebContents?: (
+    id: number
+  ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   clearCachedManifest: () => void;
   cleanupListeners: Array<() => void>;
   pendingManifests: Map<
@@ -356,10 +366,11 @@ export class HttpLifecycle {
     entry.requestsSinceLaunch += 1;
     entry.sessionIds.add(sessionId);
     this.sessionToTokenHash.set(sessionId, tokenHash);
-    // Only external bearers surface in the settings UI, so only their
-    // handshakes need a runtime-state push. Help bearers are filtered out of
-    // `listActiveBearers`; emitting for them would be needless IPC chatter.
-    if (!isHelpSession) this.deps.emitRuntimeStateChange();
+    // Both external bearers (External clients row) and help-session bearers
+    // (the "Daintree Assistant connections" row, #10036) surface on the
+    // settings tab, so every handshake needs a runtime-state push to keep the
+    // open tab live.
+    this.deps.emitRuntimeStateChange();
   }
 
   /**
@@ -412,10 +423,43 @@ export class HttpLifecycle {
     if (entry.sessionIds.size === 0) {
       this.bearerRegister.delete(tokenHash);
     }
-    // Help bearers are filtered out of `listActiveBearers`, so their teardown
-    // changes nothing the settings UI shows — skip the runtime-state push to
-    // avoid needless IPC chatter (mirrors the `touchBearer` gate).
-    if (!entry.isHelpSession) this.deps.emitRuntimeStateChange();
+    // Both external and help-session bearers surface on the settings tab
+    // (#10036), so every teardown needs a runtime-state push so an open tab
+    // drops the row.
+    this.deps.emitRuntimeStateChange();
+  }
+
+  /**
+   * Push a turn-outcome alert (`agent-stuck` / `reasoning-loop`) to the
+   * renderer pinned to the originating help session (#10018). The
+   * `TurnOutcomeService` only knows the help-session id, so resolve it to a
+   * live transport session via `sessionHelpIdMap` (transport → help), then to
+   * the pinned WebContents. At most one transport session maps to a given help
+   * session at a time, so the first match with a live pin wins. Targeted send
+   * with the same `fromId` + `isDestroyed` guard as every other push — a
+   * WebContents LRU-evicted between handshake and alert rejects harmlessly.
+   */
+  notifyTurnOutcomeAlert(payload: McpTurnOutcomeAlertPayload): void {
+    for (const [transportSessionId, helpId] of this.deps.sessionStore.sessionHelpIdMap.entries()) {
+      if (helpId !== payload.helpSessionId) continue;
+      const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(transportSessionId);
+      if (pinnedId === undefined) continue;
+      const wc = webContentsModule.fromId(pinnedId);
+      // A transport session whose WebContents was LRU-evicted/destroyed is
+      // skipped, not treated as the answer — a reconnect or concurrent
+      // transport for the same help session may still hold a live pin.
+      if (!wc || wc.isDestroyed()) continue;
+      try {
+        wc.send(CHANNELS.MCP_TURN_OUTCOME_ALERT, {
+          helpSessionId: payload.helpSessionId,
+          outcome: payload.outcome,
+          ...(payload.turnId !== undefined ? { turnId: payload.turnId } : {}),
+        });
+      } catch (err) {
+        console.error("[MCP] turn-outcome-alert send failed:", err);
+      }
+      return;
+    }
   }
 
   /**
@@ -434,6 +478,29 @@ export class HttpLifecycle {
         userAgent: entry.userAgent,
         lastActiveAt: entry.lastActiveAt,
         requestsSinceLaunch: entry.requestsSinceLaunch,
+      });
+    }
+    return records;
+  }
+
+  /**
+   * Read-only inventory of the renderer-pinned help-session bearers (the
+   * Daintree Assistant's own internal MCP connections) for the separate
+   * "Daintree Assistant connections" settings row (#10036). The inverse filter
+   * of {@link listActiveBearers}: only `isHelpSession` entries. Exposes display
+   * fields only — never the `helpToken`, `tokenHash`, or `token4LastChars`
+   * (those identify an internal credential and stay main-side, #9318); there is
+   * no disconnect action for help sessions so no hash is needed to target one.
+   */
+  listHelpSessionBearers(): HelpSessionBearerRecord[] {
+    const records: HelpSessionBearerRecord[] = [];
+    for (const entry of this.bearerRegister.values()) {
+      if (!entry.isHelpSession) continue;
+      records.push({
+        userAgent: entry.userAgent,
+        lastActiveAt: entry.lastActiveAt,
+        requestsSinceLaunch: entry.requestsSinceLaunch,
+        sessionCount: entry.sessionIds.size,
       });
     }
     return records;
@@ -925,6 +992,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
@@ -946,6 +1015,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
         this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
         this.deps.sessionStore.clearDedupState(sessionId);
         this.deps.sessionStore.clearRateLimitState(sessionId);
@@ -1077,6 +1148,8 @@ export class HttpLifecycle {
       this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
       this.deps.sessionStore.sessionWebContentsMap.delete(id);
       this.deps.sessionStore.sessionContextMap.delete(id);
+      // Resolve the public help-session id before deleting the map entry.
+      this.deps.sessionStore.clearFigureCounter(id);
       this.deps.sessionStore.sessionHelpIdMap.delete(id);
       this.deps.sessionStore.clearDedupState(id);
       this.deps.sessionStore.clearRateLimitState(id);
@@ -1103,6 +1176,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(id);
         this.deps.sessionStore.sessionContextMap.delete(id);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(id);
         this.deps.sessionStore.sessionHelpIdMap.delete(id);
         this.deps.sessionStore.clearDedupState(id);
         this.deps.sessionStore.clearRateLimitState(id);
@@ -1116,6 +1191,8 @@ export class HttpLifecycle {
         this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
         this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
         this.deps.sessionStore.sessionContextMap.delete(newSessionId);
+        // Resolve the public help-session id before deleting the map entry.
+        this.deps.sessionStore.clearFigureCounter(newSessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
         this.deps.sessionStore.clearDedupState(newSessionId);
         this.deps.sessionStore.clearRateLimitState(newSessionId);
@@ -1152,6 +1229,12 @@ export class HttpLifecycle {
     // not the MCP transport id `sessionId` — passing the transport id there
     // always missed, which broke same-turn coalescing and turnId stamping.
     const helpSessionId = this.deps.sessionStore.sessionHelpIdMap.get(sessionId) ?? null;
+    // Snapshot the pin at build time (set at handshake before this runs, and
+    // only ever deleted on teardown — never re-pointed). Capturing it makes the
+    // `getCachedManifest` closure below read strictly this session's own
+    // per-WebContents cache, so a session torn down mid-call can never flip to
+    // the shared cache and leak another window's tool surface (#7003 / #9887).
+    const pinnedWebContentsId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId) ?? null;
 
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
@@ -1187,10 +1270,16 @@ export class HttpLifecycle {
 
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =
       () => {
-        // Pinned sessions never read the shared manifest cache — see
-        // `requestManifestForWebContents` doc in rendererBridge.ts.
-        if (this.deps.sessionStore.sessionWebContentsMap.has(sessionId)) {
-          return null;
+        // Pinned sessions never read the shared manifest cache (it could serve
+        // another window's tool surface). Instead they read a per-WebContents
+        // cache keyed by the build-time-captured pinned id (#9887), so the
+        // per-call `lookupManifestEntry` hot path hits a warm cache rather than
+        // re-fetching the full manifest on every dispatch — while still never
+        // crossing windows. Reading the captured id (not a live map lookup)
+        // means a session torn down mid-call stays pinned here and fails closed
+        // to `null` (evicted cache) rather than flipping to the shared cache.
+        if (pinnedWebContentsId !== null) {
+          return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
         }
         return this.deps.getCachedManifest();
       };
@@ -1253,11 +1342,11 @@ export class HttpLifecycle {
         const wc = webContentsModule.fromId(id);
         if (!wc || wc.isDestroyed()) return;
         // Redact args with the same pipeline the audit record uses so the strip
-        // never shows raw bearer tokens or absolute paths (#9759).
-        const turnId =
-          helpSessionId !== null
-            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
-            : null;
+        // never shows raw bearer tokens or absolute paths (#9759). The turn id
+        // is the snapshot the dispatch took at call-start (#10067) — not a fresh
+        // read here, which could disagree with the settled/audit value if the
+        // FSM transitioned mid-call.
+        const turnId = payload.capturedTurnId;
         try {
           wc.send(CHANNELS.MCP_TOOL_CALL_STARTED, {
             sessionId: payload.sessionId,
@@ -1281,10 +1370,9 @@ export class HttpLifecycle {
         // Derive result/errorCode/severity from the same classifier the audit
         // writer uses, so the strip's glyph and red-tint match the audit log.
         const { result, errorCode } = classifyMcpDispatchResult(payload.outcome);
-        const turnId =
-          helpSessionId !== null
-            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
-            : null;
+        // Same snapshot the started event carried (#10067) — guarantees the
+        // strip's in-flight row and its settled row resolve to one turn group.
+        const turnId = payload.capturedTurnId;
         try {
           wc.send(CHANNELS.MCP_TOOL_CALL_SETTLED, {
             sessionId: payload.sessionId,
@@ -1300,6 +1388,31 @@ export class HttpLifecycle {
         }
       };
 
+    const notifyDisplayImage: import("./sessionServer.js").SessionServerDeps["notifyDisplayImage"] =
+      (payload) => {
+        // Help-session bearers only — targeted at the pinned WebContents so the
+        // figure renders in the assistant panel that triggered the call, even
+        // if a different project view is focused. The tool is outside the
+        // external/api-key allowlist, so this never fires for those sessions.
+        const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
+        if (id === undefined) return;
+        const wc = webContentsModule.fromId(id);
+        if (!wc || wc.isDestroyed()) return;
+        try {
+          wc.send(CHANNELS.MCP_HELP_DISPLAY_IMAGE, {
+            sessionId: payload.sessionId,
+            imageId: payload.imageId,
+            figureNumber: payload.figureNumber,
+            figureLabel: payload.figureLabel,
+            url: payload.url,
+            ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
+            ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
+          });
+        } catch (err) {
+          console.error("[MCP] help-display-image send failed:", err);
+        }
+      };
+
     return {
       sessionStore: this.deps.sessionStore,
       requestManifest,
@@ -1310,19 +1423,36 @@ export class HttpLifecycle {
         // `summarizeMcpArgs` — running the scrubber after truncation would
         // miss bearer tokens whose body got cut below the scrubber's
         // 8-char minimum match length.
-        const turnId =
-          helpSessionId !== null
-            ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
-            : null;
+        // Stamp the turn id from the dispatch-start snapshot (#10067), never a
+        // fresh read at write time — by the time the audit lands the FSM may
+        // have cleared the turn, which would split this call away from the
+        // started/settled strip events that already carry it.
+        // `capturedTurnId` is the transport-only carrier — peel it off so it
+        // never lands in the persisted record (the stamped `turnId` is the
+        // public field).
+        const { capturedTurnId, ...recordInput } = input;
+        const turnId = capturedTurnId ?? null;
         const resultSummary = summarizeAuditOutcome(input.outcome, (s) =>
           scrubSecrets(sanitizePath(s))
         );
+        // `summarizeAuditOutcome` returns null for all gate outcomes by
+        // contract — the wait-time hint for `rate_limited` reaches the audit
+        // record through `resultMeta` instead, so the recent-calls popover
+        // can surface the integer-seconds value the agent already received
+        // in the JSON-RPC error (`details: { retryAfter }`) without
+        // re-scrubbing display text or polluting the tool-output summary
+        // (#10014).
+        const resultMeta =
+          input.outcome.kind === "rate_limited"
+            ? { retryAfter: input.outcome.retryAfter }
+            : undefined;
         this.deps.auditService.appendRecord({
-          ...input,
+          ...recordInput,
           argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),
           ...(resultSummary !== null ? { resultSummary } : {}),
+          ...(resultMeta !== undefined ? { resultMeta } : {}),
         });
       },
       getCachedManifest,
@@ -1333,8 +1463,16 @@ export class HttpLifecycle {
       clearDenialState: (sessionId) => {
         this.deps.abusePolicy.dropSession(sessionId);
       },
+      // Single live read of the turn register, called once per dispatch from
+      // sessionServer (#10067). Closes over the build-time `helpSessionId` so
+      // the snapshot it returns is the turn this session's call is part of.
+      getCurrentTurnId: () =>
+        helpSessionId !== null
+          ? this.deps.turnOutcomeService.getCurrentTurnIdForSession(helpSessionId)
+          : null,
       notifyToolCallStarted,
       notifyToolCallSettled,
+      notifyDisplayImage,
     };
   }
 
@@ -1477,6 +1615,26 @@ export class HttpLifecycle {
     }
     const revokedCount = this.deps.sessionStore.grantCache.revokeSession(sessionId, "user");
     return { sessionId, revokedCount };
+  }
+
+  /**
+   * Drop the per-`(sessionId, toolId)` denial counters for a session without
+   * touching its grants. Called when the user dismisses the tier-mismatch
+   * banner (Cancel) so the next out-of-tier call re-shows the banner instead
+   * of being silently suppressed by the abuse policy after the denial
+   * threshold. Caller-pin checked identically to {@link revokeSessionGrants};
+   * a drained session is an idempotent no-op so the renderer's dismissal
+   * cleanup always succeeds.
+   */
+  resetDenialCounts(sessionId: string, callerWcId?: number): void {
+    if (!sessionId || typeof sessionId !== "string") {
+      throw new Error("Invalid sessionId");
+    }
+    const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
+    if (pinnedWcId !== undefined && callerWcId !== undefined && callerWcId !== pinnedWcId) {
+      throw new Error("Caller is not the pinned renderer for this session");
+    }
+    this.deps.sessionStore.grantCache.clearDenialCounts(sessionId);
   }
 
   /**

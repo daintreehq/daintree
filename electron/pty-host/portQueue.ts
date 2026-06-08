@@ -95,6 +95,18 @@ export class PortQueueManager {
     return this.pausedTerminals.has(id);
   }
 
+  /**
+   * Iterator over the terminal IDs currently held by this port-queue
+   * manager's pause tokens. Used by the host's `disconnectWindow` path
+   * to clear per-source pause-tracking entries scoped to the
+   * disconnecting window — multi-source attribution means the IPC
+   * queue may still hold the same terminal and we must not clobber
+   * that path's tracking.
+   */
+  getPausedTerminalIds(): IterableIterator<string> {
+    return this.pausedTerminals.keys();
+  }
+
   applyBackpressure(id: string, utilization: number): boolean {
     const highWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
     const currentBytes = this.queuedBytes.get(id) ?? 0;

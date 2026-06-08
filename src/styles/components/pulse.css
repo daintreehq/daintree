@@ -50,6 +50,19 @@
   background: var(--pulse-missed-bg, var(--theme-status-danger));
 }
 
+/* Forced-colors shape cue: a child element painted with CanvasText whose size
+ * scales with the heat level, so the four levels stay distinguishable when the
+ * UA strips theme background colors (issue #9819). Display is none by default;
+ * the @media (forced-colors: active) block in src/index.css flips it to block.
+ * `position: absolute; inset: 0; margin: auto` centres the sized square. */
+.pulse-heat-cell-shape {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: none;
+  pointer-events: none;
+}
+
 /* Shape cue for the missed-day cell (P-Heat): a destructive-tier inset ring so
  * the streak-break signal survives colour-vision deficiency and never reads as
  * just another heat level. Inset box-shadow keeps the cell footprint identical

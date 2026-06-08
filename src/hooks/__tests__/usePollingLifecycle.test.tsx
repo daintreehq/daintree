@@ -423,4 +423,127 @@ describe("usePollingLifecycle", () => {
       expect(onProjectSwitch).not.toHaveBeenCalled();
     });
   });
+
+  describe("enabled gate (#10123)", () => {
+    function setupGatedHook(opts: {
+      enabled: boolean;
+      fetchFn?: (ctx: {
+        force: boolean;
+        fetchId: number;
+        isInvalidated: () => boolean;
+      }) => Promise<void>;
+      calculateNextInterval?: (ctx: { isVisible: boolean }) => number;
+    }) {
+      const fetchFn = opts.fetchFn ?? vi.fn().mockResolvedValue(undefined);
+      const calculateNextInterval = opts.calculateNextInterval ?? vi.fn(() => 30_000);
+      const hook = renderHook(
+        ({ enabled }: { enabled: boolean }) =>
+          usePollingLifecycle({ enabled, fetchFn, calculateNextInterval }),
+        { initialProps: { enabled: opts.enabled } }
+      );
+      return { hook, fetchFn, calculateNextInterval };
+    }
+
+    it("performs no initial fetch and registers no global listeners when disabled", async () => {
+      const addEventListenerSpy = vi.spyOn(document, "addEventListener");
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+
+      setupGatedHook({ enabled: false, fetchFn });
+
+      // Give any (incorrect) async fetch a chance to land before asserting.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(onSwitchMock).not.toHaveBeenCalled();
+      const visibilityCalls = addEventListenerSpy.mock.calls.filter(
+        ([event]) => event === "visibilitychange"
+      );
+      expect(visibilityCalls).toHaveLength(0);
+
+      addEventListenerSpy.mockRestore();
+    });
+
+    it("ignores global triggers while disabled", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      setupGatedHook({ enabled: false, fetchFn });
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it("still fetches on explicit refresh() but never arms the polling timer", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      const calculateNextInterval = vi.fn(() => 30_000);
+      const { hook } = setupGatedHook({ enabled: false, fetchFn, calculateNextInterval });
+
+      await act(async () => {
+        await hook.result.current.refresh({ force: true });
+      });
+
+      // The on-demand path stays functional…
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(fetchFn.mock.calls[0]?.[0]?.force).toBe(true);
+      // …but the reschedule tail is suppressed: scheduleNextPoll bails before
+      // computing an interval, so no background timer exists afterwards.
+      expect(calculateNextInterval).not.toHaveBeenCalled();
+    });
+
+    it("does not block sibling enabled consumers", async () => {
+      const disabledFetch = vi.fn().mockResolvedValue(undefined);
+      const enabledFetch = vi.fn().mockResolvedValue(undefined);
+      setupGatedHook({ enabled: false, fetchFn: disabledFetch });
+      setupHook({ fetchFn: enabledFetch });
+
+      await waitFor(() => {
+        expect(enabledFetch).toHaveBeenCalledTimes(1);
+      });
+      expect(disabledFetch).not.toHaveBeenCalled();
+    });
+
+    it("starts polling when enabled flips from false to true", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      const { hook } = setupGatedHook({ enabled: false, fetchFn });
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(fetchFn).not.toHaveBeenCalled();
+
+      hook.rerender({ enabled: true });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+      expect(onSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("tears down polling when enabled flips from true to false", async () => {
+      const projectSwitchCleanup = vi.fn();
+      onSwitchMock.mockReturnValue(projectSwitchCleanup);
+      const fetchFn = vi.fn().mockResolvedValue(undefined);
+      const { hook } = setupGatedHook({ enabled: true, fetchFn });
+
+      await waitFor(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(1);
+      });
+
+      hook.rerender({ enabled: false });
+
+      // Last subscriber left — the singleton listeners are torn down.
+      expect(projectSwitchCleanup).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+        await Promise.resolve();
+      });
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+  });
 });

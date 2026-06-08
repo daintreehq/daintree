@@ -86,6 +86,14 @@ export interface PortalCreatePayload {
    * default `persist:portal` partition is used.
    */
   partition?: string;
+  /**
+   * True when this create is the first half of a restore (create → bounds
+   * polling → show). Marks the tab as restoring in `PortalManager` so LRU
+   * eviction cannot reclaim it during the create→show window — `activeTabId`
+   * only protects it after `showTab()` completes. Background opens must omit
+   * this flag or they would be shielded from eviction indefinitely.
+   */
+  isRestore?: boolean;
 }
 
 export interface PortalShowPayload {

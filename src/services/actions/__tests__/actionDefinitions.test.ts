@@ -49,9 +49,6 @@ describe("createActionDefinitions", () => {
     expect(actions.has("forge.openIssue")).toBe(true);
     expect(actions.has("forge.assignIssue")).toBe(true);
     expect(actions.has("forge.validateToken")).toBe(true);
-    // Aliases retire in the next release.
-    expect(actions.has("github.openIssues")).toBe(true);
-    expect(actions.has("github.openPRs")).toBe(true);
     expect(actions.has("app.developerMode.set")).toBe(true);
     expect(actions.has("portal.openLaunchpad")).toBe(true);
     expect(actions.has("browser.navigate")).toBe(true);
@@ -83,6 +80,24 @@ describe("createActionDefinitions", () => {
       .slice()
       .sort();
     expect(missing).toEqual([]);
+  });
+
+  it("does not register the removed github.* one-release aliases", async () => {
+    const actions = await createRegistry();
+
+    // These forwarded to forge.* for one release and have since been removed.
+    // Guards against accidental re-registration (which the round-trip test above,
+    // driven by BUILT_IN_ACTION_IDS, would not catch on its own).
+    const removedAliases = [
+      "github.openIssues",
+      "github.openPRs",
+      "github.openCommits",
+      "github.openIssue",
+      "github.assignIssue",
+      "github.validateToken",
+    ];
+    const stillRegistered = removedAliases.filter((id) => actions.has(id as any));
+    expect(stillRegistered).toEqual([]);
   });
 
   it("registers action.repeatLast with nonRepeatable set", async () => {

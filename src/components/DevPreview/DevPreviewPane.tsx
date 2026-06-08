@@ -10,6 +10,7 @@ import {
   Play,
   RotateCw,
   Settings,
+  WifiOff,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -71,7 +72,11 @@ import { getDevPreviewWebContents, buildEmulationParams } from "./viewportEmulat
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { loadWebviewUrl } from "./loadWebviewUrl";
-import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
+import {
+  useDevPreviewLoadLifecycle,
+  webviewLoadErrorHeading,
+  type SessionStorageEntry,
+} from "./useDevPreviewLoadLifecycle";
 
 import { BlockedNavBanner, blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
@@ -221,6 +226,35 @@ function DevPreviewStuckBanner({
           <BannerOverflowMenu actions={overflowActions} ariaLabel="More dev server options" />
         ) : undefined
       }
+    />
+  );
+}
+
+/**
+ * Surfaces a dead Vite HMR socket (#9975). The dev server keeps logging
+ * `[vite] hmr update` on every save — which fires the "Compiling" phase and
+ * reads as "live reload is working" — but with a custom `server.hmr.*` config
+ * the browser's socket connects off the proxy origin or fails outright, so
+ * the preview is silently stale. `useDevPreviewConsoleCapture` catches Vite's
+ * own failure log and flips `hmrDead`; this is a Tier 3 running-state failure
+ * with a pane-local recovery (reload reconnects the socket).
+ */
+function DevPreviewHmrDeadBanner({ onReload }: { onReload: () => void }) {
+  return (
+    <InlineStatusBanner
+      icon={WifiOff}
+      severity="error"
+      title="Live reload disconnected"
+      description="Vite's hot-reload socket dropped, so saved changes won't show up in the preview. Reload to reconnect, or drop the custom server.hmr.* config if it keeps happening."
+      role="alert"
+      ariaLive="assertive"
+      action={{
+        id: "dev-preview-hmr-dead-reload",
+        label: "Reload",
+        icon: RotateCw,
+        variant: "primary",
+        onClick: onReload,
+      }}
     />
   );
 }
@@ -383,7 +417,14 @@ export function DevPreviewPane({
       if (certCopyTimerRef.current) clearTimeout(certCopyTimerRef.current);
     };
   }, []);
-  const lastSetUrlRef = useRef<string>("");
+  // Seed `lastSetUrlRef` to the mount URL so the isWebviewReady navigation
+  // effect does not fire a redundant loadURL on first ready (#9940). The
+  // hard-restart path resets this to "" explicitly when unconfigured.
+  const lastSetUrlRef = useRef<string>(history.present);
+  // Seed value for the webview `src` attribute, captured once at mount. Never
+  // re-bound to navigation state — Electron's SrcAttribute observer would turn
+  // each guest navigation into a redundant full reload (#9940).
+  const [webviewSeedUrl, setWebviewSeedUrl] = useState(history.present);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   // Generation token to invalidate in-flight async scroll captures when the
   // user clears scroll state via hard restart. A pending executeJavaScript
@@ -421,6 +462,7 @@ export function DevPreviewPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
+  const effectiveWebviewSeedUrl = webviewSeedUrl || currentUrl;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const isUnconfigured =
@@ -436,6 +478,12 @@ export function DevPreviewPane({
     status === "running" &&
     (proxyOrigin === undefined ||
       (typeof proxyOrigin === "string" && !!currentUrl && !currentUrl.startsWith(proxyOrigin)));
+
+  useEffect(() => {
+    if (!webviewSeedUrl && currentUrl) {
+      setWebviewSeedUrl(currentUrl);
+    }
+  }, [currentUrl, webviewSeedUrl]);
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
@@ -577,6 +625,7 @@ export function DevPreviewPane({
     if (!isUnconfigured) return;
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
+    setWebviewSeedUrl("");
     lastSetUrlRef.current = "";
     setWebviewLoadError(null);
     clearRetryState();
@@ -618,12 +667,15 @@ export function DevPreviewPane({
       }
       webviewRef.current = node;
       if (node) {
-        lastSetUrlRef.current = "";
+        // Match the `src` seed so the isWebviewReady navigation effect does not
+        // re-load the same URL on first ready (#9940). The isUnconfigured effect
+        // resets this to "" afterward when there is no dev command.
+        lastSetUrlRef.current = effectiveWebviewSeedUrl;
         clearRetryState();
       }
       setWebviewElement(node);
     },
-    [id, setDevPreviewScrollPosition, clearRetryState]
+    [id, setDevPreviewScrollPosition, clearRetryState, effectiveWebviewSeedUrl]
   );
 
   useEffect(() => {
@@ -669,8 +721,11 @@ export function DevPreviewPane({
     if (proxyOrigin === undefined) return;
     const nextUrl = url ? computeDevServerUrl(url, currentUrl, proxyOrigin) : false;
     if (nextUrl !== false) {
+      // Push history only; the imperative navigation effect (keyed on currentUrl
+      // vs lastSetUrlRef) performs the actual loadURL. Pre-setting lastSetUrlRef
+      // here would make that effect skip — which used to be fine when `src`
+      // re-bound to currentUrl, but src is now seed-only (#9940).
       setHistory((prev) => pushBrowserHistory(prev, nextUrl));
-      lastSetUrlRef.current = nextUrl;
     }
   }, [url, currentUrl, isUnconfigured, proxyOrigin]);
 
@@ -692,8 +747,9 @@ export function DevPreviewPane({
   const handleNavigate = useCallback((rawUrl: string) => {
     const normalized = normalizeBrowserUrl(rawUrl);
     if (normalized.url) {
+      // Push history only; the imperative navigation effect drives loadURL now
+      // that `src` is seed-only (#9940). Mirrors handleBack/handleForward.
       setHistory((prev) => pushBrowserHistory(prev, normalized.url!));
-      lastSetUrlRef.current = normalized.url;
     }
   }, []);
 
@@ -887,6 +943,7 @@ export function DevPreviewPane({
     clearLoadTimers();
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
+    setWebviewSeedUrl("");
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsSlowLoad(false);
@@ -1167,12 +1224,13 @@ export function DevPreviewPane({
         try {
           const loadedUrl = webviewElement.getURL();
           if (loadedUrl !== currentUrl) {
-            loadWebviewUrl(webviewElement, currentUrl, () => {
-              webviewElement.src = currentUrl;
-            });
+            // Imperative load only — never write `.src`, which would re-trigger
+            // Electron's SrcAttribute observer into a redundant reload (#9940).
+            loadWebviewUrl(webviewElement, currentUrl);
           }
         } catch {
-          webviewElement.src = currentUrl;
+          // getURL() threw — the webview is detaching/unready. The ready
+          // lifecycle re-drives the load on recovery; don't write `.src` here.
         }
       }
     }
@@ -1181,7 +1239,20 @@ export function DevPreviewPane({
   // Wire the guest-page CDP console capture into the renderer store. The hook
   // owns start/stop keyed on the ready/eviction lifecycle; here we only mirror
   // the live webContentsId so lazy object inspection can reach the right guest.
-  useDevPreviewConsoleCapture(id, webviewElement, isWebviewReady, isEvicted);
+  const { hmrDead, resetHmrDead } = useDevPreviewConsoleCapture(
+    id,
+    webviewElement,
+    isWebviewReady,
+    isEvicted
+  );
+
+  // A dead HMR socket is a per-load condition. Webview reloads/navigations
+  // clear it inside the hook (the guest execution context is torn down), so
+  // here we only need to cover the dev-server lifecycle: clear the warning
+  // whenever the server leaves the running state (restart/stop/crash).
+  useEffect(() => {
+    if (status !== "running") resetHmrDead();
+  }, [status, resetHmrDead]);
 
   useEffect(() => {
     if (!isWebviewReady || isEvicted) {
@@ -1460,6 +1531,8 @@ export function DevPreviewPane({
             onRemedy={handleStuckRemedy}
           />
         )}
+
+        {status === "running" && hmrDead && <DevPreviewHmrDeadBanner onReload={handleReload} />}
 
         <div
           className={cn(
@@ -1751,20 +1824,7 @@ export function DevPreviewPane({
                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
                       <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                       <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                        {webviewLoadError.code === "timeout"
-                          ? "Page load timed out"
-                          : webviewLoadError.code === "aborted"
-                            ? "Load cancelled"
-                            : webviewLoadError.code === "connection_refused"
-                              ? "Dev server unreachable"
-                              : webviewLoadError.code === "name_not_resolved"
-                                ? "Couldn't resolve address"
-                                : webviewLoadError.code === "internet_disconnected"
-                                  ? "No internet connection"
-                                  : webviewLoadError.code === "cert" ||
-                                      webviewLoadError.code === "ssl_protocol"
-                                    ? "Certificate Error"
-                                    : "Page load failed"}
+                        {webviewLoadErrorHeading(webviewLoadError.code)}
                       </h3>
                       <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                         {webviewLoadError.message}
@@ -1787,7 +1847,8 @@ export function DevPreviewPane({
                             </span>
                           </Button>
                         )}
-                        {webviewLoadError.code === "connection_refused" ? (
+                        {webviewLoadError.code === "connection_refused" ||
+                        webviewLoadError.code === "proxy_error" ? (
                           <>
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -1974,7 +2035,8 @@ export function DevPreviewPane({
                   >
                     <webview
                       ref={setWebviewNode}
-                      src={currentUrl}
+                      // Seed-only: never re-bind to navigation state (#9940).
+                      src={effectiveWebviewSeedUrl}
                       partition={webviewPartition}
                       // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                       allowpopups=""

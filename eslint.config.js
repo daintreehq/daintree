@@ -214,6 +214,18 @@ export default tseslint.config(
           message:
             "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
         },
+        {
+          // why: values written via Sentry scope setters land in
+          // event.tags/user/contexts. sanitizeEvent deep-walks those fields,
+          // but centralizing setter call sites in TelemetryService.ts keeps
+          // every injection point reviewable against the scrubbing contract.
+          // Matches member calls (Sentry.setTag, sentryModule?.setTag,
+          // scope.setUser) and bare named-import calls. See #10047.
+          selector:
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+          message:
+            "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
+        },
       ],
     },
   },
@@ -320,6 +332,14 @@ export default tseslint.config(
             "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
           message:
             "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
+        },
+        {
+          // Mirrored from the global block (flat-config last-write-wins).
+          // See #10047.
+          selector:
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+          message:
+            "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
       ],
     },
@@ -539,6 +559,30 @@ export default tseslint.config(
             "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(flatten|format)$/]:matches([callee.object.property.name=/^(error|err)$/], [callee.object.name=/^(error|err)$/])",
           message:
             "Use z.flattenError(err) (shape-consuming) or z.prettifyError(err) (log-only) instead of deprecated ZodError instance methods .flatten() / .format(). See #8566.",
+        },
+        {
+          // Mirrored from the global block (flat-config last-write-wins).
+          // See #10047.
+          selector:
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+          message:
+            "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
+        },
+        {
+          // why: passive eventKinds (uiFeedback, workingPulse, settings) resolve
+          // to priority:"low" via resolveEventPolicyDefaults() when the caller
+          // omits priority. Combined with transient:true this is a silent no-op:
+          // low priority skips the toast and transient skips the inbox, so the
+          // notification fires nowhere. Add an explicit priority:"high" to
+          // override the passive policy default. See #10051.
+          // NOTE: the eventKind `:has()` clause omits the leading `>` before the
+          // `context` property for the same esquery reason as the
+          // notify-event-kind rule above; the transient/priority guards keep
+          // their `>` since they're single-level top-of-payload properties.
+          selector:
+            "CallExpression:matches([callee.name=/^(notify|addNotification)$/], [callee.property.name=/^(notify|addNotification)$/]) > ObjectExpression:has(> Property[key.name='transient'][value.value=true]):has(Property[key.name='context'] > ObjectExpression > Property[key.name='eventKind'][value.value=/^(uiFeedback|workingPulse|settings)$/]):not(:has(> Property[key.name='priority']))",
+          message:
+            'Passive eventKind (uiFeedback/workingPulse/settings) + transient:true is a silent no-op — priority resolves to "low" (inbox-only) and transient skips the inbox, so the notification fires nowhere. Add an explicit priority:"high" to override the policy default, or annotate with `// eslint-disable-next-line no-restricted-syntax -- notify-passive-transient: ok` for a deliberate exception. See #10051.',
         },
       ],
     },
@@ -800,6 +844,14 @@ export default tseslint.config(
           message:
             "Don't register IPC handlers with the legacy typedHandle* helpers from electron/ipc/utils. Use `defineIpcNamespace` from electron/ipc/define instead — it gives a single declarative surface for routing, validation, and error handling. See #8577.",
         },
+        {
+          // Mirrored from the global block (flat-config last-write-wins).
+          // See #10047.
+          selector:
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+          message:
+            "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
+        },
       ],
     },
   },
@@ -852,6 +904,14 @@ export default tseslint.config(
             "AssignmentExpression[left.type='MemberExpression'][left.object.name='autoUpdater']:matches([left.property.name='channel'], [left.property.value='channel'])",
           message:
             "Don't assign to autoUpdater.channel directly — the setter unconditionally flips allowDowngrade=true, silently breaking the stable-channel rollback guard from #7573. Route channel changes through AutoUpdaterService (setFeedURL + explicit allowDowngrade). See #9123.",
+        },
+        {
+          // Mirrored from the global block (flat-config last-write-wins).
+          // See #10047.
+          selector:
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+          message:
+            "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
       ],
     },
@@ -980,6 +1040,14 @@ export default tseslint.config(
             "CallExpression[callee.name=/^(typedHandle|typedHandleWithContext|typedHandleValidated|typedHandleWithContextValidated)$/]",
           message:
             "Don't register IPC handlers with the legacy typedHandle* helpers from electron/ipc/utils. Use `defineIpcNamespace` from electron/ipc/define instead — it gives a single declarative surface for routing, validation, and error handling. See #8577.",
+        },
+        {
+          // Mirrored from the global block (flat-config last-write-wins).
+          // See #10047.
+          selector:
+            "CallExpression:matches([callee.type='MemberExpression'][callee.property.name=/^(setTag|setUser|setContext)$/], [callee.type='Identifier'][callee.name=/^(setTag|setUser|setContext)$/])",
+          message:
+            "Sentry scope setters (setTag/setUser/setContext) are centralized in TelemetryService.ts so every value entering event.tags/user/contexts stays within the scrubbing contract. Annotate a legitimate site with `// eslint-disable-next-line no-restricted-syntax -- sentry-scope-setter: ok` plus a rationale. See #10047.",
         },
       ],
     },

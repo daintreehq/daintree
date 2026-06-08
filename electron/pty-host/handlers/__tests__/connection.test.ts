@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createConnectionHandlers } from "../connection.js";
 import { SharedRingBuffer } from "../../../../shared/utils/SharedRingBuffer.js";
+import { computePoolEnvHash } from "../../../services/pty/ptyPoolEnvHash.js";
 import type { HostContext } from "../types.js";
 
 function makeCtx(stateRef: {
@@ -55,6 +56,7 @@ function makeCtx(stateRef: {
     tryReplayAndResume: vi.fn(),
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
+    getPausedDurationsSnapshot: vi.fn(() => []),
   };
 }
 
@@ -125,5 +127,300 @@ describe("init-buffers handler", () => {
 
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("set-active-project pool warming (#9774)", () => {
+  interface FakePool {
+    drainAndRefill: ReturnType<typeof vi.fn>;
+    warmForKey: ReturnType<typeof vi.fn>;
+    getMaxEntries: () => number;
+    getMaxPoolSize: () => number;
+  }
+
+  function makePoolCtx(pool: FakePool) {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    ctx.ptyPool = pool as unknown as HostContext["ptyPool"];
+    return ctx;
+  }
+
+  function makeFakePool(
+    overrides: Partial<FakePool> = {},
+    drainResult: Promise<void> = Promise.resolve()
+  ): FakePool {
+    return {
+      drainAndRefill: vi.fn(() => drainResult),
+      warmForKey: vi.fn(),
+      getMaxEntries: () => 8,
+      getMaxPoolSize: () => 2,
+      ...overrides,
+    };
+  }
+
+  it("warms each restored panel cwd with the env-empty hash after drain resolves", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a", "/repo/wt-b"],
+    });
+
+    expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
+    // Warms fire only after the drain promise resolves.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(2);
+    expect(pool.warmForKey.mock.calls[0]?.[0]).toBe("/repo/wt-a");
+    expect(pool.warmForKey.mock.calls[1]?.[0]).toBe("/repo/wt-b");
+    // Each warm uses the env-empty hash (3rd arg) matching plain-shell acquires.
+    for (const call of pool.warmForKey.mock.calls) {
+      expect(call[1]).toBeUndefined();
+      expect(typeof call[2]).toBe("string");
+      expect(call[2]).toBe(pool.warmForKey.mock.calls[0]?.[2]);
+    }
+  });
+
+  it("does not warm panel cwds before the root drain resolves", async () => {
+    let resolveDrain!: () => void;
+    const deferred = new Promise<void>((resolve) => {
+      resolveDrain = resolve;
+    });
+    const pool = makeFakePool({}, deferred);
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+    });
+
+    // Drain is in flight — no warms yet.
+    await Promise.resolve();
+    expect(pool.warmForKey).not.toHaveBeenCalled();
+
+    resolveDrain();
+    await deferred;
+    await Promise.resolve();
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps warmed panel cwds so high-priority entries aren't evicted (#9774)", async () => {
+    // maxEntries=8, poolSize=2 → root takes 2, leaving room for 3 panel keys.
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/wt/a", "/wt/b", "/wt/c", "/wt/d", "/wt/e"],
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Only the first 3 (highest priority) cwds are warmed; lower-priority
+    // ones are dropped rather than evicting the earlier warms.
+    expect(pool.warmForKey).toHaveBeenCalledTimes(3);
+    expect(pool.warmForKey.mock.calls.map((c) => c[0])).toEqual(["/wt/a", "/wt/b", "/wt/c"]);
+  });
+
+  it("skips warming when no pool is present (e.g. Windows)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    // ctx.ptyPool stays null (default) — mirrors the Windows pool-disabled path.
+    const handlers = createConnectionHandlers(ctx);
+
+    expect(() =>
+      handlers["set-active-project"]({
+        windowId: 1,
+        projectId: "proj-a",
+        projectPath: "/repo",
+        panelCwds: ["/repo/wt-a"],
+      })
+    ).not.toThrow();
+    expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
+  });
+});
+
+describe("set-active-project non-empty envHash warming (#9810)", () => {
+  interface FakePool {
+    drainAndRefill: ReturnType<typeof vi.fn>;
+    warmForKey: ReturnType<typeof vi.fn>;
+    getMaxEntries: () => number;
+    getMaxPoolSize: () => number;
+  }
+
+  function makePoolCtx(pool: FakePool) {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    ctx.ptyPool = pool as unknown as HostContext["ptyPool"];
+    return ctx;
+  }
+
+  function makeFakePool(
+    overrides: Partial<FakePool> = {},
+    drainResult: Promise<void> = Promise.resolve()
+  ): FakePool {
+    return {
+      drainAndRefill: vi.fn(() => drainResult),
+      warmForKey: vi.fn(),
+      getMaxEntries: () => 8,
+      getMaxPoolSize: () => 2,
+      ...overrides,
+    };
+  }
+
+  it("warms each restored panel cwd with the project env hash when projectEnv is non-empty", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    const projectEnv = { MY_API_KEY: "x", NODE_ENV: "production" };
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a", "/repo/wt-b"],
+      projectEnv,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(2);
+    // The non-empty env is passed as callerEnv so the warmed slot can serve
+    // acquires that carry the same merged env.
+    expect(pool.warmForKey.mock.calls[0]?.[0]).toBe("/repo/wt-a");
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toEqual(projectEnv);
+    expect(pool.warmForKey.mock.calls[1]?.[0]).toBe("/repo/wt-b");
+    expect(pool.warmForKey.mock.calls[1]?.[1]).toEqual(projectEnv);
+    // Both warms use the SAME envHash — it was computed once from projectEnv
+    // and is reused for every panel cwd (one envHash, many cwds).
+    const envHashA = pool.warmForKey.mock.calls[0]?.[2];
+    const envHashB = pool.warmForKey.mock.calls[1]?.[2];
+    expect(typeof envHashA).toBe("string");
+    expect(envHashA).not.toBe("env-empty");
+    expect(envHashA).toBe(envHashB);
+    // Lock down the hash VALUE: the warm must produce the exact same hash
+    // `acquireByKey` will look up at spawn time, so any drift in
+    // `computePoolEnvHash` (forgetting `filterSensitiveOnly`, shadowing the
+    // import, etc.) is caught here.
+    expect(envHashA).toBe(computePoolEnvHash(projectEnv));
+  });
+
+  it("falls back to env-empty warm (callerEnv undefined) when projectEnv is null", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: null,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+
+  it("falls back to env-empty warm when projectEnv is undefined (back-compat with #9774 callers)", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      // projectEnv omitted — must match pre-#9810 behaviour
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+
+  it("falls back to env-empty warm when projectEnv is an empty object (matches acquirePtyProcess contract)", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: {},
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // `{}` is filtered to nothing by computePoolEnvHash, so the warm collapses
+    // to the env-empty path — no point burning a slot on a hash that
+    // `acquireByKey` would also produce for the no-caller-env case.
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
+  });
+
+  it("collapses to env-empty warm when every projectEnv key is filtered by computePoolEnvHash (#9810)", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    // SHLVL, PWD, OLDPWD, _ are VOLATILE_ENV_KEYS — excluded from the hash.
+    // DAINTREE_PANE_ID/CWD/PROJECT_ID/WORKTREE_ID are auto-injected — also
+    // excluded. So a payload consisting only of those keys hashes to
+    // env-empty, and the warm must collapse to the env-empty path (callerEnv
+    // undefined) so the slot the next acquire looks up is the right one.
+    const allFilteredEnv = {
+      SHLVL: "1",
+      PWD: "/foo",
+      OLDPWD: "/bar",
+      _: "/usr/bin/env",
+      DAINTREE_PANE_ID: "p-1",
+      DAINTREE_CWD: "/repo",
+      DAINTREE_PROJECT_ID: "proj-a",
+      DAINTREE_WORKTREE_ID: "wt-1",
+    };
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: allFilteredEnv,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
+    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
+    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
   });
 });

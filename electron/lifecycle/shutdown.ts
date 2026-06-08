@@ -1,3 +1,4 @@
+import { flushCompileCache } from "node:module";
 import { app, dialog } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
@@ -45,9 +46,11 @@ import {
   getWindowsStoreNotifierServiceRef,
   setWindowsStoreNotifierServiceRef,
 } from "../window/serviceRefs.js";
+import { haltDeferredQueue } from "../window/deferredInitQueue.js";
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
+import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
 import { CLEANUP_TIMEOUT_MS } from "./shutdownConfig.js";
 
@@ -117,6 +120,15 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
 
     isQuitting = true;
 
+    // Halt the deferred init queue before anything yields to the event loop —
+    // a pending setImmediate drain step could otherwise re-initialize services
+    // the cleanup chain below is about to tear down (issue #9881). Placed
+    // after the quit-confirmation dialog deliberately: halting is permanent,
+    // so a cancelled quit must never reach it (an abandoned drain chain cannot
+    // be resumed). Tasks that start during the dialog run against a fully live
+    // app and are torn down by the cleanup chain like any other service.
+    haltDeferredQueue();
+
     // Eager snapshot at quit-intent so the next launch has a post-quit-intent
     // backup regardless of which branch of the cleanup race wins. Without this,
     // a hard-timeout dirty exit skips cleanupOnExit() entirely and leaves the
@@ -127,6 +139,18 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       getCrashRecoveryService().takeBackup();
     } catch (err) {
       console.warn("[MAIN] Eager takeBackup at quit-intent failed:", err);
+    }
+
+    // Persist compile-cache entries on clean quit. Synchronous and cheap (one
+    // fs write), placed here before the async graceful-shutdown chain so it
+    // can't race the cleanup timeout. We've already committed to quitting
+    // (isQuitting = true), so this never fires on a cancelled quit dialog.
+    try {
+      if (typeof flushCompileCache === "function") {
+        flushCompileCache();
+      }
+    } catch (err) {
+      console.warn("[MAIN] flushCompileCache at quit failed:", err);
     }
 
     console.log("[MAIN] Starting graceful shutdown...");
@@ -152,16 +176,16 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           const captured = results.filter((r) => r.agentSessionId);
           if (captured.length === 0) continue;
 
-          const state = await projectStore.getProjectState(projectIds[i]);
-          if (!state?.terminals) continue;
-
-          for (const result of captured) {
-            const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
-            if (snapshot) {
-              snapshot.agentSessionId = result.agentSessionId ?? undefined;
+          await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
+            if (!state?.terminals) return null;
+            for (const result of captured) {
+              const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
+              if (snapshot) {
+                snapshot.agentSessionId = result.agentSessionId ?? undefined;
+              }
             }
-          }
-          await projectStore.saveProjectState(projectIds[i], state);
+            return state;
+          });
         }
       } catch (error) {
         console.warn("[MAIN] Graceful agent shutdown incomplete:", error);
@@ -218,6 +242,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           // Lazy-imported: the module only loads if a forge handler ran.
           import("../services/forge/forgeAuditService.js")
             .then(({ forgeAuditService }) => forgeAuditService.flushNow())
+            .catch(() => {}),
+          // Mirror for the durable run-history ring (#9949). Same unref'd 2s
+          // debounce, same loss-on-quit if not drained explicitly.
+          import("../services/runHistory/runHistoryService.js")
+            .then(({ runHistoryLog }) => runHistoryLog.flushNow())
             .catch(() => {}),
           // Mirror for the plugin-MCP inbound audit ring (#9234). Same unref'd
           // 2s debounce, same loss-on-quit if not drained explicitly.
@@ -485,6 +514,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
+        // Flush the perf trace (if --trace was active) while the GPU/renderer
+        // child processes are still alive. app.exit() bypasses will-quit, so
+        // this is the only reliable point to stop tracing before exit; no-op
+        // for normal runs. Awaited so the trace file isn't truncated.
+        await stopPerformanceTraceIfActive();
         app.exit(0);
       })
       .catch(async (error) => {
@@ -502,6 +536,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         } catch (err) {
           console.warn("[MAIN] closeTelemetry failed:", err);
         }
+        // Best-effort trace flush on the error path too — a partial trace is
+        // still useful, and the call is a no-op when tracing is off.
+        await stopPerformanceTraceIfActive();
         app.exit(1);
       });
   });

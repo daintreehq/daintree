@@ -140,6 +140,26 @@ describe("McpActivityStrip", () => {
     expect(screen.getByText("beta-tool")).toBeTruthy();
   });
 
+  it("labels the unassociated group so null-turn calls are explained (#10067)", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "no-turn-tool", helpSessionId: "session-a" }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    expect(await screen.findByText("no-turn-tool")).toBeTruthy();
+    expect(screen.getByText(/not tied to a turn/i)).toBeTruthy();
+  });
+
+  it("omits the unassociated label when every call has a turn (#10067)", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({ id: "1", toolId: "turn-tool", helpSessionId: "session-a", turnId: "t1" }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    expect(await screen.findByText("turn-tool")).toBeTruthy();
+    expect(screen.queryByText(/not tied to a turn/i)).toBeNull();
+  });
+
   it("filters out records from other sessions", async () => {
     getAuditRecords.mockResolvedValue([
       makeRecord({ id: "1", toolId: "mine", helpSessionId: "session-a" }),
@@ -274,6 +294,43 @@ describe("McpActivityStrip", () => {
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
     const row = await screen.findByRole("button", { name: /legacy\.call/ });
     fireEvent.click(row);
+    expect(screen.getByText(/no output recorded for this call/i)).toBeTruthy();
+  });
+
+  it("renders a Retry-in-Ns hint on rate_limited records carrying resultMeta (#10014)", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({
+        id: "1",
+        toolId: "throttled.call",
+        result: "rate_limited",
+        resultSummary: undefined,
+        resultMeta: { retryAfter: 5 },
+      }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const row = await screen.findByRole("button", { name: /throttled\.call/ });
+    fireEvent.click(row);
+    expect(screen.getByText("Rate limited")).toBeTruthy();
+    expect(screen.getByText("Retry in 5s")).toBeTruthy();
+    // The no-output fallback must NOT appear when resultMeta carries the hint.
+    expect(screen.queryByText(/no output recorded for this call/i)).toBeNull();
+  });
+
+  it("falls back to the no-output note for rate_limited records missing resultMeta (legacy rows)", async () => {
+    getAuditRecords.mockResolvedValue([
+      makeRecord({
+        id: "1",
+        toolId: "legacy.throttled",
+        result: "rate_limited",
+        resultSummary: undefined,
+      }),
+    ]);
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const row = await screen.findByRole("button", { name: /legacy\.throttled/ });
+    fireEvent.click(row);
+    expect(screen.queryByText(/retry in \d+s/i)).toBeNull();
     expect(screen.getByText(/no output recorded for this call/i)).toBeTruthy();
   });
 });

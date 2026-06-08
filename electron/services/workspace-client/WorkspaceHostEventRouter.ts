@@ -3,6 +3,7 @@ import { events } from "../events.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
+import { clearWslGitEntry } from "../../store.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 
@@ -105,6 +106,48 @@ export class WorkspaceHostEventRouter {
         events.emit("sys:worktree:remove", {
           worktreeId: event.worktreeId,
           timestamp: Date.now(),
+        });
+        break;
+
+      case "clear-wsl-git-opt-in": {
+        // Host detected that a WSL git opt-in entry no longer maps to a
+        // live worktree — either via the per-removal `removeMonitor`
+        // chokepoint or the bulk self-heal pass at the end of `loadProject`
+        // (#9926). Fire-and-forget: `clearWslGitEntry` is a batched
+        // read-mutate-set (electron-store v11 forbids `set(undefined)` and
+        // re-serializes on every set) and is a no-op if the key is missing,
+        // so a duplicate delivery or a host crash mid-clear can't corrupt
+        // the persisted map. The host's `worktreeId` is already normalized
+        // via `normalizeWslKeyPath` (lowercase on win32, `path.resolve`
+        // elsewhere) so it matches the persisted key shape.
+        if (typeof event.worktreeId === "string" && event.worktreeId) {
+          clearWslGitEntry(event.worktreeId);
+        }
+        break;
+      }
+
+      case "worktree-activated":
+        // Host-originated active-worktree change (#9945). The per-view
+        // renderer consumes this via the MessagePort path (see
+        // `DIRECT_RENDERER_EVENTS` in `electron/workspace-host.ts`) so no
+        // `sendToEntryWindows` hop is needed — the new `WorktreeStoreContext`
+        // does not subscribe to the legacy `window.electron.worktree.onActivated`
+        // IPC channel after the #9327276d7 per-view migration. Mirror to the
+        // plugin bus so `PluginService.subscribeWorktreeEvent(pluginId,
+        // "worktree-activated", ...)` still receives host-originated
+        // activations on the same payload shape.
+        //
+        // Respect the `silent` flag propagated from the originating
+        // `set-active` IPC request. PR #3603's silent contract suppresses
+        // the legacy `CHANNELS.WORKTREE_ACTIVATED` echo and the
+        // `WorkspaceClient`-level plugin-bus emit; this router case must
+        // mirror that suppression or plugin subscribers to
+        // `onDidChangeActiveWorktree` would receive notifications for
+        // activations the caller explicitly marked silent.
+        if (event.silent) break;
+        this.emit("worktree-activated", {
+          worktreeId: event.worktreeId,
+          projectPath: entry.projectPath,
         });
         break;
 

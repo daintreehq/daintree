@@ -163,6 +163,18 @@ export class WindowRegistry {
 
     ctx.cleanup.dispose();
 
+    // Revoke help-session tokens bound to this closing window so a multi-
+    // window close graceful-kills the PTY and writes a resume id to
+    // PendingHelpHibernationStore — otherwise the orphaned PTY keeps
+    // dispatching MCP calls and the user can't resume (#10053). Mirrors the
+    // eviction-hook wire-up in main.ts; dynamic import breaks the runtime
+    // cycle since HelpSessionService already imports `type { WindowRegistry }`.
+    import("../services/HelpSessionService.js")
+      .then(({ helpSessionService }) => helpSessionService.revokeByWindowId(windowId))
+      .catch((err) => {
+        console.warn("[WindowRegistry] revokeByWindowId failed during unregister:", err);
+      });
+
     this.webContentsIndex.delete(ctx.webContentsId);
     const appViewWcIds = this.appViewWebContentsIds.get(windowId);
     if (appViewWcIds) {

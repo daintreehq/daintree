@@ -117,6 +117,11 @@ export function useDevServer({
   turbopackEnabled,
 }: UseDevServerOptions): UseDevServerReturn {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
+  // Non-null once the user has switched projects in this session (#9859). A
+  // restored-stopped panel must keep its restart CTA on cold launch (#9094), but
+  // auto-start on the first live switch to a project. `lastSwitchId` is the
+  // provenance signal: null = cold launch, UUID = reached via an explicit switch.
+  const lastSwitchId = useProjectStore((state) => state.lastSwitchId);
   const [status, setStatus] = useState<DevPreviewStatus>("stopped");
   const [url, setUrl] = useState<string | null>(null);
   const [terminalId, setTerminalId] = useState<string | null>(null);
@@ -458,7 +463,11 @@ export function useDevServer({
     // "restored-stopped" panel must surface its restart CTA, not silently
     // relaunch the dev server the user closed Daintree with (#9094).
     if (!initialStateResolved) return;
-    if (status === "restored-stopped") return;
+    // A restored-stopped panel surfaces its restart CTA on cold launch
+    // (lastSwitchId === null), but auto-starts on the first live switch to the
+    // project (#9859) — the user reactivating a project expects its dev server
+    // back, unlike a fresh app launch where silent respawn is wrong (#9094).
+    if (status === "restored-stopped" && lastSwitchId === null) return;
 
     const configKey = buildEnsureConfigKey({
       projectId: currentProjectId,
@@ -495,6 +504,7 @@ export function useDevServer({
     ensureLatestConfig,
     initialStateResolved,
     status,
+    lastSwitchId,
   ]);
 
   // Staged stuck-start escalation (#8276, retuned #9099). Replaces the

@@ -1,13 +1,18 @@
 import { z } from "zod";
 import { events } from "../events.js";
 import { nextAgentState, getStateChangeTimestamp, type AgentEvent } from "../AgentStateMachine.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 // AgentState type used implicitly via TerminalInfo.agentState
 import {
   AgentStateChangedSchema,
+  AgentStateTransitionDroppedSchema,
   AgentCompletedSchema,
   AgentKilledSchema,
   type AgentStateChangeTrigger,
+  type AgentStateTransitionDropReason,
 } from "../../schemas/agent.js";
+
+import type { AgentActivityObservationResult } from "./AgentActivityTemperature.js";
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
@@ -65,6 +70,53 @@ function getLiveAgentId(terminal: TerminalInfo): string | undefined {
  */
 export class AgentStateService {
   private headlineGenerator = new ActivityHeadlineGenerator();
+
+  /**
+   * Best-effort diagnostic emit. Wraps `events.emit` in try/catch — diagnostics
+   * must never break detection (lesson #1317). Failures are logged but do not
+   * propagate. Returns true on a successful, schema-valid emit.
+   */
+  private emitTransitionDropped(
+    terminal: TerminalInfo,
+    payload: {
+      outcome: AgentStateTransitionDropReason;
+      currentState: AgentState;
+      attemptedState?: AgentState;
+      trigger?: AgentStateChangeTrigger;
+      confidence?: number;
+      cwd?: string;
+      spawnedAt?: number;
+      terminalSpawnedAt?: number;
+      reason?: string;
+      validationErrors?: string[];
+    }
+  ): void {
+    const effectiveAgentId = terminal.detectedAgentId ?? terminal.launchAgentId;
+    const dropPayload = {
+      terminalId: terminal.id,
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
+      ...(terminal.worktreeId ? { worktreeId: terminal.worktreeId } : {}),
+      ...(terminal.traceId ? { traceId: terminal.traceId } : {}),
+      timestamp: Date.now(),
+      ...payload,
+    };
+    const validated = AgentStateTransitionDroppedSchema.safeParse(dropPayload);
+    if (!validated.success) {
+      console.error(
+        "[AgentStateService] Invalid agent:state-transition-dropped payload:",
+        z.prettifyError(validated.error)
+      );
+      return;
+    }
+    try {
+      events.emit("agent:state-transition-dropped", validated.data);
+    } catch (err) {
+      console.error(
+        "[AgentStateService] Failed to emit agent:state-transition-dropped:",
+        formatErrorMessage(err, "unknown emit failure")
+      );
+    }
+  }
 
   private normalizeConfidence(confidence: number): number {
     if (!Number.isFinite(confidence)) {
@@ -152,6 +204,13 @@ export class AgentStateService {
    * Update agent state based on an event.
    * Emits state change events and specific completion/failure events.
    * Returns true if state changed, false otherwise.
+   *
+   * The optional `temperature` argument carries the live `AgentActivityTemperature`
+   * observation that drove this transition (only the activity-detector path
+   * has one — `transitionState` callers pass `undefined`). When present, the
+   * `temperature`/`heatAdded`/`changedChars` fields are attached to the emitted
+   * `agent:state-changed` event for diagnostics; the `suppressed` flag is
+   * intentionally NOT carried (resize-quiet signal, separate semantics).
    */
   updateAgentState(
     terminal: TerminalInfo,
@@ -160,7 +219,8 @@ export class AgentStateService {
     confidence?: number,
     waitingReason?: WaitingReason,
     sessionCost?: number,
-    sessionTokens?: number
+    sessionTokens?: number,
+    temperature?: AgentActivityObservationResult
   ): boolean {
     // Detection wins; fall back to the launch hint during the boot window.
     // May be undefined for runtime-detected-only flows; consumers fall back to
@@ -171,6 +231,13 @@ export class AgentStateService {
     const newState = nextAgentState(previousState, event);
 
     if (newState === previousState) {
+      this.emitTransitionDropped(terminal, {
+        outcome: "no-op",
+        currentState: previousState,
+        attemptedState: newState,
+        ...(trigger ? { trigger } : {}),
+        ...(confidence !== undefined ? { confidence: this.normalizeConfidence(confidence) } : {}),
+      });
       return false;
     }
 
@@ -197,6 +264,15 @@ export class AgentStateService {
             `within hysteresis window`
         );
       }
+      this.emitTransitionDropped(terminal, {
+        outcome: "hysteresis",
+        currentState: previousState,
+        attemptedState: newState,
+        trigger: inferredTrigger,
+        confidence: inferredConfidence,
+        cwd: terminal.cwd,
+        reason: "Opposite-direction low-confidence transition within hysteresis window",
+      });
       return false;
     }
 
@@ -219,14 +295,32 @@ export class AgentStateService {
       ...((newState === "completed" || newState === "exited") && sessionTokens != null
         ? { sessionTokens }
         : {}),
+      ...(temperature
+        ? {
+            temperature: temperature.temperature,
+            heatAdded: temperature.heatAdded,
+            changedChars: temperature.changedChars,
+          }
+        : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
     if (!validatedStateChange.success) {
+      const validationErrors = z.prettifyError(validatedStateChange.error).split("\n");
       console.error(
         "[AgentStateService] Invalid agent:state-changed payload:",
         z.prettifyError(validatedStateChange.error)
       );
+      this.emitTransitionDropped(terminal, {
+        outcome: "schema-invalid",
+        currentState: previousState,
+        attemptedState: newState,
+        trigger: inferredTrigger,
+        confidence: inferredConfidence,
+        cwd: terminal.cwd,
+        reason: "agent:state-changed payload failed Zod validation",
+        validationErrors,
+      });
       return false;
     }
 
@@ -261,6 +355,12 @@ export class AgentStateService {
   /**
    * Transition agent state from an external observer.
    * Validates session token to prevent stale observations.
+   *
+   * Returns `boolean` (load-bearing for `electron/ipc/handlers/terminal/io.ts:225`
+   * and the main-side `PtyClient.transitionState` `Promise<boolean>` resolver).
+   * The richer `reason` discriminator lives on the bus event emitted by this
+   * service, not the return value — see `PtyManager.transitionState` for the
+   * `transition-result` wire `reason` derivation.
    */
   transitionState(
     terminal: TerminalInfo,
@@ -277,6 +377,16 @@ export class AgentStateService {
             `(session ${spawnedAt} vs current ${terminal.spawnedAt})`
         );
       }
+      this.emitTransitionDropped(terminal, {
+        outcome: "stale-session",
+        currentState: terminal.agentState || "idle",
+        trigger,
+        confidence: this.normalizeConfidence(confidence),
+        cwd: terminal.cwd,
+        spawnedAt,
+        terminalSpawnedAt: terminal.spawnedAt,
+        reason: "External observer's spawnedAt token did not match the live session",
+      });
       return false;
     }
 
@@ -339,6 +449,12 @@ export class AgentStateService {
 
   /**
    * Convert activity state to agent event and trigger state update.
+   *
+   * The optional `metadata.temperature` is the live `AgentActivityObservationResult`
+   * computed by the activity detector for the sample that drove this transition.
+   * When present, it is forwarded to `updateAgentState` and attached to the
+   * emitted `agent:state-changed` event for diagnostics. Absent for transitions
+   * driven by other paths (input, output, lifecycle).
    */
   handleActivityState(
     terminal: TerminalInfo,
@@ -349,8 +465,31 @@ export class AgentStateService {
       waitingReason?: WaitingReason;
       sessionCost?: number;
       sessionTokens?: number;
+      temperature?: AgentActivityObservationResult;
     }
   ): void {
+    // The ActivityMonitor emits a synthetic `idle` observation with
+    // `trigger: "dispose"` during teardown when it was still in the busy
+    // state. Without this branch the observation falls through to the
+    // generic `activity` path below, which publishes a high-confidence
+    // `working → waiting` transition on `agent:state-changed` — a false
+    // positive that fires an "Agent waiting for input" OS notification
+    // (#9867) and burns the one-shot `useAgentWaitingNudge`. Suppress the
+    // publication and emit a diagnostic drop so the event-log inspector
+    // keeps the trace without the bad transition crossing the bus. The
+    // `ActivityMonitor.dispose()` emit itself is preserved so terminals
+    // that lose their ActivityMonitor without an authoritative exit/kill
+    // event are not stranded in `working` — the renderer's direct idle
+    // observation covers that path.
+    if (metadata?.trigger === "dispose") {
+      this.emitTransitionDropped(terminal, {
+        outcome: "no-op",
+        currentState: terminal.agentState || "idle",
+        reason: "dispose observation suppressed at teardown",
+      });
+      return;
+    }
+
     const event: AgentEvent =
       activity === "busy"
         ? metadata?.trigger === "input"
@@ -359,9 +498,19 @@ export class AgentStateService {
         : activity === "completed"
           ? { type: "completion" }
           : { type: "prompt" };
+    const temperature = metadata?.temperature;
 
     if (metadata?.trigger === "timeout") {
-      this.updateAgentState(terminal, event, "timeout", 0.6, metadata?.waitingReason);
+      this.updateAgentState(
+        terminal,
+        event,
+        "timeout",
+        0.6,
+        metadata?.waitingReason,
+        undefined,
+        undefined,
+        temperature
+      );
     } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
       this.updateAgentState(
@@ -371,14 +520,42 @@ export class AgentStateService {
         confidence,
         metadata?.waitingReason,
         metadata?.sessionCost,
-        metadata?.sessionTokens
+        metadata?.sessionTokens,
+        temperature
       );
     } else if (metadata?.trigger === "output") {
-      this.updateAgentState(terminal, event, "output", 1.0, metadata?.waitingReason);
+      this.updateAgentState(
+        terminal,
+        event,
+        "output",
+        1.0,
+        metadata?.waitingReason,
+        undefined,
+        undefined,
+        temperature
+      );
     } else if (metadata?.trigger === "input") {
-      this.updateAgentState(terminal, event, "input", 1.0, metadata?.waitingReason);
+      this.updateAgentState(
+        terminal,
+        event,
+        "input",
+        1.0,
+        metadata?.waitingReason,
+        undefined,
+        undefined,
+        temperature
+      );
     } else {
-      this.updateAgentState(terminal, event, "activity", 1.0, metadata?.waitingReason);
+      this.updateAgentState(
+        terminal,
+        event,
+        "activity",
+        1.0,
+        metadata?.waitingReason,
+        undefined,
+        undefined,
+        temperature
+      );
     }
   }
 

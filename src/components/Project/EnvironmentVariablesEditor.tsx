@@ -159,7 +159,7 @@ export function EnvironmentVariablesEditor({
   const hasGlobals = sortedGlobalEntries.length > 0;
 
   return (
-    <div className="mb-6">
+    <div id="project-env-vars" className="mb-6">
       {hasGlobals && (
         <>
           <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">

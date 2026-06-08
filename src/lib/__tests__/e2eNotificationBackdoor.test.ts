@@ -81,6 +81,23 @@ describe("e2eNotificationBackdoor gate", () => {
     expect(fakeWindow.__daintreeNotificationsE2E).toBeUndefined();
   });
 
+  it.each([
+    ["false", false],
+    ["string 'true'", "true"],
+    ["number 1", 1],
+  ])(
+    "does not attach when __DAINTREE_E2E_MODE__ is %s (not boolean true)",
+    async (_label, mode) => {
+      const fakeWindow: Record<string, unknown> = { __DAINTREE_E2E_MODE__: mode };
+      restore = setWindow(fakeWindow);
+
+      vi.resetModules();
+      await import("../e2eNotificationBackdoor");
+
+      expect(fakeWindow.__daintreeNotificationsE2E).toBeUndefined();
+    }
+  );
+
   it("can attach after the E2E mode flag appears", async () => {
     const fakeWindow: Record<string, unknown> = {};
     restore = setWindow(fakeWindow);

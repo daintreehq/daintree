@@ -147,3 +147,14 @@ describe("serializePtyPanel — detectedAgentId is never persisted", () => {
 // Since #8957 step 6 the field lives on BasePanelData and is written by the
 // base layer in panelToSnapshot, not by per-kind serializers — coverage
 // lives in panelPersistence tests instead.
+
+// sessionLostOnRestore (#9802) is a transient restore-time signal. Persisting it
+// would resurface the "Session no longer reachable" banner on every subsequent
+// restart, so the serializer must never write it into project JSON.
+describe("serializePtyPanel — sessionLostOnRestore is never persisted", () => {
+  it("omits sessionLostOnRestore even when the panel currently carries it", () => {
+    const panel = makePanel({ sessionLostOnRestore: true });
+    const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
+    expect("sessionLostOnRestore" in snapshot).toBe(false);
+  });
+});

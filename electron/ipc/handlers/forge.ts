@@ -1,9 +1,8 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
-import { typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { store } from "../../store.js";
 import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
@@ -21,6 +20,7 @@ async function handleForgeUnassignIssue(payload: {
   issueNumber: number;
   username: string;
 }): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_UNASSIGN_ISSUE, 5, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
   }
@@ -64,6 +64,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_OPEN_ISSUES, async (cwd: string, query?: string, state?: string) => {
+      checkRateLimit(CHANNELS.FORGE_OPEN_ISSUES, 20, 10_000);
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildIssuesUrl(repoRef, { query, state });
@@ -73,6 +74,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_OPEN_PRS, async (cwd: string, query?: string, state?: string) => {
+      checkRateLimit(CHANNELS.FORGE_OPEN_PRS, 20, 10_000);
       const { namespaceId, repoRef } = await resolveForCwd(cwd);
       const impl = getImplForNamespace(namespaceId);
       const url = impl.buildPRsUrl(repoRef, { query, state });
@@ -82,6 +84,7 @@ export function registerForgeHandlers(): () => void {
 
   cleanups.push(
     typedHandle(CHANNELS.FORGE_OPEN_COMMITS, async (cwd: string, branch?: string) => {
+      checkRateLimit(CHANNELS.FORGE_OPEN_COMMITS, 20, 10_000);
       if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) {
         throw new Error("Invalid branch name");
       }
@@ -96,6 +99,7 @@ export function registerForgeHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_OPEN_ISSUE,
       async (payload: { cwd: string; issueNumber: number }) => {
+        checkRateLimit(CHANNELS.FORGE_OPEN_ISSUE, 20, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -121,6 +125,7 @@ export function registerForgeHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_GET_ISSUE_URL,
       async (payload: { cwd: string; issueNumber: number }) => {
+        checkRateLimit(CHANNELS.FORGE_GET_ISSUE_URL, 10, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -145,6 +150,7 @@ export function registerForgeHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_ASSIGN_ISSUE,
       async (payload: { cwd: string; issueNumber: number; username: string }) => {
+        checkRateLimit(CHANNELS.FORGE_ASSIGN_ISSUE, 5, 10_000);
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }
@@ -181,47 +187,58 @@ export function registerForgeHandlers(): () => void {
   cleanups.push(forgeUnassignIssueNamespace.register());
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_VALIDATE_TOKEN, async (token: string) => {
-      if (typeof token !== "string" || !token.trim()) {
-        return { valid: false as const, error: "Token is required" };
-      }
-      const providers = getRegisteredForgeProviders();
-      if (providers.length === 0) {
-        return { valid: false as const, error: "No forge provider configured" };
-      }
+    typedHandle(
+      CHANNELS.FORGE_VALIDATE_TOKEN,
+      async (payload: { providerId: unknown; token: unknown }) => {
+        checkRateLimit(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
+        if (!payload || typeof payload !== "object") {
+          return { valid: false as const, error: "Invalid payload" };
+        }
+        if (typeof payload.token !== "string" || !payload.token.trim()) {
+          return { valid: false as const, error: "Token is required" };
+        }
+        // Narrow the token once after the guard so downstream uses are
+        // type-safe without per-call casts.
+        const token = payload.token.trim();
+        const providerId = normalizeProviderId(payload.providerId);
+        if (!providerId) {
+          return { valid: false as const, error: "Provider id is required" };
+        }
+        const providers = getRegisteredForgeProviders();
+        if (providers.length === 0) {
+          return { valid: false as const, error: "No forge provider configured" };
+        }
 
-      const providerId = normalizeProviderId(store.get("forgeDefaultProviderId"));
+        // Resolve strictly by canonical `{pluginId}.{contributionId}` so a
+        // GitHub-tab test cannot silently route to whichever forge registered
+        // first (#9985). The pre-fix handler fell back to `providers[0]`
+        // when the stored default id was a non-GitHub forge, producing
+        // spurious "Invalid token" results for valid GitHub PATs.
+        const entry = providers.find(
+          (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === providerId
+        );
+        if (!entry) {
+          return { valid: false as const, error: `Unknown forge provider "${providerId}"` };
+        }
 
-      // Match canonical first; bare `contribution.id` fallback preserves
-      // third-party providers whose stored ids predate canonicalization.
-      let targetProvider: (typeof providers)[0] | undefined;
-      if (providerId) {
-        targetProvider = providers.find(
-          (p) =>
-            makeForgeProviderId(p.pluginId, p.contribution.id) === providerId ||
-            p.contribution.id === providerId
+        const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
+        const impl = getForgeProviderImpl(namespaceId);
+        if (!impl) {
+          return {
+            valid: false as const,
+            error: `Forge provider "${entry.contribution.id}" not activated`,
+          };
+        }
+        return auditForgeCall(
+          { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
+          () => impl.validateToken(token),
+          // A rejected credential ({ valid: false }) is a resolved call but a
+          // failed outcome — record it as an error so a burst of bad-token
+          // responses is visible to the failure-cluster detector.
+          (validation) => (validation.valid ? "success" : "error")
         );
       }
-      // Fall back to first registered provider
-      const entry = targetProvider ?? providers[0];
-
-      const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
-      const impl = getForgeProviderImpl(namespaceId);
-      if (!impl) {
-        return {
-          valid: false as const,
-          error: `Forge provider "${entry.contribution.id}" not activated`,
-        };
-      }
-      return auditForgeCall(
-        { providerId: namespaceId, methodName: "validateToken", argsSummary: "" },
-        () => impl.validateToken(token.trim()),
-        // A rejected credential ({ valid: false }) is a resolved call but a
-        // failed outcome — record it as an error so a burst of bad-token
-        // responses is visible to the failure-cluster detector.
-        (validation) => (validation.valid ? "success" : "error")
-      );
-    })
+    )
   );
 
   cleanups.push(
@@ -234,6 +251,7 @@ export function registerForgeHandlers(): () => void {
         providerId: string;
         classification: PushErrorClassification | null;
       } | null> => {
+        checkRateLimit(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, 10, 10_000);
         if (
           !payload ||
           typeof payload !== "object" ||
@@ -247,10 +265,12 @@ export function registerForgeHandlers(): () => void {
         // unregistered provider, provider throwing) collapses to the generic
         // "push failed" banner rather than surfacing an error.
         try {
-          const { namespaceId, providerId } = await resolveForCwd(payload.cwd);
+          const { namespaceId } = await resolveForCwd(payload.cwd);
           const impl = getImplForNamespace(namespaceId);
           const classification = impl.classifyPushError?.(payload.stderr) ?? null;
-          return { providerId, classification };
+          // Return the canonical `{pluginId}.{contributionId}` id — the
+          // settings CTA routes the Code-forge subtab on canonical ids (#9968).
+          return { providerId: namespaceId, classification };
         } catch {
           return null;
         }

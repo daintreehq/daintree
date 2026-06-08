@@ -1486,6 +1486,113 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("No internet connection");
     });
 
+    it("surfaces ERR_FILE_NOT_FOUND (-6) as a load failure", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      expect(container.textContent).toContain("Page load failed");
+      expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
+    });
+
+    it("cancels pending connection-refused retry when ERR_FILE_NOT_FOUND arrives", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Fire a connection-refused to schedule a retry at 500ms
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+
+      // Before the retry fires, a file-not-found error arrives
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      // Advance past the retry timeout
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // The stale retry must NOT have called loadURL
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      // Failure overlay must be visible
+      expect(container.textContent).toContain("Page load failed");
+      expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
+    });
+
+    it("ignores subframe ERR_FILE_NOT_FOUND failures", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: false,
+          validatedURL: "http://localhost:5173/iframe-asset",
+        });
+      });
+
+      expect(container.textContent).not.toContain("Page load failed");
+    });
+
+    it("falls back to the numeric error code when errorDescription is empty", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      expect(container.textContent).toContain("Page load failed");
+      expect(container.textContent).toContain("Error code -6");
+    });
+
+    it("does not schedule a retry for ERR_FILE_NOT_FOUND", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -6,
+          errorDescription: "ERR_FILE_NOT_FOUND",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/missing",
+        });
+      });
+
+      // Advance beyond every backoff window
+      act(() => {
+        vi.advanceTimersByTime(8000);
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
     it("retry-exhausted error includes URL", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1522,7 +1629,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("certificate couldn't be verified");
       expect(container.textContent).toContain("mkcert -install");
       expect(container.textContent).toContain("localhost:8443");
@@ -1570,7 +1677,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("SSL/TLS handshake failed");
       // -107 is also raised on protocol mismatch — the mkcert hint is wrong here
       expect(container.textContent).not.toContain("mkcert");
@@ -1591,7 +1698,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("mkcert -install");
     });
 
@@ -1627,7 +1734,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       // The stale retry must NOT have called loadURL
       expect(webview.loadURL).not.toHaveBeenCalled();
       // Cert error overlay must be visible
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
     });
 
     it("classifies -299 (cert range lower bound) as cert, -199 and -300 fall through", () => {
@@ -1641,7 +1748,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
           validatedURL: "https://example.com/",
         });
       });
-      expect(c1.textContent).toContain("Certificate Error");
+      expect(c1.textContent).toContain("Certificate error");
 
       const { container: c2 } = render(<DevPreviewPane {...baseProps} />);
       const w2 = getWebviewElement(c2);
@@ -1932,6 +2039,311 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
       expect(container.textContent).toContain("npm run custom");
+    });
+  });
+
+  describe("proxy 502 handling (#9948)", () => {
+    it("shows the proxy-error overlay for a main-frame 502 and keeps it across did-finish-load", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // An HTTP 502 is a successful network load: did-frame-navigate carries the
+      // status, then did-navigate + did-finish-load fire and would otherwise
+      // clear the error. The overlay must survive both.
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).toContain("Dev server unavailable");
+    });
+
+    it("routes the proxy 502 to the Restart dev server recovery branch, not the bare Retry", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+
+      // "Reload preview" only exists in the restart-action dropdown branch shared
+      // with connection_refused — its presence proves proxy_error uses it.
+      expect(container.textContent).toContain("Dev server unavailable");
+      expect(container.textContent).toContain("Reload preview");
+    });
+
+    it("passes 4xx (bootstrap 403/405) through without an overlay", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 403,
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+
+    it("passes an upstream app 500/503/504 through without an overlay", () => {
+      // The proxy forwards upstream responses untouched; only it self-generates
+      // 502. A dev app's own 5xx error page must render, not be hidden/reloaded.
+      for (const code of [500, 503, 504]) {
+        const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+        const webview = getWebviewElement(container);
+        act(() => {
+          emitWebviewEvent(webview, "did-frame-navigate", {
+            isMainFrame: true,
+            httpResponseCode: code,
+            url: "http://localhost:5173/",
+          });
+          emitWebviewEvent(webview, "did-finish-load");
+        });
+        expect(container.textContent).not.toContain("Dev server unavailable");
+        expect(webview.reload).not.toHaveBeenCalled();
+        unmount();
+      }
+    });
+
+    it("drops the automatic-reload promise from the message once the retry cap is hit", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      const delays = [1000, 2000, 4000, 8000, 16000];
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-frame-navigate", {
+            isMainFrame: true,
+            httpResponseCode: 502,
+            url: "http://localhost:5173/",
+          });
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(delays[i]!);
+          });
+        }
+      }
+
+      expect(container.textContent).toContain("Dev server unavailable");
+      expect(container.textContent).not.toContain("reloads automatically");
+      expect(container.textContent).toContain("Restart it or reload");
+    });
+
+    it("cancels the pending auto-retry on unmount", () => {
+      const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+
+      unmount();
+      act(() => {
+        vi.advanceTimersByTime(16000);
+      });
+
+      expect(webview.reload).not.toHaveBeenCalled();
+    });
+
+    it("ignores a 502 from a non-main-frame navigation", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: false,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/iframe",
+        });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+
+    it("auto-retries the load with backoff while the 502 persists", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+
+      // First retry fires after 1000ms (1000 * 2^0); not before.
+      expect(webview.reload).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(webview.reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops auto-retrying after the cap but keeps the overlay for manual recovery", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      const delays = [1000, 2000, 4000, 8000, 16000];
+      // Each cycle mimics a reload that 502s again: a fresh load (did-start-loading)
+      // then another main-frame 502.
+      for (let i = 0; i < 6; i++) {
+        act(() => {
+          emitWebviewEvent(webview, "did-start-loading");
+          emitWebviewEvent(webview, "did-frame-navigate", {
+            isMainFrame: true,
+            httpResponseCode: 502,
+            url: "http://localhost:5173/",
+          });
+        });
+        if (i < 5) {
+          act(() => {
+            vi.advanceTimersByTime(delays[i]!);
+          });
+        }
+      }
+
+      // The 6th 502 lands after the count hit the cap, so no further reload is scheduled.
+      expect(webview.reload).toHaveBeenCalledTimes(5);
+      expect(container.textContent).toContain("Dev server unavailable");
+    });
+
+    it("clears the proxy overlay once the upstream answers with a 2xx", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 502,
+          url: "http://localhost:5173/",
+        });
+      });
+      expect(container.textContent).toContain("Dev server unavailable");
+
+      // Recovery: the retry reloads, the upstream is back, a 200 commits and finishes.
+      act(() => {
+        emitWebviewEvent(webview, "did-start-loading");
+        emitWebviewEvent(webview, "did-frame-navigate", {
+          isMainFrame: true,
+          httpResponseCode: 200,
+          url: "http://localhost:5173/",
+        });
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/" });
+        emitWebviewEvent(webview, "did-finish-load");
+      });
+
+      expect(container.textContent).not.toContain("Dev server unavailable");
+    });
+  });
+
+  describe("src binding regression (#9940)", () => {
+    it("seeds src once at mount", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not issue a redundant loadURL on first ready when the seed matches history", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // Let the ready probe run. Because lastSetUrlRef is seeded to the mount
+      // URL, the isWebviewReady navigation effect must not re-load the same URL.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("does not re-bind src or re-load after an in-page guest navigation", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate-in-page", {
+          url: "http://localhost:5173/spa/route",
+          isMainFrame: true,
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after a full guest navigation", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", {
+          url: "http://localhost:5173/page-2",
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("navigates imperatively when the dev-server URL changes (src is seed-only)", async () => {
+      const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // A dev-server restart shifts the origin (port 5173 -> 5174). Because `src`
+      // no longer re-binds to currentUrl, the imperative navigation effect MUST
+      // drive the loadURL — otherwise the guest would be stranded on the old URL.
+      webview.loadURL.mockClear();
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        url: "http://localhost:5174/",
+      };
+
+      await act(async () => {
+        rerender(<DevPreviewPane {...baseProps} />);
+        await Promise.resolve();
+      });
+
+      expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5174/");
     });
   });
 });

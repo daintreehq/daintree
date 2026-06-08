@@ -16,7 +16,6 @@ import { reconnectWithTimeout } from "./reconnectManager";
 import {
   inferKind,
   resolveAgentId,
-  inferAgentIdFromTitle,
   buildArgsForBackendTerminal,
   buildArgsForReconnectedFallback,
   buildArgsForRespawn,
@@ -31,7 +30,6 @@ type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder
 
 export interface PanelRestoreContext {
   addPanel: AddPanelFn;
-  checkCurrent: () => boolean;
   withHydrationBatch: (run: () => Promise<void>) => Promise<void>;
   backendTerminalMap: Map<string, BackendTerminalInfo>;
   terminalSizes: Record<string, { cols: number; rows: number }>;
@@ -40,7 +38,6 @@ export interface PanelRestoreContext {
   agentSettings: AgentSettings | undefined;
   clipboardDirectory: string | undefined;
   projectPresetsByAgent: Record<string, AgentPreset[]>;
-  _switchId: string | undefined;
   worktreesPromise: Promise<WorktreeState[] | null>;
   restoreTerminalOrder?: RestoreTerminalOrderFn;
   safeMode: boolean;
@@ -61,12 +58,9 @@ export interface PanelRestorePhaseResult {
  * Restore saved panels (3-phase executor: non-PTY concurrent, priority PTY
  * sequential, background PTY staggered) and append orphan backend terminals.
  *
- * Load-bearing constraints (see #4973, #4911, #4945, #5087):
- *  - `_switchId` flows as `string | undefined` to gate phantom-agent discard.
+ * Load-bearing constraints (see #4911, #4945, #5087):
  *  - `backendTerminalMap` is mutated by reference; orphan detection depends
  *    on the surviving entries after the saved-panels loop.
- *  - `checkCurrent()` placement after every `await` is preserved so a
- *    superseding hydration can pre-empt mid-phase.
  */
 export async function restorePanelsPhase(
   savedPanels: TerminalState[] | undefined,
@@ -74,7 +68,6 @@ export async function restorePanelsPhase(
 ): Promise<PanelRestorePhaseResult> {
   const {
     addPanel,
-    checkCurrent,
     withHydrationBatch,
     backendTerminalMap,
     terminalSizes,
@@ -83,7 +76,6 @@ export async function restorePanelsPhase(
     agentSettings,
     clipboardDirectory,
     projectPresetsByAgent,
-    _switchId,
     worktreesPromise,
     restoreTerminalOrder,
     safeMode,
@@ -278,29 +270,8 @@ export async function restorePanelsPhase(
                   location,
                 });
               } else {
-                // During a live project switch (_switchId defined), don't respawn agent
-                // panels that no longer exist in the backend — they are phantoms.
-                // On cold app restart (_switchId undefined), not_found simply means the
-                // PTY process was killed on quit and needs to be respawned.
-                // Mirror buildArgsForRespawn's title-inference recovery so legacy
-                // `kind: "agent"` panels with cleared agentId still skip as phantoms.
-                const inferredAgentId = inferAgentIdFromTitle(
-                  saved.title,
-                  kind,
-                  resolveAgentId(saved.launchAgentId),
-                  saved.id,
-                  "switch-guard"
-                );
-                const isAgentKind = inferredAgentId !== undefined;
-                if (
-                  isAgentKind &&
-                  reconnectOutcome.status === "not_found" &&
-                  _switchId !== undefined
-                ) {
-                  logHydrationInfo(`Skipping phantom agent during project switch: ${saved.id}`);
-                  return;
-                }
-
+                // not_found on cold app restart means the PTY process was killed
+                // on quit and needs to be respawned.
                 const respawnArgs = buildArgsForRespawn(
                   saved,
                   kind,
@@ -403,8 +374,6 @@ export async function restorePanelsPhase(
       });
     }
 
-    if (!checkCurrent()) return { restoreTasks };
-
     // Restore priority PTY panels sequentially (active worktree, for instant
     // interactivity). Batched so the sequential `await`s — which normally break
     // React 19 auto-batching and cause one render per panel — collapse into a
@@ -420,8 +389,6 @@ export async function restorePanelsPhase(
         }
       });
     }
-
-    if (!checkCurrent()) return { restoreTasks };
 
     // Restore background PTY panels in staggered batches. Each batch is its own
     // hydration batch: we still want staggered spawning to throttle PTY pressure,
@@ -460,8 +427,6 @@ export async function restorePanelsPhase(
       restoreTerminalOrder(orderedIds);
     }
   }
-
-  if (!checkCurrent()) return { restoreTasks };
 
   // Restore any orphaned backend terminals not in saved state (append at end).
   // When no panels were saved (brand-new project), skip the startup "default"

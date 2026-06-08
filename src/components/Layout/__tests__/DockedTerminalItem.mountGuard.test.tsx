@@ -6,8 +6,9 @@
  * dock popover's terminal is still migrating into the portal (focus transiently
  * leaves the layer). The fix blocks that path at PopoverContent's onFocusOutside
  * (preventDefault), so genuine pointer-outside / Escape closes still reach
- * onOpenChange and are honored. Focus is moved into the terminal once it has
- * migrated into the portal (observed child insertion), not on a fixed timer.
+ * onOpenChange and are honored. Focus is moved into the terminal once the
+ * popover container ref settles and its stable wrapper has been moved in — a
+ * synchronous step, no MutationObserver, no fixed timer.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render } from "@testing-library/react";
@@ -78,6 +79,7 @@ vi.mock("../dockPanelPortalContext", () => ({
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
   getDockDisplayAgentState: () => undefined,
+  isDockAgentStateDeprioritized: () => false,
 }));
 
 vi.mock("../dockPopoverGuard", () => ({
@@ -241,34 +243,24 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses Radix auto-focus and focuses the terminal once it migrates into the portal", async () => {
+  it("suppresses Radix auto-focus and focuses the terminal once its wrapper is moved in", () => {
     mockActiveDockTerminalId = "t-1";
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
     expect(capturedOnOpenAutoFocus).not.toBeNull();
 
-    // Radix's own auto-focus is blocked; nothing is focused until migration.
+    // Radix's own auto-focus is blocked; we focus the terminal ourselves.
     const preventDefault = vi.fn();
     act(() => {
       capturedOnOpenAutoFocus?.({ preventDefault });
     });
     expect(preventDefault).toHaveBeenCalledOnce();
-    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
 
-    // Simulate the terminal host being portaled into the popover target — the
-    // MutationObserver detects the child insertion and focus follows.
-    const portal = document.querySelector('[data-dock-portal-target="t-1"]');
-    expect(portal).not.toBeNull();
-    await act(async () => {
-      const child = document.createElement("div");
-      child.setAttribute("data-dock-panel-id", "t-1");
-      portal!.appendChild(child);
-      await Promise.resolve();
-    });
-
+    // The popover container ref settles synchronously on mount, so the stable
+    // wrapper is moved in and the terminal is focused — no MutationObserver.
     expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-1");
   });
 
-  it("does not focus an MCP-created dock terminal even after it migrates", async () => {
+  it("does not focus an MCP-created dock terminal", () => {
     mockActiveDockTerminalId = "t-1";
     render(
       <DockedTerminalItem
@@ -283,14 +275,8 @@ describe("DockedTerminalItem mount-time close guard (#6602)", () => {
     });
     expect(preventDefault).toHaveBeenCalledOnce();
 
-    const portal = document.querySelector('[data-dock-portal-target="t-1"]');
-    await act(async () => {
-      const child = document.createElement("div");
-      child.setAttribute("data-dock-panel-id", "t-1");
-      portal!.appendChild(child);
-      await Promise.resolve();
-    });
-
+    // focusPolicy "preserve" short-circuits the focus effect even though the
+    // wrapper is moved into the popover.
     expect(terminalInstanceService.focus).not.toHaveBeenCalled();
   });
 });

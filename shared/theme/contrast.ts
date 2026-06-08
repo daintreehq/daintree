@@ -321,6 +321,7 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
 
   if (typeof bg !== "string" || !bg.trim()) {
     warnings.push({
+      kind: "unevaluable",
       message: `Cannot evaluate terminal/syntax validation: terminal-background token is missing or empty`,
     });
     return warnings;
@@ -328,6 +329,7 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
 
   if (!bgIsHex) {
     warnings.push({
+      kind: "unevaluable",
       message: `Cannot evaluate terminal/syntax legibility: terminal-background="${bg}" is not a hex color`,
     });
   }
@@ -347,12 +349,14 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
       const fg = scheme.tokens[tokenKey];
       if (typeof fg !== "string" || !fg.trim()) {
         warnings.push({
+          kind: "unevaluable",
           message: `Cannot evaluate legibility for ${tokenKey}: token is missing or empty`,
         });
         continue;
       }
       if (!isHexColor(fg)) {
         warnings.push({
+          kind: "unevaluable",
           message: `Cannot evaluate legibility for ${tokenKey} on terminal-background: non-hex value "${fg}"`,
         });
         continue;
@@ -365,6 +369,7 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
           : STANDARD_LEGIBILITY_FLOOR;
       if (dL < floor) {
         warnings.push({
+          kind: "terminal-legibility",
           message: `${tokenKey} on terminal-background OKLab lightness diff is ${dL.toFixed(3)}; floor is ${floor.toFixed(2)}`,
         });
       }
@@ -387,6 +392,7 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
         : SYNTAX_CANVAS_MIN_CONTRAST;
       if (ratio < floor) {
         warnings.push({
+          kind: "terminal-legibility",
           message: `${tokenKey} on ${SYNTAX_CANVAS_SURFACE} (editor render surface) is ${ratio.toFixed(2)}:1; target is ${floor.toFixed(1)}:1`,
         });
       }
@@ -404,6 +410,7 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
       if (!aOk) unevaluable.push(`${pair.a}="${aVal ?? "<missing>"}"`);
       if (!bOk) unevaluable.push(`${pair.b}="${bVal ?? "<missing>"}"`);
       warnings.push({
+        kind: "unevaluable",
         message: `Cannot evaluate distinctness for ${pair.label}: non-hex token value(s) ${unevaluable.join(", ")}`,
       });
       continue;
@@ -411,6 +418,7 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
     const d = deltaEOK(aVal!, bVal!);
     if (d < DISTINCTNESS_FLOOR) {
       warnings.push({
+        kind: "terminal-legibility",
         message: `${pair.label} deltaEOK is ${d.toFixed(3)}; floor is ${DISTINCTNESS_FLOOR.toFixed(2)}`,
       });
     }
@@ -428,6 +436,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     const bg = scheme.tokens[pair.background];
     if (!isHexColor(fg)) {
       warnings.push({
+        kind: "unevaluable",
         message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: non-hex foreground "${fg}"`,
       });
       continue;
@@ -436,6 +445,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
       const ratio = contrastRatio(fg, bg);
       if (ratio < pair.minimum) {
         warnings.push({
+          kind: "low-contrast",
           message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
         });
       }
@@ -446,6 +456,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
           const ratio = contrastRatio(fg, rgba.hex);
           if (ratio < pair.minimum) {
             warnings.push({
+              kind: "low-contrast",
               message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
             });
           }
@@ -459,18 +470,21 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
             const ratio = contrastRatio(fg, compositedBg);
             if (ratio < pair.minimum) {
               warnings.push({
+                kind: "low-contrast",
                 message: `${pair.foreground} on ${pair.background} (over ${surfaceKey}) is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
               });
             }
           }
           if (!anySurfaceEvaluable) {
             warnings.push({
+              kind: "unevaluable",
               message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: ${pair.background}="${bg}" requires compositing over a surface but no evaluable surface found`,
             });
           }
         }
       } else {
         warnings.push({
+          kind: "unevaluable",
           message: `Cannot evaluate contrast for ${pair.foreground} on ${pair.background}: non-hex background "${bg}"`,
         });
       }
@@ -487,6 +501,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
       const ratio = contrastRatio(blended, bg);
       if (ratio < pair.minimum) {
         warnings.push({
+          kind: "low-contrast",
           message: `text-primary on ${pair.background} at ${Math.round(opacity * 100)}% opacity (${tier}) is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
         });
       }
@@ -503,6 +518,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
       if (!accentHex) unevaluable.push(`accent-primary="${accent}"`);
       if (!surfaceHex) unevaluable.push(`${surfaceKey}="${surface}"`);
       warnings.push({
+        kind: "unevaluable",
         message: `Cannot evaluate accent-primary outline contrast on ${surfaceKey}: non-hex token value(s) ${unevaluable.join(", ")}`,
       });
       continue;
@@ -510,6 +526,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     const ratio = contrastRatio(accent, surface);
     if (ratio < ACCENT_OUTLINE_MIN_CONTRAST) {
       warnings.push({
+        kind: "low-contrast",
         message: `accent-primary outline on ${surfaceKey} is ${ratio.toFixed(2)}:1; target is ${ACCENT_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
@@ -525,6 +542,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
       if (!accentSecondaryHex) unevaluable.push(`accent-secondary="${accentSecondary}"`);
       if (!surfaceHex) unevaluable.push(`${surfaceKey}="${surface}"`);
       warnings.push({
+        kind: "unevaluable",
         message: `Cannot evaluate accent-secondary outline contrast on ${surfaceKey}: non-hex token value(s) ${unevaluable.join(", ")}`,
       });
       continue;
@@ -532,6 +550,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     const ratio = contrastRatio(accentSecondary, surface);
     if (ratio < ACCENT_OUTLINE_MIN_CONTRAST) {
       warnings.push({
+        kind: "low-contrast",
         message: `accent-secondary outline on ${surfaceKey} is ${ratio.toFixed(2)}:1; target is ${ACCENT_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
@@ -551,22 +570,52 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
 const ACCENT_MIN_CONTRAST = 4.5;
 const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 
-export function accentOverrideHasLowContrast(scheme: AppColorScheme): boolean {
-  const accent = scheme.tokens["accent-primary"];
-  if (!isHexColor(accent)) return false;
+// Structured result describing how an accent override fails its contrast gate, so
+// the theme picker can render a specific, actionable warning instead of a generic
+// one-liner. `mode` distinguishes the two materially different failures:
+//   - "foreground": accent-foreground text/icons are illegible on the accent fill
+//     (e.g. a button label vanishing into its own button)
+//   - "surface": the accent color itself is hard to see on a theme background
+// `worstRatio` is the lowest contrast ratio found for the reported mode, and
+// `worstSurface` names the offending background in surface mode (null otherwise).
+export type AccentContrastFailure = {
+  mode: "foreground" | "surface";
+  worstRatio: number;
+  worstSurface: AppThemeTokenKey | null;
+};
 
+export function accentOverrideHasLowContrast(scheme: AppColorScheme): AccentContrastFailure | null {
+  const accent = scheme.tokens["accent-primary"];
+  if (!isHexColor(accent)) return null;
+
+  // Foreground-first precedence: text-on-accent-button legibility is a higher-
+  // severity failure than accent-tint-on-background, so report it before scanning
+  // surfaces. The user should fix this before discovering any surface issue.
   const accentForeground = scheme.tokens["accent-foreground"];
-  if (
-    isHexColor(accentForeground) &&
-    contrastRatio(accentForeground, accent) < ACCENT_MIN_CONTRAST
-  ) {
-    return true;
+  if (isHexColor(accentForeground)) {
+    const fgRatio = contrastRatio(accentForeground, accent);
+    if (fgRatio < ACCENT_MIN_CONTRAST) {
+      return { mode: "foreground", worstRatio: fgRatio, worstSurface: null };
+    }
   }
 
-  return DISPLAY_SURFACES.some((key) => {
+  let worstRatio = Infinity;
+  let worstSurface: AppThemeTokenKey | null = null;
+  for (const key of DISPLAY_SURFACES) {
     const background = scheme.tokens[key];
-    return isHexColor(background) && contrastRatio(accent, background) < ACCENT_MIN_CONTRAST;
-  });
+    if (!isHexColor(background)) continue;
+    const ratio = contrastRatio(accent, background);
+    if (ratio < worstRatio) {
+      worstRatio = ratio;
+      worstSurface = key;
+    }
+  }
+
+  if (worstSurface !== null && worstRatio < ACCENT_MIN_CONTRAST) {
+    return { mode: "surface", worstRatio, worstSurface };
+  }
+
+  return null;
 }
 
 // ── Round-2 light validation matrix (E6) ─────────────────────────────────────
@@ -721,6 +770,7 @@ function runMatrixContrastPairs(scheme: AppColorScheme): AppThemeValidationWarni
     const ratio = contrastRatio(fg.hex, bg.hex);
     if (ratio < pair.minimum) {
       out.push({
+        kind: "low-contrast",
         message: `[matrix] ${scheme.id}: ${pair.label} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
       });
     }
@@ -779,6 +829,7 @@ function runMatrixSeparationPairs(scheme: AppColorScheme): AppThemeValidationWar
     const de = deltaEOK(a.hex, b.hex);
     if (de < pair.minDeltaE) {
       out.push({
+        kind: "low-contrast",
         message: `[matrix] ${scheme.id}: ${pair.label} — ΔE=${de.toFixed(4)} below ${pair.minDeltaE.toFixed(3)} (perceptually merges)`,
       });
     }
@@ -806,6 +857,7 @@ function runCardAboveDialogBody(scheme: AppColorScheme): AppThemeValidationWarni
   const bodyL = relativeLuminance(body.hex);
   if (cardL <= bodyL) {
     out.push({
+      kind: "low-contrast",
       message: `[matrix] ${scheme.id}: light settings card (L≈${cardL.toFixed(3)}) is at/below the dialog body (L≈${bodyL.toFixed(3)}) — the card must lift above its container, not recede (S1)`,
     });
   }
@@ -834,6 +886,7 @@ function runPulseHeatSeparation(scheme: AppColorScheme): AppThemeValidationWarni
     const de = deltaEOK(stop1, empty.hex);
     if (de < RAMP_DL_JND_MATRIX) {
       out.push({
+        kind: "low-contrast",
         message: `[matrix] ${scheme.id}: pulse heat level-1 (heat-color @${lowOp}) ΔE=${de.toFixed(4)} vs empty cell is below JND (${RAMP_DL_JND_MATRIX}) — a worked day is invisible (P-Heat)`,
       });
     }
@@ -844,6 +897,7 @@ function runPulseHeatSeparation(scheme: AppColorScheme): AppThemeValidationWarni
     const ratio = contrastRatio(missed.hex, empty.hex);
     if (ratio < 3.0) {
       out.push({
+        kind: "low-contrast",
         message: `[matrix] ${scheme.id}: pulse missed-day fill vs empty cell is ${ratio.toFixed(2)}:1; target is 3.0:1 — the streak-break signal is imperceptible (P-Heat)`,
       });
     }
@@ -876,6 +930,7 @@ function runActivityWorkingWaitingSeparation(scheme: AppColorScheme): AppThemeVa
   // hue, which the deuteranope confusion line erases on a small dot.
   if (de < 0.1) {
     out.push({
+      kind: "low-contrast",
       message: `[matrix] ${scheme.id}: activity working vs waiting ΔE=${de.toFixed(3)} (<0.10) — near-isoluminant, separable by hue only; lean on the shape channel (B2)`,
     });
   }
@@ -918,8 +973,10 @@ export function getLightThemeMatrixWarnings(scheme: AppColorScheme): AppThemeVal
   warnings.push(...runActivityWorkingWaitingSeparation(scheme));
 
   const collect = (r: AuditResult, prefix: string) => {
-    for (const f of r.failures) warnings.push({ message: `[matrix] ${prefix}${f}` });
-    for (const w of r.warnings) warnings.push({ message: `[matrix] ${prefix}${w}` });
+    for (const f of r.failures)
+      warnings.push({ kind: "low-contrast", message: `[matrix] ${prefix}${f}` });
+    for (const w of r.warnings)
+      warnings.push({ kind: "low-contrast", message: `[matrix] ${prefix}${w}` });
   };
 
   // Elevation-direction inversions (OKLab, light-only). Resolve the composited
@@ -932,6 +989,7 @@ export function getLightThemeMatrixWarnings(scheme: AppColorScheme): AppThemeVal
       collect(auditSidebarSelectedLift(selected.hex, sidebar, scheme.id, "light"), "");
     } else {
       warnings.push({
+        kind: "unevaluable",
         message: `[matrix] ${scheme.id}: skipped sidebar-selected lift — sidebar-active-bg unevaluable (${"skip" in selected ? selected.skip : "no sidebar surface"})`,
       });
     }

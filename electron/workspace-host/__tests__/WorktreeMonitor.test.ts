@@ -612,7 +612,43 @@ describe("WorktreeMonitor", () => {
           state: "declined",
         },
       });
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.prState).toBe("closed");
+      // The canonical projection keeps the full provider state.
+      expect(snapshot.linked?.pr?.state).toBe("declined");
+    });
+
+    it("collapses a declined legacy flat prState to closed when linked is unset (#9981)", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setPRInfo({ prNumber: 5, prUrl: "u", prState: "declined" });
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.linked).toBeUndefined();
+      expect(snapshot.prState).toBe("closed");
+    });
+
+    it("clearLinked after a declined PR leaves no stale flat state (#9981)", () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setLinked({
+        providerId: "acme.bitbucket",
+        pr: {
+          ref: {
+            providerId: "acme.bitbucket",
+            owner: "acme-corp",
+            repo: "my-project",
+            number: 5,
+            rawData: null,
+          },
+          url: "u",
+          state: "declined",
+        },
+      });
       expect(monitor.getSnapshot().prState).toBe("closed");
+
+      monitor.clearLinked();
+      const snapshot = monitor.getSnapshot();
+      // null, not undefined — #8870 distinguishes "ran and cleared" from "never ran".
+      expect(snapshot.linked).toBeNull();
+      expect(snapshot.prState).toBeUndefined();
     });
 
     it("falls back to legacy flat fields when linked is unset", () => {
@@ -1951,7 +1987,8 @@ describe("WorktreeMonitor", () => {
         path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
         isWslPath: true,
         wslDistro: "Ubuntu",
-        wslGitEligible: true,
+        wslPosixPath: "/home/user/repo",
+        wslGitEligible: "eligible",
         wslGitOptIn: false,
       };
       const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
@@ -1976,7 +2013,8 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
-          wslGitEligible: true,
+          wslPosixPath: "/home/user/repo",
+          wslGitEligible: "eligible",
           wslGitOptIn: true,
         };
         const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
@@ -1993,6 +2031,44 @@ describe("WorktreeMonitor", () => {
           posixPath: "/home/user/repo",
         });
 
+        // Snapshot must carry the upstream-provided wslPosixPath verbatim —
+        // if the field round-trips through getSnapshot, renderer-side
+        // consumers can rely on it without re-parsing the UNC.
+        const snapshot = monitor.getSnapshot();
+        expect(snapshot.wslPosixPath).toBe("/home/user/repo");
+
+        monitor.stop();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
+    });
+
+    it("silently disables WSL git routing when wslPosixPath is missing upstream", async () => {
+      // Regression guard: with the regex hoisted upstream, a WorktreeMonitor
+      // constructed without `wslPosixPath` (e.g. bypassing enrichWorktreeWithWsl)
+      // must short-circuit WSL routing rather than route to a fabricated
+      // distro-root path.
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const wsl: Worktree = {
+          ...TEST_WORKTREE,
+          path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          isWslPath: true,
+          wslDistro: "Ubuntu",
+          wslGitEligible: "eligible",
+          wslGitOptIn: true,
+        };
+        const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+        await monitor.start();
+        await flushInitialStatus();
+
+        const lastCall =
+          mockGetWorktreeChangesWithStats.mock.calls[
+            mockGetWorktreeChangesWithStats.mock.calls.length - 1
+          ];
+        expect(lastCall[1]?.wsl).toBeUndefined();
+
         monitor.stop();
       } finally {
         Object.defineProperty(process, "platform", { value: original, configurable: true });
@@ -2008,7 +2084,8 @@ describe("WorktreeMonitor", () => {
           path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
           isWslPath: true,
           wslDistro: "Ubuntu",
-          wslGitEligible: true,
+          wslPosixPath: "/home/user/repo",
+          wslGitEligible: "eligible",
           wslGitOptIn: false,
         };
         const callbacks = makeCallbacks();
@@ -2031,6 +2108,125 @@ describe("WorktreeMonitor", () => {
       } finally {
         Object.defineProperty(process, "platform", { value: original, configurable: true });
       }
+    });
+
+    it("serializes ineligible as 'ineligible', not absent (#9924)", async () => {
+      // The old `this._wslGitEligible || undefined` coercion dropped `false` to
+      // absent, making "ineligible" indistinguishable from "unprobed" on the
+      // renderer. The three-state field must round-trip 'ineligible' verbatim.
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Debian\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Debian",
+        wslPosixPath: "/home/user/repo",
+        wslGitEligible: "ineligible",
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(monitor.getSnapshot().wslGitEligible).toBe("ineligible");
+
+      monitor.stop();
+    });
+
+    it("defaults eligibility to 'unprobed' when the field is absent (#9924)", async () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(monitor.getSnapshot().wslGitEligible).toBe("unprobed");
+
+      monitor.stop();
+    });
+
+    it("setWslEligible flips git routing at runtime without restart (#9924)", async () => {
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const wsl: Worktree = {
+          ...TEST_WORKTREE,
+          path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          isWslPath: true,
+          wslDistro: "Ubuntu",
+          wslPosixPath: "/home/user/repo",
+          // Start ineligible + opted in: no WSL routing yet.
+          wslGitEligible: "ineligible",
+          wslGitOptIn: true,
+        };
+        const callbacks = makeCallbacks();
+        const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, callbacks, "main");
+        await monitor.start();
+        await flushInitialStatus();
+
+        // Becoming the default distro mid-session flips eligibility → routing on.
+        const updateCallsBefore = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls
+          .length;
+        monitor.setWslEligible("eligible");
+        const updateCallsAfter = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+        expect(updateCallsAfter).toBeGreaterThan(updateCallsBefore);
+        expect(monitor.getSnapshot().wslGitEligible).toBe("eligible");
+
+        mockGetWorktreeChangesWithStats.mockClear();
+        await monitor.refresh();
+
+        const lastCall =
+          mockGetWorktreeChangesWithStats.mock.calls[
+            mockGetWorktreeChangesWithStats.mock.calls.length - 1
+          ];
+        expect(lastCall[1]?.wsl).toEqual({
+          distro: "Ubuntu",
+          uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+          posixPath: "/home/user/repo",
+        });
+
+        monitor.stop();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
+    });
+
+    it("setWslEligible is a no-op when the value is unchanged (#9924)", async () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
+        wslGitEligible: "ineligible",
+      };
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      const before = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+      monitor.setWslEligible("ineligible");
+      const after = (callbacks.onUpdate as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(after).toBe(before);
+
+      monitor.stop();
+    });
+
+    it("exposes isWslPath and wslDistro getters for eligibility refresh (#9924)", () => {
+      const wsl: Worktree = {
+        ...TEST_WORKTREE,
+        path: "\\\\wsl$\\Ubuntu\\home\\user\\repo",
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/user/repo",
+      };
+      const monitor = new WorktreeMonitor(wsl, TEST_CONFIG, makeCallbacks(), "main");
+      expect(monitor.isWslPath).toBe(true);
+      expect(monitor.wslDistro).toBe("Ubuntu");
     });
   });
 
@@ -2834,6 +3030,71 @@ describe("WorktreeMonitor", () => {
       // cleared the baseline so the stat pre-check can't short-circuit.
       await monitor.updateGitStatus(false);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+  });
+
+  describe("poll watchdog (sidebar-freeze guard)", () => {
+    // Drive a single poll() in isolation: set _isRunning directly instead of
+    // start() so the deferred initial-status timer can't fire its own
+    // scheduleNextPoll during the watchdog advance and mask the path under test.
+    function makeRunningMonitor(): WorktreeMonitor {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      return monitor;
+    }
+
+    it("reschedules the loop when a git status pass hangs instead of wedging forever", async () => {
+      // Simulate a hung git/fs call inside updateGitStatus — the exact failure
+      // that previously pinned the poll loop (and, via the shared pollQueue
+      // slot, the whole sidebar) permanently with no recovery.
+      mockGetWorktreeChangesWithStats.mockReturnValue(new Promise<never>(() => {}));
+
+      const monitor = makeRunningMonitor();
+      const scheduleSpy = vi
+        .spyOn(monitor as unknown as { scheduleNextPoll: () => void }, "scheduleNextPoll")
+        .mockImplementation(() => {});
+
+      const pollPromise = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await Promise.resolve();
+
+      // The poll actually entered updateGitStatus and is hanging on the git call
+      // (it did NOT early-return on a stale _isUpdating guard).
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      // Before the watchdog fires the loop is legitimately in-flight.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scheduleSpy).not.toHaveBeenCalled();
+
+      // Past the watchdog ceiling (40s): the hung pass is abandoned and the
+      // loop reschedules exactly once rather than dying.
+      await vi.advanceTimersByTimeAsync(45_000);
+      await pollPromise;
+
+      expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("releases the in-flight promise after a watchdog timeout so the next poll can run", async () => {
+      mockGetWorktreeChangesWithStats.mockReturnValue(new Promise<never>(() => {}));
+
+      const monitor = makeRunningMonitor();
+      vi.spyOn(
+        monitor as unknown as { scheduleNextPoll: () => void },
+        "scheduleNextPoll"
+      ).mockImplementation(() => {});
+
+      const pollPromise = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await vi.advanceTimersByTimeAsync(45_000);
+      await pollPromise;
+
+      // _pendingPollPromise must be released so a subsequent poll isn't blocked
+      // by the abandoned one.
+      expect(
+        (monitor as unknown as { _pendingPollPromise: Promise<void> | null })._pendingPollPromise
+      ).toBeNull();
 
       monitor.stop();
     });

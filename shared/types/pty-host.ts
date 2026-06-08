@@ -15,6 +15,23 @@ import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js
 
 export type { TerminalFlowStatus };
 
+/**
+ * Discriminator for the wire-level `agent-state-transition-dropped` event.
+ * Lives in this file (rather than the schema) because it crosses the pty-host
+ * wire protocol — every reason must be representable as a serializable
+ * string. Mirrors `AgentStateTransitionDropReasonSchema` in
+ * `electron/schemas/agent.ts`; keep the two in lockstep.
+ *
+ * Note: the bus event (`agent:state-transition-dropped` after the bridge)
+ * is the source of truth for diagnostics — the `transition-result` wire
+ * does NOT carry this discriminator; it only carries `success: boolean`.
+ */
+export type AgentStateTransitionDropReason =
+  | "no-op"
+  | "hysteresis"
+  | "stale-session"
+  | "schema-invalid";
+
 /** Options for spawning a new PTY process (matches PtyManager interface) */
 export interface PtyHostSpawnOptions {
   cwd: string;
@@ -91,6 +108,24 @@ export type PtyHostRequest =
       projectId: string | null;
       /** Filesystem path of the project; used to warm the PTY pool at the project root. */
       projectPath?: string;
+      /**
+       * Per-panel working directories from restored session state, in
+       * warm-priority order (active worktree first, then most-recently-active).
+       * On session restore each panel spawns at its own worktree cwd rather
+       * than the project root, so warming only `projectPath` always misses the
+       * first terminal. The pty-host warms these extra cwds after the root
+       * drain/refill so the first restored panel hits the pool (#9774).
+       */
+      panelCwds?: string[];
+      /**
+       * Merged project env (global + project settings) computed at the Main
+       * process, sent so the pty-host can warm non-empty envHash slots for
+       * plain PTY panels (#9810). `null` when neither global nor project env
+       * is present — the pty-host falls back to the env-empty warm path. The
+       * pty-host is the single owner of hash computation, which guarantees
+       * the warmed key matches the `acquireByKey` lookup at spawn time.
+       */
+      projectEnv?: Record<string, string> | null;
     }
   | {
       type: "project-switch";
@@ -133,7 +168,7 @@ export type PtyHostRequest =
   | { type: "connect-port"; windowId: number }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
-  | { type: "acknowledge-data"; id: string; charCount: number }
+  | { type: "acknowledge-data"; id: string; byteCount: number }
   | { type: "set-analysis-enabled"; id: string; enabled: boolean }
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
@@ -146,12 +181,88 @@ export type PtyHostRequest =
     }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
-  | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
+  | {
+      type: "graceful-kill-by-project";
+      projectId: string;
+      requestId: string;
+      preserveSession?: boolean;
+    }
   | { type: "trim-state"; targetLines: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
-  | { type: "set-process-tree-poll-interval"; ms: number };
+  | { type: "set-process-tree-poll-interval"; ms: number }
+  | { type: "get-flow-control-snapshot"; requestId: string };
+
+/** Per-terminal flow-control state in a {@link FlowControlSnapshot}. */
+export interface FlowControlTerminalSnapshot {
+  terminalId: string;
+  /** Current flow status, or null when the terminal has no recorded status. */
+  flowStatus: TerminalFlowStatus | null;
+  /**
+   * Pause-coordinator hold tokens currently keeping this terminal paused
+   * (sorted, possibly empty). Stringified `PauseToken`s — kept as plain
+   * strings here so the shared protocol stays free of pty-host-only types.
+   */
+  heldTokens: string[];
+  /** Whether the visual stream is suspended (FUTURE_SAB stall path). */
+  isSuspended: boolean;
+  /** Activity tier (streaming policy). */
+  activityTier: PtyHostActivityTier;
+  /** Wall-clock ms the terminal has been paused, or null when not paused. */
+  pausedDurationMs: number | null;
+}
+
+/** Per-transport queue-depth entry in a {@link FlowControlSnapshot}. */
+export interface FlowControlQueueEntry {
+  terminalId: string;
+  layer: "ipc" | "port";
+  pendingBytes: number;
+}
+
+/**
+ * Backpressure lifecycle counters captured in a {@link FlowControlSnapshot}.
+ * Mirrors the pty-host's `BackpressureStats` (serializable subset).
+ */
+export interface BackpressureStatsSnapshot {
+  pauseCount: number;
+  resumeCount: number;
+  suspendCount: number;
+  forceResumeCount: number;
+}
+
+/** Resource-governor runtime state in a {@link FlowControlSnapshot}. */
+export interface ResourceGovernorSnapshot {
+  isThrottling: boolean;
+  isWarning: boolean;
+  activeProfile: ResourceProfile;
+  /**
+   * EMA-smoothed heap utilization percent, or null during warmup (the first
+   * ~5 ticks, before the smoothed signal has stabilized). Null is distinct
+   * from 0% so consumers can tell "not yet warmed up" from "0% heap used".
+   */
+  smoothedUtilizationPercent: number | null;
+  /** Ms since throttle engaged, or 0 when not throttling. */
+  throttleDurationMs: number;
+}
+
+/**
+ * On-demand structured flow-control snapshot from the pty-host. Assembled from
+ * live backpressure / pause-coordinator / resource-governor state at request
+ * time and NOT gated by the streaming-metrics flag (that gate governs the
+ * periodic reliability-metric push, not this diagnostic pull). Captured by
+ * `DiagnosticsCollector` for support bundles.
+ */
+export interface FlowControlSnapshot {
+  timestamp: number;
+  terminals: FlowControlTerminalSnapshot[];
+  /** Live IPC + per-window MessagePort queue depths (FUTURE_SAB path excluded). */
+  queueDepth: FlowControlQueueEntry[];
+  /** Sum of pending bytes across the live IPC + port paths. */
+  totalPendingBytes: number;
+  stats: BackpressureStatsSnapshot;
+  resourceGovernor: ResourceGovernorSnapshot;
+}
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -211,6 +322,36 @@ export type PtyHostEvent =
       waitingReason?: WaitingReason;
       sessionCost?: number;
       sessionTokens?: number;
+      /**
+       * Live activity-temperature reading at the moment the transition was
+       * committed. Present only for transitions that flow through the activity
+       * detector. The resize `suppressed` flag is intentionally NOT carried —
+       * it is a different signal and would conflate transition-level decisions
+       * with resize-quiet observation in the diagnostics view.
+       */
+      temperature?: number;
+      /** Heat impulse that drove the live temperature sample. */
+      heatAdded?: number;
+      /** Number of changed characters in the most recent sample. */
+      changedChars?: number;
+    }
+  | {
+      type: "agent-state-transition-dropped";
+      id: string;
+      agentId?: AgentId;
+      worktreeId?: string;
+      outcome: AgentStateTransitionDropReason;
+      currentState: AgentState;
+      attemptedState?: AgentState;
+      trigger?: string;
+      confidence?: number;
+      cwd?: string;
+      spawnedAt?: number;
+      terminalSpawnedAt?: number;
+      reason?: string;
+      validationErrors?: string[];
+      traceId?: string;
+      timestamp: number;
     }
   | {
       type: "agent-detected";
@@ -273,7 +414,16 @@ export type PtyHostEvent =
   | {
       type: "host-memory-warning";
       isWarning: boolean;
+      /**
+       * Utilization of the binding memory budget — the max of V8 heap against
+       * its --max-old-space-size cap and combined heap + external against the
+       * total pty-host process budget.
+       */
       utilizationPercent: number;
+      /** V8 heap used, MB. */
+      heapMb?: number;
+      /** Off-heap external memory (includes all ArrayBuffer backing stores), MB. */
+      externalMb?: number;
       timestamp: number;
     }
   | {
@@ -316,6 +466,11 @@ export type PtyHostEvent =
   | {
       type: "broadcast-write-result";
       results: BroadcastWriteTargetResult[];
+    }
+  | {
+      type: "flow-control-snapshot";
+      requestId: string;
+      snapshot: FlowControlSnapshot;
     };
 
 export interface FdLeakWarningPayload {
@@ -528,7 +683,13 @@ export interface TerminalReliabilityMetricPayload {
     | "wake-latency"
     | "pending-byte-cap-hit"
     | "pending-bytes-gauge"
-    | "throughput-rate";
+    | "throughput-rate"
+    | "tier-transition"
+    | "pause-duration-gauge"
+    | "queue-depth-gauge"
+    | "data-loss-count"
+    | "buffer-memory-gauge"
+    | "ipc-cap-drop";
   timestamp: number;
   durationMs?: number;
   bufferUtilization?: number;
@@ -544,6 +705,61 @@ export interface TerminalReliabilityMetricPayload {
     bytesPerSecond: number;
     avgPacketSizeBytes: number;
   }>;
+  /** Previous activity tier — only set when metricType is "tier-transition". */
+  tierTransitionFrom?: PtyHostActivityTier;
+  /** New activity tier — only set when metricType is "tier-transition". */
+  tierTransitionTo?: PtyHostActivityTier;
+  /** Call-site label identifying which path drove the transition. */
+  tierTransitionReason?: string;
+  /** Snapshot of pause-coordinator holds at transition time (sorted, possibly empty). */
+  tierTransitionHeldTokens?: string[];
+  /**
+   * Used by `pause-duration-gauge`: per-paused-terminal held duration sampled
+   * at the metric tick. Field name `heldDurationMs` distinguishes the gauge
+   * (a point-in-time state) from `durationMs` on `pause-end` (a span resolved
+   * at resume).
+   */
+  perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+  /**
+   * Used by `queue-depth-gauge`: per-terminal queue depth for the live IPC
+   * and per-window MessagePort paths. Excludes the FUTURE_SAB path
+   * (dead in production) so the dead-code and live paths stay independently
+   * observable. The `layer` discriminator lets consumers split per-path
+   * attribution in one pass.
+   */
+  perTerminalQueueDepth?: Array<{
+    terminalId: string;
+    layer: "ipc" | "port";
+    pendingBytes: number;
+  }>;
+  /**
+   * Used by `data-loss-count`: number of bytes dropped since the last tick.
+   * Always paired with `dataLossCountDelta` (one or more chunks may be
+   * dropped per drop event).
+   */
+  droppedBytesDelta?: number;
+  /** Used by `data-loss-count`: number of drop events since the last tick. */
+  dataLossCountDelta?: number;
+  /**
+   * Used by `buffer-memory-gauge`: aggregate estimated scrollback-buffer memory
+   * across all terminals, in bytes (`Σ scrollbackLines × cols × 12`). This is the
+   * raw typed-array baseline (3 uint32s per cell) — a comparator for attribution,
+   * not a precise heap measure. Excludes pending/queue bytes (those are reported
+   * by `pending-bytes-gauge` / `queue-depth-gauge`) so the two never double-count.
+   */
+  estimatedBufferMemoryBytes?: number;
+  /**
+   * Used by `buffer-memory-gauge`: per-terminal scrollback-buffer estimate, sorted
+   * descending by `scrollbackEstimateBytes` so the heaviest contributor is first.
+   * This is the attribution signal that lets the governor (and operators) see which
+   * terminals drive buffer memory under sustained warning-band pressure.
+   */
+  perTerminalBufferMemory?: Array<{
+    terminalId: string;
+    scrollbackEstimateBytes: number;
+    scrollbackLines: number;
+    cols: number;
+  }>;
 }
 
 /**
@@ -558,13 +774,43 @@ export type RendererToPtyHostMessage =
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
  * These bypass the Main process for low-latency terminal output.
+ *
+ * `tier-changed` reconciles the renderer's dedupe baseline when the host
+ * rewrites a terminal's activity tier on its own (window connect/disconnect/
+ * project switch via `recomputeActivityTiers`). It rides the same per-window
+ * MessagePort as `data`, so it is FIFO-ordered ahead of any subsequently
+ * suppressed/emitted chunk — routing it through the Main process instead would
+ * race the direct data path and lose that ordering guarantee.
+ *
+ * `terminal-status` carries a per-window `data-loss` pulse for the multi-window
+ * fan-out case: when one window's batcher accepts a chunk but another window's
+ * is saturated, the loss is local to the saturated window. The Main-process
+ * `terminal-status` event is a broadcast to every window, so it can't signal a
+ * single window without falsely alerting the ones that received the data. This
+ * variant rides the saturated window's own MessagePort instead, FIFO-ordered
+ * with its data so the discontinuity marker lands in the right place.
  */
-export type PtyHostToRendererMessage = {
-  type: "data";
-  id: string;
-  data: Uint8Array;
-  bytes: number;
-};
+export type PtyHostToRendererMessage =
+  | {
+      type: "data";
+      id: string;
+      data: Uint8Array;
+      bytes: number;
+    }
+  | {
+      type: "tier-changed";
+      id: string;
+      tier: "active" | "background";
+    }
+  | {
+      type: "terminal-status";
+      id: string;
+      status: TerminalFlowStatus;
+      bufferUtilization?: number;
+      /** Byte count discarded — only set when status is "data-loss". */
+      droppedBytes?: number;
+      timestamp: number;
+    };
 
 /** Per-process resource breakdown entry */
 export interface TerminalResourceProcess {

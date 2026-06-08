@@ -19,11 +19,17 @@ const fsMock = vi.hoisted(() => ({
 }));
 
 const ptyManagerMock = vi.hoisted(() => ({
-  getAll: vi.fn<() => unknown[]>(() => []),
+  getAllTerminalsAsync: vi.fn<() => Promise<unknown[]>>(async () => []),
   getProjectStats: vi.fn(() => ({ terminalCount: 0 })),
   gracefulKillByProject: vi.fn(
     async () => [] as Array<{ id: string; agentSessionId: string | null }>
   ),
+  on: vi.fn(),
+  off: vi.fn(),
+}));
+
+vi.mock("../../window/serviceRefs.js", () => ({
+  getPtyClient: () => ptyManagerMock,
 }));
 
 vi.mock("../../store.js", () => ({
@@ -41,10 +47,6 @@ const writeHibernatedMarkerMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logError: vi.fn(),
-}));
-
-vi.mock("../PtyManager.js", () => ({
-  getPtyManager: () => ptyManagerMock,
 }));
 
 vi.mock("fs/promises", () => ({
@@ -68,6 +70,14 @@ vi.mock("../pty/terminalSessionPersistence.js", () => ({
 
 import { logInfo, logError } from "../../utils/logger.js";
 import { HibernationService } from "../HibernationService.js";
+import type { PtyClient } from "../PtyClient.js";
+
+/** Construct a service with the PtyClient-shaped mock injected (#10054). */
+function makeService(): HibernationService {
+  const service = new HibernationService();
+  service.setPtyClient(ptyManagerMock as unknown as PtyClient);
+  return service;
+}
 
 describe("HibernationService", () => {
   beforeEach(() => {
@@ -93,7 +103,7 @@ describe("HibernationService", () => {
       inactiveThresholdHours: Number.NaN,
     });
 
-    const service = new HibernationService();
+    const service = makeService();
 
     expect(service.getConfig()).toEqual({
       enabled: false,
@@ -107,7 +117,7 @@ describe("HibernationService", () => {
       inactiveThresholdHours: 500,
     });
 
-    const service = new HibernationService();
+    const service = makeService();
 
     expect(service.getConfig()).toEqual({
       enabled: true,
@@ -117,7 +127,7 @@ describe("HibernationService", () => {
 
   it("ignores invalid update payload values", () => {
     (storeMock.get as Mock).mockReturnValue(undefined);
-    const service = new HibernationService();
+    const service = makeService();
 
     service.updateConfig({
       enabled: "true" as unknown as boolean,
@@ -135,7 +145,7 @@ describe("HibernationService", () => {
       enabled: true,
       inactiveThresholdHours: 72,
     });
-    const service = new HibernationService();
+    const service = makeService();
 
     service.updateConfig({
       inactiveThresholdHours: Number.NaN,
@@ -147,8 +157,27 @@ describe("HibernationService", () => {
     });
   });
 
+  it("re-acquires PtyClient after a Settings toggle off→on (#10054)", async () => {
+    // stop() clears the injected PtyClient; start() must re-acquire it via
+    // getPtyClient() or checkAndHibernate() stays guarded-out forever.
+    (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+    ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
+    projectStoreMock.getAllProjects.mockReturnValue([]);
+
+    const service = makeService();
+    service.start();
+    service.updateConfig({ enabled: false }); // → stop(), clears ptyClient
+    service.updateConfig({ enabled: true }); // → start(), must re-acquire
+
+    ptyManagerMock.getAllTerminalsAsync.mockClear();
+    await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+    expect(ptyManagerMock.getAllTerminalsAsync).toHaveBeenCalled();
+    service.stop();
+  });
+
   it("does not call clearProjectState during hibernation", async () => {
-    ptyManagerMock.getAll.mockReturnValue([
+    ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
       { id: "t1", projectId: "proj-1", agentState: "idle" },
       { id: "t2", projectId: "proj-1", agentState: "idle" },
     ]);
@@ -169,7 +198,7 @@ describe("HibernationService", () => {
     projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
     projectStoreMock.getAllProjects.mockReturnValue([inactiveProject]);
 
-    const service = new HibernationService();
+    const service = makeService();
     await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
     expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -181,7 +210,7 @@ describe("HibernationService", () => {
   it.each([0, null, undefined, NaN])(
     "skips projects with falsy lastOpened (%s) in checkAndHibernate",
     async (falsyValue) => {
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-valid-1", agentState: "idle" },
         { id: "t2", projectId: "proj-falsy", agentState: "idle" },
         { id: "t3", projectId: "proj-valid-2", agentState: "idle" },
@@ -219,7 +248,7 @@ describe("HibernationService", () => {
         validOldProject2,
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-valid-1", {
@@ -238,7 +267,7 @@ describe("HibernationService", () => {
       enabled: true,
       inactiveThresholdHours: 24,
     });
-    const service = new HibernationService();
+    const service = makeService();
     const checkSpy = vi.spyOn(service as never, "checkAndHibernate" as never);
 
     service.start();
@@ -263,7 +292,7 @@ describe("HibernationService", () => {
     }
 
     it("runs even when auto-hibernation is disabled", async () => {
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "idle" })]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal({ agentState: "idle" })]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       (storeMock.get as Mock).mockReturnValue({
@@ -281,7 +310,7 @@ describe("HibernationService", () => {
         },
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -290,7 +319,9 @@ describe("HibernationService", () => {
     });
 
     it("skips the current active project", async () => {
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal({ projectId: "active-proj" })]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ projectId: "active-proj" }),
+      ]);
 
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
@@ -303,14 +334,14 @@ describe("HibernationService", () => {
         },
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
     });
 
     it("skips projects inactive less than 30 minutes", async () => {
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal()]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal()]);
 
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
@@ -323,7 +354,7 @@ describe("HibernationService", () => {
         },
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -332,7 +363,7 @@ describe("HibernationService", () => {
     it.each(["working", "waiting", "directing"] as const)(
       "skips projects with %s agent terminals",
       async (agentState) => {
-        ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState })]);
+        ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal({ agentState })]);
 
         (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
         projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
@@ -345,7 +376,7 @@ describe("HibernationService", () => {
           },
         ]);
 
-        const service = new HibernationService();
+        const service = makeService();
         await service.hibernateUnderMemoryPressure();
 
         expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -353,7 +384,7 @@ describe("HibernationService", () => {
     );
 
     it("hibernates eligible idle projects", async () => {
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "idle" })]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal({ agentState: "idle" })]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
@@ -367,7 +398,7 @@ describe("HibernationService", () => {
         },
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -393,7 +424,11 @@ describe("HibernationService", () => {
           projectId: "proj-valid-2",
           agentState: "idle",
         });
-        ptyManagerMock.getAll.mockReturnValue([validTerminal, falsyTerminal, validTerminal2]);
+        ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+          validTerminal,
+          falsyTerminal,
+          validTerminal2,
+        ]);
         ptyManagerMock.gracefulKillByProject.mockResolvedValue([
           { id: "t1", agentSessionId: null },
         ]);
@@ -421,7 +456,7 @@ describe("HibernationService", () => {
           },
         ]);
 
-        const service = new HibernationService();
+        const service = makeService();
         await service.hibernateUnderMemoryPressure();
 
         expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-valid-1", {
@@ -436,7 +471,7 @@ describe("HibernationService", () => {
     );
 
     it("skips projects with no terminals", async () => {
-      ptyManagerMock.getAll.mockReturnValue([]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
 
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
@@ -449,14 +484,14 @@ describe("HibernationService", () => {
         },
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
     });
 
     it("skips projects with active git operations", async () => {
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "idle" })]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal({ agentState: "idle" })]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       fsMock.readdir.mockImplementation(async (dirPath: string) => {
@@ -475,7 +510,7 @@ describe("HibernationService", () => {
         },
       ]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -502,9 +537,11 @@ describe("HibernationService", () => {
       "skips projects with %s agent in scheduled hibernation",
       async (agentState) => {
         setupScheduledTest();
-        ptyManagerMock.getAll.mockReturnValue([{ id: "t1", projectId: "proj-1", agentState }]);
+        ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+          { id: "t1", projectId: "proj-1", agentState },
+        ]);
 
-        const service = new HibernationService();
+        const service = makeService();
         await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
         expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -513,12 +550,12 @@ describe("HibernationService", () => {
 
     it("proceeds with idle agents in scheduled hibernation", async () => {
       setupScheduledTest();
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -542,7 +579,7 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - TWENTY_FIVE_HOURS,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
@@ -559,7 +596,7 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - THIRTY_ONE_MINUTES,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
@@ -579,7 +616,7 @@ describe("HibernationService", () => {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -593,7 +630,7 @@ describe("HibernationService", () => {
       });
       fsMock.stat.mockResolvedValue({ mtimeMs: Date.now() - 5000 }); // 5 seconds ago
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -609,7 +646,7 @@ describe("HibernationService", () => {
       // Lock is older than the 24h threshold
       fsMock.stat.mockResolvedValue({ mtimeMs: Date.now() - thresholdMs - 1000 });
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -624,7 +661,7 @@ describe("HibernationService", () => {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -642,7 +679,7 @@ describe("HibernationService", () => {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
@@ -652,7 +689,7 @@ describe("HibernationService", () => {
       setupScheduledProject();
       // Default ENOENT for all readdir calls (set in beforeEach)
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -674,7 +711,7 @@ describe("HibernationService", () => {
         throw Object.assign(new Error("EACCES"), { code: "EACCES" });
       });
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       // fail-closed: readdir error on .git means we skip that gitdir and check next
@@ -701,7 +738,7 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - TWENTY_FIVE_HOURS,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
         { id: "t2", projectId: "proj-2", agentState: "idle" },
       ]);
@@ -714,7 +751,7 @@ describe("HibernationService", () => {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       });
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalledWith("proj-1");
@@ -732,7 +769,7 @@ describe("HibernationService", () => {
       // Lock is 31 minutes old — older than MEMORY_PRESSURE_INACTIVE_MS (30 min), so stale
       fsMock.stat.mockResolvedValue({ mtimeMs: Date.now() - THIRTY_ONE_MINUTES - 1000 });
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
@@ -749,7 +786,7 @@ describe("HibernationService", () => {
       // stat throws ENOENT — lock was deleted between readdir and stat
       fsMock.stat.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       // Lock disappeared, so no active git operation — proceed
@@ -762,21 +799,21 @@ describe("HibernationService", () => {
   describe("structured logging", () => {
     it("logs auto-hibernation-disabled when config is off", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
-      const service = new HibernationService();
+      const service = makeService();
       service.start();
       expect(logInfo).toHaveBeenCalledWith("auto-hibernation-disabled");
     });
 
     it("logs auto-hibernation-started when config is on", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
-      const service = new HibernationService();
+      const service = makeService();
       service.start();
       expect(logInfo).toHaveBeenCalledWith("auto-hibernation-started");
     });
 
     it("logs auto-hibernation-stopped on stop", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
-      const service = new HibernationService();
+      const service = makeService();
       service.start();
       service.stop();
       expect(logInfo).toHaveBeenCalledWith("auto-hibernation-stopped");
@@ -784,7 +821,7 @@ describe("HibernationService", () => {
 
     it("logs auto-hibernation-check-failed when interval check throws", async () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
-      const service = new HibernationService();
+      const service = makeService();
       const testError = new Error("boom");
       (
         vi.spyOn(service as never, "checkAndHibernate" as never) as unknown as Mock
@@ -798,7 +835,7 @@ describe("HibernationService", () => {
 
     it("logs auto-hibernation-initial-check-failed when initial check throws", async () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
-      const service = new HibernationService();
+      const service = makeService();
       const testError = new Error("init-boom");
       (
         vi.spyOn(service as never, "checkAndHibernate" as never) as unknown as Mock
@@ -821,12 +858,12 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - 25 * 60 * 60 * 1000,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(logInfo).toHaveBeenCalledWith("scheduled-hibernate-project", {
@@ -853,13 +890,13 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - 25 * 60 * 60 * 1000,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
       const testError = new Error("hibernate-boom");
       ptyManagerMock.gracefulKillByProject.mockRejectedValue(testError);
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(logError).toHaveBeenCalledWith("scheduled-hibernate-failed", testError, {
@@ -874,7 +911,7 @@ describe("HibernationService", () => {
       storeMock.set.mockImplementation(() => {
         (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 48 });
       });
-      const service = new HibernationService();
+      const service = makeService();
       service.updateConfig({ inactiveThresholdHours: 48 });
 
       expect(logInfo).toHaveBeenCalledWith("hibernation-config-updated", {
@@ -898,7 +935,7 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - TWENTY_FIVE_HOURS,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
         { id: "t2", projectId: "proj-1", agentState: "idle" },
       ]);
@@ -911,7 +948,7 @@ describe("HibernationService", () => {
     it("writes hibernation markers for each killed terminal", async () => {
       setupHibernation();
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t1");
@@ -921,7 +958,7 @@ describe("HibernationService", () => {
     it("emits event to renderer with correct payload", async () => {
       setupHibernation();
 
-      const service = new HibernationService();
+      const service = makeService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
       expect(broadcastToRendererMock).toHaveBeenCalledWith(
@@ -946,12 +983,12 @@ describe("HibernationService", () => {
           lastOpened: Date.now() - 31 * 60 * 1000,
         },
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
-      const service = new HibernationService();
+      const service = makeService();
       await service.hibernateUnderMemoryPressure();
 
       expect(broadcastToRendererMock).toHaveBeenCalledWith(
@@ -966,7 +1003,7 @@ describe("HibernationService", () => {
       setupHibernation();
       const callback = vi.fn();
 
-      const service = new HibernationService();
+      const service = makeService();
       service.onProjectHibernated(callback);
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
@@ -977,7 +1014,7 @@ describe("HibernationService", () => {
       setupHibernation();
       const callback = vi.fn();
 
-      const service = new HibernationService();
+      const service = makeService();
       const unsub = service.onProjectHibernated(callback);
       unsub();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
@@ -990,7 +1027,7 @@ describe("HibernationService", () => {
       const failingCallback = vi.fn().mockRejectedValue(new Error("boom"));
       const successCallback = vi.fn();
 
-      const service = new HibernationService();
+      const service = makeService();
       service.onProjectHibernated(failingCallback);
       service.onProjectHibernated(successCallback);
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();

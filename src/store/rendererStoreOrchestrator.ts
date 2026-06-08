@@ -6,7 +6,10 @@ import {
   persistMruList,
 } from "./worktreeStore";
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
+import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
+import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
+import { subscribeFleetBroadcastResult } from "@/components/Fleet/fleetRawInputBroadcast";
 import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
@@ -14,6 +17,7 @@ import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
+import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
@@ -28,8 +32,17 @@ import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
 import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
+import { isPtyPanel } from "@shared/types/panel";
 
-const debouncedPersistMruList = debounce(persistMruList, 150);
+// Thunk form: read the live mruList at fire time, not at schedule time. A
+// snapshot captured at schedule time could be stale by the time the debounce
+// fires and would clobber a fresher immediate persistMruList() from a
+// deliberate worktree selection (#9922). persistMruList already version-
+// sequences and dedupes, so the last writer with the live list wins.
+const debouncedPersistMruList = debounce(
+  () => persistMruList(usePanelStore.getState().mruList),
+  150
+);
 
 let cleanupFn: (() => void) | null = null;
 
@@ -129,7 +142,10 @@ export function initStoreOrchestrator(): () => void {
   );
 
   // 1c. Terminal MRU recording: append the newly focused terminal to the
-  //     global MRU list and persist it (debounced) unless suppressed.
+  //     MRU list and persist it (debounced) unless suppressed. Only PTY
+  //     panels (kind "terminal") become quick-switcher items, so non-PTY
+  //     panels (browser, dev-preview, review) must not pollute the capped
+  //     MRU list with entries the switcher will never show (#9922).
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
@@ -137,8 +153,15 @@ export function initStoreOrchestrator(): () => void {
         (focusedId) => {
           if (!focusedId) return;
           if (isMruRecordingSuppressed()) return;
+          const panel = usePanelStore.getState().panelsById[focusedId];
+          // Only record panels the quick switcher can actually show — mirror
+          // its item filter (PTY kind, persisted, has a live PTY). Help/overlay
+          // terminals carry excludeFromPersistence and must not eat the cap.
+          if (!panel || !isPtyPanel(panel)) return;
+          if (panel.excludeFromPersistence === true) return;
+          if (panel.hasPty === false) return;
           usePanelStore.getState().recordMru(`terminal:${focusedId}`);
-          debouncedPersistMruList(usePanelStore.getState().mruList);
+          debouncedPersistMruList();
         }
       )
     )
@@ -203,6 +226,11 @@ export function initStoreOrchestrator(): () => void {
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             semanticAnalysisService.unregisterTerminal(removedId);
+            // Drop the renderer-side artifact store entry so content strings
+            // don't pin the dead panel's heap for the rest of the renderer
+            // lifetime (#10023). The hook listener Set is owned by each
+            // mounted `useArtifacts` consumer's own `useEffect` cleanup.
+            removeArtifactsForTerminal(removedId);
 
             const removed = prevById[removedId];
             if (removed?.worktreeId) {
@@ -264,12 +292,61 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
+  // 3c. Artifact-store trash cleanup: same `trashPanel`-doesn't-shrink-
+  //     `panelIds` constraint as 3b above, but for the renderer-side artifact
+  //     Map. The user-close path (`trashPanel`) flips `panelsById[id].location`
+  //     to "trash" and adds the id to `trashedTerminals` — `panelIds` is
+  //     unchanged, so the section-3 subscriber bails. Watch the
+  //     `trashedTerminals` map's key set; for each newly-trashed id, drop
+  //     the artifact store entry. Selector returns a primitive (the key
+  //     count plus a sorted key fingerprint) so unrelated `panelsById`
+  //     mutations don't wake this subscription. The Map reference itself
+  //     swaps on every change in `registrySlice.trashPanel`, so ref
+  //     equality is a reliable trigger.
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.trashedTerminals,
+        (trashed, prevTrashed) => {
+          if (trashed === prevTrashed) return;
+          for (const id of trashed.keys()) {
+            if (!prevTrashed.has(id)) {
+              removeArtifactsForTerminal(id);
+            }
+          }
+        }
+      )
+    )
+  );
+
   // 5a. Fleet-arming panel pruning: drop armed ids when their panels are
   //     removed, trashed, backgrounded, or otherwise become fleet-ineligible.
   //     Lives in the orchestrator so HMR/test teardown cleans the subscription
   //     deterministically (previously this was a module-scope subscription in
   //     `fleetArmingStore.ts`).
   disposables.add(toDisposable(subscribeFleetArmingPanelPruning()));
+
+  // 5b. Fleet per-target overrides pruning: drop a pane's payload override /
+  //     skip flag when it leaves the armed set, so a disarmed-then-rearmed pane
+  //     isn't silently excluded from the next broadcast by a stale skip (#9973).
+  //     Same orchestrator-scoped lifecycle as the arming pruning above.
+  disposables.add(toDisposable(subscribeFleetTargetOverridesPruning()));
+
+  // 5c. Fleet broadcast-result subscription: per-target write results for
+  //     keystroke broadcasts (dead-PTY auto-disarm + transient failure chip).
+  //     Lives here for the same HMR/`vi.resetModules()` reason as 5a — the
+  //     IIFE that previously owned this discarded its IPC unsubscribe and
+  //     gated re-registration on a `globalThis` flag, which left stale
+  //     callbacks firing against orphaned store instances after a module
+  //     reset (issue #9967).
+  disposables.add(toDisposable(subscribeFleetBroadcastResult()));
+
+  // 5d. Fleet-failure auto-clear: drop failure pills when the armed set drains
+  //     or a single pane is disarmed. Lives in the orchestrator for the same
+  //     HMR/test-teardown reason as 5a — the module-scope subscription in
+  //     `fleetFailureStore.ts` was never torn down and the `globalThis`
+  //     registration guard mishandled re-registration under HMR (#9923).
+  disposables.add(toDisposable(subscribeFleetFailureAutoClear()));
 
   // 5. Availability → agent-settings re-normalization: installed/missing state
   //    is the input to `normalizeAgentSelection`, so re-run normalization any
@@ -313,6 +390,27 @@ export function initStoreOrchestrator(): () => void {
       })
     )
   );
+
+  // 7. Flush the MRU debounce before the view is torn down. The 150ms debounce
+  //    above strands the latest MRU write if the user switches projects, closes
+  //    the window, or quits within the debounce window. `visibilitychange`
+  //    fires on WebContentsView detach while the renderer is still alive and
+  //    IPC channels are open, so the async persist completes (#9914). Mirrors
+  //    the `pagehide` flush in `optimisticPanelClose.ts`, but uses
+  //    `visibilitychange` because `persistMruList` is async IPC, which would
+  //    not complete in the late `pagehide` teardown window.
+  if (typeof document !== "undefined") {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) return;
+      void debouncedPersistMruList.flush();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    disposables.add(
+      toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
+    );
+    // Cover the race where the document is already hidden at init time.
+    if (document.hidden) void debouncedPersistMruList.flush();
+  }
 
   cleanupFn = () => {
     disposables.dispose();

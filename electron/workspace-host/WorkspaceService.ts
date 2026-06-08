@@ -9,7 +9,7 @@ import { generateProjectId, settingsFilePath } from "../services/projectStorePat
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
 import { classifyGitError, getGitRecoveryAction } from "../../shared/utils/gitOperationErrors.js";
-import type { Worktree } from "../../shared/types/worktree.js";
+import type { Worktree, WslGitEligibility } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
   WorktreeSnapshot,
@@ -22,8 +22,9 @@ import type {
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
 } from "../../shared/types/plugin.js";
-import type { CIStatus } from "../../shared/types/forge.js";
+import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
   getGitDir,
@@ -37,7 +38,7 @@ import { events } from "../services/events.js";
 import { WorktreeLifecycleService, type WorkspaceHostContext } from "./WorktreeLifecycleService.js";
 import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
-import { PRIntegrationService } from "./PRIntegrationService.js";
+import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { waitForPathExists } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -53,6 +54,33 @@ import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import parcelWatcher from "@parcel/watcher";
 import { MutableDisposable } from "../utils/lifecycle.js";
+
+function normalizePathKeyForPrefix(value: string): string {
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized === "" && value.startsWith("/") ? "/" : normalized;
+}
+
+function pathParentForPrefix(value: string): string {
+  const normalized = normalizePathKeyForPrefix(value);
+  if (normalized === "/") return "/";
+  const slashIndex = normalized.lastIndexOf("/");
+  if (slashIndex <= 0) return slashIndex === 0 ? "/" : normalized;
+  return normalized.slice(0, slashIndex);
+}
+
+function isPathKeyAtOrUnder(candidate: string, parent: string): boolean {
+  const normalizedCandidate = normalizePathKeyForPrefix(candidate);
+  const normalizedParent = normalizePathKeyForPrefix(parent);
+  const comparableCandidate =
+    process.platform === "win32" ? normalizedCandidate.toLowerCase() : normalizedCandidate;
+  const comparableParent =
+    process.platform === "win32" ? normalizedParent.toLowerCase() : normalizedParent;
+
+  return (
+    comparableCandidate === comparableParent ||
+    comparableCandidate.startsWith(comparableParent === "/" ? "/" : `${comparableParent}/`)
+  );
+}
 
 // Re-export so existing test imports (`probeGitLfsAvailable` from
 // `../WorkspaceService.js`) continue to work without modification.
@@ -89,9 +117,31 @@ function isTransientWorktreeRemoveLockError(error: unknown): boolean {
   );
 }
 
+// Ceiling for a single queued git-status pass holding a pollQueue slot. On
+// expiry p-queue rejects that task's add() promise and frees the slot (its
+// finally runs #next), so three slow/stuck worktrees can never permanently
+// starve the shared queue and freeze every other worktree. Every pollQueue
+// consumer tolerates the rejection (poll() catches, refreshAll uses
+// allSettled, forceRefreshAfterGap catches). The underlying work isn't
+// cancelled, but the individual fs/git awaits are independently bounded.
+const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
+
+// Ceiling for a single topology reconcile holding the concurrency-1 queue. A
+// stuck `git worktree prune`/`list` would otherwise pin the only slot and the
+// pending flag forever, freezing all worktree add/remove detection.
+const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
+
+// Overall ceiling for a user-initiated full refresh. Guarantees the port
+// request always replies so the sidebar's Refresh button can never hang or be
+// a silent no-op, even when the underlying pipelines are degraded.
+const HOST_REFRESH_TIMEOUT_MS = 45_000;
+
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
-  private pollQueue = new PQueue({ concurrency: 3 });
+  private pollQueue = new PQueue({
+    concurrency: 3,
+    timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
+  });
   private mainBranch: string = "main";
   private activeWorktreeId: string | null = null;
   private pollIntervalActive: number = DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS;
@@ -142,10 +192,32 @@ export class WorkspaceService {
   private wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }> = {};
   /** Cached default WSL distro (populated lazily on first WSL-path detection). */
   private wslDefaultDistroPromise: Promise<string | null> | null = null;
+  /**
+   * Last default distro the poller observed. `undefined` until the first probe
+   * seeds it (so the first poll tick can't spuriously diff against it). `null`
+   * means the probe ran but found no default (WSL absent / probe failed).
+   */
+  private wslLastKnownDefaultDistro: string | null | undefined = undefined;
+  /** Background poll handle that watches for WSL default-distro changes. */
+  private wslDistroPoller: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Monotonic guard so a slow probe (poll or reprobe) that resolves after a
+   * newer probe — or after a project switch — discards its stale result instead
+   * of overwriting fresher state or refreshing the next project's monitors.
+   */
+  private wslProbeSeq = 0;
+  /** How often to re-check the WSL default distro (Windows only). */
+  private static readonly WSL_DISTRO_POLL_INTERVAL_MS = 60_000;
 
   // Topology watcher — watches `.git/worktrees/` for external worktree
   // create/delete and triggers serialized reconciliation.
   private topologyWatcherSubscription = new MutableDisposable();
+  // No constructor `timeout` here: this queue's task wraps runTopologyReconcile
+  // in withTimeout itself (and always resolves via its own try/catch/finally),
+  // so it can never pin the single slot. A p-queue constructor timeout would
+  // instead *reject* the add() promise (p-queue passes no fallback to
+  // pTimeout), and this add() call is fire-and-forget — that would surface as
+  // an unhandled rejection.
   private topologyReconcileQueue = new PQueue({ concurrency: 1 });
   private topologyReconcilePending = false;
   // App-owned worktree create/delete register the metadata-subdir basename
@@ -165,6 +237,13 @@ export class WorkspaceService {
   private topologyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private topologyWatcherEnabled = true;
   private topologyWatcherGeneration = 0;
+  // One-shot guard for the topology-watcher-dark signal (#9908). Set when the
+  // subscribe() rejects at cold start or a 5s pending-event safety valve
+  // expires — both mean the watcher is silently unreliable and the worktree
+  // list may drift. Cleared only by a *successful* `runTopologyReconcile()`
+  // (not by the watcher re-arming), because subscription success doesn't prove
+  // the topology was re-verified (#8516/#8558).
+  private topologyWatcherDarkNotified = false;
   // Watcher-independent safety net (#8510): the topology watcher can go
   // permanently silent (macOS FSEvents root deletion) or never start (metadata
   // dir absent), so a periodic reconcile bounds phantom-row staleness. Calls
@@ -221,7 +300,7 @@ export class WorkspaceService {
         monitor.triggerRefreshIfUpdating();
       },
     });
-    this.prService = new PRIntegrationService(pullRequestService, events, {
+    const prCallbacks: PRIntegrationCallbacks = {
       onPRDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
         if (!monitor) return;
@@ -293,7 +372,9 @@ export class WorkspaceService {
           worktreeId,
           prNumber: data.prNumber,
           prUrl: data.prUrl,
-          prState: data.prState,
+          // Legacy flat field stays narrow; `linked.pr.state` carries the
+          // full NormalizedPRState including "declined".
+          prState: data.prState === "declined" ? "closed" : data.prState,
           prCiStatus: resolvedPrCiStatus,
           prTitle: data.prTitle,
           issueNumber: data.issueNumber,
@@ -425,6 +506,19 @@ export class WorkspaceService {
       onDetectionStateChanged: (tripped) => {
         this.sendEvent({ type: "pr-detection-state", tripped });
       },
+    };
+    // Worker instances (DAINTREE_INSTANCE_ROLE=worker) never start the
+    // automatic PR polling loop — the UtilityProcess inherits the launch env
+    // from main, so the flag is readable here directly (#10123). On-demand
+    // refresh and detection wiring stay fully functional.
+    const rawInstanceRole = process.env.DAINTREE_INSTANCE_ROLE;
+    if (rawInstanceRole && rawInstanceRole !== "worker" && rawInstanceRole !== "attended") {
+      console.warn(
+        `WorkspaceService: unrecognized DAINTREE_INSTANCE_ROLE "${rawInstanceRole}" — defaulting to attended`
+      );
+    }
+    this.prService = new PRIntegrationService(pullRequestService, events, prCallbacks, {
+      isWorker: rawInstanceRole === "worker",
     });
 
     this.resourceActionExecutor = new ResourceActionExecutor({
@@ -496,6 +590,20 @@ export class WorkspaceService {
       if (this.pollingEnabled) {
         this.startPeriodicSafetyTimer();
       }
+
+      // Bulk self-heal of `wslGitByWorktree` (#9926, review #1). Main ships
+      // the *full global* persisted map on `load-project` and the host
+      // merges it into its in-memory mirror at the top of this method —
+      // by this point, the live worktree set is authoritative (set by
+      // `syncMonitors` above). The persisted map is single-instance
+      // (electron-store has no per-project key), so without project-scoping
+      // this self-heal would erase valid opt-ins for every other project on
+      // every load/prewarm/host-restart. The helper restricts the walk to
+      // keys whose path is rooted at this project's parent directory;
+      // foreign keys stay in the in-memory mirror for the duration of this
+      // load and are sent through to main untouched. The next load of the
+      // owning project picks them up.
+      this.pruneStaleWslGitEntries(worktrees);
 
       this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
 
@@ -570,32 +678,11 @@ export class WorkspaceService {
 
     const currentIds = new Set(worktrees.map((wt) => wt.id));
 
-    // Remove stale monitors
-    for (const [id, monitor] of this.monitors) {
+    // Remove stale monitors. Routed through the `removeMonitor` chokepoint
+    // so the persisted WSL git opt-in entry is pruned in lockstep (#9926).
+    for (const id of this.monitors.keys()) {
       if (!currentIds.has(id)) {
-        if (monitor.isMainWorktree) {
-          console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
-          continue;
-        }
-
-        if (this.activeWorktreeId === id) {
-          this.activeWorktreeId = null;
-        }
-
-        this.resourceActionExecutor.cleanupResourceActionState(id);
-        monitor.stop();
-        this.monitors.delete(id);
-        this.lruRemove(id);
-        this.recoverWatcherIfNoMonitorsRemain();
-        clearGitDirCache(monitor.path);
-        invalidateGitStatusCache(monitor.path);
-        this.sendEvent({
-          type: "worktree-removed",
-          worktreeId: id,
-          epoch: this.epoch,
-          seq: this.nextSeq(),
-        });
-        events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
+        this.removeMonitor(id);
       }
     }
 
@@ -711,21 +798,127 @@ export class WorkspaceService {
       this.wslDefaultDistroPromise = getDefaultWslDistro().catch(() => null);
     }
     const defaultDistro = await this.wslDefaultDistroPromise;
-    // UNC paths are case-insensitive on Windows; `wsl --list --verbose` returns
-    // the canonical case (e.g. "Ubuntu"). Normalize before comparing so a
-    // worktree opened via `\\wsl$\ubuntu\...` still matches the default.
-    const eligible =
-      defaultDistro !== null && defaultDistro.toLowerCase() === detected.distro.toLowerCase();
+    // Seed the poller's baseline from the first resolved probe so its first
+    // tick compares against a real value (no spurious refresh on a stable box).
+    this.wslLastKnownDefaultDistro = defaultDistro;
+    // Now that we know a WSL worktree exists, arm the background distro watcher
+    // (idempotent — only the first WSL worktree actually starts the interval).
+    this.startWslDistroPoller();
+    const eligibility = this.computeWslEligibility(detected.distro, defaultDistro);
     const persisted = this.wslGitByWorktree[wt.id];
 
     return {
       ...wt,
       isWslPath: true,
       wslDistro: detected.distro,
-      wslGitEligible: eligible,
+      wslPosixPath: detected.posixPath,
+      wslGitEligible: eligibility,
       wslGitOptIn: Boolean(persisted?.enabled),
       wslGitDismissed: Boolean(persisted?.dismissed),
     };
+  }
+
+  /**
+   * Compute three-state WSL git eligibility for a worktree distro against the
+   * current default distro. `null` default (probe failed / WSL absent) maps to
+   * `'unprobed'` rather than `'ineligible'` so the renderer can offer a
+   * re-check instead of a wrong "git runs via Windows" note. UNC paths are
+   * case-insensitive on Windows and `wsl --list --verbose` returns canonical
+   * case (e.g. "Ubuntu"), so compare case-insensitively.
+   */
+  private computeWslEligibility(
+    distro: string | undefined,
+    defaultDistro: string | null
+  ): WslGitEligibility {
+    if (!distro || defaultDistro === null) return "unprobed";
+    return defaultDistro.toLowerCase() === distro.toLowerCase() ? "eligible" : "ineligible";
+  }
+
+  /**
+   * Arm the Windows-only background watcher that re-checks the WSL default
+   * distro. The default distro can change mid-session (`wsl --set-default`,
+   * install/uninstall) and the renderer has no OS event to subscribe to, so we
+   * poll. Idempotent — a second call while already running is a no-op.
+   */
+  private startWslDistroPoller(): void {
+    if (process.platform !== "win32") return;
+    if (this.wslDistroPoller) return;
+    this.wslDistroPoller = setInterval(() => {
+      void this.pollWslDefaultDistro();
+    }, WorkspaceService.WSL_DISTRO_POLL_INTERVAL_MS);
+    // Don't keep the host process alive solely for this poll.
+    this.wslDistroPoller.unref?.();
+  }
+
+  /** Stop the WSL distro watcher (project switch / dispose). */
+  private stopWslDistroPoller(): void {
+    // Bump the sequence so any in-flight probe (poll or reprobe) sees itself
+    // superseded and bails before mutating state — otherwise a probe awaiting
+    // across a project switch could refresh the next project's monitors with
+    // this project's distro.
+    this.wslProbeSeq++;
+    if (this.wslDistroPoller) {
+      clearInterval(this.wslDistroPoller);
+      this.wslDistroPoller = null;
+    }
+  }
+
+  /**
+   * Probe the default distro under a sequence guard. Returns whether this probe
+   * is still the most recent one — a later probe (concurrent reprobe, or a
+   * project switch via `stopWslDistroPoller`) supersedes an earlier one so the
+   * stale result is discarded rather than overwriting fresher state.
+   */
+  private async probeDefaultDistro(): Promise<{ distro: string | null; current: boolean }> {
+    const seq = ++this.wslProbeSeq;
+    const distro = await getDefaultWslDistro().catch(() => null);
+    return { distro, current: seq === this.wslProbeSeq };
+  }
+
+  /** Commit a fresh probe result to the cache and fan it out to all monitors. */
+  private applyDefaultDistro(distro: string | null): void {
+    this.wslLastKnownDefaultDistro = distro;
+    this.wslDefaultDistroPromise = Promise.resolve(distro);
+    this.refreshWslEligibilityForAllMonitors(distro);
+  }
+
+  /**
+   * One poll tick: re-probe the default distro and, when it changed, invalidate
+   * the cache and refresh every WSL monitor's eligibility so existing worktrees
+   * stop using a stale decision.
+   */
+  private async pollWslDefaultDistro(): Promise<void> {
+    const { distro, current } = await this.probeDefaultDistro();
+    if (!current) return;
+    if (distro === this.wslLastKnownDefaultDistro) return;
+    this.applyDefaultDistro(distro);
+  }
+
+  /**
+   * Recompute and push WSL git eligibility to every active WSL monitor against
+   * the given default distro. Non-WSL monitors are skipped.
+   */
+  private refreshWslEligibilityForAllMonitors(defaultDistro: string | null): void {
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isWslPath) continue;
+      monitor.setWslEligible(this.computeWslEligibility(monitor.wslDistro, defaultDistro));
+    }
+  }
+
+  /**
+   * Re-probe the WSL default distro on demand (renderer "Re-check" button) and
+   * refresh all WSL monitors. Sets the target monitor to `'unprobed'` first so
+   * the banner shows a pending state while the probe runs. The probe is shared
+   * across all worktrees, so we refresh every WSL monitor, not just the target.
+   */
+  async reprobeWslForWorktree(worktreeId: string): Promise<void> {
+    if (process.platform !== "win32") return;
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !monitor.isWslPath) return;
+    monitor.setWslEligible("unprobed");
+    const { distro, current } = await this.probeDefaultDistro();
+    if (!current) return;
+    this.applyDefaultDistro(distro);
   }
 
   /**
@@ -739,6 +932,97 @@ export class WorkspaceService {
     const monitor = this.monitors.get(worktreeId);
     if (monitor) {
       monitor.setWslOptIn(enabled, dismissed);
+    }
+  }
+
+  /**
+   * Single chokepoint for monitor removal (#9926). Drops the monitor from the
+   * in-memory map, the LRU, the active-worktree pointer, and the
+   * WSL-git opt-in cache; tells main to drop the matching persistent entry;
+   * emits `worktree-removed`. Replaces the three inline removal sites in
+   * `syncMonitors`, the external-removal handler, and `deleteWorktree` so the
+   * persisted map can never leak stale opt-in flags through a path-reuse
+   * (`git worktree remove` + recreate at the same UNC path).
+   *
+   * Caller is responsible for any monitor-specific cleanup (cache
+   * invalidation, `applyWatcherBudget`, `topologyClearPending`) that runs
+   * before/after this — see the three call sites for the exact ordering they
+   * preserve.
+   */
+  private removeMonitor(id: string): void {
+    const monitor = this.monitors.get(id);
+    if (!monitor) return;
+    if (monitor.isMainWorktree) {
+      console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
+      return;
+    }
+
+    if (this.activeWorktreeId === id) {
+      this.activeWorktreeId = null;
+    }
+
+    this.resourceActionExecutor.cleanupResourceActionState(id);
+    monitor.stop();
+    this.monitors.delete(id);
+    this.lruRemove(id);
+    this.recoverWatcherIfNoMonitorsRemain();
+
+    clearGitDirCache(monitor.path);
+    invalidateGitStatusCache(monitor.path);
+
+    // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
+    // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to
+    // drop the persistent one. Idempotent on the main side: `clearWslGitEntry`
+    // is a no-op if the key is missing, and does a case-insensitive lookup
+    // on win32 to handle legacy mixed-case persisted keys.
+    if (Object.prototype.hasOwnProperty.call(this.wslGitByWorktree, monitor.id)) {
+      delete this.wslGitByWorktree[monitor.id];
+      this.sendEvent({
+        type: "clear-wsl-git-opt-in",
+        worktreeId: monitor.id,
+      });
+    }
+
+    this.sendEvent({
+      type: "worktree-removed",
+      worktreeId: monitor.id,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
+    });
+    events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
+  }
+
+  /**
+   * Bulk self-heal of `wslGitByWorktree` after `loadProject` lands the live
+   * worktree set (#9926, review #1). Walks the in-memory mirror and emits
+   * one `clear-wsl-git-opt-in` per key that (a) is not in the live set AND
+   * (b) is rooted under this project's parent directory. Foreign-project
+   * keys are left in the in-memory mirror for the duration of this load
+   * and never reach main — otherwise loading project A would silently
+   * erase project B's valid opt-ins from the global persisted map on every
+   * load/prewarm/host-restart. The next load of the owning project picks
+   * the foreign keys up and prunes them on that cycle.
+   */
+  private pruneStaleWslGitEntries(worktrees: Worktree[]): void {
+    const projectParent = this.projectRootPath ? pathParentForPrefix(this.projectRootPath) : null;
+    const projectRoot = this.projectRootPath
+      ? normalizePathKeyForPrefix(this.projectRootPath)
+      : null;
+    const liveIds = new Set(worktrees.map((wt) => wt.id));
+    for (const key of Object.keys(this.wslGitByWorktree)) {
+      if (liveIds.has(key)) continue;
+      if (
+        projectParent &&
+        normalizePathKeyForPrefix(key) !== projectRoot &&
+        !isPathKeyAtOrUnder(key, projectParent)
+      ) {
+        continue;
+      }
+      delete this.wslGitByWorktree[key];
+      this.sendEvent({
+        type: "clear-wsl-git-opt-in",
+        worktreeId: key,
+      });
     }
   }
 
@@ -1053,7 +1337,7 @@ export class WorkspaceService {
       number: number;
       title?: string;
       url: string;
-      state: "open" | "merged" | "closed";
+      state: NormalizedPRState;
       ciStatus?: CIStatus;
       baseRef?: string;
     };
@@ -1189,6 +1473,40 @@ export class WorkspaceService {
   }
 
   /**
+   * The topology watcher went dark: its subscribe() failed at cold start, or a
+   * pending-event safety valve expired without the matching watcher event
+   * arriving. Either way the worktree list may silently drift out of date.
+   * One-shot — a second dark trigger while already dark is a no-op so the
+   * renderer indicator isn't re-asserted on every stale tick.
+   */
+  private handleTopologyWatcherDark(): void {
+    if (this.topologyWatcherDarkNotified) return;
+    this.topologyWatcherDarkNotified = true;
+    this.sendEvent({ type: "topology-watcher-dark" });
+  }
+
+  /**
+   * A topology reconcile completed successfully after a dark period, so the
+   * worktree list is current again. Clears the one-shot guard and emits
+   * `topology-watcher-recovered` so the renderer hides the indicator. No-op
+   * when not dark, so calling it after every reconcile is harmless.
+   */
+  private handleTopologyWatcherRecovered(): void {
+    if (!this.topologyWatcherDarkNotified) return;
+    this.topologyWatcherDarkNotified = false;
+    this.sendEvent({ type: "topology-watcher-recovered" });
+  }
+
+  /**
+   * Whether the topology watcher is currently dark. Bundled into the
+   * `get-all-states` handshake so a late-mounting view hydrates the indicator
+   * without waiting for a live event (mirrors `isWatcherDegraded`).
+   */
+  isTopologyWatcherDark(): boolean {
+    return this.topologyWatcherDarkNotified;
+  }
+
+  /**
    * Called after a monitor is removed. If the last monitor is gone while the
    * degradation guards are still set, the degraded watcher was torn down
    * before it could recover — there is no longer anything degraded, so treat
@@ -1234,7 +1552,15 @@ export class WorkspaceService {
     const drain = () => this.drainTopologyEventBuffer();
 
     parcelWatcher
-      .subscribe(metadataDir, (_err, events) => {
+      .subscribe(metadataDir, (err, events) => {
+        if (err) {
+          // A runtime error on an established subscription means the watcher is
+          // no longer reliably reporting changes — same consequence as a
+          // subscribe-reject. Go dark; the periodic safety net reconciles.
+          if (generation === this.topologyWatcherGeneration) {
+            this.handleTopologyWatcherDark();
+          }
+        }
         if (Array.isArray(events)) {
           for (const ev of events) {
             const e = ev as { path?: unknown; type?: unknown } | null;
@@ -1266,13 +1592,27 @@ export class WorkspaceService {
         };
       })
       .catch((err) => {
+        if (generation !== this.topologyWatcherGeneration) {
+          // A stop/restart superseded this attempt — the failure is moot.
+          return;
+        }
         console.warn(
           `[WorkspaceHost] topology watcher subscribe failed for ${metadataDir}: ${(err as Error).message}`
         );
+        // No watcher events will ever arrive for this dir. Surface the dark
+        // state so the renderer can offer a manual reconcile; the periodic
+        // safety net (#8510) is the automatic recovery path.
+        this.handleTopologyWatcherDark();
       });
   }
 
   private stopTopologyWatcher(): void {
+    // Tearing the watcher down clears the dark state — there's no longer a
+    // watcher whose silence matters. Emit recovery (only if dark) so a
+    // pause/resume or project switch after a dark event doesn't pin the
+    // renderer indicator on with nothing left to clear it (mirrors
+    // recoverWatcherIfNoMonitorsRemain for the recursive watcher).
+    this.handleTopologyWatcherRecovered();
     this.topologyWatcherGeneration++;
     this.topologyWatcherSubscription.value = undefined;
     if (this.topologyDebounceTimer) {
@@ -1317,6 +1657,10 @@ export class WorkspaceService {
       this.topologyPendingCreate.delete(key);
       this.topologyPendingDelete.delete(key);
       this.topologyPendingSafetyTimers.delete(key);
+      // The watcher never delivered the event our own op produced — it's
+      // missing events, so it can't be trusted to catch external changes
+      // either. Surface the dark state; the periodic safety net reconciles.
+      this.handleTopologyWatcherDark();
     }, 5000);
     timer.unref?.();
     this.topologyPendingSafetyTimers.set(key, timer);
@@ -1366,14 +1710,29 @@ export class WorkspaceService {
     }
   }
 
-  private scheduleTopologyReconcile(): void {
+  /**
+   * Schedules a serialized topology reconcile (full worktree re-discovery).
+   * Public so the `reconcile-topology` port action (the "Reconcile now"
+   * recovery for the dark state, #9908) can drive it. Internal guards
+   * (`topologyWatcherEnabled`, `pollingEnabled`, cooldown, in-flight) make it
+   * safe to call from anywhere — concurrent requests coalesce.
+   *
+   * `force` is for user-initiated recovery (the Refresh / "Reconcile now"
+   * buttons): it bypasses the `pollingEnabled` gate and the post-reconcile
+   * cooldown so an explicit user action is never silently swallowed. It still
+   * respects the in-flight guard — concurrency is 1 — but coalesces into a
+   * follow-up so the user's request always results in a fresh pass.
+   */
+  scheduleTopologyReconcile(force = false): void {
     if (!this.topologyWatcherEnabled) return;
-    if (!this.pollingEnabled) return;
-    if (Date.now() < this.topologyWatchCooldownUntil) {
+    if (!force && !this.pollingEnabled) return;
+    if (!force && Date.now() < this.topologyWatchCooldownUntil) {
       this.topologyWatchCooldownDirty = true;
       return;
     }
     if (this.topologyReconcilePending) {
+      // A pass is already running. Mark dirty so a follow-up fires once it
+      // settles — for both coalesced watcher events and forced user requests.
       this.topologyWatchCooldownDirty = true;
       return;
     }
@@ -1381,7 +1740,14 @@ export class WorkspaceService {
     this.topologyReconcilePending = true;
     this.topologyReconcileQueue.add(async () => {
       try {
-        await this.runTopologyReconcile();
+        // Watchdog the reconcile so a stuck `git worktree prune`/`list` can't
+        // pin the only slot — and the pending flag — forever. The finally below
+        // always runs because withTimeout guarantees the await settles.
+        await withTimeout(
+          this.runTopologyReconcile(),
+          TOPOLOGY_RECONCILE_TIMEOUT_MS,
+          "topology reconcile watchdog"
+        );
       } catch (err) {
         console.warn(`[WorkspaceHost] topology reconciliation failed: ${(err as Error).message}`);
       } finally {
@@ -1399,6 +1765,11 @@ export class WorkspaceService {
   private async runTopologyReconcile(): Promise<void> {
     const previousActiveId = this.activeWorktreeId;
     await this.discoverAndSyncWorktrees();
+
+    // A successful reconcile re-verifies the worktree list, so any prior dark
+    // state is resolved — recover here rather than on watcher re-arm, since
+    // re-subscribing doesn't prove the topology is current (#8516/#8558).
+    this.handleTopologyWatcherRecovered();
 
     // Auto-switch to main if the previously-active worktree was removed.
     // syncMonitors nulls activeWorktreeId when pruning the active monitor,
@@ -1440,37 +1811,19 @@ export class WorkspaceService {
       return;
     }
 
-    if (this.activeWorktreeId === worktreeId) {
-      this.activeWorktreeId = null;
-    }
-
-    this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
-    monitor.stop();
-    this.monitors.delete(worktreeId);
-    this.lruRemove(worktreeId);
-    this.recoverWatcherIfNoMonitorsRemain();
+    this.removeMonitor(worktreeId);
     // A freed slot lets the next most-recently-focused evicted worktree
-    // reclaim a watcher.
+    // reclaim a watcher. Called after `removeMonitor` (which only re-arms the
+    // watcher if no monitors remain) so a sibling worktree can immediately
+    // pick up the slot.
     this.applyWatcherBudget();
 
-    clearGitDirCache(monitor.path);
-    invalidateGitStatusCache(monitor.path);
     const cacheKey = this.listService.getCacheKey();
     if (cacheKey) {
       this.listService.invalidateCache(cacheKey);
     }
 
-    this.sendEvent({
-      type: "worktree-removed",
-      worktreeId,
-      epoch: this.epoch,
-      seq: this.nextSeq(),
-    });
-    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
-
-    console.log(
-      `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
-    );
+    console.log(`[WorkspaceHost] Worktree deleted externally, removed monitor: ${worktreeId}`);
   }
 
   getAllStates(requestId: string): void {
@@ -1522,7 +1875,19 @@ export class WorkspaceService {
     });
   }
 
-  setActiveWorktree(requestId: string, worktreeId: string): void {
+  setActiveWorktree(requestId: string, worktreeId: string, options?: { silent?: boolean }): void {
+    // Reject unknown worktree ids with success:false. Pre-PR, an unknown id
+    // would mutate `this.activeWorktreeId` to a value the renderer could not
+    // resolve; the new `worktree-activated` emit would propagate that miss
+    // to the per-view store via MessagePort, where the listener would call
+    // `selectWorktree(unknown)` and leave the sidebar in a half-state until
+    // the next event. The new contract: unknown id → no-op + reject the
+    // IPC request so the caller can surface the error.
+    if (!this.monitors.has(worktreeId)) {
+      this.sendEvent({ type: "set-active-result", requestId, success: false });
+      return;
+    }
+
     const previousActiveId = this.activeWorktreeId;
     this.activeWorktreeId = worktreeId;
 
@@ -1563,29 +1928,82 @@ export class WorkspaceService {
     }
     this.applyWatcherBudget();
 
+    // Host-originated activation. Fires on every `setActiveWorktree` call
+    // (auto-switch in `runTopologyReconcile` and `deleteWorktree` AND
+    // Main-originated IPC round-trips). Main-originated activations are
+    // idempotent on the renderer side — the listener at
+    // `WorktreeStoreContext.tsx` calls `selectWorktree` which is a no-op
+    // when the id is already the active one. The auto-switch case is the
+    // bug fix for #9945: without this emit, the renderer learned of the
+    // loss via `worktree-removed` (clearing `activeWorktreeId` to null) and
+    // only recovered on the next render tick via `useActiveWorktreeSync`.
+    //
+    // Separate surface from the legacy `CHANNELS.WORKTREE_ACTIVATED` echo
+    // path that PR #3603's `silent` flag suppresses for renderer-initiated
+    // IPC. The legacy echo reaches `window.electron.worktree.onActivated`
+    // (no per-view consumer since the #9327276d7 migration); this MessagePort
+    // event is what the per-view `WorktreeStoreContext` actually listens to.
+    // `silent` is propagated so the main-process router can mirror the
+    // legacy `silent` contract on the plugin bus and avoid double-notifying
+    // subscribers that the legacy path already suppressed.
+    this.sendEvent({
+      type: "worktree-activated",
+      worktreeId,
+      epoch: this.epoch,
+      seq: this.nextSeq(),
+      silent: options?.silent,
+    });
+
     this.sendEvent({ type: "set-active-result", requestId, success: true });
   }
 
-  async refresh(requestId: string, worktreeId?: string): Promise<void> {
+  async refresh(requestId: string, worktreeId?: string): Promise<{ ok: boolean; error?: string }> {
     try {
       if (worktreeId) {
         const monitor = this.monitors.get(worktreeId);
         if (monitor) {
-          await monitor.refresh();
+          await withTimeout(
+            monitor.refresh(),
+            HOST_REFRESH_TIMEOUT_MS,
+            `refresh watchdog: ${worktreeId}`
+          );
         }
       } else {
-        await this.discoverAndSyncWorktrees();
-        await this.refreshAll();
-        await pullRequestService.refresh();
+        // The user-facing Refresh button lands here. It MUST always reply in
+        // bounded time and never let one slow phase abort the others, so the
+        // button is a real escape hatch rather than a silent no-op:
+        //  - topology re-discovery runs first (it reconciles the monitor set),
+        //    but its failure must not stop the status refresh of monitors we
+        //    already have;
+        //  - the per-monitor status refresh and the PR fetch then run under
+        //    allSettled so a slow PR fetch can't sink the worktree refresh;
+        //  - the whole pass is watchdogged so the port request always returns.
+        await withTimeout(
+          (async () => {
+            try {
+              await this.discoverAndSyncWorktrees();
+            } catch (err) {
+              console.warn(
+                `[WorkspaceHost] refresh: topology re-discovery failed: ${(err as Error).message}`
+              );
+            }
+            await Promise.allSettled([this.refreshAll(), pullRequestService.refresh()]);
+          })(),
+          HOST_REFRESH_TIMEOUT_MS,
+          "refresh watchdog: all worktrees"
+        );
       }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
+      return { ok: true };
     } catch (error) {
-      this.sendEvent({
-        type: "refresh-result",
-        requestId,
-        success: false,
-        error: (error as Error).message,
-      });
+      // Reached only when the overall watchdog trips (the inner phases swallow
+      // their own failures). Report it in the request RESULT — the legacy
+      // refresh-result event has no renderer consumer, so without this the
+      // Refresh button would resolve "ok" on a host-side timeout and look like
+      // a silent no-op.
+      const message = (error as Error).message;
+      this.sendEvent({ type: "refresh-result", requestId, success: false, error: message });
+      return { ok: false, error: message };
     }
   }
 
@@ -1681,7 +2099,11 @@ export class WorkspaceService {
         }
       })
     );
-    await Promise.all(promises);
+    // allSettled, not all: a single worktree whose refresh rejects (or whose
+    // queue slot is dropped by the pollQueue watchdog) must not abort the
+    // refresh of every other worktree. The pollQueue's per-task timeout already
+    // guarantees each slot frees, so this resolves in bounded time.
+    await Promise.allSettled(promises);
   }
 
   async createWorktree(
@@ -2274,27 +2696,20 @@ export class WorkspaceService {
 
       // Clean up the monitor immediately after worktree removal succeeds,
       // before attempting branch deletion — so the monitor doesn't linger
-      // if branch deletion fails.
-      this.resourceActionExecutor.cleanupResourceActionState(worktreeId);
-      monitor.stop();
-      this.monitors.delete(worktreeId);
-      this.lruRemove(worktreeId);
-      this.recoverWatcherIfNoMonitorsRemain();
+      // if branch deletion fails. Routed through the `removeMonitor`
+      // chokepoint so the persisted WSL git opt-in entry is pruned in
+      // lockstep (#9926).
+      this.removeMonitor(worktreeId);
       // A freed slot lets the next most-recently-focused evicted worktree
-      // reclaim a watcher.
+      // reclaim a watcher. Called after `removeMonitor` (which only re-arms
+      // the watcher if no monitors remain) so a sibling worktree can
+      // immediately pick up the slot.
       this.applyWatcherBudget();
 
       // Monitor is cleaned up. Drop the pending entry now (cancelling its
       // safety valve): any still-buffered delete event for this name is
       // matched by the next drain.
       this.topologyClearPending(pendingDeleteKey);
-
-      this.sendEvent({
-        type: "worktree-removed",
-        worktreeId,
-        epoch: this.epoch,
-        seq: this.nextSeq(),
-      });
 
       if (branchToDelete && this.git) {
         try {
@@ -2725,6 +3140,16 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     void pullRequestService.refresh();
   }
 
+  /**
+   * Main registered a new forge provider descriptor (startup scan or runtime
+   * plugin install/enable). Wake the PR service if its polling paused on a
+   * "no provider matches" resolution (#9997). Routed straight to the
+   * singleton, mirroring `updateForgeSettings` above.
+   */
+  notifyForgeProviderRegistryUpdated(): void {
+    pullRequestService.notifyForgeProviderRegistryUpdated();
+  }
+
   updateForgeCredentials(
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
@@ -2789,6 +3214,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   async onProjectSwitch(requestId: string): Promise<void> {
     this.stopTopologyWatcher();
+    // Stop the WSL distro poller before clearing monitors so a poll tick can't
+    // fire setWslEligible against a half-torn-down or next-project monitor map.
+    this.stopWslDistroPoller();
     this.topologyReconcileQueue.clear();
     this.prService.cleanup();
 
@@ -2812,6 +3240,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.projectRootPath = null;
     this.projectEnvVars = {};
     this.wslDefaultDistroPromise = null;
+    this.wslLastKnownDefaultDistro = undefined;
 
     clearGitDirCache();
     clearGitCommonDirCache();
@@ -2920,6 +3349,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this._shutdownController.abort();
     // stopTopologyWatcher clears the pending sets and their safety timers.
     this.stopTopologyWatcher();
+    this.stopWslDistroPoller();
     this.topologyReconcileQueue.clear();
     this.prService.cleanup();
     this.resourceActionExecutor.dispose();

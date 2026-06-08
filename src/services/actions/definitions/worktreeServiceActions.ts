@@ -4,6 +4,8 @@ import { z } from "zod";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { worktreeClient } from "@/clients";
+import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function registerWorktreeServiceActions(
   actions: ActionRegistry,
@@ -20,10 +22,49 @@ export function registerWorktreeServiceActions(
     keywords: ["sync", "reload", "update", "sidebar"],
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
-      await Promise.allSettled([
+      const [refreshResult] = await Promise.allSettled([
         window.electron.worktreePort.request("refresh"),
         worktreeClient.refreshPullRequests(),
       ]);
+      // Two failure modes the user can't otherwise see, both surfaced (the old
+      // allSettled swallowed them, which is why a wedged host looked like a dead
+      // Refresh button): a rejection means the host isn't responding at all
+      // (transport timeout / exit); an ok:false result means the host's own
+      // refresh watchdog tripped. The Refresh button is itself the retry
+      // surface, so no action button.
+      const fallback = "The worktree host isn't responding. Try again in a moment.";
+      let failureMessage: string | null = null;
+      if (refreshResult.status === "rejected") {
+        failureMessage = formatErrorMessage(refreshResult.reason, fallback);
+      } else if (refreshResult.value.ok === false) {
+        failureMessage = refreshResult.value.error ?? fallback;
+      }
+      if (failureMessage !== null) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Refresh failed",
+          message: failureMessage,
+          duration: 5000,
+        });
+      }
+    },
+  }));
+
+  actions.set("worktree.reconcileTopology", () => ({
+    id: "worktree.reconcileTopology",
+    title: "Reconcile worktree list",
+    description:
+      "Force a full re-scan of worktrees. Recovers from a dark topology watcher that stopped reporting worktree changes.",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["watcher", "dark", "topology", "reconcile", "sync", "stale"],
+    run: async () => {
+      // force: this is explicit user-initiated recovery — bypass the cooldown
+      // and pollingEnabled gate so it can never be coalesced into a no-op.
+      await window.electron.worktreePort.request("reconcile-topology", { force: true });
     },
   }));
 

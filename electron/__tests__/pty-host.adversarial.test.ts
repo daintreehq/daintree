@@ -130,6 +130,7 @@ interface InspectableIpcQueueManager {
   isAtCapacity: TestMock;
   addBytes: TestMock;
   getUtilization: TestMock;
+  applyBackpressure: TestMock;
   dispose: TestMock;
 }
 
@@ -160,10 +161,14 @@ const hostState = vi.hoisted(() => ({
   ipcQueueManagers: [] as InspectableIpcQueueManager[],
   portQueueManagers: [] as InspectablePortQueueManager[],
   batchers: [] as InspectablePortBatcher[],
+  resourceGovernorDeps: null as {
+    getDropSnapshot: () => { droppedBytesDelta: number; dataLossCountDelta: number };
+  } | null,
   reset() {
     this.currentParentPort = null;
     this.terminals.clear();
     this.currentPtyManager = null;
+    this.resourceGovernorDeps = null;
     this.coordinators.length = 0;
     this.backpressureManagers.length = 0;
     this.ipcQueueManagers.length = 0;
@@ -502,6 +507,7 @@ vi.mock("../pty-host/index.js", async () => {
       this.queuedBytes.set(id, (this.queuedBytes.get(id) ?? 0) + bytes);
     });
     getUtilization = vi.fn(() => 0);
+    applyBackpressure = vi.fn();
     dispose = vi.fn();
 
     constructor() {
@@ -540,6 +546,7 @@ vi.mock("../pty-host/index.js", async () => {
       this.events.push("dispose");
       this.pausedIds.clear();
     });
+    getPausedTerminalIds = vi.fn(() => this.pausedIds.values());
 
     markPaused(id: string): void {
       this.pausedIds.add(id);
@@ -560,6 +567,12 @@ vi.mock("../pty-host/index.js", async () => {
   class MockResourceGovernor {
     start = vi.fn();
     dispose = vi.fn();
+
+    constructor(deps: {
+      getDropSnapshot: () => { droppedBytesDelta: number; dataLossCountDelta: number };
+    }) {
+      hostState.resourceGovernorDeps = deps;
+    }
   }
 
   return {
@@ -578,7 +591,7 @@ vi.mock("../pty-host/index.js", async () => {
   };
 });
 
-import { BACKPRESSURE_SAFETY_TIMEOUT_MS } from "../pty-host/index.js";
+import { BACKPRESSURE_SAFETY_TIMEOUT_MS, metricsEnabled } from "../pty-host/index.js";
 import { getPtyPool } from "../services/PtyPool.js";
 
 const originalParentPortDescriptor = Object.getOwnPropertyDescriptor(process, "parentPort");
@@ -631,6 +644,8 @@ describe("pty-host adversarial", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(getPtyPool).mockClear();
+    // Restore the module-default (metrics off) so per-test overrides don't leak.
+    vi.mocked(metricsEnabled).mockReturnValue(false);
   });
 
   afterEach(async () => {
@@ -700,6 +715,10 @@ describe("pty-host adversarial", () => {
   });
 
   it("IPC_QUEUE_FULL_EMITS_DATA_LOSS_STATUS", async () => {
+    // Metrics on for the baseline case; the drop pulse itself passes
+    // forceEmit so it would fire either way (see the gate-bypass test
+    // below), and the data-loss status event is ungated regardless.
+    vi.mocked(metricsEnabled).mockReturnValue(true);
     const parentPort = await loadHost();
     const terminal = createTerminal("t1");
     hostState.terminals.set("t1", terminal);
@@ -730,16 +749,34 @@ describe("pty-host adversarial", () => {
     });
 
     // The reliability metric must still fire alongside the new status event —
-    // existing telemetry consumers must keep working.
-    const backpressure = hostState.backpressureManagers[0];
-    expect(backpressure.emitReliabilityMetric).toHaveBeenCalledTimes(1);
-    expect(backpressure.emitReliabilityMetric).toHaveBeenCalledWith(
-      expect.objectContaining({
+    // existing telemetry consumers must keep working. The host funnel
+    // (`emitReliabilityMetricWithTracking`) TERMINATES the chain by emitting
+    // the wire event directly via sendEvent; it must NOT re-enter the manager
+    // (which in prod is wired with its `emitReliabilityMetric` dep pointing
+    // back at this same funnel — re-entering would recurse to a stack
+    // overflow). So we assert on the actual wire event, not the manager
+    // method, and confirm the manager was never re-invoked by the funnel.
+    const reliabilityEvents = parentPort.postMessage.mock.calls
+      .map((call: unknown[]) => call[0])
+      .filter(
+        (msg: unknown): msg is Record<string, unknown> =>
+          typeof msg === "object" &&
+          msg !== null &&
+          (msg as { type?: string }).type === "terminal-reliability-metric"
+      );
+    expect(reliabilityEvents).toHaveLength(1);
+    expect(reliabilityEvents[0]).toMatchObject({
+      type: "terminal-reliability-metric",
+      payload: {
         terminalId: "t1",
-        metricType: "suspend",
+        metricType: "ipc-cap-drop",
         bufferUtilization: 100,
-      })
-    );
+      },
+    });
+    // The funnel does NOT route back through the manager — that path is the
+    // production recursion cycle and must stay broken.
+    const backpressure = hostState.backpressureManagers[0];
+    expect(backpressure.emitReliabilityMetric).not.toHaveBeenCalled();
 
     // Drop path returns early, so addBytes and the data event are never sent.
     expect(ipcQueue.addBytes).not.toHaveBeenCalled();
@@ -750,6 +787,39 @@ describe("pty-host adversarial", () => {
           typeof msg === "object" && msg !== null && (msg as { type?: string }).type === "data"
       );
     expect(dataEvents).toHaveLength(0);
+  });
+
+  it("IPC_QUEUE_FULL_METRIC_BYPASSES_METRIC_GATE", async () => {
+    // The drop pulse is a data-loss signal: it must reach the wire even
+    // when metrics are gated off (forceEmit contract, #9902).
+    vi.mocked(metricsEnabled).mockReturnValue(false);
+    const parentPort = await loadHost();
+    const terminal = createTerminal("t1");
+    hostState.terminals.set("t1", terminal);
+
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.isAtCapacity.mockReturnValue(true);
+    ipcQueue.getUtilization.mockReturnValue(100);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(64));
+    await flushMicrotasks();
+
+    const reliabilityEvents = parentPort.postMessage.mock.calls
+      .map((call: unknown[]) => call[0])
+      .filter(
+        (msg: unknown): msg is Record<string, unknown> =>
+          typeof msg === "object" &&
+          msg !== null &&
+          (msg as { type?: string }).type === "terminal-reliability-metric"
+      );
+    expect(reliabilityEvents).toHaveLength(1);
+    expect(reliabilityEvents[0]).toMatchObject({
+      payload: { terminalId: "t1", metricType: "ipc-cap-drop" },
+    });
   });
 
   it("IPC_QUEUE_FULL_DROPPED_BYTES_USES_UTF8_BYTE_COUNT", async () => {
@@ -848,7 +918,7 @@ describe("pty-host adversarial", () => {
     const resumeCallsBefore = terminal.ptyProcess.resume.mock.calls.length;
     const statusCountBefore = terminalStatusPayloads(parentPort).length;
 
-    parentPort.emit("message", { type: "acknowledge-data", id: "t1", charCount: 60 });
+    parentPort.emit("message", { type: "acknowledge-data", id: "t1", byteCount: 60 });
     await flushMicrotasks();
 
     expect(terminal.ptyProcess.resume).toHaveBeenCalledTimes(resumeCallsBefore);
@@ -892,7 +962,27 @@ describe("pty-host adversarial", () => {
     expect(backpressure.hasPendingSegments("t1")).toBe(false);
     expect(backpressure.isSuspended("t1")).toBe(false);
     expect(runningPayloads).toHaveLength(1);
-    expect(runningPayloads[0].pauseDuration).toBe(750);
+    // The held duration now rides on the wire `pause-end` reliability metric
+    // (issue #9898: the source-of-truth for held duration moved from the
+    // SAB-only `backpressureManager.getPauseStartTime()` map to the
+    // multi-source closure `pausedTerminals` map maintained by
+    // `emitReliabilityMetricWithTracking`). The running status no longer
+    // carries `pauseDuration` — the renderer reads the metric, not the status.
+    expect(runningPayloads[0].pauseDuration).toBeUndefined();
+    // The held duration now rides on the wire `pause-end` reliability metric
+    // (issue #9898: the source-of-truth moved from the SAB-only
+    // `backpressureManager.getPauseStartTime()` map to the multi-source
+    // closure `pausedTerminals` map maintained by
+    // `emitReliabilityMetricWithTracking`). The manager's `emitReliabilityMetric`
+    // is the funnel entry point in production — assert it was called with a
+    // `pause-end` metric (the dep then populates `durationMs` and emits to the
+    // wire, which is tested in isolation at the funnel boundary).
+    expect(backpressure.emitReliabilityMetric).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalId: "t1",
+        metricType: "pause-end",
+      })
+    );
   });
 
   it("PORT_REPLACE_DROPS_STALE_ACKS", async () => {
@@ -965,5 +1055,682 @@ describe("pty-host adversarial", () => {
 
     expect(queueManager.events).toEqual(["resumeAll", "dispose"]);
     expect(terminal.ptyProcess.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {
+    // recomputeActivityTiers must push a tier-changed reconciliation message to
+    // exactly the renderer ports that also receive the terminal's data — i.e.
+    // the same per-window project filter as the data path. Otherwise the
+    // renderer's dedupe baseline goes stale and output freezes (issue #9778).
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    await flushMicrotasks();
+
+    // Window 2 owns project-2 first so the later window-1 recompute is the one
+    // under assertion; clear both ports of the intermediate broadcast.
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    await flushMicrotasks();
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+
+    // Window 1 activates project-1 (t1's project) → recompute → broadcast.
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    await flushMicrotasks();
+
+    const tierA = portA.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
+    const tierB = portB.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
+
+    // Window 1 (project-1) is the consumer of t1 — it gets the reconciliation.
+    expect(tierA).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
+    // Window 2 (project-2) is project-filtered away from t1 — nothing leaks to it.
+    expect(
+      tierB.some(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as Record<string, unknown>).id === "t1"
+      )
+    ).toBe(false);
+  });
+
+  it("UNDEFINED_PROJECT_TERMINAL_STAYS_ACTIVE_WHEN_PROJECTS_ACTIVE", async () => {
+    // Aggravating #9778 detail: a terminal with no project association is
+    // global/shared, not orphaned. It must stay active whenever any project is
+    // active, while a terminal genuinely belonging to an inactive project is
+    // correctly backgrounded.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t-global", createTerminal("t-global")); // undefined projectId
+    hostState.terminals.set("t-other", createTerminal("t-other", "project-2"));
+
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    await flushMicrotasks();
+
+    expect(backpressure.getActivityTier("t-global")).toBe("active");
+    expect(backpressure.getActivityTier("t-other")).toBe("background");
+  });
+
+  it("TIER_CHANGED_BROADCAST_TOLERATES_A_CLOSING_PORT", async () => {
+    // A port that throws on postMessage (closing mid-iteration) must not block
+    // the reconciliation from reaching the other still-open ports. Window 1 is
+    // connected first, so it is iterated first and exercises the try/catch.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portThrowing = createRendererPort();
+    const portHealthy = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [portThrowing],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portHealthy],
+    });
+    await flushMicrotasks();
+
+    // Both windows own t1's project, so both are broadcast targets.
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    await flushMicrotasks();
+    portThrowing.postMessage.mockClear();
+    portHealthy.postMessage.mockClear();
+    portThrowing.postMessage.mockImplementation(() => {
+      throw new Error("port closing");
+    });
+
+    // Re-applying window 2's project triggers a fresh recompute + broadcast.
+    expect(() =>
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 2,
+        projectId: "project-1",
+      })
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    const tierHealthy = portHealthy.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed"
+      );
+    expect(tierHealthy).toContainEqual({ type: "tier-changed", id: "t1", tier: "active" });
+  });
+
+  it("RECOMPUTE_WITH_NO_RENDERER_CONNECTIONS_IS_SAFE", async () => {
+    // With no connected ports the broadcast loop must no-op without throwing,
+    // while tiers are still applied to the backpressure manager.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    expect(() =>
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 1,
+        projectId: "project-1",
+      })
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    expect(backpressure.getActivityTier("t1")).toBe("active");
+  });
+
+  // Truth table for recomputeActivityTiers' tier decision (#9800). The rule is
+  // active ⇔ activeProjects.size === 0 OR terminal.projectId === undefined OR
+  // activeProjects.has(terminal.projectId). Each cell seeds the OPPOSITE tier
+  // first so a green assertion proves recompute actually wrote the tier rather
+  // than reading back the "active" default — and the expected column is the
+  // test author's independent prediction of behavior, not a copy of the source
+  // constant. A regression in any branch of the rule flips exactly one cell.
+  const TIER_MATRIX: ReadonlyArray<
+    readonly [
+      label: string,
+      activeProjectId: string | null,
+      termProjectId: string | undefined,
+      expected: "active" | "background",
+    ]
+  > = [
+    ["no_active_project__global_terminal", null, undefined, "active"],
+    ["no_active_project__owned_terminal", null, "project-1", "active"],
+    ["no_active_project__foreign_terminal", null, "project-2", "active"],
+    ["active_project__global_terminal_stays_active", "project-1", undefined, "active"],
+    ["active_project__matching_terminal_active", "project-1", "project-1", "active"],
+    ["active_project__foreign_terminal_backgrounded", "project-1", "project-2", "background"],
+  ];
+
+  it.each(TIER_MATRIX)(
+    "TIER_MATRIX[%s]",
+    async (_label, activeProjectId, termProjectId, expected) => {
+      const parentPort = await loadHost();
+      const backpressure = hostState.backpressureManagers[0];
+      hostState.terminals.set("t1", createTerminal("t1", termProjectId));
+
+      // Exactly one connected window, which also owns the active project, so the
+      // recompute has a real broadcast target (rendererConnections.size = 1).
+      parentPort.emit("message", {
+        data: { type: "connect-port", windowId: 1 },
+        ports: [createRendererPort()],
+      });
+      await flushMicrotasks();
+
+      // Seed the opposite tier so the final assertion can only pass if recompute
+      // performed a genuine write to this terminal's tier.
+      backpressure.setActivityTier("t1", expected === "active" ? "background" : "active");
+
+      // projectId:null is a real window with no active project — it contributes
+      // nothing to the active-project union, giving the activeProjects.size === 0
+      // rows while still driving a recompute (connect-port alone does not).
+      parentPort.emit("message", {
+        type: "set-active-project",
+        windowId: 1,
+        projectId: activeProjectId,
+      });
+      await flushMicrotasks();
+
+      expect(backpressure.getActivityTier("t1")).toBe(expected);
+
+      // The ActivityMonitor polling cadence must move in lockstep with the tier:
+      // 50ms when active, 500ms when background. A drift here is the producer
+      // gate and the poll rate disagreeing — exactly the desync class #9800 guards.
+      const ptyManager = hostState.currentPtyManager as MiniEmitter & {
+        setActivityMonitorTier: TestMock;
+      };
+      expect(ptyManager.setActivityMonitorTier).toHaveBeenCalledWith(
+        "t1",
+        expected,
+        expected === "active" ? 50 : 500
+      );
+    }
+  );
+
+  it("TIER_CHANGED_STREAM_IS_FIFO_ORDERED_ON_A_SINGLE_PORT", async () => {
+    // The reconciliation push is posted on the SAME per-window MessagePort as
+    // terminal data (pty-host.ts: `conn.port.postMessage` in recompute vs the
+    // batcher's `receivedPort.postMessage` for data), so a tier-changed lands
+    // FIFO-ordered ahead of any chunk gated by that tier. This test pins the
+    // ordering guarantee for the tier stream itself: a viewer window that owns
+    // no project (windowProject === null) receives every terminal's
+    // reconciliation, and a sequence of host-driven transitions must arrive in
+    // exactly the order they happened — no reordering, dropping, or collapsing.
+    // If recompute ever moved the post behind an async/batched path, this
+    // sequence would scramble and the renderer's dedupe baseline would desync
+    // (the #9778 failure class).
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const viewer = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [viewer] });
+    // Viewer owns no project → it is a consumer of every terminal's tier-changed.
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: null });
+    await flushMicrotasks();
+    viewer.postMessage.mockClear();
+
+    // Window 2 (no port needed — it only contributes to the active-project union)
+    // drives t1 through background → active → background.
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    await flushMicrotasks();
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    await flushMicrotasks();
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    await flushMicrotasks();
+
+    const tierSequence = viewer.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string; id: string; tier: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).type === "tier-changed" &&
+          (m as Record<string, unknown>).id === "t1"
+      )
+      .map((m) => m.tier);
+
+    // Derived from the three transitions driven above — not copied from source.
+    expect(tierSequence).toEqual(["background", "active", "background"]);
+  });
+
+  it("MULTI_WINDOW_UNION_DRIVES_TIERS_AND_DISCONNECT_RECONTRACTS_IT", async () => {
+    // recomputeActivityTiers computes activeProjects as the UNION over every
+    // connected window's project, then tiers each terminal against that union.
+    // Two windows owning two different projects must keep both their terminals
+    // active while a third-project terminal is backgrounded — a regression that
+    // only honored the last windowProjectMap entry (instead of iterating all)
+    // would background one of the two. Disconnecting one window must then
+    // contract the union and re-background its now-inactive terminal.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t-a", createTerminal("t-a", "project-a"));
+    hostState.terminals.set("t-b", createTerminal("t-b", "project-b"));
+    hostState.terminals.set("t-c", createTerminal("t-c", "project-c"));
+
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [createRendererPort()],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [createRendererPort()],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-a" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-b" });
+    await flushMicrotasks();
+
+    // Union = {project-a, project-b}: both owned terminals active, the foreign one background.
+    expect(backpressure.getActivityTier("t-a")).toBe("active");
+    expect(backpressure.getActivityTier("t-b")).toBe("active");
+    expect(backpressure.getActivityTier("t-c")).toBe("background");
+
+    // Drop window 1 → union contracts to {project-b}: t-a re-backgrounds, t-b stays active.
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    expect(backpressure.getActivityTier("t-a")).toBe("background");
+    expect(backpressure.getActivityTier("t-b")).toBe("active");
+    expect(backpressure.getActivityTier("t-c")).toBe("background");
+  });
+
+  it("RACE_FUZZER_TIER_QUIESCENCE_INVARIANT", async () => {
+    // Fuzz the interleaving of connect-port and set-active-project across
+    // macrotasks. connect-port never triggers a recompute while set-active-project
+    // always does, so the two orders exercise different paths. Each iteration
+    // drives a single window (set, assert, disconnect) — the multi-window union
+    // is covered separately above; here the invariant is that after every
+    // interleaving settles, each terminal's tier reflects the FINAL active
+    // project, order-independent. A regression that recomputed off stale window
+    // state, or left a tier stranded when the port arrived after the project
+    // switch, breaks this for some interleaving.
+    const parentPort = await loadHost();
+    const backpressure = hostState.backpressureManagers[0];
+    hostState.terminals.set("t-a", createTerminal("t-a", "project-a"));
+    hostState.terminals.set("t-b", createTerminal("t-b", "project-b"));
+
+    const PROJECTS: Array<string | null> = ["project-a", "project-b", null];
+    const ITERATIONS = 200;
+
+    for (let i = 0; i < ITERATIONS; i++) {
+      const windowId = (i % 4) + 1;
+      const activeProject = PROJECTS[i % PROJECTS.length];
+      const connectFirst = i % 2 === 0;
+      const port = createRendererPort();
+
+      const connectOp = () =>
+        parentPort.emit("message", { data: { type: "connect-port", windowId }, ports: [port] });
+      const projectOp = () =>
+        parentPort.emit("message", {
+          type: "set-active-project",
+          windowId,
+          projectId: activeProject,
+        });
+
+      // Schedule the two operations on separate macrotasks in an order that
+      // flips each iteration, so connect-before-project and project-before-connect
+      // both get exercised.
+      setTimeout(connectFirst ? connectOp : projectOp, 0);
+      setTimeout(connectFirst ? projectOp : connectOp, 0);
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+
+      // Quiescence invariant: an active project backgrounds only the terminals
+      // that belong to a different project; a null active project (empty union)
+      // leaves everything active.
+      const expectA =
+        activeProject === null || activeProject === "project-a" ? "active" : "background";
+      const expectB =
+        activeProject === null || activeProject === "project-b" ? "active" : "background";
+      expect(backpressure.getActivityTier("t-a")).toBe(expectA);
+      expect(backpressure.getActivityTier("t-b")).toBe(expectB);
+
+      // Explicit disconnect forgets this window's project + connection, resetting
+      // the union to empty before the next interleaving.
+      parentPort.emit("message", { type: "disconnect-port", windowId });
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+    }
+
+    // With every window disconnected the union is empty → both terminals settle
+    // back to active.
+    expect(backpressure.getActivityTier("t-a")).toBe("active");
+    expect(backpressure.getActivityTier("t-b")).toBe("active");
+  });
+
+  // Helper: terminal-status messages posted directly on a renderer MessagePort.
+  function portStatusMessages(port: MockRendererPort): Array<Record<string, unknown>> {
+    return port.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is Record<string, unknown> =>
+          typeof m === "object" && m !== null && (m as { type?: string }).type === "terminal-status"
+      );
+  }
+
+  it("FAN_OUT_SATURATED_WINDOW_GETS_DATA_LOSS_PULSE", async () => {
+    // The #9891 core: with two windows fanning out the same terminal, one
+    // window's batcher accepts the chunk (visualWritten flips true, suppressing
+    // the shared IPC fallback) while the other's is saturated. The starved
+    // window must receive a per-port data-loss pulse — not a broadcast, which
+    // would falsely flag the window that received its data — and the global
+    // drop counter must account exactly the dropped chunk.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    // No active project on either window → windowProjectMap empty → both windows
+    // are fan-out targets. batchers are created per connect-port in order.
+    const batcherA = hostState.batchers[0];
+    const batcherB = hostState.batchers[1];
+    batcherA.write.mockReturnValue(true); // window A accepts
+    batcherB.write.mockReturnValue(false); // window B saturated
+
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    const payload = "a".repeat(40);
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", payload);
+    await flushMicrotasks();
+
+    // Starved window B gets exactly one data-loss pulse on its own port.
+    const statusB = portStatusMessages(portB);
+    expect(statusB).toHaveLength(1);
+    expect(statusB[0]).toMatchObject({
+      type: "terminal-status",
+      id: "t1",
+      status: "data-loss",
+      droppedBytes: payload.length,
+    });
+    expect(typeof statusB[0].timestamp).toBe("number");
+
+    // Window A received its data on its own port — it must NOT be told of a loss.
+    expect(portStatusMessages(portA)).toHaveLength(0);
+
+    // The IPC broadcast path must NOT emit a data-loss for this chunk — that
+    // would falsely reach window A (and every other window).
+    const ipcDataLoss = terminalStatusPayloads(parentPort).filter((p) => p.status === "data-loss");
+    expect(ipcDataLoss).toHaveLength(0);
+
+    // The global drop counter accounts exactly the starved window's chunk once.
+    const drops = hostState.resourceGovernorDeps?.getDropSnapshot();
+    expect(drops).toEqual({ droppedBytesDelta: payload.length, dataLossCountDelta: 1 });
+  });
+
+  it("FAN_OUT_DATA_LOSS_USES_UTF8_BYTE_COUNT", async () => {
+    // The dropped-byte accounting must report UTF-8 bytes, not JS string length,
+    // or non-ASCII output (CJK, emoji) silently mis-reports the gap size.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portB.postMessage.mockClear();
+
+    const payload = "⚠".repeat(10); // 10 chars, 30 UTF-8 bytes
+    expect(payload.length).toBe(10);
+    expect(Buffer.byteLength(payload, "utf8")).toBe(30);
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", payload);
+    await flushMicrotasks();
+
+    const statusB = portStatusMessages(portB);
+    expect(statusB).toHaveLength(1);
+    expect(statusB[0].droppedBytes).toBe(30);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 30,
+      dataLossCountDelta: 1,
+    });
+  });
+
+  it("FAN_OUT_ALL_SATURATED_FALLS_THROUGH_TO_IPC_WITHOUT_PULSE", async () => {
+    // When EVERY window's batcher rejects, visualWritten stays false and the
+    // shared IPC fallback broadcasts the chunk to all windows (the renderer's
+    // onData listens on both the port and IPC). Nothing is lost, so no per-port
+    // data-loss pulse must fire — the regression would double-signal a loss that
+    // didn't happen.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    // Both batchers reject (mock default is false) — leave them as-is.
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(25));
+    await flushMicrotasks();
+
+    // IPC fallback delivered the chunk (queue not at capacity by default).
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    // No window was starved, so no data-loss pulse on either port and no drop.
+    expect(portStatusMessages(portA)).toHaveLength(0);
+    expect(portStatusMessages(portB)).toHaveLength(0);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 0,
+      dataLossCountDelta: 0,
+    });
+  });
+
+  it("FAN_OUT_SATURATED_PORT_THROWS_ON_STATUS_POSTMESSAGE", async () => {
+    // A starved window whose port throws on postMessage (closing mid-iteration)
+    // must not break the fan-out: the accepting window keeps its data and the
+    // drop is still accounted. Mirrors the tier-changed closing-port tolerance.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portThrowing = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portThrowing],
+    });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portThrowing.postMessage.mockImplementation(() => {
+      throw new Error("port closing");
+    });
+
+    expect(() =>
+      (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(15))
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    // The drop is still accounted even though the pulse delivery threw.
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 15,
+      dataLossCountDelta: 1,
+    });
+  });
+
+  it("FAN_OUT_THREE_WINDOWS_TWO_SATURATED_EACH_GET_A_PULSE", async () => {
+    // With three windows fanning out, one accepting and two saturated, BOTH
+    // starved windows must each get exactly one pulse — a regression that only
+    // pulsed the first saturated connection would silently strand the rest.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    const portC = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 3 }, ports: [portC] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true); // A accepts
+    hostState.batchers[1].write.mockReturnValue(false); // B saturated
+    hostState.batchers[2].write.mockReturnValue(false); // C saturated
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    portC.postMessage.mockClear();
+
+    const payload = "a".repeat(20);
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", payload);
+    await flushMicrotasks();
+
+    expect(portStatusMessages(portA)).toHaveLength(0);
+    expect(portStatusMessages(portB)).toHaveLength(1);
+    expect(portStatusMessages(portC)).toHaveLength(1);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: payload.length * 2,
+      dataLossCountDelta: 2,
+    });
+  });
+
+  it("FAN_OUT_SATURATED_BEFORE_ACCEPTED_STILL_PULSES", async () => {
+    // The pulse decision is post-loop, so it must not depend on whether the
+    // saturated window is iterated before or after the accepting one. Here the
+    // first-connected window is saturated and the second accepts.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portSaturated = createRendererPort();
+    const portAccepting = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1 },
+      ports: [portSaturated],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portAccepting],
+    });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(false); // first window saturated
+    hostState.batchers[1].write.mockReturnValue(true); // second window accepts
+    portSaturated.postMessage.mockClear();
+    portAccepting.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(12));
+    await flushMicrotasks();
+
+    expect(portStatusMessages(portSaturated)).toHaveLength(1);
+    expect(portStatusMessages(portAccepting)).toHaveLength(0);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 12,
+      dataLossCountDelta: 1,
+    });
+  });
+
+  it("FAN_OUT_IPC_MIRRORED_TERMINAL_GETS_NO_PULSE", async () => {
+    // IPC-mirrored terminals (dev-preview consoles) broadcast every chunk via the
+    // IPC data mirror whenever visualWritten is true, so a saturated window still
+    // receives the data over IPC. Emitting a data-loss pulse there would mark a
+    // discontinuity that never happened.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(18));
+    await flushMicrotasks();
+
+    // No per-port pulse, no drop accounting — the IPC mirror covers the window.
+    expect(portStatusMessages(portB)).toHaveLength(0);
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 0,
+      dataLossCountDelta: 0,
+    });
+    // The mirror broadcast did fire (the data reaches every window via IPC).
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+  });
+
+  it("FAN_OUT_PULSE_RESPECTS_PROJECT_FILTER", async () => {
+    // Only windows that own (or globally view) the terminal's project are fan-out
+    // targets, so only a saturated TARGET window may get a pulse — a project-
+    // filtered window is never a target and must never be pulsed.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portOwner = createRendererPort(); // window 1 → project-1 (target, saturated)
+    const portViewer = createRendererPort(); // window 2 → project-1 (target, accepts)
+    const portForeign = createRendererPort(); // window 3 → project-2 (filtered out)
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portOwner] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2 },
+      ports: [portViewer],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 3 },
+      ports: [portForeign],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 3, projectId: "project-2" });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    await flushMicrotasks();
+
+    // batchers[0]=window1 (owner), [1]=window2 (viewer), [2]=window3 (foreign).
+    hostState.batchers[0].write.mockReturnValue(false); // owner saturated
+    hostState.batchers[1].write.mockReturnValue(true); // viewer accepts
+    portOwner.postMessage.mockClear();
+    portViewer.postMessage.mockClear();
+    portForeign.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(22));
+    await flushMicrotasks();
+
+    expect(portStatusMessages(portOwner)).toHaveLength(1); // saturated target → pulse
+    expect(portStatusMessages(portViewer)).toHaveLength(0); // accepted → no pulse
+    expect(portStatusMessages(portForeign)).toHaveLength(0); // filtered out → never a target
+    expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
+      droppedBytesDelta: 22,
+      dataLossCountDelta: 1,
+    });
   });
 });

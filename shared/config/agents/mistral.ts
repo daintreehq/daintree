@@ -103,8 +103,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
-    debounceMs: 6000,
-    promptFastPathMinQuietMs: 6000,
   },
   // Vibe emits "vibe --resume {session_id}" on exit (session_exit.py:21).
   // Critical: Vibe has NO `/quit` slash command — only `/exit`.

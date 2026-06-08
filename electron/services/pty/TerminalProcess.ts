@@ -722,7 +722,7 @@ export class TerminalProcess {
     this.terminalInfo.lastObservedTitle = title;
   }
 
-  acknowledgeData(_charCount: number): void {
+  acknowledgeData(_byteCount: number): void {
     // No-op: SAB-based backpressure in pty-host.ts handles all flow control
   }
 
@@ -1377,10 +1377,10 @@ export class TerminalProcess {
     this.osc94Parser.reset();
   }
 
-  setActivityMonitorTier(pollingIntervalMs: number): void {
-    // Track activity tier based on polling interval:
-    // 50ms = active (foreground), 500ms = background (project switched away)
-    this._activityTier = pollingIntervalMs <= 50 ? "active" : "background";
+  setActivityMonitorTier(tier: "active" | "background", pollingIntervalMs: number): void {
+    // The tier is authoritative; the polling interval is only a cadence hint
+    // (issue #8596 — VISIBLE-unfocused panes are "active" at 200ms).
+    this._activityTier = tier;
 
     if (this.activityMonitor) {
       this.activityMonitor.setPollingInterval(pollingIntervalMs);
@@ -1408,6 +1408,16 @@ export class TerminalProcess {
     if (!this.terminalInfo.headlessTerminal) return;
     this._scrollback = targetLines;
     this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
+  }
+
+  /**
+   * Current scrollback cap (in lines). Mirrors `headlessTerminal.options.scrollback`
+   * but reads the field directly so the resource governor can rank per-terminal
+   * buffer-memory contribution without touching the headless instance. Used as the
+   * line-count input to the `scrollbackLines × cols × 12` byte estimate.
+   */
+  getCurrentScrollback(): number {
+    return this._scrollback;
   }
 
   dispose(): void {
@@ -1491,6 +1501,10 @@ export class TerminalProcess {
       this.deps.agentStateService.handleActivityState(this.terminalInfo, "busy", {
         trigger: "output",
       });
+      // Arm the monitor's private busy state so its idle paths can transition
+      // the FSM back to waiting — without this the direct promotion above
+      // strands the FSM in working (#9875).
+      this.activityMonitor?.notifyExternalPromotion();
     }
   }
 
@@ -1595,8 +1609,9 @@ export class TerminalProcess {
     // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
     // the agent-state signal is viewport-independent (#8701). The parser is
     // a read-only side channel; `IdleSequenceFilter.stripIdleTerminalSequences`
-    // still removes the sequence from the byte-volume / renderer paths
-    // downstream, so other detectors stay clean.
+    // still removes the sequence from the ActivityMonitor byte-volume /
+    // activity-gate path, so those detectors stay clean (the renderer keeps
+    // the raw bytes — see TerminalProcess.osc.test.ts).
     this.osc94Parser.feed(data, now);
 
     if (this.activityMonitor) {

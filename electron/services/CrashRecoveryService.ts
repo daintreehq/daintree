@@ -103,9 +103,34 @@ export class CrashRecoveryService {
     return info.exists && typeof info.timestamp === "number" ? info.timestamp : null;
   }
 
-  getBackupPanelCount(): number | null {
-    const appState = this.cachedBackupSnapshot?.appState as Record<string, unknown> | undefined;
-    const terminals = appState?.terminals;
+  getBackupPanelCount(allowDiskFallback: boolean = false): number | null {
+    // Cache wins unconditionally. It reflects the snapshot at the moment
+    // consumeMarker() learned about the main-process crash, so later disk
+    // state (rotations from a normal session tick) must not override it.
+    // Without this guard, a "simplify to disk-first" refactor would silently
+    // re-introduce the bleed-into-fresh-boot bug pinned by the test at
+    // CrashRecoveryService.test.ts:1346.
+    if (this.cachedBackupSnapshot) {
+      const appState = this.cachedBackupSnapshot.appState as Record<string, unknown> | undefined;
+      const terminals = appState?.terminals;
+      return Array.isArray(terminals) ? terminals.length : null;
+    }
+    if (!allowDiskFallback) return null;
+    // Renderer-crash mid-session: no marker was ever consumed, so the cache
+    // is empty. readBackupInfo() resolves the parseable rotation file
+    // (current → previous) and readBackupFile() returns null on torn
+    // writes or non-restorable content. Both helpers are observation-only —
+    // they never mutate marker or backup state.
+    const info = this.readBackupInfo();
+    if (!info.exists || !info.path) return null;
+    const snapshot = this.readBackupFile(info.path);
+    if (!snapshot) return null;
+    // Freshness gate: a snapshot from a previous session must not surface a
+    // panel count on the current session's recovery page. Mirrors the
+    // watchdog freshness check at consumeWatchdogKillFlag (line 637).
+    if (snapshot.capturedAt < this.sessionStartMs) return null;
+    const fallbackState = snapshot.appState as Record<string, unknown> | undefined;
+    const terminals = fallbackState?.terminals;
     return Array.isArray(terminals) ? terminals.length : null;
   }
 
@@ -135,17 +160,33 @@ export class CrashRecoveryService {
     this.crashRecorded = true;
 
     try {
-      fs.mkdirSync(this.crashesDir, { recursive: true });
-
       const entry = this.buildCrashEntry(error);
-      const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
-      resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+      // The only call site is the uncaughtException handler, so the cause is
+      // always "uncaught-exception" — but the field is additive, default only
+      // when absent so a future caller passing a more specific cause is honored.
+      if (entry.crashCause === undefined) entry.crashCause = "uncaught-exception";
+      const logPath = this.writeCrashLog(entry);
       this.writeMarker(entry);
       this.pruneOldLogs();
       console.log("[CrashRecovery] Crash recorded:", logPath);
     } catch (err) {
       console.error("[CrashRecovery] Failed to record crash:", err);
     }
+  }
+
+  /**
+   * Persist a crash log to `crashesDir/crash-{id}.json` using the same
+   * `resilientAtomicWriteFileSync` channel as `recordCrash` (handles Windows
+   * AV/indexer lock retries). Shared by `recordCrash` and the marker-only
+   * branch of `consumeMarker` so both call sites produce a real on-disk
+   * artifact and the dialog's "Open log file" affordance always points at a
+   * file that exists.
+   */
+  private writeCrashLog(entry: CrashLogEntry): string {
+    fs.mkdirSync(this.crashesDir, { recursive: true });
+    const logPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
+    resilientAtomicWriteFileSync(logPath, JSON.stringify(entry, null, 2), "utf-8");
+    return logPath;
   }
 
   startBackupTimer(): void {
@@ -427,7 +468,7 @@ export class CrashRecoveryService {
         return null;
       }
 
-      // Move the live backup aside BEFORE deleting the marker. A kill
+      // Move the live backup aside BEFORE any state mutations. A kill
       // between the two operations would otherwise wipe the marker (and
       // skip crash detection on the next launch) while session-state.json
       // is still present and recoverable. preserveBackupForRecovery is
@@ -435,7 +476,12 @@ export class CrashRecoveryService {
       // from a partially-completed prior attempt it is reused.
       this.crashedBackupPath = this.preserveBackupForRecovery(marker.sessionStartMs);
 
-      this.deleteMarker();
+      // NOTE: deleteMarker() is called AFTER the synthesized crash log is
+      // written below (per the #8728 preserve-before-delete ordering rule).
+      // If a kill happens in the gap, the next launch re-runs consumeMarker
+      // and surfaces the recovery dialog against the persisted log.
+      // (Watchdog annotation rewrites for an existing logPath fire earlier
+      // in this block and are unaffected.)
 
       // Gate hasBackup on parseability: a renamed crashed-* file that fails
       // to parse (corrupted write, partial flush) shouldn't surface a
@@ -463,15 +509,41 @@ export class CrashRecoveryService {
         }
       }
       if (parseableBackupPath) {
-        try {
-          backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
-        } catch {
-          // best-effort: backup timestamp is informational only
+        // Read the timestamp from the parsed snapshot's `capturedAt` rather
+        // than the file's disk mtime. On the Windows/EPERM copy-fallback
+        // path in preserveBackupForRecovery, the new crashed-* file's mtime
+        // is the relaunch time — feeding that into the priority chain
+        // would win over the heartbeat and re-introduce the #10062 bug we
+        // just fixed. `capturedAt` is the pre-crash write time stamped
+        // by captureSessionSnapshot, which is exactly what we want.
+        if (this.cachedBackupSnapshot) {
+          backupTimestamp = this.cachedBackupSnapshot.capturedAt;
+        } else {
+          try {
+            backupTimestamp = fs.statSync(parseableBackupPath).mtimeMs;
+          } catch {
+            // best-effort: backup timestamp is informational only
+          }
         }
       }
 
       const logPath = marker.crashLogPath ?? null;
-      const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
+      // Compute the best available estimate of when the previous session
+      // actually died. Marker-only entries (no crashLogPath) had no in-process
+      // recorder to stamp a real crash time, so without this they'd inherit
+      // the relaunch time and mislead the recovery dialog, GitHub crash
+      // report, and 30s panel-suspect window. Existing crash logs already
+      // carry their own timestamp from the recorder path and are unaffected.
+      const nowMs = Date.now();
+      const crashTimestamp = this.resolveMarkerCrashTimestamp(
+        marker,
+        watchdogAnnotation,
+        backupTimestamp,
+        nowMs
+      );
+      const entry = logPath
+        ? this.readCrashLog(logPath)
+        : this.buildCrashEntryFromMarker(marker, crashTimestamp);
       entry.crashCause = this.classifyCrashCause(marker);
       if (watchdogAnnotation) {
         entry.cause = "watchdog-deadlock";
@@ -490,12 +562,47 @@ export class CrashRecoveryService {
           }
         }
       }
+
+      // For marker-only crashes (no original crashLogPath — e.g. external kill,
+      // power loss, native crash), synthesize a real on-disk log so the
+      // recovery dialog's "Open log file" affordance points at a file that
+      // actually exists. Persist BEFORE deleteMarker (per #8728's
+      // preserve-before-delete ordering rule) so a kill in this window still
+      // leaves the marker pointing at a real on-disk log, and the next
+      // launch re-runs consumeMarker to surface the recovery dialog. Failure
+      // is non-fatal — the in-memory entry is the source of truth and the
+      // dialog falls back to a softer warning if the file later can't be
+      // opened.
+      let resolvedLogPath = logPath;
+      if (!resolvedLogPath) {
+        try {
+          resolvedLogPath = this.writeCrashLog(entry);
+          // Honor the same MAX_CRASH_LOGS retention as recordCrash so 25
+          // consecutive external kills don't accumulate crash-{id}.json
+          // files. recordCrash also calls pruneOldLogs; folding it here keeps
+          // retention behavior consistent across both code paths.
+          this.pruneOldLogs();
+        } catch (writeErr) {
+          console.error("[CrashRecovery] Failed to persist synthesized crash log:", writeErr);
+          // Fall back to the synthetic path so PendingCrash.logPath is stable
+          // for the renderer; the dialog's defensive openPath handler covers
+          // the missing-file case.
+          resolvedLogPath = path.join(this.crashesDir, `crash-${entry.id}.json`);
+        }
+      }
+
+      // Marker is unlinked LAST — after the synthesized crash log is on disk.
+      // A kill between preserveBackupForRecovery and this point still leaves
+      // the marker on disk and the next launch re-detects the crash against
+      // the persisted log.
+      this.deleteMarker();
+
       const panels = parseableBackupPath
         ? this.extractPanelSummaries(entry.timestamp, parseableBackupPath)
         : undefined;
 
       return {
-        logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
+        logPath: resolvedLogPath,
         entry,
         hasBackup: parseableBackupPath !== null,
         backupTimestamp,
@@ -621,14 +728,19 @@ export class CrashRecoveryService {
         // would pass a bare `typeof === "number"` check and produce a
         // misleading attribution. Real values from buildWatchdogKillPayload
         // are always positive (killedAt = Date.now(), missedBeats >= 1,
-        // mainPid > 0).
+        // mainPid > 0). `JSON.parse('{"killedAt":1e309}')` returns
+        // `Infinity` which passes `> 0` but corrupts the report
+        // ("Infinity" in the GitHub crash URL), so finiteness is required.
         if (
           typeof parsed.killedAt === "number" &&
           parsed.killedAt > 0 &&
+          Number.isFinite(parsed.killedAt) &&
           typeof parsed.missedBeats === "number" &&
           parsed.missedBeats >= 1 &&
+          Number.isFinite(parsed.missedBeats) &&
           typeof parsed.mainPid === "number" &&
-          parsed.mainPid > 0
+          parsed.mainPid > 0 &&
+          Number.isFinite(parsed.mainPid)
         ) {
           annotation = {
             killedAt: parsed.killedAt,
@@ -794,22 +906,65 @@ export class CrashRecoveryService {
     return entry;
   }
 
-  private buildCrashEntryFromMarker(marker: MarkerFile): CrashLogEntry {
+  private buildCrashEntryFromMarker(marker: MarkerFile, crashTimestamp: number): CrashLogEntry {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const entry: CrashLogEntry = {
       id,
-      timestamp: Date.now(),
+      timestamp: crashTimestamp,
       appVersion: marker.appVersion ?? app.getVersion(),
       platform: marker.platform ?? process.platform,
       osVersion: os.release(),
       arch: os.arch(),
-      sessionDurationMs: marker.sessionStartMs ? Date.now() - marker.sessionStartMs : undefined,
+      sessionDurationMs: marker.sessionStartMs
+        ? Math.max(0, crashTimestamp - marker.sessionStartMs)
+        : undefined,
     };
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, this.readCrashedBackupAppState());
+    this.enrichWithRecentActions(entry);
 
     return entry;
+  }
+
+  /**
+   * Pick the best available estimate of when the previous session actually
+   * died, for entries synthesized from a marker with no crash log.
+   *
+   * Priority chain (strongest signal first):
+   *   1. watchdogAnnotation.killedAt — exact SIGKILL time the watchdog wrote
+   *   2. marker.lastSuspendStart — power loss during sleep
+   *   3. backupTimestamp — last parseable backup mtime, a floor on
+   *      "what state was on disk when death occurred"
+   *   4. marker.lastHeartbeatMs — the heartbeat we tick every backup
+   *      interval; a marker with no heartbeat would have to be from a code
+   *      path that pre-dates this service, so it's effectively unreachable.
+   *
+   * The chosen value is clamped to [sessionStartMs, nowMs] so it can never
+   * precede the session (negative `sessionDurationMs` would break
+   * `formatDuration` in the dialog) and never exceed the relaunch time
+   * (would mislead the 30s suspect window and produce a future-dated crash
+   * report). When no candidate is valid the fallback is the clamped
+   * relaunch time — the only honest answer in that pathological case.
+   */
+  private resolveMarkerCrashTimestamp(
+    marker: MarkerFile,
+    watchdogAnnotation: WatchdogKillAnnotation | null,
+    backupTimestamp: number | undefined,
+    nowMs: number
+  ): number {
+    const candidates: Array<number | null | undefined> = [
+      watchdogAnnotation?.killedAt,
+      marker.lastSuspendStart,
+      backupTimestamp,
+      marker.lastHeartbeatMs,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+        return Math.max(marker.sessionStartMs, Math.min(candidate, nowMs));
+      }
+    }
+    return Math.max(marker.sessionStartMs, nowMs);
   }
 
   private readCrashedBackupAppState(): unknown {
@@ -1117,6 +1272,8 @@ function isValidMarker(value: unknown): value is MarkerFile {
     typeof value === "object" &&
     value !== null &&
     typeof (value as MarkerFile).sessionStartMs === "number" &&
+    Number.isFinite((value as MarkerFile).sessionStartMs) &&
+    (value as MarkerFile).sessionStartMs > 0 &&
     typeof (value as MarkerFile).appVersion === "string"
   );
 }

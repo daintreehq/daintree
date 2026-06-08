@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   accentOverrideHasLowContrast,
   contrastRatio,
@@ -449,17 +449,22 @@ describe("accentOverrideHasLowContrast", () => {
 
   it("flags a white accent override on a light theme (invisible on light surfaces)", () => {
     const patched = applyAccentOverrideToScheme(lightScheme, "#ffffff");
-    expect(accentOverrideHasLowContrast(patched)).toBe(true);
+    const result = accentOverrideHasLowContrast(patched);
+    assert(result !== null);
+    // White accent on a light theme has legible button text but vanishes on surfaces.
+    expect(result.mode).toBe("surface");
+    expect(result.worstRatio).toBeLessThan(4.5);
+    expect(result.worstSurface).not.toBeNull();
   });
 
   it("does not flag a white accent override on a dark theme", () => {
     const patched = applyAccentOverrideToScheme(darkScheme, "#ffffff");
-    expect(accentOverrideHasLowContrast(patched)).toBe(false);
+    expect(accentOverrideHasLowContrast(patched)).toBeNull();
   });
 
   it("does not flag a strong dark accent override on a light theme", () => {
     const patched = applyAccentOverrideToScheme(lightScheme, "#1a1a1a");
-    expect(accentOverrideHasLowContrast(patched)).toBe(false);
+    expect(accentOverrideHasLowContrast(patched)).toBeNull();
   });
 
   it("flags via the accent-foreground/accent-primary pair when surfaces are fine", () => {
@@ -474,7 +479,111 @@ describe("accentOverrideHasLowContrast", () => {
       "surface-panel": "#000000" as AppColorSchemeTokens["surface-panel"],
       "surface-panel-elevated": "#000000" as AppColorSchemeTokens["surface-panel-elevated"],
     });
-    expect(accentOverrideHasLowContrast(scheme)).toBe(true);
+    const result = accentOverrideHasLowContrast(scheme);
+    assert(result !== null);
+    // Foreground branch: the offending pair is the near-match label, not a surface.
+    expect(result.mode).toBe("foreground");
+    expect(result.worstRatio).toBeLessThan(4.5);
+    expect(result.worstSurface).toBeNull();
+  });
+
+  it("reports the surface with the worst ratio, not just the first failing one", () => {
+    // Mid-grey accent fails harder against the lighter surface than the darker one;
+    // the scan must surface the lowest ratio and its key, not short-circuit on the first.
+    const scheme = makeScheme({
+      "accent-primary": "#808080" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#000000" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#000000" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#000000" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#000000" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#9a9a9a" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    const result = accentOverrideHasLowContrast(scheme);
+    assert(result !== null);
+    expect(result.mode).toBe("surface");
+    expect(result.worstSurface).toBe("surface-panel-elevated");
+    // The reported ratio must be the lowest of all surface pairs.
+    const reported = result.worstRatio;
+    for (const key of [
+      "surface-grid",
+      "surface-sidebar",
+      "surface-canvas",
+      "surface-panel",
+      "surface-panel-elevated",
+    ] as const) {
+      expect(reported).toBeLessThanOrEqual(contrastRatio("#808080", scheme.tokens[key]));
+    }
+  });
+
+  it("prioritizes the foreground failure when both modes fail", () => {
+    // Near-match foreground AND a vanishing accent on a same-toned surface: foreground wins.
+    const scheme = makeScheme({
+      "accent-primary": "#aaaaaa" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#a4a4a4" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#a8a8a8" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#a8a8a8" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#a8a8a8" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#a8a8a8" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#a8a8a8" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    const result = accentOverrideHasLowContrast(scheme);
+    assert(result !== null);
+    expect(result.mode).toBe("foreground");
+    // The foreground branch must not leak a surface key, and the reported ratio
+    // must be the foreground pair's ratio — not whichever surface scored worst.
+    expect(result.worstSurface).toBeNull();
+    expect(result.worstRatio).toBeCloseTo(contrastRatio("#a4a4a4", "#aaaaaa"), 5);
+  });
+
+  it("returns the foreground failure mode when a non-hex accent-foreground is paired with a failing surface", () => {
+    // Non-hex foreground skips the foreground branch; a low-contrast surface then governs.
+    const scheme = makeScheme({
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-foreground"],
+      "surface-grid": "#fdfdfd" as AppColorSchemeTokens["surface-grid"],
+      "surface-sidebar": "#fdfdfd" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-canvas": "#fdfdfd" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#fdfdfd" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#fdfdfd" as AppColorSchemeTokens["surface-panel-elevated"],
+    });
+    const result = accentOverrideHasLowContrast(scheme);
+    assert(result !== null);
+    // Foreground skipped (non-hex) → surface branch reports the near-white-on-white failure.
+    expect(result.mode).toBe("surface");
+    expect(result.worstRatio).toBeLessThan(4.5);
+    expect(result.worstSurface).not.toBeNull();
+  });
+
+  it("treats the 4.5:1 gate as strict — passes just above, fails just below", () => {
+    // WCAG reference greys on white: #767676 = 4.54:1 (clears), #777777 = 4.48:1 (fails).
+    // Surfaces are black so the surface branch never fires; the foreground gate governs.
+    const baseSurfaces = {
+      "surface-grid": "#000000",
+      "surface-sidebar": "#000000",
+      "surface-canvas": "#000000",
+      "surface-panel": "#000000",
+      "surface-panel-elevated": "#000000",
+    } as Partial<AppColorSchemeTokens>;
+
+    const justAbove = makeScheme({
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#767676" as AppColorSchemeTokens["accent-foreground"],
+      ...baseSurfaces,
+    });
+    // Sanity-check the fixtures straddle the boundary so the test stays meaningful.
+    expect(contrastRatio("#767676", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(accentOverrideHasLowContrast(justAbove)).toBeNull();
+
+    const justBelow = makeScheme({
+      "accent-primary": "#ffffff" as AppColorSchemeTokens["accent-primary"],
+      "accent-foreground": "#777777" as AppColorSchemeTokens["accent-foreground"],
+      ...baseSurfaces,
+    });
+    expect(contrastRatio("#777777", "#ffffff")).toBeLessThan(4.5);
+    const result = accentOverrideHasLowContrast(justBelow);
+    assert(result !== null);
+    expect(result.mode).toBe("foreground");
   });
 
   it("skips the foreground pair when accent-foreground is non-hex but still checks surfaces", () => {
@@ -489,14 +598,14 @@ describe("accentOverrideHasLowContrast", () => {
       "surface-panel-elevated": "#000000" as AppColorSchemeTokens["surface-panel-elevated"],
     });
     // White accent on black surfaces is high-contrast → no warning despite non-hex fg.
-    expect(accentOverrideHasLowContrast(scheme)).toBe(false);
+    expect(accentOverrideHasLowContrast(scheme)).toBeNull();
   });
 
   it("does not flag when a non-hex accent-primary cannot be evaluated", () => {
     const scheme = makeScheme({
       "accent-primary": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["accent-primary"],
     });
-    expect(accentOverrideHasLowContrast(scheme)).toBe(false);
+    expect(accentOverrideHasLowContrast(scheme)).toBeNull();
   });
 });
 

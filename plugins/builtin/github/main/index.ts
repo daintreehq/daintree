@@ -11,7 +11,12 @@ import { registerReviewDecorationProvider } from "./reviewDecorationProvider.js"
  */
 export function activate(host: PluginHostApi): () => void {
   const disposeForge = host.registerForgeProvider({ id: "github" }, githubForgeProvider);
-  const disposeDecorations = registerReviewDecorationProvider(host);
+  // Pass the registered forge provider so the decoration hook can author
+  // the per-file deep-link via `buildPRFileUrl` (a future non-GitHub provider
+  // would inject its own equivalent). The provider instance is the same
+  // object the host holds — sharing the reference keeps the capability
+  // check a single source of truth.
+  const disposeDecorations = registerReviewDecorationProvider(host, githubForgeProvider);
   return () => {
     disposeForge();
     disposeDecorations();
@@ -49,7 +54,6 @@ export {
 } from "./GitHubTokenHealthService.js";
 
 export {
-  REPO_STATS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
   PROJECT_HEALTH_QUERY,
   MERGE_VELOCITY_QUERY,
@@ -73,7 +77,7 @@ export type { RollupContextNode, DerivedCIResult } from "./prRequiredCIStatus.js
 export type {
   RepoContext,
   RepoStats,
-  RepoStatsResult,
+  RestCountsSnapshot,
   LinkedPR,
   PRCheckResult,
   PRCheckCandidate,
@@ -111,12 +115,7 @@ export {
 export { clearGitHubCaches, clearPRCaches } from "./GitHubCaches.js";
 
 // Stats
-export {
-  getRepoStats,
-  getRepoStatsAndPage,
-  getFirstPageCache,
-  getRepoStatsComplete,
-} from "./GitHubStats.js";
+export { getRepoStatsAndPage, getFirstPageCache, getRepoStatsComplete } from "./GitHubStats.js";
 export type { RepoStatsAndPageResult, RepoStatsCompleteResult } from "./GitHubStats.js";
 
 // Project health

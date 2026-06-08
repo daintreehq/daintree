@@ -4,22 +4,35 @@ vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
 }));
 
+vi.mock("../../ipc/errorHandlers.js", () => ({
+  notifyError: vi.fn(),
+}));
+
+vi.mock("../../services/TelemetryService.js", () => ({
+  trackEvent: vi.fn(),
+}));
+
 import {
   registerDeferredTask,
   finalizeDeferredRegistration,
   signalFirstInteractive,
   getDeferredQueueState,
   resetDeferredQueue,
+  haltDeferredQueue,
+  __resetDeferredQueueForTests,
 } from "../deferredInitQueue.js";
+import { notifyError } from "../../ipc/errorHandlers.js";
+import { trackEvent } from "../../services/TelemetryService.js";
 
 describe("deferredInitQueue", () => {
   beforeEach(() => {
-    resetDeferredQueue();
+    __resetDeferredQueueForTests();
+    vi.clearAllMocks();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
-    resetDeferredQueue();
+    __resetDeferredQueueForTests();
     vi.useRealTimers();
   });
 
@@ -134,6 +147,89 @@ describe("deferredInitQueue", () => {
     expect(ran).toEqual(["ok"]);
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
+
+    // Both failures are surfaced through the shared error infrastructure and
+    // telemetry — not just swallowed into the console.
+    expect(notifyError).toHaveBeenCalledTimes(2);
+    for (const [error, options] of vi.mocked(notifyError).mock.calls) {
+      expect(error).toBeInstanceOf(Error);
+      expect(options).toEqual({ source: "deferred-init" });
+    }
+    const reportedMessages = vi
+      .mocked(notifyError)
+      .mock.calls.map(([error]) => (error as Error).message);
+    expect(reportedMessages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("fail-sync"),
+        expect.stringContaining("fail-async"),
+      ])
+    );
+
+    expect(trackEvent).toHaveBeenCalledTimes(2);
+    expect(trackEvent).toHaveBeenCalledWith("deferred_init_task_failed", { taskName: "fail-sync" });
+    expect(trackEvent).toHaveBeenCalledWith("deferred_init_task_failed", {
+      taskName: "fail-async",
+    });
+  });
+
+  it("queue still advances when failure reporting itself throws", async () => {
+    const ran: string[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Simulate a store-write / serialization failure inside notifyError.
+    // mockImplementationOnce auto-reverts so it can't leak into later tests.
+    vi.mocked(notifyError).mockImplementationOnce(() => {
+      throw new Error("reporting backend exploded");
+    });
+
+    registerDeferredTask({
+      name: "fail-sync",
+      run: () => {
+        throw new Error("boom");
+      },
+    });
+    registerDeferredTask({ name: "ok", run: () => void ran.push("ok") });
+
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(null);
+    await waitForDrain();
+
+    // The reporter threw, but failure isolation held: the next task ran and the
+    // queue reached "drained" instead of stalling in "draining".
+    expect(ran).toEqual(["ok"]);
+    expect(getDeferredQueueState().drainState).toBe("drained");
+    consoleError.mockRestore();
+  });
+
+  it("reports non-Error thrown values without secondary failure", async () => {
+    const ran: string[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    registerDeferredTask({
+      name: "throws-string",
+      run: () => {
+        throw "plain string failure";
+      },
+    });
+    registerDeferredTask({
+      name: "throws-null",
+      run: () => {
+        throw null;
+      },
+    });
+    registerDeferredTask({ name: "ok", run: () => void ran.push("ok") });
+
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(null);
+    await waitForDrain();
+
+    expect(ran).toEqual(["ok"]);
+    expect(getDeferredQueueState().drainState).toBe("drained");
+    expect(notifyError).toHaveBeenCalledTimes(2);
+    // Each reported error is a real Error with the original value preserved on cause.
+    for (const [error] of vi.mocked(notifyError).mock.calls) {
+      expect(error).toBeInstanceOf(Error);
+    }
+    consoleError.mockRestore();
   });
 
   it("late registration after drain runs immediately", async () => {
@@ -150,6 +246,50 @@ describe("deferredInitQueue", () => {
     expect(late).toHaveBeenCalledTimes(1);
     expect(consoleWarn).toHaveBeenCalled();
     consoleWarn.mockRestore();
+
+    // A successful late task is not reported as a failure.
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("reports late-registration failures through the error infrastructure", async () => {
+    const early = vi.fn();
+    registerDeferredTask({ name: "early", run: early });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+    await waitForDrain();
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Late sync throw
+    registerDeferredTask({
+      name: "late-sync",
+      run: () => {
+        throw new Error("late-boom");
+      },
+    });
+
+    // Late async rejection
+    registerDeferredTask({
+      name: "late-async",
+      run: async () => {
+        throw new Error("late-async-boom");
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    consoleWarn.mockRestore();
+    consoleError.mockRestore();
+
+    expect(notifyError).toHaveBeenCalledTimes(2);
+    for (const [, options] of vi.mocked(notifyError).mock.calls) {
+      expect(options).toEqual({ source: "deferred-init" });
+    }
+    expect(trackEvent).toHaveBeenCalledWith("deferred_init_task_failed", { taskName: "late-sync" });
+    expect(trackEvent).toHaveBeenCalledWith("deferred_init_task_failed", {
+      taskName: "late-async",
+    });
   });
 
   it("finalize is idempotent", async () => {
@@ -244,5 +384,158 @@ describe("deferredInitQueue", () => {
     expect(task).not.toHaveBeenCalled();
     expect(getDeferredQueueState().drainState).toBe("idle");
     expect(getDeferredQueueState().firstInteractiveReceived).toBe(true);
+  });
+
+  it("halt stops an in-flight drain — remaining tasks never run", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstRun = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+    const secondRun = vi.fn();
+
+    registerDeferredTask({ name: "hang", run: firstRun });
+    registerDeferredTask({ name: "after-halt", run: secondRun });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+
+    // Let the first task start but not finish
+    await vi.advanceTimersByTimeAsync(0);
+    expect(firstRun).toHaveBeenCalledTimes(1);
+    expect(getDeferredQueueState().drainState).toBe("draining");
+
+    // before-quit fires mid-drain
+    haltDeferredQueue();
+
+    releaseFirst();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(secondRun).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("draining");
+  });
+
+  it("signalFirstInteractive after halt does not start a drain", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+    finalizeDeferredRegistration(10_000);
+
+    haltDeferredQueue();
+    signalFirstInteractive(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+  });
+
+  it("fallback timer armed before halt never fires tasks", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "fb", run: task });
+    finalizeDeferredRegistration(5_000);
+
+    haltDeferredQueue();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+  });
+
+  it("finalize after halt does not arm the fallback timer", async () => {
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+
+    haltDeferredQueue();
+    finalizeDeferredRegistration(5_000);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
+    expect(getDeferredQueueState().registrationComplete).toBe(false);
+  });
+
+  it("registration after halt is dropped, not run immediately", async () => {
+    // Drain fully so the "run immediately" late path would normally apply
+    registerDeferredTask({ name: "early", run: vi.fn() });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+    await waitForDrain();
+
+    haltDeferredQueue();
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const late = vi.fn();
+    registerDeferredTask({ name: "late", run: late });
+
+    expect(late).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalled();
+    consoleWarn.mockRestore();
+  });
+
+  it("non-quit reset still allows a fresh cycle to drain (macOS re-open)", async () => {
+    // Regression guard: a cycle that never saw haltDeferredQueue
+    // (reset on last-window-close, new window, new drain) works normally.
+    const t1 = vi.fn();
+    registerDeferredTask({ name: "t1", run: t1 });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+    await waitForDrain();
+
+    resetDeferredQueue();
+
+    const t2 = vi.fn();
+    registerDeferredTask({ name: "t2", run: t2 });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(2);
+    await waitForDrain();
+    expect(t2).toHaveBeenCalledTimes(1);
+  });
+
+  it("halt between a sync task and its queued setImmediate stops the chain", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    registerDeferredTask({ name: "sync-a", run: first });
+    registerDeferredTask({ name: "sync-b", run: second });
+    finalizeDeferredRegistration(10_000);
+    // doDrain runs synchronously from the signal: task A executes, task B's
+    // setImmediate is queued but has not fired yet when control returns here.
+    signalFirstInteractive(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+
+    haltDeferredQueue();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(second).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("draining");
+  });
+
+  it("halt on a virgin queue drops registrations without queueing them", async () => {
+    haltDeferredQueue();
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+
+    expect(task).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalled();
+    expect(getDeferredQueueState().taskCount).toBe(0);
+    expect(getDeferredQueueState().drainState).toBe("idle");
+    consoleWarn.mockRestore();
+  });
+
+  it("resetDeferredQueue does not undo a halt", async () => {
+    haltDeferredQueue();
+    // Last-window-close reset racing the quit sequence must not unhalt
+    resetDeferredQueue();
+
+    const task = vi.fn();
+    registerDeferredTask({ name: "t", run: task });
+    finalizeDeferredRegistration(10_000);
+    signalFirstInteractive(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(task).not.toHaveBeenCalled();
+    expect(getDeferredQueueState().drainState).toBe("idle");
   });
 });

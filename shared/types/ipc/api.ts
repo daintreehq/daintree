@@ -28,6 +28,7 @@ import type {
   Page,
   RepoMetadata,
   ListOptions,
+  ForgeUser,
 } from "../forge.js";
 import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
@@ -72,10 +73,14 @@ import type {
   DemoStopCaptureResult,
   DemoCaptureStatus,
   DemoAnnotateResult,
+  DemoAnnotationPlacement,
+  DemoAnnotationSize,
+  DemoTerminalKey,
 } from "./demo.js";
 import type {
   CopyTreeResult,
   CopyTreeOptions,
+  CopyTreeTestConfigOptions,
   FileTreeNode,
   CopyTreeProgress,
 } from "./copyTree.js";
@@ -111,10 +116,10 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
-  GitHubRateLimitPayload,
   GitHubRateLimitDetails,
   GitHubTokenHealthPayload,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
@@ -140,6 +145,7 @@ import type {
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
+  TerminalReliabilityMetricPayload,
 } from "../pty-host.js";
 import type {
   FileSearchPayload,
@@ -207,7 +213,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     delete(worktreeId: string, force?: boolean, deleteBranch?: boolean): Promise<void>;
     attachIssue(payload: AttachIssuePayload): Promise<void>;
     detachIssue(worktreeId: string): Promise<void>;
-    getIssueAssociation(worktreeId: string): Promise<IssueAssociation | null>;
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
     restartService(): Promise<void>;
     retryProjectLoad(): Promise<void>;
@@ -266,6 +271,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
+    onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ): () => void;
@@ -337,7 +343,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getFileTree(worktreeId: string, dirPath?: string): Promise<FileTreeNode[]>;
     testConfig(
       worktreeId: string,
-      options?: CopyTreeOptions
+      options?: CopyTreeTestConfigOptions
     ): Promise<import("./copyTree.js").CopyTreeTestConfigResult>;
     onProgress(callback: (progress: CopyTreeProgress) => void): () => void;
   };
@@ -754,10 +760,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
     onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
-    onRateLimitChanged(callback: (data: GitHubRateLimitPayload) => void): () => void;
     getRateLimitDetails(): Promise<GitHubRateLimitDetails | null>;
     onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
     onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
+    onRepoCountsUpdated(callback: (data: RepoCountsUpdatedPayload) => void): () => void;
     getTokenHealth(): Promise<GitHubTokenHealthPayload>;
   };
   // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.
@@ -891,6 +897,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         defaultValue: string;
       }) => void
     ): () => void;
+    /** Subscribe to dialog-dismiss events — guest navigated away or its renderer crashed */
+    onDialogDismiss(callback: (payload: { panelId: string }) => void): () => void;
     /** Subscribe to find-in-page shortcuts forwarded from focused webview guests */
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
@@ -1033,6 +1041,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setWslGit(worktreeId: string, enabled: boolean): Promise<void>;
     /** Hide the WSL git suggestion banner for this worktree without enabling. */
     dismissWslBanner(worktreeId: string): Promise<void>;
+    /**
+     * Re-probe the WSL default distro on demand (user "Re-check") and refresh
+     * eligibility across all WSL worktrees. Windows-only.
+     */
+    reprobeWsl(worktreeId: string): Promise<void>;
   };
   window: {
     /** Subscribe to fullscreen state changes */
@@ -1308,8 +1321,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
     /** Unassign a user from an issue via the resolved forge provider. */
     unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
-    /** Validate a token against the global default forge provider. */
-    validateToken(token: string): Promise<AuthValidation>;
+    /**
+     * Validate a token against a specific forge provider, identified by its
+     * canonical `{pluginId}.{contributionId}` id. The Test button in the
+     * Code Forge settings surfaces a single provider at a time and passes
+     * that provider's id directly — there is no implicit default fallback,
+     * so a token entered in the GitHub tab can never be validated against
+     * a non-GitHub forge (issue #9985).
+     */
+    validateToken(payload: { providerId: string; token: string }): Promise<AuthValidation>;
     /**
      * Validate and persist credentials for a specific forge provider, keyed
      * by its canonical `{pluginId}.{contributionId}` id. `credentials` is a
@@ -1339,6 +1359,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Fetch the normalized repository metadata roll-up. */
     getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
     /**
+     * Resolve the active forge provider's current authenticated viewer for a
+     * project, used by the renderer to drive provider-agnostic "assign issue
+     * to me" flows. Returns `null` when the provider doesn't carry a viewer
+     * concept, has no credentials, or the user is signed out — callers treat
+     * that as "skip self-assignment", not an error.
+     */
+    getCurrentUser(payload: { cwd: string }): Promise<ForgeUser | null>;
+    /**
      * Provider-keyed rate-limit state push. Every forge provider (GitHub
      * included) flows through this channel tagged with its canonical
      * `providerId`; consumers filter to the provider they care about.
@@ -1356,10 +1384,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     /**
      * Classify a `git push` failure via the resolved forge provider. Returns
-     * the provider's `contribution.id` (for routing the push-error banner's
-     * settings CTA) plus the provider's classification (a stable error code,
-     * or `null` when the provider doesn't recognize the stderr). Resolves to
-     * `null` when no forge provider can be resolved for `cwd`.
+     * the provider's canonical `{pluginId}.{contributionId}` id (for routing
+     * the push-error banner's settings CTA) plus the provider's classification
+     * (a stable error code, or `null` when the provider doesn't recognize the
+     * stderr). Resolves to `null` when no forge provider can be resolved for
+     * `cwd`.
      */
     classifyPushError(payload: {
       cwd: string;
@@ -1423,6 +1452,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./mcpServer.js").McpGrantLifecyclePayload) => void
     ): () => void;
     /**
+     * Subscribe to session-revoked pushes for the pinned help-session in this
+     * WebContents. Fires when the abuse policy revokes the session after the
+     * denial threshold is exceeded so the renderer can explain why it ended
+     * and offer a new-session recovery action (#10017).
+     */
+    onSessionRevoked(
+      callback: (payload: { sessionId: string; denialKind: string }) => void
+    ): () => void;
+    /**
      * Subscribe to live tool-call-started pushes for the pinned help-session
      * in this WebContents. Drives the Assistant panel's activity strip (#9759).
      */
@@ -1435,6 +1473,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onToolCallSettled(
       callback: (payload: import("./mcpServer.js").McpToolCallSettledPayload) => void
+    ): () => void;
+    /**
+     * Subscribe to `help.displayImage` pushes for the pinned help-session in
+     * this WebContents. Each push carries a validated daintree.org image URL
+     * and its session-assigned figure number for inline rendering (#9828).
+     */
+    onDisplayImage(
+      callback: (payload: import("./mcpServer.js").McpHelpDisplayImagePayload) => void
+    ): () => void;
+    /**
+     * Subscribe to turn-outcome alerts (`agent-stuck` / `reasoning-loop`) for
+     * the pinned help-session in this WebContents. Drives the Assistant
+     * footer's ambient outcome pip (#10018). Targeted send — never broadcast.
+     */
+    onTurnOutcomeAlert(
+      callback: (payload: import("./mcpServer.js").McpTurnOutcomeAlertPayload) => void
     ): () => void;
   };
   // helpAssistant is generated — see GeneratedElectronAPI.
@@ -1613,19 +1667,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
       selector?: string
     ): Promise<void>;
+    typeInTerminal(selector: string, text: string, cps?: number): Promise<void>;
+    sendKeyToTerminal(selector: string, key: DemoTerminalKey): Promise<void>;
     spotlight(selector: string, padding?: number): Promise<void>;
     dismissSpotlight(): Promise<void>;
     annotate(
       selector: string,
       text: string,
-      position?: "top" | "bottom" | "left" | "right",
+      position?: DemoAnnotationPlacement,
+      size?: DemoAnnotationSize,
       id?: string
     ): Promise<DemoAnnotateResult>;
     dismissAnnotation(id?: string): Promise<void>;
     waitForIdle(settleMs?: number, timeoutMs?: number): Promise<void>;
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
     sendCaptureChunk(captureId: string, data: Uint8Array): void;
-    sendCaptureStop(captureId: string, frameCount: number, error?: string): void;
+    sendCaptureStop(captureId: string, chunkCount: number, error?: string): void;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;
     onExecCommand(
@@ -1769,4 +1826,31 @@ export interface HelpAssistantSettings {
    * idle hibernation. Defaults to 30.
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
+}
+
+/** One per-tool grant currently active for the pinned help session. */
+export interface HelpSessionActiveGrant {
+  /** Dotted `BuiltInActionId` the grant authorizes (e.g. `terminal.kill`). */
+  toolId: string;
+  /** Absolute epoch millis when the grant expires without refresh. */
+  expiresAt: number;
+  /** TTL the grant was minted with, in milliseconds. */
+  ttlMs: number;
+}
+
+/**
+ * Live status snapshot of the currently pinned help session — the effective
+ * tier the session is *running at right now* (which a renderer-approved
+ * "Always allow" elevation can raise above the configured
+ * {@link HelpAssistantSettings.tier} default) plus the per-tool grants
+ * currently in effect. Distinct from the persisted settings: those describe
+ * the default for new sessions, this describes the live one. `connected` is
+ * false when there is no pinned help session for the caller's WebContents (no
+ * session, or the caller isn't the pinned renderer) — the tier/grants fields
+ * then carry safe defaults the UI renders as a quiet "no live session" state.
+ */
+export interface HelpSessionLiveStatus {
+  connected: boolean;
+  tier: HelpAssistantTier;
+  activeGrants: HelpSessionActiveGrant[];
 }

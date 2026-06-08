@@ -366,8 +366,8 @@ describe("PtyManager adversarial", () => {
       tierChanges.push({ id, tier });
     });
 
-    expect(shared.created[0]!.setActivityMonitorTier).toHaveBeenCalledWith(50);
-    expect(shared.created[1]!.setActivityMonitorTier).toHaveBeenCalledWith(500);
+    expect(shared.created[0]!.setActivityMonitorTier).toHaveBeenCalledWith("active", 50);
+    expect(shared.created[1]!.setActivityMonitorTier).toHaveBeenCalledWith("background", 500);
     expect(shared.created[0]!.startProcessDetector).toHaveBeenCalledTimes(1);
     expect(tierChanges).toEqual([
       { id: "t1", tier: "active" },

@@ -1,4 +1,5 @@
 import type { TerminalStatusPayload } from "@shared/types";
+import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -8,7 +9,12 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
-import { enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
+import {
+  enqueueFlowStatusUpdate,
+  enqueueHeldDurationUpdate,
+  clearHeldDuration,
+  cancelTerminalFlowState,
+} from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -224,7 +230,15 @@ export function setupLifecycleListeners(): DisposableStore {
           updates.previousFocusedId = null;
         }
         if (state.maximizedId === id) {
+          // Backend-driven trash (e.g. PTY-host TTL) arrives here, not via
+          // the `trashPanel`/`trashPanelGroup` wrappers, so this listener
+          // owns the trio-clear on its own. Drop target and snapshot too —
+          // a dangling `maximizeTarget` would mislabel the next
+          // `TerminalContextMenu` render and stall the post-restore
+          // `toggleMaximize` (#9935).
           updates.maximizedId = null;
+          updates.maximizeTarget = null;
+          updates.preMaximizeLayout = null;
         }
         if (state.activeDockTerminalId === id) {
           updates.activeDockTerminalId = null;
@@ -241,12 +255,18 @@ export function setupLifecycleListeners(): DisposableStore {
       terminalRegistryController.onRestored((data: { id: string }) => {
         const { id } = data;
         usePanelStore.getState().markAsRestored(id);
-        const { focusedId: previousFocusedId, activeDockTerminalId } = usePanelStore.getState();
+        const {
+          focusedId: previousFocusedId,
+          activeDockTerminalId,
+          panelsById,
+        } = usePanelStore.getState();
         // Only clear the open dock popover when the restored terminal IS the
-        // one displayed in it. A background terminal waking from hibernation
-        // must not silently dismiss an unrelated dock session the user is
-        // typing into (#8368).
-        const clearsActiveDock = activeDockTerminalId === id;
+        // one displayed in it AND it did not land back in the dock. A terminal
+        // restored INTO the dock must keep the popover open so focus and the
+        // visible panel agree (#9938); a restore that lands elsewhere must not
+        // silently dismiss an unrelated dock session the user is typing into
+        // (#8368).
+        const clearsActiveDock = activeDockTerminalId === id && panelsById[id]?.location !== "dock";
         usePanelStore.setState({
           focusedId: id,
           ...(clearsActiveDock && { activeDockTerminalId: null }),
@@ -279,14 +299,28 @@ export function setupLifecycleListeners(): DisposableStore {
         // Clean up resource metrics for exited terminal
         useResourceMonitoringStore.getState().removePanel(id);
 
-        // Store exit code on the terminal before applying exit behavior
+        // Drop any buffered flow-status/held-duration patches for this terminal
+        // before committing the clear below, so a pending RAF flush can't
+        // resurrect a stale "paused" pill on the just-exited panel (#9899).
+        cancelTerminalFlowState(id);
+
+        // Store exit code and clear the flow state on the terminal before
+        // applying exit behavior. Flow status must not outlive the PTY process
+        // that owned the pause — clear it atomically with the exit-code write so
+        // the paused pill and derived runtime status reset on exit (#9899).
         usePanelStore.setState((s) => {
           const existing = s.panelsById[id];
           if (!existing) return s;
           return {
             panelsById: {
               ...s.panelsById,
-              [id]: { ...existing, exitCode },
+              [id]: {
+                ...existing,
+                exitCode,
+                flowStatus: undefined,
+                flowStatusTimestamp: undefined,
+                heldDurationMs: undefined,
+              },
             },
           };
         });
@@ -357,11 +391,114 @@ export function setupLifecycleListeners(): DisposableStore {
           terminalInstanceService.injectDataLossMarker(id, droppedBytes ?? 0);
           return;
         }
+        // FUTURE_SAB: `suspended` and `paused-user` are excluded from
+        // `PersistableFlowStatus` (see #9900 / `shared/types/panel.ts`).
+        // `suspended` is only emitted by the disabled SAB transport path
+        // (`BackpressureManager.suspendVisualStream`,
+        // `electron/pty-host/backpressure.ts:277`); `paused-user` has no
+        // producer. Drop both at the listener boundary so the buffer
+        // (typed `PersistableFlowStatus`) is never asked to persist a
+        // skeleton value. When the SAB transport is revived, remove this
+        // guard, restore the suspended wake branch below, and re-widen
+        // the formatter/component prop types — see the // FUTURE_SAB:
+        // markers in `useAccessibilityAnnouncements.ts` and
+        // `TerminalHeaderContent.tsx`.
+        if (status === "suspended" || status === "paused-user") {
+          return;
+        }
         enqueueFlowStatusUpdate(id, status, timestamp);
-        if (status === "suspended" || status === "paused-backpressure") {
-          terminalInstanceService.wake(id);
+        // FUTURE_SAB: the suspended wake branch was removed in #9900.
+        // The producer (`suspendVisualStream`) is unreachable in production,
+        // so waking on its emission would only ever fire in adversarial
+        // tests. If the SAB transport is revived and `suspended` becomes
+        // a real status again, re-add `|| status === "suspended"` here
+        // and remove the early-return guard above.
+        if (status === "paused-backpressure") {
+          // Don't wake a terminal the user already backgrounded (#9906).
+          // A backpressure pause on a hidden pane is expected — waking it
+          // sends a stale `wake-terminal` IPC that promotes the host tier to
+          // "active" against an offscreen terminal, defeating the background
+          // gate. Primary prevention for the late-wake desync; the renderer
+          // policy's cancelPendingWake and the host's wake correction are the
+          // backstops for wakes already scheduled or in flight.
+          if (!usePanelStore.getState().backgroundedTerminals.has(id)) {
+            terminalInstanceService.wake(id);
+          }
         }
       })
+    )
+  );
+
+  d.add(
+    toDisposable(
+      terminalRegistryController.onReliabilityMetric(
+        (payload: TerminalReliabilityMetricPayload) => {
+          // `pause-end` and `suspend` are the canonical resume signals —
+          // clear the held-duration gauge for the terminal so a stale
+          // value doesn't outlive the actual pause. `pause-duration-gauge`
+          // is the skip-when-empty gauge that drives the held-duration
+          // tooltip body. Other metric types (queue-depth-gauge,
+          // data-loss-count, ipc-cap-drop, pending-bytes-gauge,
+          // throughput-rate) are host-side telemetry sinks — observable
+          // via the host log stream and ignored here. In particular,
+          // `ipc-cap-drop` (a chunk dropped at the IPC queue's hard cap)
+          // must NOT clear the gauge: the terminal is still paused when
+          // the drop fires (#9902).
+          //
+          // FUTURE_SAB: the `suspend` arm is the symmetric companion of the
+          // `suspended` `flowStatus` dropped in the onStatus boundary above.
+          // `suspendVisualStream` emits BOTH the `suspended` status and the
+          // `suspend` reliability metric (see `electron/pty-host/backpressure.ts:309+`).
+          // The flow-status half is now dropped at the listener boundary
+          // (#9900) but the metric half is still routed through
+          // `clearHeldDuration`. In production the SAB transport path is
+          // disabled so neither half can fire; the asymmetry is a forward-
+          // looking breadcrumb for the migration author. When the SAB
+          // transport is revived, EITHER drop the `suspend` metric arm
+          // alongside the `suspended` status, OR gate it on the same
+          // source/buffer the flow-status boundary uses, so the held-
+          // duration gauge and the pill stay in lockstep.
+          if (payload.metricType === "pause-end" || payload.metricType === "suspend") {
+            const terminal = usePanelStore.getState().panelsById[payload.terminalId];
+            if (terminal && isPtyPanel(terminal)) {
+              // Always enqueue the clear — the buffer's null-wins
+              // semantics correctly handle the cross-frame race where a
+              // non-null `pause-duration-gauge` patch was enqueued but
+              // hasn't been flushed yet. Skipping the enqueue based on
+              // the committed (post-flush) `heldDurationMs` would let
+              // the buffered non-null value resurrect after the
+              // terminal resumed. The fold's same-value skip makes a
+              // redundant enqueue cheap when nothing is buffered.
+              clearHeldDuration(payload.terminalId);
+            }
+            return;
+          }
+          if (payload.metricType !== "pause-duration-gauge") return;
+          const entries = payload.perTerminalHeld;
+
+          // Snapshot the panel map once per tick so we can both update
+          // terminals present in the gauge AND clear terminals absent from
+          // it (a terminal that was paused on the last tick but is no
+          // longer in the gauge has resumed — clear its stale value).
+          const panelsById = usePanelStore.getState().panelsById;
+          const seenIds = new Set<string>();
+          if (entries) {
+            for (const entry of entries) {
+              const terminal = panelsById[entry.terminalId];
+              if (!terminal || !isPtyPanel(terminal)) continue;
+              seenIds.add(entry.terminalId);
+              enqueueHeldDurationUpdate(entry.terminalId, entry.heldDurationMs);
+            }
+          }
+          for (const id of Object.keys(panelsById)) {
+            if (seenIds.has(id)) continue;
+            const terminal = panelsById[id];
+            if (!terminal || !isPtyPanel(terminal)) continue;
+            if (terminal.heldDurationMs === undefined) continue;
+            clearHeldDuration(id);
+          }
+        }
+      )
     )
   );
 

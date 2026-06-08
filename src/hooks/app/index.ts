@@ -1,7 +1,6 @@
 export { useAppBoot } from "./useAppBoot";
 export type { SafeBootResult } from "./useAppBoot";
 export { useAppHydration } from "./useAppHydration";
-export { useProjectSwitchRehydration } from "./useProjectSwitchRehydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";

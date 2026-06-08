@@ -33,6 +33,11 @@ type TrashedHandler = (data: { id: string; expiresAt: number }) => void;
 type RestoredHandler = (data: { id: string }) => void;
 type ExitHandler = (id: string, exitCode: number) => void;
 type StatusHandler = (data: { id: string; status: string; timestamp: number }) => void;
+type ReliabilityMetricHandler = (data: {
+  metricType: string;
+  terminalId?: string;
+  perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+}) => void;
 type BackendCrashedHandler = (data: {
   crashType: string;
   code: number | null;
@@ -57,6 +62,7 @@ const handlers: {
   restored?: RestoredHandler;
   exit?: ExitHandler;
   status?: StatusHandler;
+  reliabilityMetric?: ReliabilityMetricHandler;
   backendCrashed?: BackendCrashedHandler;
   backendRecovering?: BackendRecoveringHandler;
   backendReady?: BackendReadyHandler;
@@ -72,6 +78,7 @@ const unsubs = {
   restored: vi.fn(),
   exit: vi.fn(),
   status: vi.fn(),
+  reliabilityMetric: vi.fn(),
   backendCrashed: vi.fn(),
   backendRecovering: vi.fn(),
   backendReady: vi.fn(),
@@ -109,6 +116,10 @@ const onExitMock = vi.fn((cb: ExitHandler) => {
 const onStatusMock = vi.fn((cb: StatusHandler) => {
   handlers.status = cb;
   return unsubs.status;
+});
+const onReliabilityMetricMock = vi.fn((cb: ReliabilityMetricHandler) => {
+  handlers.reliabilityMetric = cb;
+  return unsubs.reliabilityMetric;
 });
 const onBackendCrashedMock = vi.fn((cb: BackendCrashedHandler) => {
   handlers.backendCrashed = cb;
@@ -153,6 +164,7 @@ vi.mock("@/clients", () => ({
     onTrashed: onTrashedMock,
     onRestored: onRestoredMock,
     onStatus: onStatusMock,
+    onReliabilityMetric: onReliabilityMetricMock,
     onBackendCrashed: onBackendCrashedMock,
     onBackendRecovering: onBackendRecoveringMock,
     onBackendReady: onBackendReadyMock,
@@ -675,10 +687,14 @@ describe("terminalStore process detection listeners", () => {
         mod.terminalInstanceService as unknown as typeof terminalInstanceService;
     });
 
-    it("calls wake on suspended status", () => {
+    // FUTURE_SAB: `suspended` is no longer a wake-triggering status as of
+    // #9900 — the listener drops it at the boundary (it has no production
+    // producer; see `lifecycle.ts`). This test now locks in the new
+    // behavior: suspended must not wake.
+    it("does not call wake on suspended status (FUTURE_SAB; #9900)", () => {
       const cleanup = setupTerminalStoreListeners();
       handlers.status?.({ id: "term-1", status: "suspended", timestamp: Date.now() });
-      expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
       cleanup();
     });
 
@@ -689,7 +705,9 @@ describe("terminalStore process detection listeners", () => {
       cleanup();
     });
 
-    it("does not call wake on paused-user status", () => {
+    // FUTURE_SAB: `paused-user` has no producer (#9900); the listener drops
+    // it at the boundary. This test continues to assert no wake.
+    it("does not call wake on paused-user status (FUTURE_SAB; #9900)", () => {
       const cleanup = setupTerminalStoreListeners();
       handlers.status?.({ id: "term-1", status: "paused-user", timestamp: Date.now() });
       expect(terminalInstanceService.wake).not.toHaveBeenCalled();

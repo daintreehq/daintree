@@ -10,7 +10,7 @@ export const config: AgentConfig = {
   tooltip: "Sourcegraph's agentic coding tool",
   usageUrl: "https://ampcode.com/",
   packages: {
-    npm: "@sourcegraph/amp",
+    npm: "@ampcode/cli",
   },
   // The native installer drops the binary at ~/.amp/bin/amp and symlinks
   // ~/.local/bin/amp. Probe both — the symlink may not be on PATH for
@@ -22,11 +22,11 @@ export const config: AgentConfig = {
   supportsWsl: true,
   version: {
     args: ["--version"],
-    npmPackage: "@sourcegraph/amp",
+    npmPackage: "@ampcode/cli",
   },
   update: {
     curl: "curl -fsSL https://ampcode.com/install.sh | bash",
-    npm: "npm install -g @sourcegraph/amp@latest",
+    npm: "npm install -g @ampcode/cli@latest",
   },
   install: {
     docsUrl: "https://ampcode.com/manual",
@@ -38,7 +38,7 @@ export const config: AgentConfig = {
         },
         {
           label: "npm",
-          commands: ["npm install -g @sourcegraph/amp"],
+          commands: ["npm install -g @ampcode/cli"],
         },
       ],
       linux: [
@@ -48,13 +48,13 @@ export const config: AgentConfig = {
         },
         {
           label: "npm",
-          commands: ["npm install -g @sourcegraph/amp"],
+          commands: ["npm install -g @ampcode/cli"],
         },
       ],
       windows: [
         {
           label: "npm",
-          commands: ["npm install -g @sourcegraph/amp"],
+          commands: ["npm install -g @ampcode/cli"],
           notes: ["Native Windows binary is not published — npm or WSL is required"],
         },
       ],
@@ -77,8 +77,11 @@ export const config: AgentConfig = {
   detection: {
     // Amp ships with empty primary/fallback patterns until on-device PTY
     // capture confirms the actual spinner glyphs and working strings emitted
-    // by the Ink TUI. Speculative patterns risk wrong-Unicode regressions
-    // (see #3941). Boot/prompt patterns are conservative and self-validating.
+    // by the Ink TUI; speculative patterns risk wrong-Unicode regressions
+    // (see #3941). Note: empty primaryPatterns is fallthrough, not opt-out —
+    // buildPatternConfig returns undefined (dropping fallbackPatterns too)
+    // and the universal pattern set applies. Opt-out semantics are #9873's
+    // scope. Boot/prompt patterns are conservative and self-validating.
     primaryPatterns: [
       // @generated:amp:primaryPatterns:start
       // @generated:amp:primaryPatterns:end
@@ -100,7 +103,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
-    debounceMs: 6000,
   },
   // Amp resumes a thread by ID via `amp threads continue <id>`. There's no
   // session-ID emission on quit and no slash-quit command — Ctrl+C is the

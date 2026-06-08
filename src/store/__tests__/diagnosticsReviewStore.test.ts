@@ -237,4 +237,29 @@ describe("diagnosticsReviewStore", () => {
     useDiagnosticsReviewStore.getState().clearError();
     expect(useDiagnosticsReviewStore.getState().downloadError).toBeNull();
   });
+
+  describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {
+    it("increments on each successful open, including a re-open while already open", async () => {
+      collectMock.mockResolvedValue(samplePayload);
+      const before = useDiagnosticsReviewStore.getState().requestSeq;
+
+      await useDiagnosticsReviewStore.getState().openReview();
+      const afterFirst = useDiagnosticsReviewStore.getState().requestSeq;
+      expect(afterFirst).toBeGreaterThan(before);
+      expect(useDiagnosticsReviewStore.getState().isOpen).toBe(true);
+
+      // Re-open without closing first: `isOpen` stays true the whole time, so a
+      // `Number(isOpen)` key would not change — the counter must still advance.
+      await useDiagnosticsReviewStore.getState().openReview();
+      expect(useDiagnosticsReviewStore.getState().requestSeq).toBeGreaterThan(afterFirst);
+    });
+
+    it("does not increment when collection fails", async () => {
+      collectMock.mockRejectedValueOnce(new Error("boom"));
+      const before = useDiagnosticsReviewStore.getState().requestSeq;
+
+      await useDiagnosticsReviewStore.getState().openReview();
+      expect(useDiagnosticsReviewStore.getState().requestSeq).toBe(before);
+    });
+  });
 });

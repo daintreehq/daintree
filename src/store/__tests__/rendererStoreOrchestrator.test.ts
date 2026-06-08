@@ -12,6 +12,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(),
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
+    onBroadcastResult: vi.fn().mockReturnValue(() => {}),
   },
   appClient: {
     setState: vi.fn().mockResolvedValue(undefined),
@@ -75,7 +76,8 @@ vi.mock("../worktreeStore", async (importOriginal) => {
 });
 
 const { usePanelStore } = await import("../panelStore");
-const { useWorktreeSelectionStore, persistMruList } = await import("../worktreeStore");
+const { useWorktreeSelectionStore, persistMruList, suppressMruRecording } =
+  await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
@@ -322,6 +324,120 @@ describe("rendererStoreOrchestrator", () => {
     usePanelStore.setState({ focusedId: "term-1" });
 
     expect(trackSpy).not.toHaveBeenCalled();
+  });
+
+  // Issue #9933 — boot focus and suppression-window tests. Placed AFTER
+  // the existing "does not fire side effects" test because
+  // `vi.spyOn(useWorktreeSelectionStore.getState(), "trackTerminalFocus")`
+  // wraps the underlying StateCreator function (which is shared by every
+  // state object via the closure), so a spy installed in one test keeps
+  // receiving calls from later tests that re-install on the same function
+  // — Vitest returns the existing spy on re-wrap, and its mock state
+  // carries over. Running these after the existing side-effect test
+  // keeps the order predictable without requiring `vi.restoreAllMocks`.
+  it("skips MRU recording for boot focus when suppressMruRecording is on (issue #9933)", () => {
+    // Boot-time focus (post-hydration) must NOT prepend the panel to
+    // `mruList` — that would silently demote the user's actual
+    // last-focused terminal on every cold boot. The L1c subscription
+    // checks `isMruRecordingSuppressed()` and bails; the L1a (focus
+    // tracking) and L1b (worktree switch) subscriptions still fire so
+    // the boot pick correctly seeds `lastFocusedTerminalByWorktree`
+    // (which is runtime-only and has no other writer).
+    const recordMruSpy = vi.spyOn(usePanelStore.getState(), "recordMru");
+    const trackSpy = vi.spyOn(useWorktreeSelectionStore.getState(), "trackTerminalFocus");
+    trackSpy.mockClear();
+    recordMruSpy.mockClear();
+
+    usePanelStore.setState({
+      panelsById: {
+        "term-boot": {
+          id: "term-boot",
+          title: "T-boot",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      },
+      panelIds: ["term-boot"],
+    });
+
+    suppressMruRecording(true);
+    try {
+      usePanelStore.setState({ focusedId: "term-boot" });
+    } finally {
+      suppressMruRecording(false);
+    }
+
+    // L1c: MRU recording gated.
+    expect(recordMruSpy).not.toHaveBeenCalled();
+    // L1a: focus tracking still fires — seeds `lastFocusedTerminalByWorktree`
+    // so future worktree switches can restore last-focus (#9512).
+    expect(trackSpy).toHaveBeenCalledWith("wt-1", "term-boot");
+  });
+
+  it("MRU recording resumes immediately after suppressMruRecording is lifted (issue #9933)", () => {
+    // Verifies the suppression window is correctly scoped to the boot pick
+    // and doesn't leak into subsequent user focus changes.
+    const recordMruSpy = vi.spyOn(usePanelStore.getState(), "recordMru");
+    recordMruSpy.mockClear();
+
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": {
+          id: "term-1",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      },
+      panelIds: ["term-1"],
+    });
+
+    // Suppress window for the boot pick — a null→"term-1" change is
+    // gated, so no recordMru.
+    suppressMruRecording(true);
+    usePanelStore.setState({ focusedId: "term-1" });
+    suppressMruRecording(false);
+    recordMruSpy.mockClear();
+
+    // A subsequent user focus on a DIFFERENT panel (after suppress is
+    // lifted) MUST record. Using a different id is necessary because
+    // `subscribeWithSelector` compares with `Object.is` — a same-value
+    // set wouldn't fire the subscription at all.
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": {
+          id: "term-1",
+          title: "T1",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+        "term-2": {
+          id: "term-2",
+          title: "T2",
+          kind: "terminal" as const,
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      },
+      panelIds: ["term-1", "term-2"],
+      focusedId: "term-2",
+    });
+    expect(recordMruSpy).toHaveBeenCalledWith("terminal:term-2");
   });
 
   it("handles rapid A→B focus changes correctly", () => {
@@ -894,6 +1010,103 @@ describe("rendererStoreOrchestrator", () => {
     }
   });
 
+  it("does not record or persist MRU when a non-PTY panel is focused (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "br-1": {
+            id: "br-1",
+            title: "Browser",
+            kind: "browser" as const,
+            location: "grid",
+          } as PanelInstance,
+        },
+        panelIds: ["br-1"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "br-1" });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).not.toHaveBeenCalled();
+      expect(usePanelStore.getState().mruList).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not record MRU for excludeFromPersistence terminals (help/overlay) (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "help-1": {
+            id: "help-1",
+            title: "Help",
+            kind: "terminal" as const,
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            excludeFromPersistence: true,
+          },
+        },
+        panelIds: ["help-1"],
+        mruList: [],
+      });
+
+      usePanelStore.setState({ focusedId: "help-1" });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).not.toHaveBeenCalled();
+      expect(usePanelStore.getState().mruList).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("debounced persist reads the live mruList at fire time, not schedule time (#9922)", async () => {
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "t-1": {
+            id: "t-1",
+            title: "T1",
+            kind: "terminal" as const,
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+        },
+        panelIds: ["t-1"],
+      });
+
+      // Focusing schedules the debounced persist and records terminal:t-1.
+      usePanelStore.setState({ focusedId: "t-1" });
+
+      // Simulate a deliberate worktree selection updating the live MRU list
+      // before the debounce fires. The stale-args bug would persist the list
+      // captured at schedule time and clobber this promotion.
+      usePanelStore.setState({ mruList: ["worktree:wt-9", "terminal:t-1"] });
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).toHaveBeenCalledTimes(1);
+      expect(persistMruList).toHaveBeenLastCalledWith(["worktree:wt-9", "terminal:t-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels pending persistMruList on destroy", async () => {
     vi.useFakeTimers();
     try {
@@ -1231,6 +1444,135 @@ describe("rendererStoreOrchestrator", () => {
       initStoreOrchestrator();
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual([]);
+    });
+  });
+
+  describe("fleet failure auto-clear (issue #9923)", () => {
+    type FleetStores = {
+      useFleetArmingStore: typeof import("../fleetArmingStore").useFleetArmingStore;
+      useFleetFailureStore: typeof import("../fleetFailureStore").useFleetFailureStore;
+    };
+
+    async function loadStores(): Promise<FleetStores> {
+      const { useFleetArmingStore } = await import("../fleetArmingStore");
+      const { useFleetFailureStore } = await import("../fleetFailureStore");
+      return { useFleetArmingStore, useFleetFailureStore };
+    }
+
+    function seedFleetPanels(): void {
+      usePanelStore.setState({
+        panelsById: {
+          "agent-a": {
+            id: "agent-a",
+            kind: "terminal",
+            title: "A",
+            location: "grid",
+            worktreeId: "wt-1",
+            detectedAgentId: "claude",
+            everDetectedAgent: true,
+            agentState: "idle",
+            hasPty: true,
+          } as PtyPanelData,
+          "agent-b": {
+            id: "agent-b",
+            kind: "terminal",
+            title: "B",
+            location: "grid",
+            worktreeId: "wt-1",
+            detectedAgentId: "claude",
+            everDetectedAgent: true,
+            agentState: "idle",
+            hasPty: true,
+          } as PtyPanelData,
+        },
+        panelIds: ["agent-a", "agent-b"],
+      });
+    }
+
+    function resetFleetStores(stores: FleetStores): void {
+      stores.useFleetArmingStore.setState({
+        armedIds: new Set<string>(),
+        armOrder: [],
+        armOrderById: {},
+        lastArmedId: null,
+        broadcastSignal: 0,
+        previewArmedIds: new Set<string>(),
+      });
+      stores.useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
+    }
+
+    it("halts auto-clear after destroy — fleet drain during torn-down does not clear", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Subscription torn down; the next armed-set change has no listener.
+      destroyStoreOrchestrator();
+      stores.useFleetArmingStore.getState().clear();
+
+      // The drain happened, but failures persist because the subscription
+      // is gone. Initial reconciliation runs on the NEXT re-init.
+      expect(stores.useFleetFailureStore.getState().failedIds).toEqual(
+        new Set(["agent-a", "agent-b"])
+      );
+      expect(stores.useFleetFailureStore.getState().payload).toBe("p");
+    });
+
+    it("reconciles drained fleet on re-init (initial pass picks up the missed clear)", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Tear down, drain the fleet while the subscription is gone, confirm
+      // the failures are still present (no auto-clear fired).
+      destroyStoreOrchestrator();
+      stores.useFleetArmingStore.getState().clear();
+      expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(2);
+
+      // Re-init: the initial reconciliation pass sees the drained armed
+      // set and clears the stale failures without needing a fresh event.
+      initStoreOrchestrator();
+      expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(stores.useFleetFailureStore.getState().payload).toBeNull();
+    });
+
+    it("reconciles partial disarm on re-init (initial pass dismisses stale per-pane)", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Tear down, disarm one pane while the subscription is gone.
+      destroyStoreOrchestrator();
+      stores.useFleetArmingStore.getState().disarmId("agent-a");
+
+      // Re-init: the initial pass sees `failedIds = {a, b}` but
+      // `armedIds = {b}`, and dismisses just the stale `a`.
+      initStoreOrchestrator();
+      expect(stores.useFleetFailureStore.getState().failedIds).toEqual(new Set(["agent-b"]));
+      expect(stores.useFleetFailureStore.getState().payload).toBe("p");
+    });
+
+    it("listener continues to fire for post-re-init armed-set changes", async () => {
+      const stores = await loadStores();
+      resetFleetStores(stores);
+      seedFleetPanels();
+
+      destroyStoreOrchestrator();
+      // Re-init with a non-empty armed set already in place.
+      stores.useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      initStoreOrchestrator();
+      stores.useFleetFailureStore.getState().recordFailure("p", ["agent-a", "agent-b"]);
+
+      // Listener should still fire on a drain that happens AFTER re-init.
+      stores.useFleetArmingStore.getState().clear();
+      expect(stores.useFleetFailureStore.getState().failedIds.size).toBe(0);
+      expect(stores.useFleetFailureStore.getState().payload).toBeNull();
     });
   });
 });

@@ -966,3 +966,209 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     expect(store.listExternalActiveClients()).toEqual([]);
   });
 });
+
+describe("SessionStore.nextFigureNumber (#9828)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("assigns sequential figure numbers starting from 1 within a help session", () => {
+    expect(store.nextFigureNumber("help-1")).toBe(1);
+    expect(store.nextFigureNumber("help-1")).toBe(2);
+    expect(store.nextFigureNumber("help-1")).toBe(3);
+  });
+
+  it("keeps independent counters per help session", () => {
+    expect(store.nextFigureNumber("help-a")).toBe(1);
+    expect(store.nextFigureNumber("help-b")).toBe(1);
+    expect(store.nextFigureNumber("help-a")).toBe(2);
+    expect(store.nextFigureNumber("help-b")).toBe(2);
+  });
+
+  it("clears the counter on revokeSession, keyed by the public help-session id", () => {
+    store.httpSessions.set("transport-1", fakeHttpSession());
+    store.sessionHelpIdMap.set("transport-1", "help-1");
+    store.nextFigureNumber("help-1");
+    store.nextFigureNumber("help-1");
+    expect(store.figureCounters.get("help-1")).toBe(2);
+
+    store.revokeSession("transport-1");
+
+    expect(store.figureCounters.has("help-1")).toBe(false);
+    // A fresh session under the same public id restarts at 1.
+    expect(store.nextFigureNumber("help-1")).toBe(1);
+  });
+
+  it("clears the counter on SSE idle expiry", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeSseSession();
+    store.sessions.set("transport-2", session);
+    store.sessionHelpIdMap.set("transport-2", "help-2");
+    store.nextFigureNumber("help-2");
+
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createIdleTimer("transport-2");
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(store.figureCounters.has("help-2")).toBe(false);
+  });
+
+  it("clears the counter on HTTP idle expiry", () => {
+    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
+    const session = fakeHttpSession();
+    store.httpSessions.set("transport-h", session);
+    store.sessionHelpIdMap.set("transport-h", "help-h");
+    store.nextFigureNumber("help-h");
+
+    clearTimeout(session.idleTimer);
+    session.idleTimer = store.createHttpIdleTimer("transport-h");
+    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+
+    expect(store.figureCounters.has("help-h")).toBe(false);
+  });
+
+  it("clears the counter on normal transport close via clearFigureCounter", () => {
+    store.sessionHelpIdMap.set("transport-c", "help-c");
+    store.nextFigureNumber("help-c");
+    expect(store.figureCounters.get("help-c")).toBe(1);
+
+    // Mirrors the httpLifecycle transport.onclose path: clearFigureCounter
+    // must run BEFORE the sessionHelpIdMap entry is deleted.
+    store.clearFigureCounter("transport-c");
+    store.sessionHelpIdMap.delete("transport-c");
+
+    expect(store.figureCounters.has("help-c")).toBe(false);
+  });
+
+  it("clears all counters on drain()", () => {
+    store.nextFigureNumber("help-1");
+    store.nextFigureNumber("help-2");
+    expect(store.figureCounters.size).toBe(2);
+
+    store.drain();
+
+    expect(store.figureCounters.size).toBe(0);
+  });
+});
+
+describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  const WC = 4242;
+  const TRANSPORT = "transport-x";
+  const HELP_ID = "help-public-1";
+
+  function wireLiveHelpSession(opts?: { tier?: "workbench" | "action" | "system" }): void {
+    store.httpSessions.set(TRANSPORT, fakeHttpSession());
+    store.sessionWebContentsMap.set(TRANSPORT, WC);
+    store.sessionHelpIdMap.set(TRANSPORT, HELP_ID);
+    if (opts?.tier) store.sessionTierMap.set(TRANSPORT, opts.tier);
+  }
+
+  it("resolves the transport session from the public help id and returns its live tier", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    const result = store.getLiveStatusForHelpSession(HELP_ID, WC);
+
+    expect(result).not.toBeNull();
+    expect(result?.tier).toBe("system");
+    expect(result?.activeGrants).toEqual([]);
+  });
+
+  it("defaults the tier to workbench when the tier map has no entry", () => {
+    wireLiveHelpSession();
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("workbench");
+  });
+
+  it("maps active grants to {toolId, expiresAt, ttlMs} for the resolved transport id", () => {
+    wireLiveHelpSession({ tier: "action" });
+    store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
+    store.grantCache.issueGrant(TRANSPORT, "git.push");
+    // A grant on an unrelated session must not leak into this snapshot.
+    store.grantCache.issueGrant("other-transport", "worktree.delete");
+
+    const grants = store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants ?? [];
+
+    expect(grants.map((g) => g.toolId).sort()).toEqual(["git.push", "terminal.kill"]);
+    for (const grant of grants) {
+      expect(grant.expiresAt).toBeGreaterThan(Date.now());
+      expect(grant.ttlMs).toBeGreaterThan(0);
+    }
+  });
+
+  it("returns null when the caller is not the pinned WebContents (forgery defence)", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC + 1)).toBeNull();
+  });
+
+  it("returns null when the help id maps to no transport session", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession("unknown-help", WC)).toBeNull();
+  });
+
+  it("returns null when the tier map outlives a closed transport (decaying session)", () => {
+    // Tier + pin still present, but the transport was already removed — the
+    // session is no longer live and must not report as connected.
+    store.sessionWebContentsMap.set(TRANSPORT, WC);
+    store.sessionHelpIdMap.set(TRANSPORT, HELP_ID);
+    store.sessionTierMap.set(TRANSPORT, "system");
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)).toBeNull();
+  });
+
+  it("returns null for an empty help id", () => {
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession("", WC)).toBeNull();
+  });
+
+  it("omits grants past their expiry that the sweep hasn't yet evicted", () => {
+    wireLiveHelpSession({ tier: "action" });
+    // Issue one grant, advance the wall clock past its expiry WITHOUT firing
+    // the sweep interval (setSystemTime doesn't run timers), then issue a
+    // second one still in its window. The first lingers in the cache (lazy
+    // eviction) but must not surface as active.
+    const expired = store.grantCache.issueGrant(TRANSPORT, "git.push");
+    vi.setSystemTime(expired.expiresAt + 1);
+    store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
+
+    const grants = store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants ?? [];
+
+    expect(grants.map((g) => g.toolId)).toEqual(["terminal.kill"]);
+  });
+
+  it("finds the caller's live transport even when a stale same-help-id mapping is iterated first", () => {
+    // A reconnect left an older transport for the same help id pinned to a
+    // different WebContents; it must not short-circuit the lookup before the
+    // caller's own live transport is reached.
+    store.httpSessions.set("stale-transport", fakeHttpSession());
+    store.sessionWebContentsMap.set("stale-transport", WC + 99);
+    store.sessionHelpIdMap.set("stale-transport", HELP_ID);
+    store.sessionTierMap.set("stale-transport", "workbench");
+
+    wireLiveHelpSession({ tier: "system" });
+
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("system");
+  });
+});

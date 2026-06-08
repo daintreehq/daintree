@@ -52,20 +52,76 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toContain("toolbar-project-chip-label");
     });
 
-    it("CSS has container query to hide branch label at narrow widths", () => {
-      expect(css).toContain("@container toolbar");
-      expect(css).toContain("toolbar-project-chip-label");
-      expect(css).toContain("display: none");
+    it("CSS hides the whole branch chip in one step at 700px — issue #9824", () => {
+      // Single-step collapse: label + icon drop together at 700px. The earlier
+      // two-stage degradation hid the label at 700px and the chip at 560px,
+      // leaving a lone GitBranch icon between the two; that vestigial icon-only
+      // stage is gone. The tooltip remains the recovery surface for the branch.
+      expect(css).toMatch(
+        /@container toolbar \(max-width:\s*700px\)[\s\S]*?\.toolbar-project-chip[^-][\s\S]*?display:\s*none/
+      );
     });
 
-    it("CSS has a second container-query tier that hides the entire chip at narrower widths — issue #8174", () => {
-      // Below the second breakpoint the vestigial GitBranch icon shifts visual
-      // weight without conveying anything (the branch label has already
-      // dropped); hide the whole chip so the pill stays clean. The tooltip
-      // remains the recovery surface for the branch name.
-      expect(css).toMatch(
-        /@container toolbar \(max-width:\s*560px\)[\s\S]*?\.toolbar-project-chip[^-][\s\S]*?display:\s*none/
-      );
+    it("has no standalone label-only hide rule — the icon-only intermediate stage is gone (issue #9824)", () => {
+      // Guard against a regression that re-splits the collapse into two steps:
+      // there must be no container query that hides toolbar-project-chip-label
+      // on its own (which would resurrect the lone-icon stage).
+      expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?display:\s*none/);
+      // Also guard the non-display hide forms that would resurrect it.
+      expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?visibility:\s*hidden/);
+      expect(css).not.toMatch(/\.toolbar-project-chip-label\s*\{[\s\S]*?opacity:\s*0\b/);
+      // And no 560px breakpoint remains for the chip.
+      expect(css).not.toContain("max-width: 560px");
+    });
+  });
+
+  describe("project pill interaction ladder — issue #9824", () => {
+    it("lifts hover/armed/active via a ::before overlay, not by replacing the pill background", () => {
+      // The pill's own background is the capsule fill (opaque near-white on light
+      // themes). Replacing it on hover erased that fill; the lift must layer on a
+      // ::before overlay instead so the capsule is preserved.
+      expect(css).toMatch(/\.toolbar-project-pill::before\s*\{[\s\S]*?opacity:\s*0/);
+      expect(css).toContain(".toolbar-project-pill:hover::before");
+      expect(css).toContain('.toolbar-project-pill[aria-expanded="true"]::before');
+      expect(css).toContain('.toolbar-project-pill[data-state="open"]::before');
+      expect(css).toContain(".toolbar-project-pill:active::before");
+    });
+
+    it("overlay fades via opacity only — no transform/box-shadow/all in its transition", () => {
+      // Tier 1 constraint: the lift animates opacity (the background-image layer
+      // can't be transitioned). transform is owned by the base Button cva; the
+      // pill must not slow or widen the transition list.
+      const overlayBlock = css.match(/\.toolbar-project-pill::before\s*\{[\s\S]*?\}/)?.[0];
+      expect(overlayBlock).toBeDefined();
+      const transition = overlayBlock!.match(/transition:[\s\S]*?;/)?.[0];
+      expect(transition).toBeDefined();
+      expect(transition).toContain("opacity");
+      expect(transition).not.toContain("transform");
+      expect(transition).not.toContain("box-shadow");
+      expect(transition).not.toContain("all");
+    });
+
+    it("armed/active overlay escalates after :hover in source order so armed survives hover-over-armed", () => {
+      // Equal-specificity rules: later-in-source wins. A refactor that moves the
+      // armed block above hover would erase the armed fill while hovering.
+      const hoverIndex = css.search(/\.toolbar-project-pill:hover::before/);
+      const armedIndex = css.search(/\.toolbar-project-pill\[aria-expanded="true"\]::before/);
+      const activeIndex = css.search(/\.toolbar-project-pill:active::before/);
+      expect(hoverIndex).toBeGreaterThan(-1);
+      expect(armedIndex).toBeGreaterThan(hoverIndex);
+      expect(activeIndex).toBeGreaterThan(armedIndex);
+    });
+
+    it("provides a forced-colors fallback for the armed pill — High Contrast strips the overlay tint", () => {
+      // The armed lift is background-only (no inset ring), so Windows High
+      // Contrast forces it to Canvas and the open pill reads as idle. A
+      // ButtonText border restores the state edge, mirroring the icon-button.
+      const forcedColorsBlock = css.match(
+        /@media \(forced-colors: active\)\s*\{[\s\S]*?border:\s*2px solid ButtonText[\s\S]*?\}/
+      )?.[0];
+      expect(forcedColorsBlock).toBeDefined();
+      expect(forcedColorsBlock).toContain('.toolbar-project-pill[aria-expanded="true"]');
+      expect(forcedColorsBlock).toContain('.toolbar-project-pill[data-state="open"]');
     });
   });
 
@@ -189,6 +245,25 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(armedBlock).toContain('.toolbar-agent-button[aria-pressed="true"]');
     });
 
+    it("radio chips (aria-checked) share the armed-state recipe across base, light, and forced-colors blocks", () => {
+      // Segmented radio chips (viewport preset / DPR) carry role=radio + aria-checked
+      // rather than aria-pressed. For them to read with the same theme-aware armed
+      // styling — and not fall back to a hardcoded fill that smudges on light themes —
+      // every armed block must enumerate aria-checked alongside aria-pressed.
+      const armedSelectorIndex = css.indexOf('.toolbar-icon-button[aria-checked="true"]');
+      const lightFlipIndex = css.indexOf(
+        ':where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-checked="true"]'
+      );
+      const forcedColorsBlock = css.match(
+        /@media \(forced-colors: active\)\s*\{[\s\S]*?aria-pressed[\s\S]*?\}\s*\}/
+      )?.[0];
+
+      expect(armedSelectorIndex).toBeGreaterThan(-1);
+      expect(lightFlipIndex).toBeGreaterThan(-1);
+      expect(forcedColorsBlock).toBeDefined();
+      expect(forcedColorsBlock).toContain('.toolbar-icon-button[aria-checked="true"]');
+    });
+
     it("armed selectors appear after :hover in source order so armed survives hover-over-armed", () => {
       // Hover and armed have equal specificity, so later-in-source wins. If a
       // refactor moves the armed block above hover, hovering an armed button
@@ -297,6 +372,54 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(source).toMatch(
         /if\s*\(overflowMenuPointerCloseRef\.current\)\s*{\s*e\.preventDefault\(\);/
       );
+    });
+  });
+
+  describe("agent split-button seam — issue #9823", () => {
+    // The seam is implemented as a custom toolbar.css class (not a Tailwind
+    // utility) because .border-divider resolves to the plain --border-divider
+    // alias and skips the --toolbar-divider override chain. The chevron's
+    // open-state suppression is asserted as a CSS source guard so a future
+    // refactor cannot silently drop the suppression — which would let the
+    // 1px right border stack with the chevron's inset 1px border-strong
+    // armed ring into a 2px smudge on light themes (the same failure mode
+    // the L97-117 comment block above documents).
+
+    it("declares the toolbar-agent-split-seam class", () => {
+      expect(css).toContain(".toolbar-agent-split-seam");
+    });
+
+    it("paints the seam with the --toolbar-divider chain (matches .toolbar-divider)", () => {
+      // Verify the seam rule body uses the same fallback chain as the
+      // existing .toolbar-divider so per-theme --toolbar-divider overrides
+      // apply identically. A regression that hardcodes a color here would
+      // break the theme-tokened contract.
+      const seamBlock = css.match(/\.toolbar-agent-split-seam\s*\{[^}]*\}/)?.[0];
+      expect(seamBlock).toBeDefined();
+      expect(seamBlock).toContain("border-right-color");
+      expect(seamBlock).toContain("var(--toolbar-divider, var(--theme-border-divider))");
+    });
+
+    it("suppresses the seam when the chevron is armed via :has() on group/agent-split", () => {
+      // The suppression anchors on .toolbar-agent-button[data-state="open"]
+      // (the same selector the existing armed-state block above uses) so
+      // the trigger path is shared. The :has() sits on .group\/agent-split
+      // to scope the rule to the split-button JSX, not bare toolbar buttons.
+      // (CSS escapes the `/` so the on-disk literal is `\/`.)
+      expect(css).toContain('.group\\/agent-split:has(.toolbar-agent-button[data-state="open"])');
+      expect(css).toContain("border-right-color: transparent");
+    });
+
+    it("provides a forced-colors fallback so the seam survives Windows High Contrast", () => {
+      // Without the ButtonText fallback, Windows High Contrast would force
+      // the seam to Canvas (invisible) and the split-button structure would
+      // read as a single button — losing the discoverability win the issue
+      // asks for.
+      const forcedColorsBlock = css.match(
+        /@media \(forced-colors: active\)\s*\{[\s\S]*?\.toolbar-agent-split-seam[\s\S]*?\}/
+      )?.[0];
+      expect(forcedColorsBlock).toBeDefined();
+      expect(forcedColorsBlock).toContain("border-right-color: ButtonText");
     });
   });
 });

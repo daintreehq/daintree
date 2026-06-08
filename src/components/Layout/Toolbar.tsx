@@ -16,12 +16,12 @@ import {
   PinOff,
   Clipboard,
   Square,
-  Unplug,
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Folders, McpServerIcon } from "@/components/icons";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
@@ -32,8 +32,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -67,7 +70,17 @@ import type {
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import type { CliAvailability, AgentSettings } from "@shared/types";
+import { usePanelStore } from "@/store/panelStore";
+import { useShallow } from "zustand/react/shallow";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import {
+  getDominantAgentState,
+  agentStateDotColor,
+} from "@/components/Worktree/AgentStatusIndicator";
+import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
+import { isPtyPanel } from "@shared/types/panel";
+import { notify } from "@/lib/notify";
+import type { CliAvailability, AgentSettings, AgentState, RepositoryStats } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -84,7 +97,7 @@ import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 
 const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
   "agent-tray",
@@ -111,6 +124,16 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 // before reverting to its idle state. Long enough to register the success,
 // short enough that re-clicks don't feel stuck.
 const COPY_TREE_FEEDBACK_RESET_MS = 2000;
+
+// Agent states that count as an "active session" when deriving the per-agent
+// dominant state for the overflow menu dot. Mirrors AgentButton's own set so
+// the dot shown in overflow matches what the visible agent button would show.
+const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
+  "idle",
+  "working",
+  "waiting",
+  "directing",
+]);
 
 function GitHubStatsPlaceholder() {
   return (
@@ -142,7 +165,6 @@ export function PluginToolbarButton({
 }) {
   const hover = useShortcutHintHover(config.actionId);
   const ariaShortcut = useAriaKeyshortcuts(config.actionId);
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   return (
     <ContextMenu>
@@ -172,10 +194,7 @@ export function PluginToolbarButton({
         </Tooltip>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-        <ContextMenuItem onSelect={() => toggleButtonVisibility(pluginId, "right")}>
-          <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
-        </ContextMenuItem>
+        <ToolbarContextMenuItems buttonId={pluginId} side="right" />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -189,6 +208,238 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
 }
 export const OVERFLOW_MENU_META: Partial<Record<AnyToolbarButtonId, OverflowMenuMeta>> =
   overflowMenuMetaInit;
+
+interface OverflowMenuProps {
+  overflowIds: AnyToolbarButtonId[];
+  side: "left" | "right";
+  severity: OverflowBadgeSeverity;
+  errorCount: number;
+  notificationUnreadCount: number;
+  agentDominantStates: Map<string, AgentState | null>;
+  hasActiveWorktree: boolean;
+  githubStatsRef: React.RefObject<GitHubStatsHandle | null>;
+  overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
+  pluginOverflowMeta: Record<string, OverflowMenuMeta>;
+  // Shortcut display strings keyed by toolbar button id, so each overflow item
+  // shows the same hint its visible button does (issue #9821).
+  shortcutById: Partial<Record<string, string | null>>;
+}
+
+// Overflow `…` menu. A component (not just a render helper) so the trigger can
+// stay mounted across the empty↔non-empty transition and animate its entry /
+// exit via CSS (issue #9821) while `open` stays controlled — avoiding React's
+// controlled/uncontrolled warning. Each menu item restores the contextual
+// state its source toolbar button carries: error/unread counts, agent-state
+// dots, and keyboard shortcut hints.
+function OverflowMenu({
+  overflowIds,
+  side,
+  severity,
+  errorCount,
+  notificationUnreadCount,
+  agentDominantStates,
+  hasActiveWorktree,
+  githubStatsRef,
+  overflowActions,
+  pluginOverflowMeta,
+  shortcutById,
+}: OverflowMenuProps) {
+  const [open, setOpen] = useState(false);
+  // Snapshot of the GitHub stats taken when the menu opens. The stats live in
+  // GitHubStatsToolbarButton's hook and are exposed through its imperative
+  // handle, so they can't be read during render (refs aren't reactive — the
+  // menu wouldn't re-render on updates anyway). Reading in the open handler
+  // captures them at the only moment they're about to become visible.
+  const [ghStats, setGhStats] = useState<RepositoryStats | null>(null);
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) setGhStats(githubStatsRef.current?.stats ?? null);
+    setOpen(nextOpen);
+  };
+  const isEmpty = overflowIds.length === 0;
+
+  // Keep the controlled `open` state in sync when the menu empties: Radix
+  // closes the popover when `open` is forced false, but `open` state would
+  // stay `true`, so the next non-empty transition would reopen the menu with
+  // no user action. Resetting here makes re-appearing overflow start closed.
+  useEffect(() => {
+    if (isEmpty) setOpen(false);
+  }, [isEmpty]);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
+  // restoration for pointer dismissals so the ellipsis button doesn't keep its
+  // accent focus-visible ring; keyboard close (Escape/Enter) still gets default
+  // focus return for WAI-ARIA. Local to this component so react-compiler doesn't
+  // flag mutating a ref passed in as a prop.
+  const overflowMenuPointerCloseRef = useRef(false);
+
+  // Keep the accessible name stable and terse: a comma-enumerated list
+  // re-announces the full set on every focus pass and goes stale as
+  // resize-driven overflow changes. Surface only the purpose plus a
+  // count, escalating the noun to "problem(s)" when severity is
+  // actionable (critical/warning) so screen-reader users still learn
+  // there's something to act on without the list churn.
+  const n = overflowIds.length;
+  const hasProblem = severity === "critical" || severity === "warning";
+  const tooltipText = hasProblem
+    ? `More — ${n} ${n === 1 ? "problem" : "problems"}`
+    : `More — ${n} ${n === 1 ? "item" : "items"}`;
+  const ariaLabel = hasProblem
+    ? `More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`
+    : `More toolbar items — ${n} hidden`;
+
+  const countSuffix = (id: AnyToolbarButtonId) => {
+    if (id === "problems" && errorCount > 0) return ` (${errorCount})`;
+    if (id === "notification-center" && notificationUnreadCount > 0)
+      return ` (${notificationUnreadCount})`;
+    return "";
+  };
+
+  return (
+    <DropdownMenu open={isEmpty ? false : open} onOpenChange={handleOpenChange}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-toolbar-item=""
+              data-toolbar-overflow-trigger=""
+              data-toolbar-overflow-side={side}
+              data-visible={isEmpty ? "false" : "true"}
+              aria-hidden={isEmpty || undefined}
+              tabIndex={isEmpty ? -1 : undefined}
+              className={toolbarIconButtonClass}
+              aria-label={ariaLabel}
+            >
+              <Ellipsis />
+              <span
+                aria-hidden="true"
+                data-testid="toolbar-overflow-badge"
+                data-severity={severity}
+                data-visible={severity !== null}
+                className="toolbar-overflow-badge toolbar-badge absolute top-1.5 right-1.5 h-1.5 w-1.5 pointer-events-none"
+              />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{tooltipText}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent
+        align={side === "left" ? "start" : "end"}
+        sideOffset={4}
+        onPointerDownOutside={() => {
+          overflowMenuPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(e) => {
+          if (overflowMenuPointerCloseRef.current) {
+            e.preventDefault();
+            overflowMenuPointerCloseRef.current = false;
+          }
+        }}
+      >
+        {overflowIds.flatMap((id, idx) => {
+          if (id === "github-stats") {
+            const isLast = idx === overflowIds.length - 1;
+            return [
+              <DropdownMenuGroup key="gh-group">
+                <DropdownMenuLabel>GitHub</DropdownMenuLabel>
+                <DropdownMenuItem
+                  key="gh-issues"
+                  onClick={() => githubStatsRef.current?.openIssues()}
+                >
+                  <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
+                  Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
+                </DropdownMenuItem>
+                <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
+                  <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
+                  Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  key="gh-commits"
+                  onClick={() => githubStatsRef.current?.openCommits()}
+                >
+                  <GitCommit className="mr-2 h-4 w-4" />
+                  Commits {ghStats?.commitCount != null ? `(${ghStats.commitCount})` : ""}
+                </DropdownMenuItem>
+              </DropdownMenuGroup>,
+              ...(isLast ? [] : [<DropdownMenuSeparator key="gh-sep" />]),
+            ];
+          }
+          const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
+          if (!meta) return [];
+          if (isBuiltInAgentId(id)) {
+            const dominantState = agentDominantStates.get(id) ?? null;
+            const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+            return [
+              <AgentOverflowItem
+                key={id}
+                id={id}
+                label={meta.label}
+                Icon={meta.icon}
+                dotColor={dotColor}
+                onSelect={() => overflowActions[id]?.()}
+              />,
+            ];
+          }
+          const Icon = meta.icon;
+          const shortcut = shortcutById[id];
+          // Mirror the visible copy-tree button, which is aria-disabled with an
+          // "Open a worktree first" tooltip when no worktree is active — without
+          // this the overflow item would silently close with no feedback.
+          const disabled = id === "copy-tree" && !hasActiveWorktree;
+          return [
+            <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
+              <Icon className="mr-2 h-4 w-4" />
+              <span className="flex-1">
+                {meta.label}
+                {countSuffix(id)}
+              </span>
+              {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
+            </DropdownMenuItem>,
+          ];
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// Overflow menu item for a built-in agent. A standalone component (hoisted, so
+// OverflowMenu above can reference it) so the per-agent keybinding lookup
+// (`useKeybindingDisplay`) runs at component scope rather than inside a `.map()`
+// callback (rules of hooks). Restores the two signals the bare overflow item
+// dropped: the colored agent-state dot and the keyboard shortcut hint.
+function AgentOverflowItem({
+  id,
+  label,
+  Icon,
+  dotColor,
+  onSelect,
+}: {
+  id: string;
+  label: string;
+  Icon: React.ComponentType<{ className?: string }>;
+  dotColor: string | null;
+  onSelect: () => void;
+}) {
+  const shortcut = useKeybindingDisplay(`agent.${id}`);
+  return (
+    <DropdownMenuItem onClick={onSelect}>
+      <span className="relative mr-2 inline-flex h-4 w-4 items-center justify-center">
+        <Icon className="h-4 w-4" />
+        {dotColor && (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-bg",
+              dotColor
+            )}
+          />
+        )}
+      </span>
+      <span className="flex-1">{label}</span>
+      {shortcut && <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>}
+    </DropdownMenuItem>
+  );
+}
 
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
@@ -226,6 +477,16 @@ export function Toolbar({
   );
   const branchName = activeWorktree?.branch;
   const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
+  const topologyWatcherDark = useWorktreeStore((state) => state.topologyWatcherDark);
+
+  // Per-item state for the overflow menu, so evicted buttons keep the signal
+  // they carry on the visible toolbar (issue #9821). Reads mirror the
+  // selectors used by the source buttons (NotificationCenterToolbarButton,
+  // AgentButton) rather than extending useOverflowBadgeSeverity to return a
+  // composite map (would risk the selector-identity churn of lesson #3730).
+  const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
+  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
 
   useEffect(() => {
     loadProjects();
@@ -242,9 +503,6 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
-  const toggleButtonVisibility = useToolbarPreferencesStore(
-    (state) => state.toggleButtonVisibility
-  );
   // Live subscription so pin/unpin toggles from the AgentTrayButton immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
@@ -280,16 +538,17 @@ export function Toolbar({
   // nearest visible item to preserve keyboard navigation (WCAG 2.4.3).
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
   const githubStatsRef = useRef<GitHubStatsHandle>(null);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus on the overflow
-  // dropdown. Suppresses focus restoration for pointer dismissals so the
-  // ellipsis button doesn't keep its accent focus-visible ring; keyboard
-  // close (Escape/Enter) still gets default focus return for WAI-ARIA.
-  const overflowMenuPointerCloseRef = useRef(false);
 
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
   const devServerShortcut = useKeybindingDisplay("devServer.start");
+  const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
+  const commandPaletteShortcut = useKeybindingDisplay("action.palette.open");
+  const settingsShortcut = useKeybindingDisplay("app.settings");
+  const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
+  const terminalShortcut = useKeybindingDisplay("agent.terminal");
+  const browserShortcut = useKeybindingDisplay("agent.browser");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
 
@@ -379,6 +638,60 @@ export function Toolbar({
       setIsCopyingTree(false);
     }
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
+
+  // Copy-tree invoked from the overflow menu. The visible toolbar button shows
+  // inline green-tick feedback, but that button is hidden when copy-tree is in
+  // overflow — so the overflow path surfaces a transient success toast instead
+  // (issue #9821). `transient: true` keeps it out of the inbox: the result is
+  // already on the clipboard, so no durable record is warranted.
+  const handleCopyTreeOverflow = useCallback(async () => {
+    if (isCopyingTree || !activeWorktree) return;
+    setIsCopyingTree(true);
+    try {
+      const resultMessage = await handleCopyTree(activeWorktree);
+      if (resultMessage) {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "success",
+          title: "Context copied",
+          message: resultMessage,
+          transient: true,
+        });
+      }
+    } finally {
+      setIsCopyingTree(false);
+    }
+  }, [isCopyingTree, activeWorktree, handleCopyTree]);
+
+  // Per-agent dominant state across panels in the active worktree, used to draw
+  // the agent-state dot on overflow menu items. Mirrors the derivation in
+  // AgentTrayButton so the overflow dot matches the visible agent button.
+  const agentDominantStates = useMemo(() => {
+    const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
+    for (const pid of panelIds) {
+      const p = panelsById[pid];
+      if (
+        !p ||
+        !isPtyPanel(p) ||
+        p.location === "trash" ||
+        p.location === "background" ||
+        p.location === "overlay"
+      )
+        continue;
+      const agentId = getRuntimeOrBootAgentId(p);
+      if (!agentId) continue;
+      if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
+      if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
+      const arr = statesPerAgent.get(agentId) ?? [];
+      arr.push(p.agentState);
+      statesPerAgent.set(agentId, arr);
+    }
+    const result = new Map<string, AgentState | null>();
+    for (const [agentId, states] of statesPerAgent) {
+      result.set(agentId, getDominantAgentState(states));
+    }
+    return result;
+  }, [panelsById, panelIds, activeWorktreeId]);
 
   const getToolbarItems = useCallback(
     () =>
@@ -590,21 +903,18 @@ export function Toolbar({
                         actionService.dispatch("devServer.start", undefined, { source: "user" })
                       }
                       className={toolbarIconButtonClass}
-                      aria-label="Open Dev Preview"
+                      aria-label="Open dev preview"
                     >
                       <MonitorPlay />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {createTooltipContent("Open Dev Preview", devServerShortcut)}
+                    {createTooltipContent("Open dev preview", devServerShortcut)}
                   </TooltipContent>
                 </Tooltip>
               </ContextMenuTrigger>
               <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                <ContextMenuItem onSelect={() => toggleButtonVisibility("dev-server", "left")}>
-                  <Unplug className="mr-2 h-3.5 w-3.5" />
-                  Unpin from Toolbar
-                </ContextMenuItem>
+                <ToolbarContextMenuItems buttonId="dev-server" side="left" />
               </ContextMenuContent>
             </ContextMenu>
           ) : (
@@ -654,14 +964,12 @@ export function Toolbar({
                     aria-disabled={isCopyingTree || !activeWorktree || undefined}
                     className={cn(
                       "toolbar-icon-button relative",
-                      treeCopied
-                        ? "text-status-success bg-status-success/10"
-                        : "text-daintree-text",
+                      treeCopied ? "text-status-success" : "text-daintree-text",
                       isCopyingTree && "cursor-wait opacity-70",
                       "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}
                     aria-label={
-                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy Context"
+                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy context"
                     }
                     aria-keyshortcuts={copyTreeAriaShortcut}
                   >
@@ -678,16 +986,13 @@ export function Toolbar({
                   ) : !activeWorktree ? (
                     "Open a worktree first"
                   ) : (
-                    createTooltipContent("Copy Context", copyTreeShortcut)
+                    createTooltipContent("Copy context", copyTreeShortcut)
                   )}
                 </TooltipContent>
               </Tooltip>
             </ContextMenuTrigger>
             <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <ContextMenuItem onSelect={() => toggleButtonVisibility("copy-tree", "right")}>
-                <Unplug className="mr-2 h-3.5 w-3.5" />
-                Unpin from Toolbar
-              </ContextMenuItem>
+              <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
             </ContextMenuContent>
           </ContextMenu>
         ),
@@ -714,14 +1019,15 @@ export function Toolbar({
             key="problems"
             errorCount={errorCount}
             watcherDegraded={watcherDegraded}
+            topologyWatcherDark={topologyWatcherDark}
             onToggleProblems={onToggleProblems}
             data-toolbar-item=""
           />
         ),
-        // Auto-surface the Problems button when the watcher is degraded so
+        // Auto-surface the Problems button when file watching is unreliable so
         // the persistent Tier-1 indicator is visible even for users who
         // haven't enabled developer tools (the default).
-        isAvailable: showDeveloperTools || watcherDegraded,
+        isAvailable: showDeveloperTools || watcherDegraded || topologyWatcherDark,
       },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
@@ -770,13 +1076,13 @@ export function Toolbar({
       onToggleProblems,
       errorCount,
       watcherDegraded,
+      topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
       pluginButtonIds,
       pluginConfigs,
       devServerShortcut,
       devServerHintHover,
-      toggleButtonVisibility,
     ]
   );
 
@@ -971,7 +1277,7 @@ export function Toolbar({
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
-        void handleCopyTreeClick();
+        void handleCopyTreeOverflow();
       },
       "command-palette": () => {
         void actionService.dispatch("action.palette.open", undefined, { source: "user" });
@@ -998,7 +1304,7 @@ export function Toolbar({
     }),
     [
       onLaunchAgent,
-      handleCopyTreeClick,
+      handleCopyTreeOverflow,
       onSettings,
       onToggleProblems,
       pluginButtonIds,
@@ -1006,108 +1312,36 @@ export function Toolbar({
     ]
   );
 
+  const overflowShortcutById: Partial<Record<string, string | null>> = {
+    "copy-tree": copyTreeShortcut,
+    "notification-center": notificationsShortcut,
+    "command-palette": commandPaletteShortcut,
+    "dev-server": devServerShortcut,
+    settings: settingsShortcut,
+    problems: problemsShortcut,
+    terminal: terminalShortcut,
+    browser: browserShortcut,
+  };
+
   const renderOverflowMenu = (
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
     severity: OverflowBadgeSeverity
-  ) => {
-    if (overflowIds.length === 0) return null;
-    // Keep the accessible name stable and terse: a comma-enumerated list
-    // re-announces the full set on every focus pass and goes stale as
-    // resize-driven overflow changes. Surface only the purpose plus a
-    // count, escalating the noun to "problem(s)" when severity is
-    // actionable (critical/warning) so screen-reader users still learn
-    // there's something to act on without the list churn.
-    const n = overflowIds.length;
-    const hasProblem = severity === "critical" || severity === "warning";
-    const tooltipText = hasProblem
-      ? `More — ${n} ${n === 1 ? "problem" : "problems"}`
-      : `More — ${n} ${n === 1 ? "item" : "items"}`;
-    const ariaLabel = hasProblem
-      ? `More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`
-      : `More toolbar items — ${n} hidden`;
-    return (
-      <DropdownMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-toolbar-item=""
-                data-toolbar-overflow-trigger=""
-                data-toolbar-overflow-side={side}
-                className={toolbarIconButtonClass}
-                aria-label={ariaLabel}
-              >
-                <Ellipsis />
-                <span
-                  aria-hidden="true"
-                  data-testid="toolbar-overflow-badge"
-                  data-severity={severity}
-                  data-visible={severity !== null}
-                  className="toolbar-overflow-badge toolbar-badge absolute top-1.5 right-1.5 h-1.5 w-1.5 pointer-events-none"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{tooltipText}</TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent
-          align={side === "left" ? "start" : "end"}
-          sideOffset={4}
-          onPointerDownOutside={() => {
-            overflowMenuPointerCloseRef.current = true;
-          }}
-          onCloseAutoFocus={(e) => {
-            if (overflowMenuPointerCloseRef.current) {
-              e.preventDefault();
-              overflowMenuPointerCloseRef.current = false;
-            }
-          }}
-        >
-          {overflowIds.flatMap((id, idx) => {
-            if (id === "github-stats") {
-              const ghStats = githubStatsRef.current?.stats;
-              const items = [
-                <DropdownMenuItem
-                  key="gh-issues"
-                  onClick={() => githubStatsRef.current?.openIssues()}
-                >
-                  <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
-                  Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
-                </DropdownMenuItem>,
-                <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
-                  <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
-                  Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
-                </DropdownMenuItem>,
-                <DropdownMenuItem
-                  key="gh-commits"
-                  onClick={() => githubStatsRef.current?.openCommits()}
-                >
-                  <GitCommit className="mr-2 h-4 w-4" />
-                  Commits {ghStats?.commitCount != null ? `(${ghStats.commitCount})` : ""}
-                </DropdownMenuItem>,
-              ];
-              if (idx < overflowIds.length - 1) {
-                items.push(<DropdownMenuSeparator key="gh-sep" />);
-              }
-              return items;
-            }
-            const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
-            if (!meta) return [];
-            const Icon = meta.icon;
-            return [
-              <DropdownMenuItem key={id} onClick={() => overflowActions[id]?.()}>
-                <Icon className="mr-2 h-4 w-4" />
-                {meta.label}
-              </DropdownMenuItem>,
-            ];
-          })}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  };
+  ) => (
+    <OverflowMenu
+      overflowIds={overflowIds}
+      side={side}
+      severity={severity}
+      errorCount={errorCount}
+      notificationUnreadCount={notificationUnreadCount}
+      agentDominantStates={agentDominantStates}
+      hasActiveWorktree={!!activeWorktree}
+      githubStatsRef={githubStatsRef}
+      overflowActions={overflowActions}
+      pluginOverflowMeta={pluginOverflowMeta}
+      shortcutById={overflowShortcutById}
+    />
+  );
 
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
   const handleDropdownClose = useCallback(() => {
@@ -1246,7 +1480,7 @@ export function Toolbar({
                   <TooltipTrigger asChild>
                     <button
                       data-toolbar-item=""
-                      className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden"
+                      className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                       data-testid="project-switcher-trigger"
                       aria-label={
                         currentProject
@@ -1290,7 +1524,7 @@ export function Toolbar({
                           {truncatedBranchName ?? "main"}
                         </span>
                       </span>
-                      <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
+                      <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
                     </button>
                   </TooltipTrigger>
                 </ContextMenuTrigger>

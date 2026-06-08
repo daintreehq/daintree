@@ -222,4 +222,33 @@ describe("panelLimitStore persist migration", () => {
     expect(state.hardwareDefaultsApplied).toBe(false);
     expect(state.lastSoftWarningDismissedAt).toBeNull();
   });
+
+  describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {
+    it("strictly increases on each request, including back-to-back supersede", async () => {
+      const store = await loadStore();
+      const before = store.getState().requestSeq;
+
+      store.getState().requestConfirmation(21, null);
+      const afterFirst = store.getState().requestSeq;
+      expect(afterFirst).toBeGreaterThan(before);
+
+      store.getState().requestConfirmation(22, null);
+      const afterSecond = store.getState().requestSeq;
+      expect(afterSecond).toBeGreaterThan(afterFirst);
+
+      store.getState().resolveConfirmation(false);
+    });
+
+    it("is transient runtime state — never persisted via partialize", async () => {
+      const store = await loadStore();
+      store.getState().requestConfirmation(21, null);
+      expect(store.getState().requestSeq).toBeGreaterThan(0);
+
+      const persisted = JSON.parse(storageMock.getItem(STORAGE_KEY) ?? "{}");
+      expect(persisted.state).not.toHaveProperty("requestSeq");
+      expect(persisted.state).not.toHaveProperty("pendingConfirm");
+
+      store.getState().resolveConfirmation(false);
+    });
+  });
 });

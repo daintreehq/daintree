@@ -41,6 +41,18 @@ export function useWebviewDialog(
     return cleanup;
   }, [panelId]);
 
+  // Clear queued dialogs when the guest navigates away or its renderer crashes —
+  // the page context backing those dialogs no longer exists, so their overlays
+  // are stale and can never receive a meaningful response.
+  useEffect(() => {
+    const cleanup = window.electron.webview.onDialogDismiss((payload) => {
+      if (payload.panelId === panelId) {
+        setDialogQueue([]);
+      }
+    });
+    return cleanup;
+  }, [panelId]);
+
   const handleDialogRespond = useCallback(
     (confirmed: boolean, response?: string) => {
       const current = dialogQueue[0];

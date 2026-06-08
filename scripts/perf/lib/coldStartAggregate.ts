@@ -16,6 +16,11 @@ export interface RunData {
   failed?: boolean;
   error?: string;
   degraded?: boolean;
+  // "cold" (fresh profile) or "warm" (persisted, pre-populated compile cache).
+  // Absent runs default to "cold" for backward compatibility.
+  cacheKind?: "cold" | "warm";
+  // Files in the compile-cache dir at the end of the run — corroborates warmth.
+  cacheFileCount?: number;
 }
 
 export interface MarkStats {
@@ -64,6 +69,16 @@ export interface EventLoopLagStats {
   totalAccumulatedMs: number;
 }
 
+export interface CacheKindBucketStats {
+  runs: number;
+  p50Ms: number;
+  p95Ms: number;
+  meanMs: number;
+  // Median compile-cache file count across the bucket's runs. 0 for a true
+  // cold bucket; >0 for a warm bucket confirms the cache populated.
+  medianCacheFileCount: number;
+}
+
 export interface Aggregate {
   marks: Record<string, MarkStats>;
   phaseDurations: Record<string, MarkStats>;
@@ -72,6 +87,10 @@ export interface Aggregate {
   cls: ClsStats | null;
   osToAppBoot: OsToAppBootStats | null;
   eventLoopLag: EventLoopLagStats | null;
+  // Headline boot-duration split by compile-cache state. Each bucket is null
+  // when no successful runs of that kind are present. The other aggregates pool
+  // all runs; this is the cache-cold vs cache-warm comparison (#9772).
+  byCacheKind: { cold: CacheKindBucketStats | null; warm: CacheKindBucketStats | null };
 }
 
 // Vite/Rolldown default chunkFileNames is `[name]-[hash].js`. The hash is 8
@@ -95,6 +114,15 @@ export const PHASE_PAIRS: Array<[string, string, string]> = [
   // is kept as a sub-phase signal to distinguish hydration cost.
   [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_FIRST_INTERACTIVE, "boot → first_interactive"],
   [PERF_MARKS.APP_BOOT_START, PERF_MARKS.RENDERER_READY, "boot → renderer_ready (pre-hydration)"],
+  // Window-reveal phase (#9773): when the OS is asked to map the window. The
+  // boot-relative pair frames it against startup; the created→shown pair
+  // isolates the dom-ready gate wait inside the window lifecycle.
+  [PERF_MARKS.APP_BOOT_START, PERF_MARKS.MAIN_WINDOW_SHOWN, "boot → main_window_shown"],
+  [
+    PERF_MARKS.MAIN_WINDOW_CREATED,
+    PERF_MARKS.MAIN_WINDOW_SHOWN,
+    "main_window_created → main_window_shown",
+  ],
   [PERF_MARKS.SERVICE_INIT_START, PERF_MARKS.SERVICE_INIT_COMPLETE, "service_init"],
   [PERF_MARKS.HYDRATE_START, PERF_MARKS.HYDRATE_COMPLETE, "hydrate"],
   [
@@ -102,6 +130,19 @@ export const PHASE_PAIRS: Array<[string, string, string]> = [
     PERF_MARKS.HYDRATE_RESTORE_PANELS_END,
     "hydrate_restore_panels",
   ],
+  // Per-view preload evaluation cost (#9770). firstByMark pairs the initial
+  // (cold-start) view's spans, so this surfaces the headline preload-eval and
+  // contextBridge-exposure durations for the first project view.
+  [PERF_MARKS.PRELOAD_EVAL_START, PERF_MARKS.PRELOAD_EVAL_END, "preload.eval"],
+  [
+    PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
+    PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
+    "preload.exposeInMainWorld",
+  ],
+  // New-terminal cold path (#9809): isolates the synchronous `terminal.open()`
+  // step so the first-paint work for a freshly-attached terminal is visible
+  // alongside the boot/hydrate phases above.
+  [PERF_MARKS.TERMINAL_OPEN_START, PERF_MARKS.TERMINAL_OPEN_END, "terminal_open"],
 ];
 
 // Warn-only thresholds for the new first-launch quality signals introduced
@@ -320,5 +361,35 @@ export function aggregate(runs: RunData[]): Aggregate {
         }
       : null;
 
-  return { marks, phaseDurations, ipc, loaf, cls, osToAppBoot, eventLoopLag };
+  const byCacheKind = {
+    cold: bucketByCacheKind(successful, "cold"),
+    warm: bucketByCacheKind(successful, "warm"),
+  };
+
+  return { marks, phaseDurations, ipc, loaf, cls, osToAppBoot, eventLoopLag, byCacheKind };
+}
+
+// Build headline boot-duration stats for one cache kind. Runs without an
+// explicit cacheKind default to "cold" so pre-#9772 data still buckets. Degraded
+// runs are excluded — their wall-clock fallback durationMs is systematically
+// higher than the mark-based duration, matching the phase-duration table's
+// policy. Returns null when the bucket has no qualifying runs.
+function bucketByCacheKind(runs: RunData[], kind: "cold" | "warm"): CacheKindBucketStats | null {
+  const bucket = runs.filter((r) => !r.degraded && (r.cacheKind ?? "cold") === kind);
+  if (bucket.length === 0) return null;
+
+  // Guard percentile/mean against malformed durations (NaN/Infinity/negative).
+  const durations = bucket.map((r) => r.durationMs).filter((d) => Number.isFinite(d) && d >= 0);
+  if (durations.length === 0) return null;
+  const cacheCounts = bucket
+    .map((r) => r.cacheFileCount)
+    .filter((c): c is number => typeof c === "number" && Number.isFinite(c));
+
+  return {
+    runs: durations.length,
+    p50Ms: round(percentile(durations, 50)),
+    p95Ms: round(percentile(durations, 95)),
+    meanMs: round(mean(durations)),
+    medianCacheFileCount: cacheCounts.length > 0 ? round(percentile(cacheCounts, 50)) : 0,
+  };
 }

@@ -95,9 +95,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 20 IPC handlers when isDemoMode is true", () => {
+  it("registers 22 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(20);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(22);
     cleanup();
   });
 
@@ -150,10 +150,10 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("cleanup removes all 20 handlers", () => {
+  it("cleanup removes all 22 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(20);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
   });
 
   it("cleanup removes chunk and stop listeners", () => {
@@ -240,6 +240,35 @@ describe("registerDemoHandlers", () => {
       cleanup();
     });
 
+    it("getCaptureStatus reports live chunkCount as chunks arrive during capture", async () => {
+      autoResolveCommandDone();
+      const deps = makeDeps(true);
+      const cleanup = registerDemoHandlers(deps);
+      await (getHandler("demo:start-capture") as (...a: unknown[]) => Promise<unknown>)(
+        {},
+        defaultPayload
+      );
+
+      const statusHandler = getHandler("demo:get-capture-status") as (
+        ev: unknown
+      ) => Promise<{ active: boolean; chunkCount: number; outputPath: string | null }>;
+      const chunkListener = getIpcListener("demo:capture-chunk");
+
+      expect((await statusHandler({})).chunkCount).toBe(0);
+
+      chunkListener!({}, { captureId: "test-request-id", data: new Uint8Array([1]) });
+      chunkListener!({}, { captureId: "test-request-id", data: new Uint8Array([2]) });
+      let status = await statusHandler({});
+      expect(status.active).toBe(true);
+      expect(status.chunkCount).toBe(2);
+
+      // Stale-captureId chunks must not advance the live counter.
+      chunkListener!({}, { captureId: "bogus", data: new Uint8Array([3]) });
+      status = await statusHandler({});
+      expect(status.chunkCount).toBe(2);
+      cleanup();
+    });
+
     it("stale captureId chunks are ignored", async () => {
       autoResolveCommandDone();
       const cleanup = registerDemoHandlers(makeDeps(true));
@@ -263,19 +292,19 @@ describe("registerDemoHandlers", () => {
       const stopPromise = (
         getHandler("demo:stop-capture") as (...a: unknown[]) => Promise<{
           outputPath: string;
-          frameCount: number;
+          chunkCount: number;
         }>
       )({});
 
       setTimeout(() => {
         const stopListener = getIpcListener("demo:capture-stop");
-        stopListener!({}, { captureId: "test-request-id", frameCount: 7 });
+        stopListener!({}, { captureId: "test-request-id", chunkCount: 7 });
       }, 10);
 
       const result = await stopPromise;
       expect(mockWriteStream.end).toHaveBeenCalled();
       expect(result.outputPath).toBe("/tmp/capture/out.webm");
-      expect(result.frameCount).toBe(7);
+      expect(result.chunkCount).toBe(7);
       cleanup();
     });
 
@@ -292,7 +321,7 @@ describe("registerDemoHandlers", () => {
         getHandler("demo:get-capture-status") as (ev: unknown) => Promise<unknown>
       )({})) as {
         active: boolean;
-        frameCount: number;
+        chunkCount: number;
         outputPath: string | null;
       };
       expect(status.active).toBe(false);
@@ -330,7 +359,7 @@ describe("registerDemoHandlers", () => {
       )({});
       setTimeout(() => {
         const stopListener = getIpcListener("demo:capture-stop");
-        stopListener!({}, { captureId: "test-request-id", frameCount: 0, error: "boom" });
+        stopListener!({}, { captureId: "test-request-id", chunkCount: 0, error: "boom" });
       }, 10);
       await expect(stopPromise).rejects.toThrow("Capture failed: boom");
       cleanup();
@@ -365,5 +394,125 @@ describe("registerDemoHandlers", () => {
     const handler = getHandler("demo:annotate");
     const result = await handler({}, { selector: ".my-el", text: "Hello", position: "top" });
     expect(result).toEqual({ id: "test-request-id" });
+  });
+
+  describe("command watchdog timeout (#10142)", () => {
+    // Auto-acks every command after a short real delay so handlers resolve without
+    // wall-clock waits, while the setTimeout spy records the watchdog delay arg.
+    function autoAck() {
+      ipcMainMock.on.mockImplementation(
+        (channel: string, listener: (...args: unknown[]) => void) => {
+          if (channel === "demo:command-done") {
+            setTimeout(() => listener({}, { requestId: "test-request-id" }), 5);
+          }
+        }
+      );
+    }
+
+    // The watchdog setTimeout is the only one armed with a delay other than the
+    // 5ms auto-ack scheduler; return that delay so tests assert the derived budget.
+    function watchdogDelay(spy: ReturnType<typeof vi.spyOn>): number | undefined {
+      const call = spy.mock.calls.find((args: unknown[]) => args[1] !== 5);
+      return call?.[1] as number | undefined;
+    }
+
+    async function runAndCaptureDelay(
+      channel: string,
+      payload?: unknown
+    ): Promise<number | undefined> {
+      const spy = vi.spyOn(global, "setTimeout");
+      autoAck();
+      const cleanup = registerDemoHandlers(makeDeps(true));
+      try {
+        await getHandler(channel)({}, payload);
+        return watchdogDelay(spy);
+      } finally {
+        cleanup();
+        spy.mockRestore();
+      }
+    }
+
+    it("sleep derives the watchdog from durationMs (above the old 30s cap)", async () => {
+      // 45000 * 1.2 + 5000 = 59000 — would have been capped at 30000 before the fix.
+      expect(await runAndCaptureDelay("demo:sleep", { durationMs: 45_000 })).toBe(59_000);
+    });
+
+    it("waitForSelector derives the watchdog from the supplied timeoutMs", async () => {
+      // 40000 * 1.2 + 5000 = 53000
+      expect(
+        await runAndCaptureDelay("demo:wait-for-selector", { selector: ".x", timeoutMs: 40_000 })
+      ).toBe(53_000);
+    });
+
+    it("waitForSelector falls back to the 10s default when timeoutMs is omitted", async () => {
+      // 10000 * 1.2 + 5000 = 17000
+      expect(await runAndCaptureDelay("demo:wait-for-selector", { selector: ".x" })).toBe(17_000);
+    });
+
+    it("waitForIdle derives the watchdog from timeoutMs, ignoring settleMs", async () => {
+      // 60000 * 1.2 + 5000 = 77000 — settleMs is a polling cadence, not additive.
+      expect(
+        await runAndCaptureDelay("demo:wait-for-idle", { timeoutMs: 60_000, settleMs: 800 })
+      ).toBe(77_000);
+    });
+
+    it("type scales the watchdog with text length and can exceed 30s", async () => {
+      // 100 chars at 12 cps: ceil(100/12*1000*8 + 5000) = 71667
+      const text = "a".repeat(100);
+      expect(await runAndCaptureDelay("demo:type", { selector: ".x", text })).toBe(71_667);
+    });
+
+    it("type honors a slower cps, lengthening the watchdog", async () => {
+      // 20 chars at 5 cps: ceil(20/5*1000*8 + 5000) = 37000
+      const text = "a".repeat(20);
+      expect(await runAndCaptureDelay("demo:type", { selector: ".x", text, cps: 5 })).toBe(37_000);
+    });
+
+    it("typeInTerminal uses the same text-derived watchdog", async () => {
+      const text = "a".repeat(100);
+      expect(await runAndCaptureDelay("demo:type-in-terminal", { selector: ".x", text })).toBe(
+        71_667
+      );
+    });
+
+    it("drag derives the watchdog from durationMs", async () => {
+      // 8000 * 1.2 + 5000 = 14600
+      expect(
+        await runAndCaptureDelay("demo:drag", {
+          fromSelector: ".a",
+          toSelector: ".b",
+          durationMs: 8_000,
+        })
+      ).toBe(14_600);
+    });
+
+    it("type falls back to the 20ms keystroke floor at very high cps", async () => {
+      // 1000 chars at 1000 cps: nominal = 1000/1000*1000*8 = 8000, but the renderer
+      // floors each keystroke at 20ms => 1000*20 = 20000 wins; +5000 = 25000.
+      const text = "a".repeat(1000);
+      expect(await runAndCaptureDelay("demo:type", { selector: ".x", text, cps: 1000 })).toBe(
+        25_000
+      );
+    });
+
+    it("moveTo falls back to the 3s default when durationMs is omitted", async () => {
+      // 3000 * 1.2 + 5000 = 8600
+      expect(await runAndCaptureDelay("demo:move-to", { x: 1, y: 2 })).toBe(8_600);
+    });
+
+    it("moveToSelector falls back to the 3s default when durationMs is omitted", async () => {
+      expect(await runAndCaptureDelay("demo:move-to-selector", { selector: ".x" })).toBe(8_600);
+    });
+
+    it("drag falls back to the 3s default when durationMs is omitted", async () => {
+      expect(await runAndCaptureDelay("demo:drag", { fromSelector: ".a", toSelector: ".b" })).toBe(
+        8_600
+      );
+    });
+
+    it("unbounded commands keep the 30s default watchdog", async () => {
+      // click carries no duration/timeout payload, so the watchdog is unchanged.
+      expect(await runAndCaptureDelay("demo:click")).toBe(30_000);
+    });
   });
 });

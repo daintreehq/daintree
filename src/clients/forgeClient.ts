@@ -1,5 +1,6 @@
 import type {
   AuthValidation,
+  ForgeUser,
   PushErrorClassification,
   Issue,
   PR,
@@ -37,8 +38,8 @@ export const forgeClient = {
     return window.electron.forge.unassignIssue({ cwd, issueNumber, username });
   },
 
-  validateToken: (token: string): Promise<AuthValidation> => {
-    return window.electron.forge.validateToken(token);
+  validateToken: (providerId: string, token: string): Promise<AuthValidation> => {
+    return window.electron.forge.validateToken({ providerId, token });
   },
 
   listIssues: (cwd: string, opts?: ListOptions): Promise<Page<Issue>> => {
@@ -59,6 +60,10 @@ export const forgeClient = {
 
   getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
     return window.electron.forge.getRepoMetadata({ cwd });
+  },
+
+  getCurrentUser: (cwd: string): Promise<ForgeUser | null> => {
+    return window.electron.forge.getCurrentUser({ cwd });
   },
 
   classifyPushError: (

@@ -50,6 +50,7 @@ const storeMock = vi.hoisted(() => {
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 import { registerForgeDataHandlers } from "../forgeData.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { forgeAuditService } from "../../../services/forge/forgeAuditService.js";
 
 function findHandler(channel: string): (...args: unknown[]) => unknown {
@@ -91,6 +92,9 @@ const makePR = (n: number): PR => ({
 describe("registerForgeDataHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The handlers share a per-channel rate-limit budget (10 calls / 10s); a
+    // suite-cumulative count would make later tests fail on call volume alone.
+    _resetRateLimitQueuesForTest();
     resolveForCwdMock.mockResolvedValue({
       namespaceId: "fake.provider",
       repoRef,
@@ -98,9 +102,9 @@ describe("registerForgeDataHandlers", () => {
     });
   });
 
-  it("registers five IPC handlers", () => {
+  it("registers six IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(5);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(6);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
@@ -109,6 +113,7 @@ describe("registerForgeDataHandlers", () => {
       "forge:get-repo-metadata",
       expect.any(Function)
     );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-current-user", expect.any(Function));
     cleanup();
   });
 
@@ -195,6 +200,71 @@ describe("registerForgeDataHandlers", () => {
 
     expect(fakeImpl.getRepoMetadata).toHaveBeenCalledWith(repoRef);
     expect(result).toEqual(meta);
+  });
+
+  it("getCurrentUser returns the identity projection when the impl exposes one", async () => {
+    const user = {
+      login: "ada",
+      avatarUrl: "https://avatars.test/ada.png",
+      rawData: { source: "fake.provider" },
+    };
+    const implWithIdentity = {
+      ...fakeImpl,
+      identity: { getCurrentUser: vi.fn().mockResolvedValue(user) },
+    };
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: implWithIdentity as unknown as ForgeProviderImpl,
+    });
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
+
+    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(user);
+  });
+
+  it("getCurrentUser returns null when the provider has no identity capability", async () => {
+    // No `identity` field on the impl — host falls back to `null` so callers
+    // treat it as "no viewer" rather than throwing.
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
+
+    expect(result).toBeNull();
+  });
+
+  it("getCurrentUser does not write an audit record (read probe, matches getRateLimit)", async () => {
+    // Lock in the no-audit-on-probe design intent. The audit ring should
+    // not be flooded by every render-time identity probe fired on dialog
+    // open; the `ForgeProviderMethodName` union carries the name for
+    // type-exhaustiveness in `summarizeForgeArgs`, not because we audit it.
+    fakeImpl.getRepoMetadata.mockResolvedValue({
+      defaultBranch: "main",
+      isPrivate: false,
+      isFork: false,
+      isArchived: false,
+      rawData: null,
+    });
+    const user = { login: "ada", rawData: null };
+    const implWithIdentity = {
+      ...fakeImpl,
+      identity: { getCurrentUser: vi.fn().mockResolvedValue(user) },
+    };
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: implWithIdentity as unknown as ForgeProviderImpl,
+    });
+    const auditSpy = vi.spyOn(forgeAuditService, "appendRecord");
+    registerForgeDataHandlers();
+
+    for (let i = 0; i < 5; i++) {
+      await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
+    }
+
+    expect(auditSpy).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid cwd before resolving a provider", async () => {
@@ -284,6 +354,22 @@ describe("registerForgeDataHandlers", () => {
     // `["a,b"]` and `["a","b"]` are different queries — the JSON-tuple key keeps
     // them in separate in-flight slots instead of collapsing to one call.
     expect(fakeImpl.listIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not coalesce list queries that differ only by search term", async () => {
+    fakeImpl.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    registerForgeDataHandlers();
+    const handler = findHandler("forge:list-issues");
+
+    // The issue picker fires a new IPC call per debounced keystroke; a key
+    // that omitted `search` would hand the second caller the first's result.
+    await Promise.all([
+      handler(null, { cwd: "/repo", opts: { state: "open", search: "auth" } }),
+      handler(null, { cwd: "/repo", opts: { state: "open", search: "auth bug" } }),
+      handler(null, { cwd: "/repo", opts: { state: "open" } }),
+    ]);
+
+    expect(fakeImpl.listIssues).toHaveBeenCalledTimes(3);
   });
 
   it("collapses repeat lookups within the TTL then re-runs after it elapses", async () => {

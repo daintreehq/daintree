@@ -253,6 +253,18 @@ export interface Issue {
   rawData: unknown;
 }
 
+/**
+ * Normalized input for {@link ForgeProviderImpl.createIssue}. Mirrors the
+ * lowest common denominator across forges — `title` is required, `body` and
+ * `labels` are optional. Providers map these onto their own create payload and
+ * silently ignore fields they don't support.
+ */
+export interface CreateIssueInput {
+  title: string;
+  body?: string;
+  labels?: string[];
+}
+
 export interface PR {
   number: number;
   title: string;
@@ -429,6 +441,19 @@ export interface BatchLookupCapability {
 }
 
 /**
+ * Optional viewer-identity probe. Lets the renderer resolve "who am I" through
+ * the active forge provider instead of reading the GitHub token's username
+ * directly, so non-GitHub forges (GitLab, Gitea, Bitbucket) can wire the same
+ * "assign issue to me" flow against their own identity. Returns `null` when
+ * no authenticated viewer is available (no token, token rejected, or the
+ * provider doesn't carry viewer info) — callers treat that as "skip
+ * self-assignment" rather than an error.
+ */
+export interface IdentityCapability {
+  getCurrentUser(): Promise<ForgeUser | null>;
+}
+
+/**
  * Runtime contract a forge plugin implements and registers via
  * `host.registerForgeProvider`. Every provider implements the base methods;
  * optional capabilities are sibling fields the host probes at runtime.
@@ -475,8 +500,29 @@ export interface ForgeProviderImpl {
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildCommitsUrl(repo: RepoRef, branch?: string): string;
+  /**
+   * Optional. Build a deep-link to a specific file's entry on a PR's
+   * "Files changed" view. The provider knows its own anchor algorithm
+   * (GitHub hashes the path bytes; GitLab uses a different hash + prefix;
+   * Bitbucket uses a literal path) so the renderer never reconstructs a
+   * provider-shaped URL. The renderer consumes the result via
+   * {@link FileDecoration.url}; this method exists for the provider-side
+   * decoration hook to call. The `path` is the raw, repository-relative
+   * path as the provider's review-thread data returns it — do not
+   * URL-encode, the provider decides whether to hash the raw bytes or the
+   * encoded form. Returns nothing (omit the field) when the provider
+   * doesn't support PR-file deep-links.
+   */
+  buildPRFileUrl?(repo: RepoRef, number: number, path: string): string;
 
-  // Mutations — providers that don't support assignment throw "Not supported".
+  // Mutations — providers that don't support a mutation throw "Not supported".
+  /**
+   * Create a new issue and return the normalized {@link Issue}. Providers that
+   * can't create issues throw `"Not supported"`, matching the assignment
+   * convention. The host clears its issue caches after a successful create so
+   * the new issue shows up in subsequent {@link listIssues} calls.
+   */
+  createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
   assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   validateToken(token: string): Promise<AuthValidation>;
@@ -525,6 +571,7 @@ export interface ForgeProviderImpl {
   projectBoards?: ProjectBoardCapability;
   milestones?: MilestoneCapability;
   batchLookups?: BatchLookupCapability;
+  identity?: IdentityCapability;
 }
 
 /**
@@ -548,6 +595,8 @@ export type ForgeCapabilityHint =
   | "project-boards"
   | "milestones"
   | "batch-branch-prs"
+  | "identity"
+  | "pr-files"
   | (string & {});
 
 /**
@@ -688,6 +737,15 @@ export interface FileDecoration {
   tooltip?: string;
   /** Opaque color token/class passed through to `className` by the host. */
   color?: string;
+  /**
+   * Optional provider-authored deep-link for a clickable decoration. The host
+   * opens this through `systemClient.openExternal` when present; the
+   * decoration renders as non-interactive when absent. Built by the
+   * decoration provider via the active forge's `buildPRFileUrl` (or a
+   * provider-specific equivalent) — the host never reconstructs a
+   * provider-shaped URL from a base PR URL.
+   */
+  url?: string;
 }
 
 /**

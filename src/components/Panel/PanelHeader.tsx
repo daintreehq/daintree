@@ -860,7 +860,7 @@ function PanelHeaderComponent({
         </div>
       )}
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <DropdownMenu

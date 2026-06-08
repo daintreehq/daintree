@@ -13,6 +13,7 @@ const testState = vi.hoisted(() => ({
     resize: vi.fn(),
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
+    onTierChanged: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
@@ -23,6 +24,7 @@ const testState = vi.hoisted(() => ({
     })),
     acknowledgeData: vi.fn(),
     acknowledgePortData: vi.fn(),
+    discardPortAcks: vi.fn(),
   },
 }));
 
@@ -369,7 +371,10 @@ describe("TerminalInstanceService adversarial", () => {
     service.writeToTerminal("t1", "abc");
 
     expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
-    expect(testState.clientMocks.acknowledgeData).not.toHaveBeenCalled();
+    // Hibernated output is dropped, never replayed — IPC-delivered string
+    // chunks were charged to the host's IPC ledger, so it must be drained here
+    // or it leaks into permanent backpressure (#9893). ASCII "abc" = 3 bytes.
+    expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledWith("t1", 3);
     expect(notifyWriteCompleteSpy).toHaveBeenCalledWith("t1", 3);
     expect(managed.terminal.write).not.toHaveBeenCalled();
   });

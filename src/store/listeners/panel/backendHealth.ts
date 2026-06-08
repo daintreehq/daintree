@@ -1,9 +1,58 @@
 import type { CrashType } from "@shared/types/pty-host";
+import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { logInfo, logError, logWarn } from "@/utils/logger";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { usePanelStore } from "@/store/panelStore";
+import { deriveRuntimeStatus } from "@/store/slices/panelRegistry/helpers";
+import { cancelPanelStatusBuffer } from "@/store/panelStatusBuffer";
+
+/**
+ * Clear stale flow state on every PTY panel after a pty-host crash + recovery.
+ * The host only re-emits flow status on a pause/resume transition, so a panel
+ * paused at crash time would keep showing the "Paused" pill forever once the
+ * host comes back. One batched setState handles all panels to avoid N Zustand
+ * subscriber notifications; unchanged panels are left untouched (#9899).
+ */
+function clearFlowStateOnRecovery(): void {
+  // Drop every buffered status patch first — they were enqueued before the
+  // crash and the recovered host won't re-emit them, so a pending RAF flush
+  // would otherwise restore the stale "paused" pill right after we clear it.
+  cancelPanelStatusBuffer();
+
+  usePanelStore.setState((state) => {
+    const nextById = { ...state.panelsById };
+    let changed = false;
+    for (const id of Object.keys(nextById)) {
+      const panel = nextById[id];
+      if (!panel || !isPtyPanel(panel)) continue;
+      const nextRuntimeStatus = deriveRuntimeStatus(
+        panel.isVisible,
+        undefined,
+        panel.runtimeStatus
+      );
+      if (
+        panel.flowStatus === undefined &&
+        panel.flowStatusTimestamp === undefined &&
+        panel.heldDurationMs === undefined &&
+        panel.runtimeStatus === nextRuntimeStatus
+      ) {
+        continue;
+      }
+      nextById[id] = {
+        ...panel,
+        flowStatus: undefined,
+        flowStatusTimestamp: undefined,
+        heldDurationMs: undefined,
+        runtimeStatus: nextRuntimeStatus,
+      };
+      changed = true;
+    }
+    if (!changed) return state;
+    return { panelsById: nextById };
+  });
+}
 
 function normalizeCrashType(value: unknown): CrashType | null {
   const validTypes: CrashType[] = [
@@ -81,6 +130,10 @@ export function setupBackendHealthListeners(): DisposableStore {
         }
 
         usePanelStore.setState({ backendStatus: "recovering" });
+
+        // Clear flow state left over from before the crash — the recovered host
+        // won't re-emit it, so a paused-at-crash panel would stay "Paused" (#9899).
+        clearFlowStateOnRecovery();
 
         // Reset all xterm instances to fix white text
         terminalInstanceService.handleBackendRecovery();

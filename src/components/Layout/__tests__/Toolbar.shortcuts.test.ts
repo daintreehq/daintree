@@ -90,22 +90,22 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
 
   describe("createTooltipContent usage", () => {
     it("uses createTooltipContent for terminal tooltip", () => {
-      expect(launcherSource).toContain('tooltipLabel: "Open Terminal"');
+      expect(launcherSource).toContain('tooltipLabel: "Open terminal"');
       expect(launcherSource).toContain("createTooltipContent(config.tooltipLabel, shortcut)");
     });
 
     it("uses createTooltipContent for browser tooltip", () => {
-      expect(launcherSource).toContain('tooltipLabel: "Open Browser"');
+      expect(launcherSource).toContain('tooltipLabel: "Open browser"');
       expect(launcherSource).toContain("createTooltipContent(config.tooltipLabel, shortcut)");
     });
 
     it("uses createTooltipContent for settings tooltip", () => {
-      expect(settingsSource).toContain('createTooltipContent("Open Settings", settingsShortcut)');
+      expect(settingsSource).toContain('createTooltipContent("Open settings", settingsShortcut)');
     });
 
     it("uses createTooltipContent for problems tooltip with dynamic shortcut", () => {
       expect(problemsSource).toContain(
-        'createTooltipContent("Show Problems Panel", diagnosticsShortcut)'
+        'createTooltipContent("Show problems panel", diagnosticsShortcut)'
       );
     });
 
@@ -115,11 +115,11 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses createTooltipContent for copy-tree tooltip", () => {
-      expect(source).toContain('createTooltipContent("Copy Context", copyTreeShortcut)');
+      expect(source).toContain('createTooltipContent("Copy context", copyTreeShortcut)');
     });
 
     it("uses createTooltipContent for dev-server tooltip", () => {
-      expect(source).toContain('createTooltipContent("Open Dev Preview", devServerShortcut)');
+      expect(source).toContain('createTooltipContent("Open dev preview", devServerShortcut)');
     });
 
     it("uses createTooltipContent for sidebar tooltip with dynamic shortcut", () => {
@@ -195,6 +195,19 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     it("uses sentence-case 'Context copied' aria-label", () => {
       expect(source).toContain('"Context copied"');
       expect(source).not.toContain('"Context Copied"');
+    });
+
+    it("keeps text-status-success in the treeCopied branch but drops the bg tint — issue #9822", () => {
+      // Scoped to the copy-tree render block so unrelated `bg-status-success/10`
+      // uses (e.g. ghost-success hover) don't false-positive the negative.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      const treeCopiedBranch = copyTreeBlock![0].match(
+        /treeCopied[\s\S]{0,200}?"text-daintree-text"/
+      );
+      expect(treeCopiedBranch).not.toBeNull();
+      expect(treeCopiedBranch![0]).toContain("text-status-success");
+      expect(treeCopiedBranch![0]).not.toContain("bg-status-success/10");
     });
   });
 

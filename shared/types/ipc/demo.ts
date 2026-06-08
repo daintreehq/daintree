@@ -35,6 +35,26 @@ export interface DemoScreenshotResult {
 export interface DemoStartCapturePayload {
   fps?: number;
   outputPath: string;
+  /**
+   * Target encode bitrate in bits/sec for the MediaRecorder. Higher = sharper,
+   * larger files. Defaults to a very-high-quality value chosen by the main
+   * handler when omitted. Set explicitly for embeddable/master-quality output.
+   */
+  videoBitsPerSecond?: number;
+  /**
+   * Pin the captured frame width in device pixels. Enforced via applyConstraints
+   * after getDisplayMedia (getDisplayMedia ignores width/height for display
+   * capture); the recording fails if Chromium can't deliver this exact size.
+   * Omit to record at the surface's native resolution.
+   */
+  width?: number;
+  /**
+   * Pin the captured frame height in device pixels. Enforced via applyConstraints
+   * after getDisplayMedia (getDisplayMedia ignores width/height for display
+   * capture); the recording fails if Chromium can't deliver this exact size.
+   * Omit to record at the surface's native resolution.
+   */
+  height?: number;
 }
 
 export interface DemoCaptureChunkPayload {
@@ -44,7 +64,7 @@ export interface DemoCaptureChunkPayload {
 
 export interface DemoCaptureStopPayload {
   captureId: string;
-  frameCount: number;
+  chunkCount: number;
   error?: string;
 }
 
@@ -53,6 +73,9 @@ export interface DemoExecStartCapturePayload {
   requestId: string;
   fps: number;
   mimeType: string;
+  videoBitsPerSecond?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface DemoExecStopCapturePayload {
@@ -66,12 +89,13 @@ export interface DemoStartCaptureResult {
 
 export interface DemoStopCaptureResult {
   outputPath: string;
-  frameCount: number;
+  chunkCount: number;
 }
 
 export interface DemoCaptureStatus {
   active: boolean;
-  frameCount: number;
+  /** Number of MediaRecorder timeslice chunks received so far (not video frames). */
+  chunkCount: number;
   outputPath: string | null;
 }
 
@@ -92,15 +116,76 @@ export interface DemoPressKeyPayload {
   selector?: string;
 }
 
+/** Named special keys the demo engine can send into a terminal panel. */
+export type DemoTerminalKey =
+  | "up"
+  | "down"
+  | "left"
+  | "right"
+  | "enter"
+  | "tab"
+  | "escape"
+  | "backspace"
+  | "ctrl-c"
+  | "ctrl-d"
+  | "ctrl-u"
+  | "home"
+  | "end"
+  | "pageup"
+  | "pagedown";
+
+export interface DemoTypeInTerminalPayload {
+  /** Selector resolving to (or inside) a terminal panel's `[data-panel-id]`. */
+  selector: string;
+  text: string;
+  /** Characters per second; humanized around this rate. Defaults to 12. */
+  cps?: number;
+}
+
+export interface DemoSendKeyToTerminalPayload {
+  /** Selector resolving to (or inside) a terminal panel's `[data-panel-id]`. */
+  selector: string;
+  key: DemoTerminalKey;
+}
+
 export interface DemoSpotlightPayload {
   selector: string;
   padding?: number;
 }
 
+export type DemoAnnotationPlacement =
+  // Anchored to a target element (requires `selector`).
+  | "top"
+  | "bottom"
+  | "left"
+  | "right"
+  // Anchored to the viewport (selector ignored). screen-bottom is subtitle style.
+  | "screen-top"
+  | "screen-bottom"
+  | "screen-center"
+  | "lower-third-left"
+  | "lower-third-right"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
+  // Anchored to the demo cursor's position at annotate time.
+  | "above-cursor"
+  | "below-cursor";
+
+/** Caption size tier — resolved to a fraction of frame height so it scales across 1080p/4K. */
+export type DemoAnnotationSize = "sm" | "md" | "lg" | "xl";
+
 export interface DemoAnnotatePayload {
-  selector: string;
+  /**
+   * Target element. Required for element-anchored placements (top/bottom/left/
+   * right); ignored for screen-* and cursor placements.
+   */
+  selector?: string;
   text: string;
-  position?: "top" | "bottom" | "left" | "right";
+  position?: DemoAnnotationPlacement;
+  /** Size tier; defaults to "md". */
+  size?: DemoAnnotationSize;
   id?: string;
 }
 

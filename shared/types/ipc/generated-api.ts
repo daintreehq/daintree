@@ -198,6 +198,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["help:unmark-terminal"]["result"]>;
   };
   helpAssistant: {
+    getLiveSessionStatus(
+      ...args: IpcInvokeMap["help-assistant:get-live-session-status"]["args"]
+    ): Promise<IpcInvokeMap["help-assistant:get-live-session-status"]["result"]>;
     getSettings(
       ...args: IpcInvokeMap["help-assistant:get-settings"]["args"]
     ): Promise<IpcInvokeMap["help-assistant:get-settings"]["result"]>;
@@ -238,6 +241,9 @@ export interface GeneratedElectronAPI {
     getConfigSnippet(
       ...args: IpcInvokeMap["mcp-server:get-config-snippet"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-config-snippet"]["result"]>;
+    getLogRecords(
+      ...args: IpcInvokeMap["mcp-server:get-log-records"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-log-records"]["result"]>;
     getRuntimeState(
       ...args: IpcInvokeMap["mcp-server:get-runtime-state"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-runtime-state"]["result"]>;
@@ -256,6 +262,12 @@ export interface GeneratedElectronAPI {
     listActiveClients(
       ...args: IpcInvokeMap["mcp-server:list-active-clients"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-active-clients"]["result"]>;
+    listHelpSessionBearers(
+      ...args: IpcInvokeMap["mcp-server:list-help-session-bearers"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-help-session-bearers"]["result"]>;
+    resetDenialCounts(
+      ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;
     revokeSessionGrants(
       ...args: IpcInvokeMap["mcp-server:revoke-session-grants"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:revoke-session-grants"]["result"]>;
@@ -512,6 +524,17 @@ export interface GeneratedElectronAPI {
     setTelemetryLevel(
       ...args: IpcInvokeMap["privacy:set-telemetry-level"]["args"]
     ): Promise<IpcInvokeMap["privacy:set-telemetry-level"]["result"]>;
+  };
+  runHistory: {
+    append(
+      ...args: IpcInvokeMap["run-history:append"]["args"]
+    ): Promise<IpcInvokeMap["run-history:append"]["result"]>;
+    clear(
+      ...args: IpcInvokeMap["run-history:clear"]["args"]
+    ): Promise<IpcInvokeMap["run-history:clear"]["result"]>;
+    getRecords(
+      ...args: IpcInvokeMap["run-history:get-records"]["args"]
+    ): Promise<IpcInvokeMap["run-history:get-records"]["result"]>;
   };
   sentry: {
     getConsentState(

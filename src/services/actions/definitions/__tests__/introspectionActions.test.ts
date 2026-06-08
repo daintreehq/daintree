@@ -388,6 +388,41 @@ describe("actions.list", () => {
     const def = registry.get("actions.list")!();
     expect(def.mcpVisibility).toBe("core");
   });
+
+  it("excludes actions with mcpVisibility hidden", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "actions.visible", title: "Visible", mcpVisibility: "core" }),
+      makeEntry({ id: "actions.secret", title: "Secret", mcpVisibility: "hidden" }),
+    ]);
+
+    const def = registry.get("actions.list")!();
+    const result = (await def.run(undefined, stubCtx)) as {
+      actions: ActionManifestEntry[];
+    };
+
+    const ids = result.actions.map((a) => a.id);
+    expect(ids).toContain("actions.visible");
+    expect(ids).not.toContain("actions.secret");
+  });
+
+  it("excludes hidden actions under each user filter branch", async () => {
+    // A narrower user filter must never be able to surface a hidden entry —
+    // the hidden exclusion must run before category/search/enabledOnly.
+    const hidden = makeEntry({ id: "actions.secret", title: "Secret", mcpVisibility: "hidden" });
+    const visible = makeEntry({ id: "actions.secret", title: "Secret", mcpVisibility: "core" });
+
+    for (const args of [{ category: "test" }, { search: "secret" }, { enabledOnly: true }]) {
+      vi.mocked(actionService.list).mockReturnValueOnce([hidden, visible]);
+      const def = registry.get("actions.list")!();
+      const result = (await def.run(args as never, stubCtx)) as {
+        actions: ActionManifestEntry[];
+      };
+      const ids = result.actions.map((a) => a.id);
+      expect(ids).toContain("actions.secret");
+      expect(ids.every((id, i) => i === ids.lastIndexOf(id))).toBe(true);
+      expect(result.actions.find((a) => a.mcpVisibility === "hidden")).toBeUndefined();
+    }
+  });
 });
 
 describe("actions.search", () => {
@@ -644,6 +679,39 @@ describe("actions.getSchema", () => {
 
     const def = registry.get("actions.getSchema")!();
     const result = (await def.run({ actionId: "actions.secret" } as never, stubCtx)) as {
+      ok: false;
+      error: { code: string; message: string };
+    };
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe("NOT_FOUND");
+  });
+
+  it("returns structured error for restricted action", async () => {
+    const entry = makeEntry({ id: "actions.locked", danger: "restricted" });
+    vi.mocked(actionService.get).mockReturnValueOnce(entry);
+
+    const def = registry.get("actions.getSchema")!();
+    const result = (await def.run({ actionId: "actions.locked" } as never, stubCtx)) as {
+      ok: false;
+      error: { code: string; message: string };
+    };
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe("NOT_FOUND");
+    expect(result.error.message).toContain("actions.locked");
+  });
+
+  it("returns structured error when an entry is both hidden and restricted", async () => {
+    const entry = makeEntry({
+      id: "actions.dual",
+      mcpVisibility: "hidden",
+      danger: "restricted",
+    });
+    vi.mocked(actionService.get).mockReturnValueOnce(entry);
+
+    const def = registry.get("actions.getSchema")!();
+    const result = (await def.run({ actionId: "actions.dual" } as never, stubCtx)) as {
       ok: false;
       error: { code: string; message: string };
     };

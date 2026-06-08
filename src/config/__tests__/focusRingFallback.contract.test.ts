@@ -267,12 +267,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Inner click-target overlay — keyboard nav handled by the parent focusable card row (#8094)",
   },
   {
-    file: "src/components/Layout/Toolbar.tsx",
-    fragment: "toolbar-project-pill",
-    reason:
-      "Project switcher pill — focus indicator is delivered via the toolbar-project-pill CSS class",
-  },
-  {
     file: "src/components/Worktree/ReviewHub/ReviewHub.tsx",
     fragment: "outline-hidden overflow-hidden",
     reason: "Review hub dialog wrapper — focus trap (tabIndex=-1) delegates focus to content",

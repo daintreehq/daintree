@@ -1,12 +1,15 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
+import { createHash } from "node:crypto";
 import { configure } from "safe-stable-stringify";
 import type {
   AuthValidation,
   CIStatus,
+  CreateIssueInput,
   Credentials,
   ForgeProviderImpl,
   ForgeUser,
   ForgeLabel,
+  IdentityCapability,
   Issue,
   ListOptions,
   NormalizedIssueState,
@@ -199,6 +202,68 @@ function toForgeIssue(node: Record<string, unknown>): Issue {
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
     rawData: node,
+  };
+}
+
+/**
+ * Map a GitHub REST user object ({@link https://docs.github.com/en/rest/issues})
+ * to a {@link ForgeUser}. REST uses `avatar_url` where the GraphQL projection
+ * (consumed by {@link toForgeUser}) uses `avatarUrl`, so REST responses need
+ * their own mapper.
+ */
+function restUserToForgeUser(node: unknown): ForgeUser | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const n = node as { login?: unknown; avatar_url?: unknown };
+  if (typeof n.login !== "string") return undefined;
+  return {
+    login: n.login,
+    ...(typeof n.avatar_url === "string" ? { avatarUrl: n.avatar_url } : {}),
+    rawData: node,
+  };
+}
+
+/**
+ * Normalize a GitHub REST issue payload (e.g. the `POST .../issues` create
+ * response) to the contract {@link Issue}. The REST field names diverge from
+ * the GraphQL ones {@link toForgeIssue} handles — `html_url` vs `url`, `body`
+ * vs `bodyText`, snake_case timestamps, and flat `labels`/`assignees` arrays
+ * rather than `{ nodes: [...] }` connections — so a dedicated mapper is needed.
+ */
+function restToForgeIssue(raw: Record<string, unknown>): Issue {
+  const rawState = typeof raw.state === "string" ? raw.state : "open";
+  const assignees = Array.isArray(raw.assignees)
+    ? raw.assignees.map(restUserToForgeUser).filter((u): u is ForgeUser => u !== undefined)
+    : [];
+  const labels: ForgeLabel[] = [];
+  if (Array.isArray(raw.labels)) {
+    for (const entry of raw.labels) {
+      if (typeof entry === "string") {
+        labels.push({ name: entry });
+        continue;
+      }
+      if (!entry || typeof entry !== "object") continue;
+      const label = entry as { name?: unknown; color?: unknown };
+      if (typeof label.name !== "string") continue;
+      labels.push({
+        name: label.name,
+        ...(typeof label.color === "string" ? { color: label.color } : {}),
+      });
+    }
+  }
+  return {
+    number: raw.number as number,
+    title: typeof raw.title === "string" ? raw.title : "",
+    body: typeof raw.body === "string" ? raw.body : "",
+    state: normalizeIssueState(rawState),
+    rawState,
+    url: typeof raw.html_url === "string" ? raw.html_url : "",
+    author: restUserToForgeUser(raw.user),
+    assignees,
+    labels,
+    createdAt: isoToMs(raw.created_at ?? raw.updated_at),
+    updatedAt: isoToMs(raw.updated_at),
+    closedAt: isoToMsOrNull(raw.closed_at),
+    rawData: raw,
   };
 }
 
@@ -463,14 +528,73 @@ function buildNumberBatchInflightKey(repo: RepoRef, numbers: number[]): string {
   return `${repo.owner}/${repo.repo}:${[...numbers].sort((a, b) => a - b).join(",")}`;
 }
 
+/**
+ * Text-search path for `listIssues` — routes through GitHub's search API
+ * instead of the repository issues connection. Results are typed-input
+ * ephemera: they use a `search:`-prefixed in-flight dedupe key and are never
+ * written to `forgeIssueListCache`, so a search response can't be served
+ * later as the unfiltered background-poll list. `runQuery`'s short-TTL
+ * response cache still coalesces identical search terms.
+ */
+async function searchIssuesImpl(
+  repo: RepoRef,
+  search: string,
+  opts: ListOptions
+): Promise<Page<Issue>> {
+  const state = listCacheState(opts);
+  const bypass = opts.bypassCache === true;
+  const limit = opts.perPage ?? 20;
+  // Free text is appended unquoted — GitHub search tokenizes it as keywords,
+  // matching what its own search box does (see findPRByBranchImpl, which only
+  // quotes because branch refs must not parse as separate operators). GitHub
+  // caps search queries at 256 chars, so the term is truncated to the budget
+  // left after the qualifiers rather than letting the whole query be rejected.
+  const stateQualifier = state === "all" ? "" : ` state:${state}`;
+  const sortQualifier = opts.sort === "updated" ? "sort:updated-desc" : "sort:created-desc";
+  const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
+  const available = 256 - prefix.length;
+  const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
+  const dedupeKey = `search:${searchQuery}:${opts.cursor ?? ""}:${limit}`;
+
+  return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {
+    const response = await runQuery(
+      SEARCH_QUERY,
+      {
+        searchQuery,
+        type: "ISSUE",
+        cursor: opts.cursor ?? null,
+        limit,
+      },
+      "SEARCH_QUERY",
+      bypass
+    );
+
+    const result = response?.search as
+      | {
+          nodes?: unknown[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          issueCount?: number;
+        }
+      | undefined;
+    const nodes = (result?.nodes ?? []) as Array<Record<string, unknown>>;
+    return {
+      items: nodes.filter(Boolean).map(toForgeIssue),
+      nextCursor: result?.pageInfo?.endCursor ?? null,
+      hasMore: result?.pageInfo?.hasNextPage ?? false,
+      ...(typeof result?.issueCount === "number" ? { totalCount: result.issueCount } : {}),
+    };
+  });
+}
+
 async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
+  const searchTerm = opts.search?.trim();
+  if (searchTerm) return searchIssuesImpl(repo, searchTerm, opts);
+
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
   const bypass = opts.bypassCache === true;
-  // The GitHub forge list path issues the unfiltered repository query and
-  // ignores `opts.search` (advisory — see ListOptions). Keep `search` out of
-  // the cache key so it reflects what the query actually varies on; wiring
-  // search would mean routing to SEARCH_QUERY and re-adding it here together.
+  // The unfiltered list path keeps `search` out of the cache key — search
+  // routes through `searchIssuesImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey(
     "issue",
     repo.owner,
@@ -535,8 +659,9 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
   const state = listCacheState(opts);
   const sortOrder = opts.sort === "updated" ? "updated" : "created";
   const bypass = opts.bypassCache === true;
-  // See listIssuesImpl: the forge list query ignores `opts.search`, so it's
-  // kept out of the cache key.
+  // The PR list query ignores `opts.search` (advisory — see ListOptions), so
+  // it's kept out of the cache key. Wiring it would mean routing to
+  // SEARCH_QUERY like `searchIssuesImpl` does for issues.
   const cacheKey = buildListCacheKey(
     "pr",
     repo.owner,
@@ -1003,13 +1128,19 @@ async function getReviewThreadsImpl(repo: RepoRef, prNumber: number): Promise<Re
 function getRateLimitImpl(): Promise<RateLimitInfo> {
   const state = gitHubRateLimitService.getState();
   if (!state.blocked) {
-    return Promise.resolve({ limit: null, remaining: null, resetAt: null });
+    return Promise.resolve({
+      limit: null,
+      remaining: null,
+      resetAt: null,
+      throttleMultiplier: state.throttleMultiplier ?? 1,
+    });
   }
   return Promise.resolve({
     limit: null,
     remaining: 0,
     resetAt: state.resetAt ?? null,
     ...(state.kind === "secondary" ? { secondaryThrottled: true } : {}),
+    throttleMultiplier: state.throttleMultiplier ?? 1,
   });
 }
 
@@ -1026,6 +1157,24 @@ function classifyPushErrorImpl(stderr: string): PushErrorClassification | null {
 
 const reviewCapability: ReviewCapability = {
   getReviewThreads: getReviewThreadsImpl,
+};
+
+// Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same
+// cached `username`/`avatarUrl` and the `pendingValidation` singleflight so a
+// cold-start probe (token present, cache empty) coalesces with any other
+// concurrent caller and doesn't double-hit `/user`. The provider surface
+// expects a `ForgeUser`, so the GitHub `{ login, avatarUrl }` shape is
+// projected and the raw `GitHubTokenConfig` stays inside the auth module.
+const identityCapability: IdentityCapability = {
+  async getCurrentUser(): Promise<ForgeUser | null> {
+    const config = await GitHubAuth.getConfigAsync();
+    if (!config.username) return null;
+    return {
+      login: config.username,
+      ...(config.avatarUrl ? { avatarUrl: config.avatarUrl } : {}),
+      rawData: { source: "GitHubAuth.cached" },
+    };
+  },
 };
 
 export const githubForgeProvider: ForgeProviderImpl = {
@@ -1093,33 +1242,83 @@ export const githubForgeProvider: ForgeProviderImpl = {
 
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/issues`;
+    const qParts: string[] = [];
+    if (options?.query) qParts.push(options.query);
+    if (options?.state && options.state !== "all") qParts.push(`is:${options.state}`);
     const params = new URLSearchParams();
-    if (options?.query) {
-      const qParts: string[] = [options.query];
-      if (options.state && options.state !== "all") {
-        qParts.push(`is:${options.state}`);
-      }
-      params.set("q", qParts.join(" "));
-    }
+    if (qParts.length > 0) params.set("q", qParts.join(" "));
     return params.toString() ? `${base}?${params.toString()}` : base;
   },
 
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/pulls`;
+    const qParts: string[] = [];
+    if (options?.query) qParts.push(options.query);
+    if (options?.state && options.state !== "all") qParts.push(`is:${options.state}`);
     const params = new URLSearchParams();
-    if (options?.query) {
-      const qParts: string[] = [options.query];
-      if (options.state && options.state !== "all") {
-        qParts.push(`is:${options.state}`);
-      }
-      params.set("q", qParts.join(" "));
-    }
+    if (qParts.length > 0) params.set("q", qParts.join(" "));
     return params.toString() ? `${base}?${params.toString()}` : base;
   },
 
   buildCommitsUrl(repo: RepoRef, branch?: string): string {
     const base = `https://github.com/${repo.owner}/${repo.repo}/commits`;
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
+  },
+
+  // GitHub's `Files changed` view deep-links to a specific file via a
+  // `#diff-<sha256-of-utf8-path>` anchor (the SHA-256 is computed from the
+  // file's UTF-8 path bytes, not the URL-encoded form). The hash input must
+  // match what the plugin's `getPRReviewThreads` data path uses for the
+  // file path — if that path is normalized upstream, this hash must mirror
+  // the same normalization. Base-SHA-agnostic: github.com resolves the
+  // anchor to the current diff on the PR's "Files changed" tab.
+  buildPRFileUrl(repo: RepoRef, number: number, path: string): string {
+    const hash = createHash("sha256").update(path, "utf8").digest("hex");
+    return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${hash}`;
+  },
+
+  async createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {
+    const token = GitHubAuth.getToken();
+    if (!token) {
+      throw new Error("GitHub token not configured. Set it in Settings.");
+    }
+    const title = input.title?.trim();
+    if (!title) {
+      throw new Error("Issue title is required.");
+    }
+    const requestBody: Record<string, unknown> = { title };
+    if (input.body) requestBody.body = input.body;
+    if (input.labels && input.labels.length > 0) requestBody.labels = input.labels;
+
+    const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/issues`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      // 410 Gone = issues are disabled on the repository.
+      if (response.status === 410) {
+        throw new Error("Issues are disabled for this repository.");
+      }
+      throw new Error(
+        `Failed to create issue: HTTP ${response.status}${text ? ` — ${text.slice(0, 200)}` : ""}`
+      );
+    }
+    const data = (await response.json()) as Record<string, unknown>;
+    // Guard the mutation result: a malformed body must not surface as
+    // "Issue #undefined created" with an empty URL after caches are cleared.
+    if (typeof data.number !== "number" || typeof data.html_url !== "string") {
+      throw new Error("Unexpected response from GitHub: missing issue number or URL.");
+    }
+    return restToForgeIssue(data);
   },
 
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void> {
@@ -1215,4 +1414,5 @@ export const githubForgeProvider: ForgeProviderImpl = {
   classifyPushError: classifyPushErrorImpl,
 
   reviews: reviewCapability,
+  identity: identityCapability,
 };

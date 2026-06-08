@@ -4,7 +4,7 @@ import { promisify } from "util";
 import { app, screen } from "electron";
 import { sanitizePath } from "./TelemetryService.js";
 import { logBuffer } from "./LogBuffer.js";
-import { getPtyManager } from "./PtyManager.js";
+import type { PtyClient } from "./PtyClient.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import type { HandlerDependencies } from "../ipc/types.js";
@@ -401,19 +401,28 @@ async function collectStoreConfig() {
   }
 }
 
-async function collectTerminals() {
+async function collectTerminals(ptyClient?: PtyClient) {
   try {
-    const ptyManager = getPtyManager();
-    const terminals = ptyManager.getAll();
+    if (!ptyClient) return [];
+    const terminals = await ptyClient.getAllTerminalsAsync();
     return terminals.map((t) => ({
       id: t.id,
       kind: t.kind,
       agentState: t.agentState,
       cwd: t.cwd ? sanitizePath(t.cwd) : null,
-      isExited: t.isExited,
+      isExited: t.hasPty === false,
     }));
   } catch {
     return { error: "Failed to get terminal info" };
+  }
+}
+
+async function collectFlowControl(ptyClient?: PtyClient) {
+  try {
+    if (!ptyClient) return { error: "PtyClient not available" };
+    return await ptyClient.getFlowControlSnapshotAsync();
+  } catch {
+    return { error: "Failed to get flow-control snapshot" };
   }
 }
 
@@ -474,7 +483,8 @@ export async function collectDiagnosticsWithKeys(
     { key: "tools", fn: collectTools },
     { key: "git", fn: collectGit },
     { key: "config", fn: collectStoreConfig },
-    { key: "terminals", fn: collectTerminals },
+    { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
+    { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
     { key: "logs", fn: collectLogs },
     { key: "events", fn: () => collectEvents(deps) },
   ];

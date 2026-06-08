@@ -19,12 +19,20 @@ interface PendingPushConfirmation {
 
 interface GitPushConfirmState {
   pendingConfirm: PendingPushConfirmation | null;
+  /**
+   * Monotonic counter bumped on every request. Used as the always-mounted host's
+   * ErrorBoundary `resetKeys` signal so a crashed dialog auto-recovers when a new
+   * request arrives — including the back-to-back supersede case where
+   * `pendingConfirm` never returns to null between requests (#9918).
+   */
+  requestSeq: number;
   requestConfirmation: (cwd: string) => Promise<boolean>;
   resolveConfirmation: (ok: boolean) => void;
 }
 
 export const useGitPushConfirmStore = create<GitPushConfirmState>()((set, get) => ({
   pendingConfirm: null,
+  requestSeq: 0,
 
   requestConfirmation: (cwd: string): Promise<boolean> => {
     const existing = get().pendingConfirm;
@@ -33,7 +41,7 @@ export const useGitPushConfirmStore = create<GitPushConfirmState>()((set, get) =
     }
 
     return new Promise<boolean>((resolve) => {
-      set({ pendingConfirm: { resolve, cwd } });
+      set((state) => ({ pendingConfirm: { resolve, cwd }, requestSeq: state.requestSeq + 1 }));
     });
   },
 

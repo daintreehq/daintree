@@ -59,6 +59,8 @@ export const WORKBENCH_TIER_TOOLS = [
 
   "notifications.recent",
   "errors.recent",
+
+  "help.displayImage",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const ACTION_TIER_ADDONS = [

@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 // eslint-disable-next-line no-restricted-imports
 import { githubClient } from "@/clients/githubClient";
+import { notify } from "@/lib/notify";
 import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import type { GitHubTokenHealthPayload } from "@shared/types";
 
 /**
@@ -31,12 +31,22 @@ export function useGitHubTokenHealth(): void {
 
       if (isUnhealthy && !wasUnhealthy && !hasInboxedRef.current) {
         hasInboxedRef.current = true;
-        useNotificationHistoryStore.getState().addEntry({
+        // Inbox-only backstop (priority "low" → no toast) for the no-project
+        // case where the toolbar's `useGitHubTokenExpiryNotification` isn't
+        // mounted. Shares `supersedeKey` with that hook so whichever fires
+        // second archives the first — one active row per token-expiry event.
+        // No `correlationId`: it would only thread this row so that a second
+        // expiry cycle (after the toolbar archived the first row) re-promotes
+        // the backstop into an unwanted toast via the un-snooze re-toast path.
+        // The supersede dedup runs on `supersedeKey` alone.
+        notify({
           type: "warning",
+          priority: "low",
           title: "GitHub token expired",
           message: "GitHub token expired — reconnect to restore GitHub features.",
-          correlationId: "github-token-health",
+          supersedeKey: "github.token",
           countable: false,
+          context: { eventKind: "connectivity" },
         });
       }
 

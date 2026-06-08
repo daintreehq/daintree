@@ -197,7 +197,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Settings/SettingsSwitchCard.tsx",
     "src/components/Settings/TerminalSettingsTab.tsx",
-    "src/components/Settings/ToolbarSettingsTab.tsx",
     "src/components/Settings/WorktreeSettingsTab.tsx",
     "src/components/Setup/AgentCliStep.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",

@@ -208,6 +208,52 @@ describe("WorkspaceHostEventRouter", () => {
     });
   });
 
+  describe("worktree-activated (#9945)", () => {
+    it("forwards non-silent activations to the plugin bus", () => {
+      const entry = makeEntry({ projectPath: "/project/foo" });
+      router.routeHostEvent(entry, {
+        type: "worktree-activated",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 1,
+      });
+
+      // The injected `emit` (the `WorkspaceClient` internal bus) is the
+      // surface `PluginService.subscribeWorktreeEvent` listens on for
+      // host-originated activations. A non-silent Main-originated
+      // activation (the `WorkspaceClient.setActiveWorktree` path that
+      // forwards silent: false) must still notify plugin subscribers.
+      const emit = router as unknown as { emit: ReturnType<typeof vi.fn> };
+      expect(emit.emit).toHaveBeenCalledWith("worktree-activated", {
+        worktreeId: "wt-1",
+        projectPath: "/project/foo",
+      });
+    });
+
+    it("suppresses the plugin-bus emit when silent=true (#9945 regression guard)", () => {
+      // The renderer IPC path calls
+      // `WorkspaceClient.setActiveWorktree(id, winId, { silent: true })`
+      // (lifecycle.ts:53) so the legacy `CHANNELS.WORKTREE_ACTIVATED` echo
+      // and `WorkspaceClient`-level plugin emit are suppressed. The host
+      // propagates `silent` onto the `worktree-activated` event; this
+      // router case must mirror the suppression or plugin subscribers to
+      // `onDidChangeActiveWorktree` would receive notifications the
+      // caller explicitly marked silent (and the non-silent path would
+      // double-notify).
+      const entry = makeEntry({ projectPath: "/project/foo" });
+      router.routeHostEvent(entry, {
+        type: "worktree-activated",
+        worktreeId: "wt-1",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 1,
+        silent: true,
+      });
+
+      const emit = router as unknown as { emit: ReturnType<typeof vi.fn> };
+      expect(emit.emit).not.toHaveBeenCalled();
+    });
+  });
+
   describe("pr-detected IPC payload (#8870)", () => {
     function makeWebContents() {
       return {

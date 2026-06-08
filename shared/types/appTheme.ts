@@ -4,5 +4,6 @@ export type {
   AppColorSchemeTokens,
   AppThemeConfig,
   AppThemeValidationWarning,
+  AppThemeWarningKind,
   ColorVisionMode,
 } from "../theme/index.js";

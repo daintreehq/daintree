@@ -2,6 +2,7 @@
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
+import { normalizeBrowserUrl } from "../browserUtils";
 import type { ViewportPresetId } from "@shared/types/panel";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -134,6 +135,57 @@ describe("BrowserToolbar handleSubmit", () => {
     expect(defaultProps.onReload).toHaveBeenCalledOnce();
     expect(defaultProps.onNavigate).not.toHaveBeenCalled();
   });
+
+  // #9941: with no validateUrl prop the toolbar stays strict (DevPreview policy),
+  // rejecting LAN hosts before onNavigate fires.
+  it("rejects a LAN host in strict default mode (no validateUrl)", () => {
+    const { getByTestId, container } = renderToolbar();
+    const input = openDropdown(getByTestId);
+
+    fireEvent.change(input, { target: { value: "192.168.1.10:3000" } });
+    fireEvent.submit(input.closest("form")!);
+
+    expect(defaultProps.onNavigate).not.toHaveBeenCalled();
+    expect(defaultProps.onReload).not.toHaveBeenCalled();
+    // The inline error banner renders, confirming the host was actively rejected
+    // rather than the submit silently no-op'ing.
+    expect(container.querySelector(".text-status-error")).not.toBeNull();
+  });
+
+  // #9941: a validateUrl prop lets BrowserPane inject its extended policy so the
+  // toolbar forwards LAN hosts instead of rejecting them inline.
+  it("forwards a LAN host when validateUrl supplies extended policy", () => {
+    const { getByTestId } = renderToolbar({
+      validateUrl: (value: string) => normalizeBrowserUrl(value, { allowedHosts: [] }),
+    });
+    const input = openDropdown(getByTestId);
+
+    fireEvent.change(input, { target: { value: "192.168.1.10:3000" } });
+    fireEvent.submit(input.closest("form")!);
+
+    expect(defaultProps.onNavigate).toHaveBeenCalledWith("http://192.168.1.10:3000/");
+    expect(defaultProps.onReload).not.toHaveBeenCalled();
+  });
+
+  // #9941: requiresConfirmation is not an error — the toolbar forwards the URL and
+  // lets BrowserPane.handleNavigate raise the approval banner.
+  it("forwards the URL when validateUrl returns requiresConfirmation", () => {
+    const validateUrl = vi.fn(() => ({
+      url: "http://tunnel.example.com/",
+      requiresConfirmation: true,
+      hostname: "tunnel.example.com",
+    }));
+    const { getByTestId } = renderToolbar({ validateUrl });
+    const input = openDropdown(getByTestId);
+
+    fireEvent.change(input, { target: { value: "tunnel.example.com" } });
+    fireEvent.submit(input.closest("form")!);
+
+    // validateUrl receives the edited input, not the current `url` prop.
+    expect(validateUrl).toHaveBeenCalledWith("tunnel.example.com");
+    expect(defaultProps.onNavigate).toHaveBeenCalledWith("http://tunnel.example.com/");
+    expect(defaultProps.onReload).not.toHaveBeenCalled();
+  });
 });
 
 describe("BrowserToolbar favicon and delete", () => {
@@ -259,6 +311,42 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(button).toBeTruthy();
   });
 
+  it("Open in browser button is exposed by accessible name", () => {
+    const { getByRole } = renderToolbar();
+    const button = getByRole("button", { name: "Open in browser" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(defaultProps.onOpenExternal).toHaveBeenCalledOnce();
+  });
+
+  it("screenshot button accessible name matches its visible tooltip (WCAG 2.5.3)", () => {
+    const onCaptureScreenshot = vi.fn();
+    const { getByRole, queryByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+    // The visible tooltip reads "Copy screenshot to clipboard"; the accessible
+    // name (aria-label) must contain it, so the stale "Capture screenshot" name
+    // must be gone.
+    expect(queryByRole("button", { name: "Capture screenshot" })).toBeNull();
+    const button = getByRole("button", { name: "Copy screenshot to clipboard" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+  });
+
+  it("screenshot button keeps its accessible name while disabled", () => {
+    const onCaptureScreenshot = vi.fn();
+    const { getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: false,
+    });
+    const button = getByRole("button", { name: "Copy screenshot to clipboard" });
+    expect(button).toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    expect(onCaptureScreenshot).not.toHaveBeenCalled();
+  });
+
   it("copy success announces in a polite live region", async () => {
     const { container, getByRole } = renderToolbar();
 
@@ -270,6 +358,25 @@ describe("BrowserToolbar ARIA semantics", () => {
       const liveRegions = container.querySelectorAll('[role="status"]');
       const texts = Array.from(liveRegions).map((node) => node.textContent);
       expect(texts).toContain("Copied to clipboard");
+    });
+  });
+
+  it("screenshot capture announces success in a polite live region and flips to a check", async () => {
+    const onCaptureScreenshot = vi.fn(() => Promise.resolve());
+    const { container, getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
+    });
+
+    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+    await waitFor(() => {
+      const liveRegions = container.querySelectorAll('[role="status"]');
+      const texts = Array.from(liveRegions).map((node) => node.textContent);
+      expect(texts).toContain("Screenshot copied to clipboard");
     });
   });
 
@@ -421,6 +528,29 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
     const reload = getByTestId("browser-reload");
     expect(reload.className).not.toContain("animate-spin");
   });
+
+  it("scheme icon is decorative and hidden from the accessibility tree", () => {
+    const lock = renderToolbar({ url: "https://example.com/" }).getByTestId(
+      "browser-url-scheme-lock"
+    );
+    expect(lock.getAttribute("aria-hidden")).toBe("true");
+
+    const globe = renderToolbar({ url: "http://localhost:3000/" }).getByTestId(
+      "browser-url-scheme-globe"
+    );
+    expect(globe.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("address bar exposes a focus-visible ring without suppressing the forced-colors outline", () => {
+    const { getByTestId } = renderToolbar();
+    const input = getByTestId("browser-address-bar");
+    // A focus-visible indicator must be present (the accent ring is the address bar's
+    // sole accent signal per CLAUDE.md) and outline-hidden must be preserved so the
+    // transparent forced-colors outline survives (lesson #6185 — never outline-none).
+    expect(input.className).toContain("focus-visible:outline-daintree-accent");
+    expect(input.className).toContain("focus:outline-hidden");
+    expect(input.className).not.toContain("outline-none");
+  });
 });
 
 describe("BrowserToolbar viewport presets", () => {
@@ -480,6 +610,31 @@ describe("BrowserToolbar viewport presets", () => {
 
       const galaxyRadio = document.querySelector('[data-viewport-preset-id="galaxy"]');
       expect(galaxyRadio!.getAttribute("aria-label")).toBe("Galaxy S25");
+    });
+  });
+
+  describe("armed-state styling", () => {
+    it("selected preset chip drives state via toolbar-icon-button + aria-checked, not a hardcoded fill", () => {
+      renderWithViewport();
+      const selected = document.querySelector('[data-viewport-preset-id="iphone"]')! as HTMLElement;
+      // The selected chip must participate in the theme-aware armed-state recipe
+      // (toolbar.css keys off .toolbar-icon-button[aria-checked="true"]) rather than
+      // hardcoding bg-overlay-emphasis, which reads as a dark smudge on light themes.
+      expect(selected.getAttribute("aria-checked")).toBe("true");
+      expect(selected.className).toContain("toolbar-icon-button");
+      expect(selected.className).not.toContain("bg-overlay-emphasis");
+    });
+
+    it("selected DPR chip uses the same armed-state contract", () => {
+      renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 2 });
+      const dprGroup = document.querySelector('[aria-label="Device pixel ratio"]')!;
+      const selected = Array.from(dprGroup.querySelectorAll('[role="radio"]')).find(
+        (r) => r.getAttribute("aria-checked") === "true"
+      ) as HTMLElement;
+      expect(selected).toBeTruthy();
+      expect(selected.getAttribute("data-dpr")).toBe("2");
+      expect(selected.className).toContain("toolbar-icon-button");
+      expect(selected.className).not.toContain("bg-overlay-emphasis");
     });
   });
 
@@ -715,6 +870,25 @@ describe("BrowserToolbar viewport presets", () => {
       expect(pixelRadio.getAttribute("tabindex")).toBe("0");
     });
 
+    it("keeps exactly one radio tabbable after ArrowRight (no transient dual tab stop)", () => {
+      // The roving-tabindex contract requires a single tab stop. Before the fix,
+      // the freshly focused chip AND the still-selected chip both reported
+      // tabIndex=0 until the parent rerendered with the new preset, briefly
+      // exposing two tab stops to keyboard/AT users.
+      renderWithViewport();
+      const iphoneRadio = document.querySelector(
+        '[data-viewport-preset-id="iphone"]'
+      )! as HTMLElement;
+
+      iphoneRadio.focus();
+      fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
+
+      const tabbable = Array.from(document.querySelectorAll('[role="radio"]')).filter(
+        (r) => r.getAttribute("tabindex") === "0"
+      );
+      expect(tabbable.length).toBe(1);
+    });
+
     it("ArrowRight on the focused radio activates the next preset immediately (APG automatic activation)", () => {
       renderWithViewport();
       const iphoneRadio = document.querySelector(
@@ -789,6 +963,57 @@ describe("BrowserToolbar viewport presets", () => {
       fireEvent.keyDown(iphoneRadio, { key: "ArrowRight" });
 
       expect(document.activeElement).toBe(pixelRadio);
+    });
+  });
+
+  describe("DPR radiogroup keyboard navigation", () => {
+    function renderWithDpr(overrides = {}) {
+      return renderWithViewport({ onViewportDprChange: vi.fn(), viewportDpr: 1, ...overrides });
+    }
+
+    function dprRadios() {
+      const group = document.querySelector('[aria-label="Device pixel ratio"]')!;
+      return Array.from(group.querySelectorAll('[role="radio"]')) as HTMLElement[];
+    }
+
+    it("renders a DPR radiogroup with one radio per ratio", () => {
+      renderWithDpr();
+      const radios = dprRadios();
+      expect(radios.map((r) => r.getAttribute("data-dpr"))).toEqual(["1", "2", "3"]);
+    });
+
+    it("ArrowRight moves focus to the next ratio and selection follows focus", () => {
+      const onViewportDprChange = vi.fn();
+      renderWithDpr({ onViewportDprChange });
+      const radios = dprRadios();
+
+      radios[0]!.focus();
+      fireEvent.keyDown(radios[0]!, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(radios[1]);
+      expect(onViewportDprChange).toHaveBeenCalledWith(2);
+    });
+
+    it("ArrowRight wraps from the last ratio back to the first", () => {
+      renderWithDpr({ viewportDpr: 3 });
+      const radios = dprRadios();
+
+      radios[2]!.focus();
+      fireEvent.keyDown(radios[2]!, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(radios[0]);
+    });
+
+    it("Home/End jump to the first and last ratios", () => {
+      renderWithDpr({ viewportDpr: 2 });
+      const radios = dprRadios();
+
+      radios[1]!.focus();
+      fireEvent.keyDown(radios[1]!, { key: "Home" });
+      expect(document.activeElement).toBe(radios[0]);
+
+      fireEvent.keyDown(radios[0]!, { key: "End" });
+      expect(document.activeElement).toBe(radios[2]);
     });
   });
 });

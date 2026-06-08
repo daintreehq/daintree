@@ -20,6 +20,7 @@ describe("PtyManager Activity Tier", () => {
 
       const terminal = manager.getTerminal(id);
       expect(terminal).toBeDefined();
+      expect(manager.getActivityTier(id)).toBe("active");
     });
 
     it("should accept setActivityTier calls without error", async () => {
@@ -32,8 +33,33 @@ describe("PtyManager Activity Tier", () => {
       expect(terminal).toBeDefined();
 
       // ActivityMonitor tier can be changed
-      expect(() => manager.setActivityMonitorTier(id, 500)).not.toThrow();
-      expect(() => manager.setActivityMonitorTier(id, 50)).not.toThrow();
+      expect(() => manager.setActivityMonitorTier(id, "background", 500)).not.toThrow();
+      expect(() => manager.setActivityMonitorTier(id, "active", 50)).not.toThrow();
+    });
+
+    it("should store the explicit tier, not derive it from the polling interval", async () => {
+      const id = await spawnShellTerminal(manager);
+      await sleep(200);
+
+      // Issue #9911: VISIBLE-unfocused panes send ("active", 200ms). The old
+      // code derived tier from interval <= 50, misclassifying this as background.
+      manager.setActivityMonitorTier(id, "active", 200);
+      expect(manager.getActivityTier(id)).toBe("active");
+
+      manager.setActivityMonitorTier(id, "background", 500);
+      expect(manager.getActivityTier(id)).toBe("background");
+
+      manager.setActivityMonitorTier(id, "active", 50);
+      expect(manager.getActivityTier(id)).toBe("active");
+
+      // Inversion of the original bug: a 50ms interval must not force "active".
+      manager.setActivityMonitorTier(id, "background", 50);
+      expect(manager.getActivityTier(id)).toBe("background");
+    });
+
+    it("should no-op for an unknown terminal id", () => {
+      expect(() => manager.setActivityMonitorTier("nonexistent", "active", 200)).not.toThrow();
+      expect(manager.getActivityTier("nonexistent")).toBeUndefined();
     });
   });
 
@@ -46,10 +72,10 @@ describe("PtyManager Activity Tier", () => {
       expect(terminal).toBeDefined();
 
       // Change to background tier polling (500ms)
-      manager.setActivityMonitorTier(id, 500);
+      manager.setActivityMonitorTier(id, "background", 500);
 
       // Change to active tier polling (50ms)
-      manager.setActivityMonitorTier(id, 50);
+      manager.setActivityMonitorTier(id, "active", 50);
 
       // Verify terminal is still functioning
       await sleep(100);
@@ -62,8 +88,8 @@ describe("PtyManager Activity Tier", () => {
 
       // Rapid tier changes should be safe
       for (let i = 0; i < 5; i++) {
-        manager.setActivityMonitorTier(id, 500);
-        manager.setActivityMonitorTier(id, 50);
+        manager.setActivityMonitorTier(id, "background", 500);
+        manager.setActivityMonitorTier(id, "active", 50);
       }
 
       await sleep(100);
@@ -80,7 +106,7 @@ describe("PtyManager Activity Tier", () => {
       expect(terminal).toBeDefined();
 
       // Set to background tier
-      manager.setActivityMonitorTier(id, 500);
+      manager.setActivityMonitorTier(id, "background", 500);
 
       // Kill terminal
       manager.kill(id);

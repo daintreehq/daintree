@@ -141,6 +141,60 @@ describe("portalStore", () => {
     expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
   });
 
+  it("does not show the next active tab over an open overlay after a close", async () => {
+    vi.mocked(document.getElementById).mockReturnValue({
+      getBoundingClientRect: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+    } as HTMLElement);
+
+    usePortalStore.setState({
+      isOpen: true,
+      tabs: [
+        { id: "tab-1", title: "One", url: "https://example.com/1" },
+        { id: "tab-2", title: "Two", url: "https://example.com/2" },
+      ],
+      activeTabId: "tab-1",
+      createdTabs: new Set<string>(["tab-1", "tab-2"]),
+    });
+    useUIStore.getState().addOverlayClaim("settings");
+
+    usePortalStore.getState().closeTab("tab-1");
+    await vi.runAllTimersAsync();
+
+    // The tab still becomes active in the store; only the WebContentsView show is suppressed.
+    expect(usePortalStore.getState().activeTabId).toBe("tab-2");
+    expect(window.electron.portal.show).not.toHaveBeenCalled();
+
+    useUIStore.setState({ overlayStack: [] });
+  });
+
+  it("shows the next active tab when the overlay clears before restore runs", async () => {
+    vi.mocked(document.getElementById).mockReturnValue({
+      getBoundingClientRect: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+    } as HTMLElement);
+
+    usePortalStore.setState({
+      isOpen: true,
+      tabs: [
+        { id: "tab-1", title: "One", url: "https://example.com/1" },
+        { id: "tab-2", title: "Two", url: "https://example.com/2" },
+      ],
+      activeTabId: "tab-1",
+      createdTabs: new Set<string>(["tab-1", "tab-2"]),
+    });
+    useUIStore.getState().addOverlayClaim("settings");
+
+    usePortalStore.getState().closeTab("tab-1");
+    // Overlay clears before the deferred restore macro-task runs — the guard reads
+    // state at show-time, so the show proceeds.
+    useUIStore.setState({ overlayStack: [] });
+    await vi.runAllTimersAsync();
+
+    expect(window.electron.portal.show).toHaveBeenCalledWith({
+      tabId: "tab-2",
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+    });
+  });
+
   describe("width clamping", () => {
     it("clamps width below minimum to PORTAL_MIN_WIDTH", () => {
       usePortalStore.getState().setWidth(PORTAL_MIN_WIDTH - 1);
@@ -437,7 +491,125 @@ describe("portalStore persistence migration", () => {
 
     const { usePortalStore: store } = await import("../portalStore");
 
+    const tabs = store.getState().tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).not.toBeNull();
+    expect(tabs[0]?.id).toBe("tab-keep");
     expect(store.getState().activeTabId).toBe("tab-keep");
+  });
+
+  it("strips non-object, missing-field, and wrong-type tab entries from persisted state", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [
+          null,
+          "string-not-an-object",
+          42,
+          { title: "no-id", url: "https://example.com" },
+          { id: "no-title", url: "https://example.com" },
+          { id: 7, title: "wrong-id-type" },
+          { id: "wrong-url", title: "Wrong url", url: 5 },
+          { id: "wrong-icon", title: "Wrong icon", url: null, icon: 9 },
+          { id: "wrong-partition", title: "Wrong partition", url: null, partition: 7 },
+          { id: "tab-good", title: "Good", url: "https://example.com" },
+        ],
+        activeTabId: "tab-good",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const tabs = store.getState().tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]?.id).toBe("tab-good");
+    expect(store.getState().activeTabId).toBe("tab-good");
+  });
+
+  it("preserves valid optional fields through rehydration", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [
+          {
+            id: "tab-rich",
+            title: "Rich",
+            url: "https://example.com",
+            favicon: "https://example.com/favicon.ico",
+            icon: "globe",
+            partition: "persist:dev-preview-1",
+          },
+        ],
+        activeTabId: "tab-rich",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    const tab = store.getState().tabs[0];
+    expect(tab?.favicon).toBe("https://example.com/favicon.ico");
+    expect(tab?.icon).toBe("globe");
+    expect(tab?.partition).toBe("persist:dev-preview-1");
+  });
+
+  it("falls back to the first surviving tab when activeTabId points to a filtered entry", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [
+          { id: "tab-junk", title: "Junk" },
+          null,
+          { id: "tab-good", title: "Good", url: "https://example.com" },
+        ],
+        activeTabId: "tab-junk",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().activeTabId).toBe("tab-good");
+    expect(store.getState().tabs.map((t) => t.id)).toEqual(["tab-good"]);
+  });
+
+  it("clears tabs and activeTabId when every persisted tab fails shape validation", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        tabs: [null, { title: "no-id" }, { id: 5 }],
+        activeTabId: "anything",
+        links: [],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    expect(store.getState().tabs).toEqual([]);
+    expect(store.getState().activeTabId).toBeNull();
+  });
+
+  it("does not crash when persisted links contains a null entry", async () => {
+    const persistedBlob = JSON.stringify({
+      version: 0,
+      state: {
+        links: [null, "string-not-an-object", 42],
+        tabs: [{ id: "tab-1", title: "One", url: "https://example.com" }],
+        activeTabId: "tab-1",
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+
+    // Survived the rehydration with usable defaults; no throw on first l.id access.
+    expect(Array.isArray(store.getState().links)).toBe(true);
+    expect(store.getState().tabs[0]?.id).toBe("tab-1");
   });
 
   it("falls back to currentState.tabs when persisted tabs is non-array", async () => {

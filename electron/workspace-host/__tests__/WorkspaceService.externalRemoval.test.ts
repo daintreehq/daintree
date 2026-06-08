@@ -664,6 +664,149 @@ describe("WorkspaceService external worktree removal", () => {
     });
   });
 
+  describe("topology-watcher dark state (#9908)", () => {
+    function darkEventCount(): number {
+      return mockSendEvent.mock.calls.filter(
+        ([e]) => (e as { type?: string })?.type === "topology-watcher-dark"
+      ).length;
+    }
+    function recoveredEventCount(): number {
+      return mockSendEvent.mock.calls.filter(
+        ([e]) => (e as { type?: string })?.type === "topology-watcher-recovered"
+      ).length;
+    }
+
+    beforeEach(() => {
+      mockGetGitCommonDir.mockReturnValue("/test/root/.git");
+      parcelWatcherCallbacks.length = 0;
+      mockParcelSubscribe.mockClear();
+    });
+
+    it("emits topology-watcher-dark when subscribe() rejects at cold start", async () => {
+      mockParcelSubscribe.mockReturnValueOnce(Promise.reject(new Error("EPERM")));
+
+      service["startTopologyWatcher"]();
+
+      await vi.waitFor(() => expect(darkEventCount()).toBe(1));
+      expect(service.isTopologyWatcherDark()).toBe(true);
+    });
+
+    it("emits the dark event at most once while already dark", async () => {
+      mockParcelSubscribe.mockReturnValueOnce(Promise.reject(new Error("EPERM")));
+      service["startTopologyWatcher"]();
+      await vi.waitFor(() => expect(darkEventCount()).toBe(1));
+
+      // A second independent dark trigger (safety-valve expiry path) must not
+      // re-assert the signal — the one-shot guard suppresses it.
+      service["handleTopologyWatcherDark"]();
+      expect(darkEventCount()).toBe(1);
+      expect(service.isTopologyWatcherDark()).toBe(true);
+    });
+
+    it("emits topology-watcher-dark when a pending-event safety valve expires", async () => {
+      vi.useFakeTimers();
+      try {
+        // The watcher missed the event our own op produced: the 5s valve fires.
+        service["topologyMarkPending"]("missed-wt", service["topologyPendingCreate"]);
+        expect(darkEventCount()).toBe(0);
+
+        await vi.advanceTimersByTimeAsync(5001);
+
+        expect(darkEventCount()).toBe(1);
+        expect(service.isTopologyWatcherDark()).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clears the dark state on a successful runTopologyReconcile and emits recovered", async () => {
+      vi.spyOn(service as any, "discoverAndSyncWorktrees").mockResolvedValue(undefined);
+      service["handleTopologyWatcherDark"]();
+      expect(service.isTopologyWatcherDark()).toBe(true);
+
+      await service["runTopologyReconcile"]();
+
+      expect(service.isTopologyWatcherDark()).toBe(false);
+      expect(recoveredEventCount()).toBe(1);
+    });
+
+    it("does not emit recovered from a reconcile when never dark", async () => {
+      vi.spyOn(service as any, "discoverAndSyncWorktrees").mockResolvedValue(undefined);
+
+      await service["runTopologyReconcile"]();
+
+      expect(recoveredEventCount()).toBe(0);
+      expect(service.isTopologyWatcherDark()).toBe(false);
+    });
+
+    it("does NOT recover on watcher re-arm — only a reconcile clears the dark state", async () => {
+      mockParcelSubscribe.mockReturnValueOnce(Promise.reject(new Error("EPERM")));
+      service["startTopologyWatcher"]();
+      await vi.waitFor(() => expect(service.isTopologyWatcherDark()).toBe(true));
+
+      // The watcher re-subscribes successfully (default mock resolves). A live
+      // subscription does NOT prove the topology is current (#8516/#8558), so
+      // the dark state must persist until a reconcile verifies it.
+      service["startTopologyWatcher"]();
+      await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalledTimes(2));
+
+      expect(service.isTopologyWatcherDark()).toBe(true);
+      expect(recoveredEventCount()).toBe(0);
+    });
+
+    it("emits recovered on stopTopologyWatcher while dark so the renderer can clear", async () => {
+      service["handleTopologyWatcherDark"]();
+      expect(service.isTopologyWatcherDark()).toBe(true);
+
+      service["stopTopologyWatcher"]();
+
+      expect(service.isTopologyWatcherDark()).toBe(false);
+      expect(recoveredEventCount()).toBe(1);
+    });
+
+    it("does not emit recovered on stopTopologyWatcher when not dark", () => {
+      service["stopTopologyWatcher"]();
+      expect(recoveredEventCount()).toBe(0);
+    });
+
+    it("goes dark when the watcher callback reports a runtime error", async () => {
+      service["startTopologyWatcher"]();
+      await vi.waitFor(() => expect(parcelWatcherCallbacks.length).toBeGreaterThanOrEqual(1));
+
+      // An established subscription firing an error callback is as unreliable
+      // as a failed subscribe — surface the dark state.
+      parcelWatcherCallbacks.at(-1)!(new Error("watcher backend error"), []);
+
+      expect(darkEventCount()).toBe(1);
+      expect(service.isTopologyWatcherDark()).toBe(true);
+    });
+
+    it("can re-dark after a stop/resume cycle clears the guard", async () => {
+      vi.useFakeTimers();
+      try {
+        service["handleTopologyWatcherDark"]();
+        expect(darkEventCount()).toBe(1);
+
+        // Stop clears the guard (emits recovered); a fresh valve expiry after
+        // resume must be able to signal dark again.
+        service["stopTopologyWatcher"]();
+        expect(service.isTopologyWatcherDark()).toBe(false);
+
+        service["topologyMarkPending"]("again-wt", service["topologyPendingDelete"]);
+        await vi.advanceTimersByTimeAsync(5001);
+
+        expect(darkEventCount()).toBe(2);
+        expect(service.isTopologyWatcherDark()).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("isTopologyWatcherDark() defaults to false", () => {
+      expect(service.isTopologyWatcherDark()).toBe(false);
+    });
+  });
+
   describe("periodic safety-net timer (#8510)", () => {
     it("calls scheduleTopologyReconcile on each interval tick", async () => {
       vi.useFakeTimers();

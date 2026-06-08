@@ -4,6 +4,7 @@ import {
   Command,
   FileCode,
   GitBranch,
+  History,
   LayoutGrid,
   Mic,
   Package,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
 
@@ -97,6 +99,7 @@ const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
+const importRunHistorySettingsTab = () => import("./RunHistorySettingsTab");
 const importPluginsTab = () => import("./PluginsTab");
 const importDaintreeAssistantSettingsTab = () => import("./DaintreeAssistantSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
@@ -153,6 +156,9 @@ const LazyMcpServerSettingsTab = lazy(() =>
 );
 const LazyPluginActionsSettingsTab = lazy(() =>
   importPluginActionsSettingsTab().then((m) => ({ default: m.PluginActionsSettingsTab }))
+);
+const LazyRunHistorySettingsTab = lazy(() =>
+  importRunHistorySettingsTab().then((m) => ({ default: m.RunHistorySettingsTab }))
 );
 const LazyPluginsTab = lazy(() => importPluginsTab().then((m) => ({ default: m.PluginsTab })));
 const LazyDaintreeAssistantSettingsTab = lazy(() =>
@@ -1061,7 +1067,7 @@ export const SETTINGS_REGISTRY = [
     sections: [
       {
         id: "github-token",
-        subtab: "github",
+        subtab: BUILTIN_GITHUB_PROVIDER_ID,
         subtabLabel: "GitHub",
         section: "Personal access token",
         title: "GitHub personal access token",
@@ -1414,6 +1420,50 @@ export const SETTINGS_REGISTRY = [
         description:
           "Append a structured audit record each time an installed plugin dispatches an action. Arguments are hashed by default.",
         keywords: ["plugin", "audit", "log", "record", "actions", "dispatch", "hash", "privacy"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
+    id: "run-history",
+    scope: "global",
+    group: "Integrations",
+    label: "Run history",
+    headerTitle: "Run history",
+    icon: <History className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importRunHistorySettingsTab,
+    LazyComponent: LazyRunHistorySettingsTab,
+    searchNavDescription: "Durable history of recipe runs and fleet broadcasts",
+    searchNavKeywords: [
+      "integrations",
+      "run",
+      "history",
+      "recipe",
+      "fleet",
+      "broadcast",
+      "automation",
+      "outcome",
+      "audit",
+    ],
+    sections: [
+      {
+        id: "run-history-log",
+        section: "Run history",
+        title: "Run history",
+        description:
+          "Review each recipe run and fleet broadcast, including spawned terminals, targets, and failures. Clear the log at any time.",
+        keywords: [
+          "run",
+          "history",
+          "recipe",
+          "fleet",
+          "broadcast",
+          "automation",
+          "outcome",
+          "spawned",
+          "clear",
+        ],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -1821,6 +1871,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,
+  "run-history": <History className="w-5 h-5 text-text-secondary" />,
   environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
   privacy: <Shield className="w-5 h-5 text-text-secondary" />,
   troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,

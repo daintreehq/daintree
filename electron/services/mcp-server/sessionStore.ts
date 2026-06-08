@@ -113,6 +113,12 @@ export class SessionStore {
   // per-connection id, so this is the join that lets audit records and
   // turn-id lookups correlate back to the help session the user sees.
   readonly sessionHelpIdMap = new Map<string, string>();
+  // Public help-session id → count of figures emitted by `help.displayImage`
+  // (#9828). Keyed by the public help-session id (NOT the transport sessionId)
+  // so the sequence survives a transport reconnect within one conversation.
+  // Torn down when the help session's transport is reaped, by capturing the
+  // public id from `sessionHelpIdMap` BEFORE that map entry is deleted.
+  readonly figureCounters = new Map<string, number>();
   readonly resourceSubscriptions = new Map<string, Map<string, () => void>>();
   // Per-session idempotency dedup state for the MCP creation-tool allowlist.
   // Two phases: in-flight singleflight (same-moment duplicates share the
@@ -277,6 +283,33 @@ export class SessionStore {
     this.rateLimitBuckets.delete(sessionId);
   }
 
+  /**
+   * Assign the next sequential figure number for a help session and advance
+   * the counter (#9828). First call for a session returns 1. Keyed by the
+   * public help-session id so the sequence is stable across transport
+   * reconnects within one conversation — the model never picks its own number.
+   */
+  nextFigureNumber(helpSessionId: string): number {
+    const next = (this.figureCounters.get(helpSessionId) ?? 0) + 1;
+    this.figureCounters.set(helpSessionId, next);
+    return next;
+  }
+
+  /**
+   * Drop a help session's figure counter. Resolve the public help-session id
+   * from {@link sessionHelpIdMap} BEFORE that entry is deleted, since the
+   * counter is keyed by the public id, not the transport sessionId. Public so
+   * the inline `transport.onclose` / connect-failure cleanup closures in
+   * `httpLifecycle` can tear it down on a normal disconnect, in lockstep with
+   * the other per-session maps (mirrors {@link clearClientMetadata}).
+   */
+  clearFigureCounter(sessionId: string): void {
+    const helpSessionId = this.sessionHelpIdMap.get(sessionId);
+    if (helpSessionId !== undefined) {
+      this.figureCounters.delete(helpSessionId);
+    }
+  }
+
   private expireSseSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -289,6 +322,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-idle");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
@@ -346,6 +380,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-idle");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
@@ -569,6 +604,57 @@ export class SessionStore {
     return this.sessionTierMap.get(sessionId) ?? "workbench";
   }
 
+  /**
+   * Snapshot the live tier and per-tool grants for a help session, addressed
+   * by its *public* help-session id (the one persisted in the renderer's
+   * `helpPanelStore`, NOT the per-connection MCP transport sessionId that keys
+   * these maps). Resolves the transport sessionId through {@link sessionHelpIdMap}
+   * before reading the tier/grant state.
+   *
+   * Caller-pinned: returns `null` unless `callerWebContentsId` matches the
+   * WebContents the session was pinned to at handshake — mirrors the
+   * cross-window forgery defence on `setSessionTier`/`issueGrant`, so a renderer
+   * can only ever read its own session's live status. Also returns `null` when
+   * no live transport exists for the help id (session never connected, idled
+   * out, or was revoked) so the caller renders a "no live session" state rather
+   * than a stale snapshot.
+   */
+  getLiveStatusForHelpSession(
+    helpSessionId: string,
+    callerWebContentsId: number
+  ): {
+    tier: McpTier;
+    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
+  } | null {
+    if (!helpSessionId) return null;
+    for (const [transportSessionId, mappedHelpId] of this.sessionHelpIdMap) {
+      if (mappedHelpId !== helpSessionId) continue;
+      // Caller-pin: only the renderer the session was pinned to may read it.
+      // `continue` (not `return null`) so a stale reconnect mapping pinned to a
+      // different WebContents iterated first can't mask the caller's own live
+      // transport — keep scanning, and only fail closed once nothing matches.
+      if (this.sessionWebContentsMap.get(transportSessionId) !== callerWebContentsId) {
+        continue;
+      }
+      // The tier map can briefly outlive the transport during teardown; require
+      // a live transport so a decaying session never reports as connected.
+      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
+        continue;
+      }
+      // getActiveGrants is lazy-eviction only — a grant past expiresAt can
+      // linger until the periodic sweep (~5min). Filter those out so the
+      // snapshot never reports a logically-expired grant as active; the next
+      // sweep's `grant.expired` push will reconcile the renderer anyway.
+      const now = Date.now();
+      const activeGrants = this.grantCache
+        .getActiveGrants(transportSessionId)
+        .filter((g) => g.expiresAt > now)
+        .map((g) => ({ toolId: g.toolId, expiresAt: g.expiresAt, ttlMs: g.ttlMs }));
+      return { tier: this.getTier(transportSessionId), activeGrants };
+    }
+    return null;
+  }
+
   revokeSession(sessionId: string): boolean {
     const sseSession = this.sessions.get(sessionId);
     const httpSession = this.httpSessions.get(sessionId);
@@ -595,6 +681,7 @@ export class SessionStore {
     this.grantCache.revokeSession(sessionId, "session-ended");
     this.sessionWebContentsMap.delete(sessionId);
     this.sessionContextMap.delete(sessionId);
+    this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
     this.clearRateLimitState(sessionId);
@@ -650,6 +737,7 @@ export class SessionStore {
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
     this.sessionHelpIdMap.clear();
+    this.figureCounters.clear();
     this.sessionConnectedAtMs.clear();
     this.sessionUserAgent.clear();
     this.sessionTransport.clear();

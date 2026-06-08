@@ -21,12 +21,15 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { projectClient, terminalClient } from "@/clients";
-import { broadcastFleetLiteralPaste } from "@/components/Fleet/fleetExecution";
+import { filterEligibleIds } from "@/components/Fleet/fleetExecution";
+import { runManagedFleetBroadcast } from "@/components/Fleet/fleetEnterBroadcast";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { FleetSavedScope } from "@shared/types";
+import type { FleetSavedScope, ProjectSettings } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
+
+const FLEET_USAGE_HISTORY_CAP = 20;
 
 interface ArmedSnapshot {
   terminalTargets: PtyPanelData[];
@@ -339,9 +342,23 @@ export function registerFleetActions(actions: ActionRegistry): void {
       if (payload == null || failedIds.size === 0) return;
       // Snapshot once — `failedIds` mutates as dismissId fires inside the loop.
       const targets = Array.from(failedIds);
+      // Re-check eligibility at dispatch time: a pane that died or was trashed
+      // since the failure was recorded must not receive bytes. The primary
+      // broadcast gates this in its caller (tryFleetBroadcastFromEditor), not
+      // inside executeFleetBroadcast — so the retry path owns the filter too.
+      const eligibleTargets = filterEligibleIds(targets);
+      if (eligibleTargets.length === 0) return;
       retryInFlight = true;
       try {
-        const result = await broadcastFleetLiteralPaste(payload, targets);
+        // The stored payload is already fully substituted (it's the verbatim
+        // literal the user originally broadcast), so route it through
+        // perTargetOverrides to bypass executeFleetBroadcast's recipe-variable
+        // substitution — the empty draft is never resolved when every target
+        // has an override. `runManagedFleetBroadcast` runs it through the shared
+        // single-flight controller so the retry gains batching, progress, and a
+        // working ribbon Cancel button just like the primary Enter path.
+        const perTargetOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, payload]));
+        const result = await runManagedFleetBroadcast("", eligibleTargets, perTargetOverrides);
         // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
         // keep firing into the same dead pipes. The retry chip clears for them
         // too — the user already saw them once; surfacing the same id again
@@ -438,18 +455,36 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const newScope = buildSavedScope(parsed);
       if (!newScope) return;
       try {
-        const current = await projectClient.getSettings(projectId);
+        // Capture the pre-append snapshot so a failed save can roll the
+        // in-memory append back — otherwise the dropdown would show a
+        // phantom fleet the user can't recall across restarts.
+        const previousSettings =
+          useProjectSettingsStore.getState().projectId === projectId
+            ? useProjectSettingsStore.getState().settings
+            : null;
+        // Append atomically against the in-memory store so a near-simultaneous
+        // recall's lastUsedAt stamp is not clobbered. The naive
+        // getSettings-read-then-save pattern dropped concurrent stamps when
+        // recall's fire-and-forget save landed after our await. Falls back to
+        // an IPC read only when the in-memory store hasn't been hydrated for
+        // this project (cold-start case).
+        const nextSettings = await appendFleetScopeInMemory(projectId, newScope);
         if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        const next: FleetSavedScope[] = [...(current.fleetSavedScopes ?? []), newScope];
-        const nextSettings = { ...current, fleetSavedScopes: next };
-        await projectClient.saveSettings(projectId, nextSettings);
-        if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        // Write-through: the SavedFleetsSection reads from useProjectSettingsStore,
-        // so the row only appears if the in-memory cache is updated. Without
-        // this the user clicks Save, the disk write succeeds, but no row shows.
-        if (useProjectSettingsStore.getState().projectId === projectId) {
-          useProjectSettingsStore.getState().setSettings(nextSettings);
+        try {
+          await projectClient.saveSettings(projectId, nextSettings);
+        } catch (saveError) {
+          // Roll back the in-memory append so the user doesn't see a row
+          // that won't be on disk after a reload.
+          if (previousSettings && useProjectSettingsStore.getState().projectId === projectId) {
+            useProjectSettingsStore.setState({ settings: previousSettings });
+          }
+          throw saveError;
         }
+        // In-memory was already updated by `appendFleetScopeInMemory` (which
+        // also runs the detectedRunners filter inside `setSettings`). Do NOT
+        // call `setSettings(nextSettings)` here — that would overwrite a
+        // concurrent recall's stamp that landed on the in-memory store
+        // between the append and the await above.
         notify({
           type: "success",
           message: `Saved fleet "${newScope.name}"`,
@@ -482,23 +517,16 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const projectId = useProjectStore.getState().currentProject?.id ?? null;
       if (!projectId) return;
       try {
-        const current = await projectClient.getSettings(projectId);
-        if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        const scope = (current.fleetSavedScopes ?? []).find((s) => s.id === id);
+        // Read the scope from the in-memory store first so two near-simultaneous
+        // recalls see a consistent snapshot, and so the subsequent stamp lands
+        // on a write that the concurrent caller can't have clobbered before
+        // reading. Falls back to a one-shot IPC read on cold start.
+        const scope = await findFleetScope(projectId, id);
         if (!scope) return;
         applySavedScope(scope);
 
         const now = Date.now();
-        scope.lastUsedAt = now;
-        scope.usageHistory = [...(scope.usageHistory ?? []), now].slice(-20);
-
-        if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        projectClient.saveSettings(projectId, current).catch((err) => {
-          console.warn("Failed to persist fleet recency stamp:", err);
-        });
-        if (useProjectSettingsStore.getState().projectId === projectId) {
-          useProjectSettingsStore.getState().setSettings(current);
-        }
+        stampFleetUsageInMemory(projectId, id, now);
       } catch (error) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
@@ -613,6 +641,99 @@ function applySavedScope(scope: FleetSavedScope): void {
     return;
   }
   fleet.armByState(scope.stateFilter as FleetArmStatePreset, scope.scope, false);
+}
+
+/**
+ * Locate a saved scope in the in-memory project-settings store, falling
+ * back to a one-shot IPC read when the store hasn't been hydrated for the
+ * active project (cold-start case — the dropdown that triggers recall is
+ * itself gated on the store being loaded, so this branch is rare).
+ */
+async function findFleetScope(projectId: string, scopeId: string): Promise<FleetSavedScope | null> {
+  const store = useProjectSettingsStore.getState();
+  if (store.projectId === projectId && store.settings) {
+    return (store.settings.fleetSavedScopes ?? []).find((s) => s.id === scopeId) ?? null;
+  }
+  const current = await projectClient.getSettings(projectId);
+  if (useProjectStore.getState().currentProject?.id !== projectId) return null;
+  // Hydrate the in-memory store so subsequent operations (the stamp below)
+  // can use the in-memory path. The project-switch check above guarantees
+  // we just fetched the right project's settings, so it's safe to write.
+  useProjectSettingsStore.setState({
+    projectId,
+    settings: current,
+  });
+  return (current.fleetSavedScopes ?? []).find((s) => s.id === scopeId) ?? null;
+}
+
+/**
+ * Append a new scope to the in-memory project-settings store atomically,
+ * returning the full settings object the caller should persist. Operates
+ * on the freshest in-memory snapshot via `setState((state) => ...)` so
+ * a concurrent recall's `lastUsedAt` stamp on a different scope is not
+ * clobbered. On cold start (in-memory store unhydrated) does an IPC read
+ * to fetch the current fleetSavedScopes from disk — this loses the
+ * in-memory race guarantee, but the dropdown that triggers the action
+ * requires a loaded store to be visible, so in practice this branch is
+ * rare. Throws when the project switches mid-IPC; the caller's catch
+ * surfaces the error to the user.
+ */
+async function appendFleetScopeInMemory(
+  projectId: string,
+  newScope: FleetSavedScope
+): Promise<ProjectSettings> {
+  const store = useProjectSettingsStore.getState();
+  if (store.projectId === projectId && store.settings) {
+    let next: ProjectSettings | null = null;
+    useProjectSettingsStore.setState((state) => {
+      if (!state.settings) return {};
+      const merged = [...(state.settings.fleetSavedScopes ?? []), newScope];
+      next = { ...state.settings, fleetSavedScopes: merged };
+      return { settings: next };
+    });
+    if (next) return next;
+  }
+  const current = await projectClient.getSettings(projectId);
+  if (useProjectStore.getState().currentProject?.id !== projectId) {
+    throw new Error("Project switched mid-IPC");
+  }
+  const merged = [...(current.fleetSavedScopes ?? []), newScope];
+  const nextSettings = { ...current, fleetSavedScopes: merged };
+  useProjectSettingsStore.setState({
+    projectId,
+    settings: nextSettings,
+  });
+  return nextSettings;
+}
+
+/**
+ * Stamp `lastUsedAt` and append to `usageHistory` (capped) on a single
+ * scope, atomically against the in-memory store. The persist call reads
+ * the freshest in-memory snapshot, so any other in-flight append (a
+ * concurrent save) is preserved in the persisted history rather than
+ * dropped. Persist is fire-and-forget: the in-memory store is the source
+ * of truth for the UI, and the next project switch / save reconciles disk.
+ */
+function stampFleetUsageInMemory(projectId: string, scopeId: string, now: number): void {
+  let snapshot: ProjectSettings | null = null;
+  useProjectSettingsStore.setState((state) => {
+    if (!state.settings || state.projectId !== projectId) return {};
+    const nextScopes = (state.settings.fleetSavedScopes ?? []).map((s) => {
+      if (s.id !== scopeId) return s;
+      return {
+        ...s,
+        lastUsedAt: now,
+        usageHistory: [...(s.usageHistory ?? []), now].slice(-FLEET_USAGE_HISTORY_CAP),
+      };
+    });
+    snapshot = { ...state.settings, fleetSavedScopes: nextScopes };
+    return { settings: snapshot };
+  });
+  if (snapshot) {
+    projectClient.saveSettings(projectId, snapshot).catch((err) => {
+      console.warn("Failed to persist fleet recency stamp:", err);
+    });
+  }
 }
 
 function generateScopeId(): string {

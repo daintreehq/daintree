@@ -123,9 +123,18 @@ export interface McpAuditRecord {
    * Redacted, bounded (1500-char) pretty-printed JSON of what the call
    * returned — or the error code + message for failed dispatches. Lets the
    * recent-calls popover show each call's actual output. Absent for gate
-   * outcomes (unauthorized/dedup/collision/rate-limit) and old records.
+   * outcomes (unauthorized / dedup / collision) and old records. For
+   * `rate_limited` the wait time travels in `resultMeta.retryAfter` (#10014).
    */
   resultSummary?: string;
+  /**
+   * Renderer-presented hints for gate outcomes that carry a meaningful
+   * parameter the `result` label can't capture on its own. Currently set
+   * only for `rate_limited` (`retryAfter`, integer seconds from the
+   * `MCP_RATE_LIMITED_CODE` error). Absent on every other result, and on
+   * old records written before the field existed (#10014).
+   */
+  resultMeta?: { retryAfter?: number };
   result: McpAuditResult;
   errorCode?: string;
   durationMs: number;
@@ -244,6 +253,45 @@ export interface McpGrantRecord {
 export type McpLogRecord = McpAuditRecord | McpGrantRecord;
 
 /**
+ * Runtime guard for the `type` discriminator on `McpGrantRecord`. The check
+ * is intentionally the same as the main-process filter at
+ * `electron/services/mcp-server/auditLog.ts` so renderer consumers and the
+ * ring-buffer filter cannot drift on what counts as a grant record. The
+ * legacy on-disk shape (no `type` field on `McpAuditRecord`) is load-bearing;
+ * the discriminator must be a member of the literal `McpGrantRecordType`
+ * union — a stringly-typed `type: "dispatch"` (or any other unknown
+ * discriminator) on a hydrated dispatch record would otherwise be silently
+ * reclassified as a grant and misrendered in the viewer (#10027).
+ */
+const GRANT_RECORD_TYPES: ReadonlySet<McpGrantRecordType> = new Set([
+  "grant.issued",
+  "grant.expired",
+  "grant.revoked",
+  "tier.elevated",
+  "tier.decayed",
+]);
+
+export function isGrantRecord(record: McpLogRecord): record is McpGrantRecord {
+  return (
+    typeof record === "object" &&
+    record !== null &&
+    "type" in record &&
+    typeof (record as { type: unknown }).type === "string" &&
+    GRANT_RECORD_TYPES.has((record as { type: string }).type as McpGrantRecordType)
+  );
+}
+
+/**
+ * Inverse of {@link isGrantRecord} — narrows to `McpAuditRecord` by
+ * complement. Kept as a positive form so consumers can call it at the
+ * prop boundary without writing `!isGrantRecord(r)` and reasoning about
+ * the legacy no-`type` invariant at every site.
+ */
+export function isAuditRecord(record: McpLogRecord): record is McpAuditRecord {
+  return !isGrantRecord(record);
+}
+
+/**
  * Live event payload broadcast to the pinned renderer for a grant
  * transition. Mirrors `McpGrantRecord` because renderers want the same
  * fields they'd see in the audit log. Send is targeted (never broadcast)
@@ -294,6 +342,49 @@ export interface McpToolCallSettledPayload {
   result: McpAuditResult;
   errorCode?: string;
   severity: McpAuditSeverity;
+  turnId?: string;
+}
+
+/**
+ * Live event emitted when the assistant invokes the `help.displayImage` MCP
+ * tool (#9828). The main process validates the URL against the daintree.org
+ * allowlist and assigns `figureNumber` sequentially per help session, so the
+ * model never picks its own number. The renderer keys figures by `imageId`
+ * and references them inline as `[image #<figureNumber>]`. Send is targeted at
+ * the pinned WebContents, never broadcast.
+ */
+export interface McpHelpDisplayImagePayload {
+  sessionId: string;
+  imageId: string;
+  figureNumber: number;
+  figureLabel: string;
+  url: string;
+  caption?: string;
+  altText?: string;
+}
+
+/**
+ * The subset of {@link TurnOutcomeClass} values that warrant a live, in-app
+ * ambient signal in the Assistant panel (#10018). Both are silent
+ * "needs-a-look" outcomes the user would otherwise only find by opening the
+ * Settings diagnostics tab: the watchdog-driven `agent-stuck` and the
+ * tight-tool-call-loop `reasoning-loop`. Narrowed via `Extract` so the alert
+ * channel and pip can never carry a non-alertable outcome.
+ */
+export type TurnOutcomeAlertClass = Extract<TurnOutcomeClass, "agent-stuck" | "reasoning-loop">;
+
+/**
+ * Live event pushed to the pinned help-session renderer when a turn for that
+ * session classifies as `agent-stuck` or `reasoning-loop` (#10018). Drives the
+ * Assistant footer's ambient outcome pip — a Tier 1 indicator, never a toast.
+ * Targeted at the WebContents that minted the session's bearer, never
+ * broadcast. `turnId` is the turn the outcome was recorded for (absent for
+ * `agent-stuck`, whose turn id is already cleared by the time the watchdog
+ * fires); the renderer uses it to auto-clear the pip when a fresh turn begins.
+ */
+export interface McpTurnOutcomeAlertPayload {
+  helpSessionId: string;
+  outcome: TurnOutcomeAlertClass;
   turnId?: string;
 }
 
@@ -523,6 +614,27 @@ export interface ActiveBearerRecord {
   userAgent: string;
   lastActiveAt: number;
   requestsSinceLaunch: number;
+}
+
+/**
+ * Read-only inventory of one renderer-pinned internal bearer — Daintree's own
+ * MCP consumers (the help-chat assistant and in-panel agents, i.e. any
+ * non-`external` tier) — surfaced as a separate "Internal connections" section
+ * on the MCP Server settings tab (#10036). These bearers are deliberately
+ * excluded from {@link ActiveBearerRecord}/the External clients row (#9151) —
+ * this type gives the user passive visibility into them without offering a
+ * disconnect control (they are severed via their owning surface, not here).
+ *
+ * Carries display fields only: no `tokenHash` (there is no disconnect action to
+ * target) and no `token4LastChars` (the bearer suffix identifies an internal
+ * credential and stays main-side, per #9318). `sessionCount` is the number of
+ * live MCP transport sessions this bearer currently owns.
+ */
+export interface HelpSessionBearerRecord {
+  userAgent: string;
+  lastActiveAt: number;
+  requestsSinceLaunch: number;
+  sessionCount: number;
 }
 
 /**

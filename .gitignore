@@ -119,3 +119,6 @@ planning/
 # Claude scratch / working notes (private, ephemeral)
 .claude-scratch/
 .lessons-build/
+
+# Unredacted raw captures left behind by pattern-discovery:redact-cast in-place mode
+*.cast.bak

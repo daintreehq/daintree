@@ -109,7 +109,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
-    debounceMs: 6000,
   },
   // Crush has no `/quit` command and Ctrl+C triggers a confirmation dialog,
   // so we omit `resume` and let the PTY host kill the process on shutdown.

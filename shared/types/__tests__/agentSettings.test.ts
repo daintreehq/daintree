@@ -58,7 +58,7 @@ describe("buildResumeCommand", () => {
     // Kiro's `--resume` is directory-scoped — the session ID we pass in is
     // ignored. Verify the schema dispatch correctly drops it instead of
     // appending a stale ID after `--resume`.
-    expect(buildResumeCommand("kiro", "ignored-session-id")).toBe("kiro-cli --resume");
+    expect(buildResumeCommand("kiro", "ignored-session-id")).toBe("kiro-cli chat --resume");
   });
 
   it("escapes session IDs with special characters", () => {
@@ -292,6 +292,181 @@ describe("generateAgentCommand copilot prompt injection", () => {
     });
     expect(cmd).not.toContain("-i");
     expect(cmd).toContain("Fix the bug");
+  });
+});
+
+describe("generateAgentCommand per-agent prompt injection", () => {
+  forcePosixPlatform();
+
+  it("gemini uses -p for non-interactive (bare positional launches the TUI)", () => {
+    const cmd = generateAgentCommand("gemini", {}, "gemini", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toMatch(/-p\s+'Fix the bug'/);
+  });
+
+  it("gemini keeps -i for interactive", () => {
+    const cmd = generateAgentCommand("gemini", {}, "gemini", {
+      initialPrompt: "Fix the bug",
+    });
+    expect(cmd).toMatch(/-i\s+'Fix the bug'/);
+  });
+
+  it("qwen uses explicit -i/-p flags, never a bare positional", () => {
+    const interactiveCmd = generateAgentCommand("qwen", {}, "qwen", {
+      initialPrompt: "Fix the bug",
+    });
+    const printCmd = generateAgentCommand("qwen", {}, "qwen", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).toMatch(/-i\s+'Fix the bug'/);
+    expect(printCmd).toMatch(/-p\s+'Fix the bug'/);
+  });
+
+  it("copilot uses -p for non-interactive", () => {
+    const cmd = generateAgentCommand("copilot", {}, "copilot", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toMatch(/-p\s+'Fix the bug'/);
+  });
+
+  it("opencode uses --prompt for interactive (bare positional is a project path)", () => {
+    const cmd = generateAgentCommand("opencode", {}, "opencode", {
+      initialPrompt: "Fix the bug",
+    });
+    expect(cmd).toMatch(/--prompt\s+'Fix the bug'/);
+  });
+
+  it("opencode uses the run subcommand for non-interactive", () => {
+    const cmd = generateAgentCommand("opencode", {}, "opencode", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toMatch(/run\s+'Fix the bug'/);
+    expect(cmd).not.toContain("--prompt");
+  });
+
+  it("aider uses -m in both modes (positionals are filenames)", () => {
+    const interactiveCmd = generateAgentCommand("aider", {}, "aider", {
+      initialPrompt: "Fix the bug",
+    });
+    const oneShotCmd = generateAgentCommand("aider", {}, "aider", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).toMatch(/-m\s+'Fix the bug'/);
+    expect(oneShotCmd).toMatch(/-m\s+'Fix the bug'/);
+  });
+
+  it("goose swaps the session arg for run -t and stays interactive", () => {
+    const cmd = generateAgentCommand("goose", {}, "goose", {
+      initialPrompt: "Fix the bug",
+    });
+    expect(cmd).toMatch(/^goose run\b/);
+    expect(cmd).not.toMatch(/\bsession\b/);
+    expect(cmd).toMatch(/-t\s+'Fix the bug'/);
+    expect(cmd).toContain("--interactive");
+  });
+
+  it("goose omits --interactive in one-shot mode", () => {
+    const cmd = generateAgentCommand("goose", {}, "goose", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toMatch(/^goose run\b/);
+    expect(cmd).toMatch(/-t\s+'Fix the bug'/);
+    expect(cmd).not.toContain("--interactive");
+  });
+
+  it("amp uses -x for non-interactive one-shot", () => {
+    const cmd = generateAgentCommand("amp", {}, "amp", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toMatch(/-x\s+'Fix the bug'/);
+  });
+
+  it("crush uses the run subcommand for non-interactive", () => {
+    const cmd = generateAgentCommand("crush", {}, "crush", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toMatch(/run\s+'Fix the bug'/);
+  });
+
+  it("kimi uses -p in both modes (no bare-positional prompt form)", () => {
+    const interactiveCmd = generateAgentCommand("kimi", {}, "kimi", {
+      initialPrompt: "Fix the bug",
+    });
+    const oneShotCmd = generateAgentCommand("kimi", {}, "kimi", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).toMatch(/-p\s+'Fix the bug'/);
+    expect(oneShotCmd).toMatch(/-p\s+'Fix the bug'/);
+  });
+
+  it("mistral adds --prompt only for non-interactive", () => {
+    const interactiveCmd = generateAgentCommand("vibe", {}, "mistral", {
+      initialPrompt: "Fix the bug",
+    });
+    const oneShotCmd = generateAgentCommand("vibe", {}, "mistral", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).not.toContain("--prompt");
+    expect(interactiveCmd).toContain("'Fix the bug'");
+    expect(oneShotCmd).toMatch(/--prompt\s+'Fix the bug'/);
+  });
+
+  it("kiro adds chat --no-interactive only for non-interactive", () => {
+    const interactiveCmd = generateAgentCommand("kiro-cli", {}, "kiro", {
+      initialPrompt: "Fix the bug",
+    });
+    const oneShotCmd = generateAgentCommand("kiro-cli", {}, "kiro", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).not.toContain("--no-interactive");
+    expect(interactiveCmd).toContain("'Fix the bug'");
+    expect(oneShotCmd).toMatch(/chat --no-interactive\s+'Fix the bug'/);
+  });
+});
+
+describe("generateAgentCommand antigravity prompt injection", () => {
+  forcePosixPlatform();
+
+  it("uses -i flag for interactive prompt", () => {
+    const cmd = generateAgentCommand("agy", {}, "antigravity", {
+      initialPrompt: "Fix the bug",
+    });
+    expect(cmd).toContain("-i");
+    expect(cmd).toContain("Fix the bug");
+  });
+
+  it("uses -p flag for non-interactive mode", () => {
+    const cmd = generateAgentCommand("agy", {}, "antigravity", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).toContain("-p");
+    expect(cmd).not.toContain("-i");
+    expect(cmd).toContain("Fix the bug");
+  });
+
+  it("never emits a bare positional prompt (agy rejects them)", () => {
+    const interactiveCmd = generateAgentCommand("agy", {}, "antigravity", {
+      initialPrompt: "Fix the bug",
+    });
+    const printCmd = generateAgentCommand("agy", {}, "antigravity", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(interactiveCmd).toMatch(/-i\s+'Fix the bug'/);
+    expect(printCmd).toMatch(/-p\s+'Fix the bug'/);
   });
 });
 

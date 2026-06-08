@@ -10,17 +10,14 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Plug, Pin, Settings2, ChevronRight, Keyboard, Unplug } from "lucide-react";
+import { Plug, Pin, Settings2, ChevronRight, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import {
   DropdownMenu,
+  DropdownMenuActionItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -48,7 +45,11 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import {
+  TOOLBAR_CUSTOMIZE_LABEL,
+  TOOLBAR_PIN_LABEL,
+  TOOLBAR_UNPIN_LABEL,
+} from "./toolbarMenuStrings";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useKeybindingDisplay } from "@/hooks";
@@ -138,13 +139,10 @@ function buildAgentRow(
 
 function RunningDot({ state }: { state: AgentState | null }) {
   const color = state ? agentStateDotColor(state) : null;
-  if (!color) return null;
   return (
     <span
-      className={cn(
-        "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-sidebar",
-        color
-      )}
+      className={cn("toolbar-pip toolbar-badge", color)}
+      data-visible={!!color}
       aria-hidden="true"
     />
   );
@@ -318,7 +316,6 @@ export function AgentTrayButton({
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
   const updateWorktreePreset = useAgentSettingsStore((s) => s.updateWorktreePreset);
-  const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
   const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
 
@@ -589,10 +586,6 @@ export function AgentTrayButton({
     );
   };
 
-  const handleCustomizeToolbar = () => {
-    void actionService.dispatch("app.settings.openTab", { tab: "toolbar" }, { source: "user" });
-  };
-
   const handleManageAgents = () => {
     void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
   };
@@ -693,14 +686,11 @@ export function AgentTrayButton({
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Agent Tray</TooltipContent>
+              <TooltipContent side="bottom">Agent tray</TooltipContent>
             </Tooltip>
           </ContextMenuTrigger>
           <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-            <ContextMenuItem onSelect={() => toggleButtonVisibility("agent-tray", "left")}>
-              <Unplug className="mr-2 h-3.5 w-3.5" />
-              Unpin from Toolbar
-            </ContextMenuItem>
+            <ToolbarContextMenuItems buttonId="agent-tray" side="left" />
           </ContextMenuContent>
         </ContextMenu>
         <DropdownMenuContent
@@ -800,10 +790,14 @@ export function AgentTrayButton({
             <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
             Manage Agents
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleCustomizeToolbar} className="h-7">
+          <DropdownMenuActionItem
+            actionId="app.settings.openTab"
+            args={{ tab: "toolbar" }}
+            className="h-7"
+          >
             <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
-            Customize Toolbar
-          </DropdownMenuItem>
+            {TOOLBAR_CUSTOMIZE_LABEL}
+          </DropdownMenuActionItem>
           <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">
             <Plug className="mr-2 h-3.5 w-3.5" />
             Set Up Agents
@@ -934,7 +928,7 @@ function LaunchRow({
         aria-hidden="true"
         data-testid={`agent-tray-pin-${row.id}`}
         data-pinned={row.pinned ? "true" : "false"}
-        title={row.pinned ? "Unpin from toolbar (P)" : "Pin to toolbar (P)"}
+        title={row.pinned ? `${TOOLBAR_UNPIN_LABEL} (P)` : `${TOOLBAR_PIN_LABEL} (P)`}
         onPointerDown={stopPointer}
         onPointerUp={stopPointer}
         onClick={(e) => {

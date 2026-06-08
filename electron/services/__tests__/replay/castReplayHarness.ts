@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { vi } from "vitest";
-import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
+import type { IBufferCell, Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
+import unicode11 from "@xterm/addon-unicode11";
+const { Unicode11Addon } = unicode11;
 
 import {
   ActivityMonitor,
@@ -10,6 +12,12 @@ import {
   type ProcessStateValidator,
 } from "../../ActivityMonitor.js";
 import { buildActivityMonitorOptions } from "../../pty/terminalActivityPatterns.js";
+import { Osc94Parser } from "../../pty/Osc94Parser.js";
+import {
+  createVisibleCellContentSnapshot,
+  type VisibleContentCell,
+  type VisibleContentSnapshot,
+} from "../../pty/SustainedChangeTracker.js";
 
 export interface RecordedTransition {
   replayMs: number;
@@ -37,6 +45,15 @@ export interface ReplayCastOpts {
   idleDebounceMs?: number;
   promptFastPathMinQuietMs?: number;
   simpleOutputState?: boolean;
+  /**
+   * Route OSC 9;4 progress sequences from cast "o" events into the monitor's
+   * `onOscProgressWorking`/`onOscProgressIdle` callbacks (production wiring).
+   * Defaults to true. Set false to suppress the routing — used by the OSC
+   * coverage test to show that the viewport-independent heartbeat genuinely
+   * shifts the idle deadline (without it, the monitor idles off stale visible
+   * content instead).
+   */
+  routeOsc94?: boolean;
 }
 
 export interface ExpectedTransition {
@@ -197,12 +214,20 @@ function fragmentBytes(bytes: Uint8Array, rng: () => number, maxSplits: number):
 }
 
 function createHeadlessTerminal(cols: number, rows: number): HeadlessTerminalType {
-  return new HeadlessTerminal({
+  const term = new HeadlessTerminal({
     cols: Math.max(1, cols),
     rows: Math.max(1, rows),
     scrollback: 1000,
     allowProposedApi: true,
   });
+  // Match production (TerminalProcess): Unicode 11 widths must be active before
+  // any data is written so emoji/CJK glyphs in agent spinner output measure at
+  // their true cell width — otherwise cell-based snapshots desync from what the
+  // real terminal renders (#7403). Order matters: load the addon, then select
+  // the version.
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = "11";
+  return term;
 }
 
 function makeGetVisibleLines(term: HeadlessTerminalType): (n: number) => string[] {
@@ -231,6 +256,81 @@ function makeGetCursorLine(term: HeadlessTerminalType): () => string | null {
     const cursorY = buffer.cursorY ?? 0;
     const line = buffer.getLine(buffer.baseY + cursorY);
     return line ? line.translateToString(true) : null;
+  };
+}
+
+interface SnapshotBufferLine {
+  getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
+}
+
+interface SnapshotBuffer {
+  baseY: number;
+  getNullCell?: () => IBufferCell;
+  getLine: (index: number) => SnapshotBufferLine | undefined;
+}
+
+function cellToVisibleContentCell(cell: IBufferCell): VisibleContentCell {
+  const attributes =
+    (cell.isBold() ? 1 : 0) |
+    (cell.isItalic() ? 1 << 1 : 0) |
+    (cell.isDim() ? 1 << 2 : 0) |
+    (cell.isUnderline() ? 1 << 3 : 0) |
+    (cell.isBlink() ? 1 << 4 : 0) |
+    (cell.isInverse() ? 1 << 5 : 0) |
+    (cell.isInvisible() ? 1 << 6 : 0) |
+    (cell.isStrikethrough() ? 1 << 7 : 0) |
+    (cell.isOverline() ? 1 << 8 : 0);
+
+  return {
+    chars: cell.getChars(),
+    code: cell.getCode(),
+    width: cell.getWidth(),
+    fgColorMode: cell.getFgColorMode(),
+    fgColor: cell.getFgColor(),
+    bgColorMode: cell.getBgColorMode(),
+    bgColor: cell.getBgColor(),
+    attributes,
+    defaultVisual: cell.isFgDefault() && cell.isBgDefault() && attributes === 0,
+  };
+}
+
+/**
+ * Cell-based visible-content snapshot, mirroring
+ * `TerminalProcess.getVisibleActivitySnapshot`. Production always wires this so
+ * the `AgentActivityTemperature` cell-snapshot path is exercised; the harness
+ * previously passed only `getVisibleLines`/`getCursorLine`, leaving the cell
+ * path on its text-only fallback. The `n` parameter is intentionally ignored:
+ * production's `getVisibleActivityCells()` scans the full viewport
+ * (`[baseY, baseY + rows)`), not the bottom-N rows. Returns `undefined` when the
+ * cell API is unavailable so `ActivityMonitor` falls back to the text snapshot.
+ */
+function makeGetVisibleContentSnapshot(
+  term: HeadlessTerminalType
+): (n: number) => VisibleContentSnapshot | undefined {
+  return () => {
+    const buffer = term.buffer.active as unknown as SnapshotBuffer;
+    if (
+      !buffer ||
+      typeof buffer.getLine !== "function" ||
+      typeof buffer.getNullCell !== "function"
+    ) {
+      return undefined;
+    }
+    const reusableCell = buffer.getNullCell();
+    const start = buffer.baseY;
+    const end = buffer.baseY + term.rows;
+    const rows: VisibleContentCell[][] = [];
+    for (let y = start; y < end; y++) {
+      const line = buffer.getLine(y);
+      if (!line || typeof line.getCell !== "function") continue;
+      const row: VisibleContentCell[] = [];
+      for (let x = 0; x < term.cols; x++) {
+        const cell = line.getCell(x, reusableCell);
+        if (cell) row.push(cellToVisibleContentCell(cell));
+      }
+      rows.push(row);
+    }
+    return createVisibleCellContentSnapshot(rows);
   };
 }
 
@@ -280,10 +380,12 @@ export async function replayCast(
   const term = createHeadlessTerminal(cast.cols, cast.rows);
   const getVisibleLines = makeGetVisibleLines(term);
   const getCursorLine = makeGetCursorLine(term);
+  const getVisibleContentSnapshot = makeGetVisibleContentSnapshot(term);
 
   const baseOptions = buildActivityMonitorOptions(opts.agentId, {
     getVisibleLines,
     getCursorLine,
+    getVisibleContentSnapshot,
   });
 
   const pollingIntervalMs = opts.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS;
@@ -311,19 +413,31 @@ export async function replayCast(
       pollingIntervalMs,
       pollingMaxBootMs: opts.pollingMaxBootMs ?? baseOptions.pollingMaxBootMs,
       maxWorkingSilenceMs: opts.maxWorkingSilenceMs ?? baseOptions.maxWorkingSilenceMs,
-      // Replay fixtures were calibrated against the legacy 6000ms agent
-      // debounce floor; the production floor is now 8000ms (set by
-      // buildActivityMonitorOptions). Pin both timing knobs to the legacy
-      // value so fixture timestamps remain meaningful — the replay harness
-      // exercises pattern/prompt detection logic, not the production floor.
-      idleDebounceMs: opts.idleDebounceMs ?? 6000,
-      promptFastPathMinQuietMs: opts.promptFastPathMinQuietMs ?? 6000,
-      // Replay fixtures encode pattern/prompt-driven transitions
-      // (completed/pattern, idle/pattern). simpleOutputState short-circuits
-      // those paths, so opt out unless the caller explicitly requests it.
-      simpleOutputState: opts.simpleOutputState ?? false,
+      // Start from the production options that `buildActivityMonitorOptions`
+      // returns (simpleOutputState, the 8000ms debounce floor, the cell
+      // snapshot path) so the harness exercises the same detection branch
+      // production agents run. A fixture may still override these via its
+      // `.expected.json` (e.g. aider/goose pin a 6000ms debounce) — those flow
+      // through `opts` and win only when explicitly set.
+      idleDebounceMs: opts.idleDebounceMs ?? baseOptions.idleDebounceMs,
+      promptFastPathMinQuietMs:
+        opts.promptFastPathMinQuietMs ?? baseOptions.promptFastPathMinQuietMs,
+      simpleOutputState: opts.simpleOutputState ?? baseOptions.simpleOutputState,
     }
   );
+
+  // OSC 9;4 taskbar-progress routing (#8701, deferred from #10301). Production
+  // (`TerminalProcess.handlePtyData`) feeds every raw PTY chunk to an
+  // `Osc94Parser` upstream of `activityMonitor.onData()`; the parser routes
+  // working/idle progress states into the monitor's progress callbacks. The
+  // harness mirrors that wiring so Claude-style OSC 9;4 heartbeats — which keep
+  // an agent "busy" even when the visible viewport is quiet — are exercised.
+  // For fixtures with no OSC 9;4 sequences, `feed()` is a no-op pass-through.
+  const routeOsc94 = opts.routeOsc94 ?? true;
+  const osc94Parser = new Osc94Parser({
+    onWorking: (now) => monitor.onOscProgressWorking(now),
+    onIdle: (now) => monitor.onOscProgressIdle(now),
+  });
 
   // Boot phase clock starts here. Tests must call vi.setSystemTime(startedAt)
   // before invoking replayCast so the boot deadline is anchored to a known origin.
@@ -332,56 +446,66 @@ export async function replayCast(
   const rng = opts.fragmentation ? mulberry32(opts.fragmentation.seed) : null;
   const maxSplits = opts.fragmentation?.maxSplits ?? DEFAULT_FRAGMENT_MAX_SPLITS;
 
-  let currentMs = 0;
-  for (const event of cast.events) {
-    const delta = Math.max(0, event.absoluteMs - currentMs);
-    if (delta > 0) {
-      // Polling ordering: timers advance to the event timestamp BEFORE the event
-      // is written/dispatched. A polling tick scheduled exactly at `currentMs+N`
-      // therefore observes pre-event state — the new bytes land immediately
-      // afterward and the next tick sees them. Deterministic and matches how
-      // production polling is interleaved with PTY data callbacks.
-      vi.advanceTimersByTime(delta);
-      currentMs = event.absoluteMs;
-    }
-
-    if (event.kind === "o") {
-      const bytes = Buffer.from(event.data, "utf8");
-      const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
-      for (const fragment of fragments) {
-        if (fragment.length === 0) continue;
-        writeBytesToTerminal(term, fragment);
+  try {
+    let currentMs = 0;
+    for (const event of cast.events) {
+      const delta = Math.max(0, event.absoluteMs - currentMs);
+      if (delta > 0) {
+        // Polling ordering: timers advance to the event timestamp BEFORE the
+        // event is written/dispatched. A polling tick scheduled exactly at
+        // `currentMs+N` therefore observes pre-event state — the new bytes land
+        // immediately afterward and the next tick sees them. Deterministic and
+        // matches how production polling is interleaved with PTY data callbacks.
+        vi.advanceTimersByTime(delta);
+        currentMs = event.absoluteMs;
       }
-      // Production calls `monitor.onData(chunk)` with the fully-decoded string
-      // from node-pty (which buffers partial UTF-8). Replay mirrors that
-      // contract: the monitor sees the whole event as one string, not the
-      // fragmented byte chunks. Fragmentation stresses xterm's parser only.
-      monitor.onData(event.data);
-    } else if (event.kind === "i") {
-      monitor.onInput(event.data);
-    } else if (event.kind === "r") {
-      const match = /^(\d+)x(\d+)$/.exec(event.data);
-      if (match) {
-        const newCols = Number(match[1]);
-        const newRows = Number(match[2]);
-        try {
-          term.resize(Math.max(1, newCols), Math.max(1, newRows));
-        } catch {
-          // Some xterm builds throw if dims unchanged — ignore.
+
+      if (event.kind === "o") {
+        const bytes = Buffer.from(event.data, "utf8");
+        const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
+        for (const fragment of fragments) {
+          if (fragment.length === 0) continue;
+          writeBytesToTerminal(term, fragment);
         }
-        monitor.notifyResize();
+        // Production calls `monitor.onData(chunk)` with the fully-decoded string
+        // from node-pty (which buffers partial UTF-8). Replay mirrors that
+        // contract: the monitor sees the whole event as one string, not the
+        // fragmented byte chunks. Fragmentation stresses xterm's parser only.
+        // OSC 9;4 is fed first (matching production's feed-before-onData order);
+        // `Date.now()` reflects the replay clock since timers were already
+        // advanced to this event's timestamp above.
+        if (routeOsc94) {
+          osc94Parser.feed(event.data, Date.now());
+        }
+        monitor.onData(event.data);
+      } else if (event.kind === "i") {
+        monitor.onInput(event.data);
+      } else if (event.kind === "r") {
+        const match = /^(\d+)x(\d+)$/.exec(event.data);
+        if (match) {
+          const newCols = Number(match[1]);
+          const newRows = Number(match[2]);
+          try {
+            term.resize(Math.max(1, newCols), Math.max(1, newRows));
+          } catch {
+            // Some xterm builds throw if dims unchanged — ignore.
+          }
+          monitor.notifyResize();
+        }
       }
+      // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
     }
-    // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
-  }
 
-  const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
-  if (settleMs > 0) {
-    vi.advanceTimersByTime(settleMs);
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
+    if (settleMs > 0) {
+      vi.advanceTimersByTime(settleMs);
+    }
+  } finally {
+    // Always tear down so a throw mid-replay can't leak the polling interval or
+    // debounce timers into the next test under shared fake timers.
+    monitor.dispose();
+    term.dispose();
   }
-
-  monitor.dispose();
-  term.dispose();
   return recorded;
 }
 

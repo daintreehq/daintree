@@ -74,8 +74,6 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
-    debounceMs: 6000,
-    promptFastPathMinQuietMs: 6000,
   },
   authCheck: {
     // Cursor may store tokens in OS Keychain on newer versions; file check

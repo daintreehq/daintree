@@ -13,6 +13,10 @@ type MockWebviewElement = HTMLElement & {
   isLoading: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
   capturePage: ReturnType<typeof vi.fn>;
+  canGoBack: ReturnType<typeof vi.fn>;
+  canGoForward: ReturnType<typeof vi.fn>;
+  goBack: ReturnType<typeof vi.fn>;
+  goForward: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -44,6 +48,11 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   webview.capturePage = vi.fn(() =>
     Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
   );
+  // Default to no navigable history; tests override via mockReturnValue.
+  webview.canGoBack = vi.fn(() => false);
+  webview.canGoForward = vi.fn(() => false);
+  webview.goBack = vi.fn();
+  webview.goForward = vi.fn();
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -70,7 +79,9 @@ const {
   );
   (usePanelStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState = () =>
     terminalStoreState;
-  const projectStoreState = { currentProject: { id: "test-project" } };
+  const projectStoreState: { currentProject: { id: string } | null } = {
+    currentProject: { id: "test-project" },
+  };
   const useProjectStoreMock = vi.fn((selector: (state: typeof projectStoreState) => unknown) =>
     selector(projectStoreState)
   );
@@ -142,6 +153,13 @@ vi.mock("@/components/Browser/BrowserToolbar", () => ({
     browserToolbarPropsSpy(props);
     return <div data-testid="browser-toolbar" />;
   },
+}));
+
+const { notifyMock } = vi.hoisted(() => ({
+  notifyMock: vi.fn(),
+}));
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
 }));
 
 vi.mock("@/components/Panel", () => ({
@@ -231,6 +249,10 @@ describe("BrowserPane webview lifecycle regression", () => {
         onNavigationBlocked: vi.fn(() => vi.fn()),
         onUnresponsive: vi.fn(() => vi.fn()),
         onResponsive: vi.fn(() => vi.fn()),
+        getNavigationHistory: vi.fn(() =>
+          Promise.resolve({ entries: [], activeIndex: 0, canGoBack: false, canGoForward: false })
+        ),
+        goToHistoryIndex: vi.fn(() => Promise.resolve()),
       },
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
@@ -266,6 +288,45 @@ describe("BrowserPane webview lifecycle regression", () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);
     expect(webview.hasAttribute("allowpopups")).toBe(true);
+  });
+
+  describe("per-project session partition (#9965)", () => {
+    const restoreProjectMock = () =>
+      useProjectStoreMock.mockImplementation((selector) =>
+        selector({ currentProject: { id: "test-project" } })
+      );
+
+    afterEach(() => {
+      restoreProjectMock();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any).__DAINTREE_INITIAL_PROJECT__;
+    });
+
+    it("scopes the webview partition to the current project", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("partition")).toBe("persist:browser-test-project");
+    });
+
+    it("falls back to the synchronously-seeded project id when the store has not resolved", () => {
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__DAINTREE_INITIAL_PROJECT__ = { id: "seeded-project" };
+
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      // Must NOT attach with the shared default partition — that would leak the
+      // session across projects, which is the bug this fix closes.
+      expect(webview.getAttribute("partition")).toBe("persist:browser-seeded-project");
+    });
+
+    it("uses the default partition only when no project id is available at all", () => {
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
+
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("partition")).toBe("persist:browser-default");
+    });
   });
 
   it("does not pass console-toggle props to BrowserToolbar (regression #7495)", () => {
@@ -331,7 +392,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
     expect(webview.stop).toHaveBeenCalledTimes(1);
     expect(webview.reload).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Page Load Timed Out");
+    expect(container.textContent).toContain("Page load timed out");
   });
 
   it("clears stuck-load timeout on did-stop-loading", () => {
@@ -393,6 +454,330 @@ describe("BrowserPane webview lifecycle regression", () => {
 
     expect(webview.reload).not.toHaveBeenCalled();
     expect(webview.stop).not.toHaveBeenCalled();
+  });
+
+  it("exposes the loading overlay to screen readers via role=status (#9964)", () => {
+    const { container, getByRole } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    // The overlay is Doherty-gated — it only mounts after the 400ms threshold.
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    const status = getByRole("status");
+    expect(status.getAttribute("aria-busy")).toBe("true");
+    expect(status.getAttribute("aria-label")).toBe("Loading…");
+    expect(status.textContent).toContain("Loading…");
+  });
+
+  it("announces the slow-load escalation via a polite live region (#9964)", () => {
+    // aria-busy on the status wrapper suppresses inner live regions, so the
+    // escalation must flow through the sibling aria-live span.
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    const liveRegion = container.querySelector('[aria-live="polite"]');
+    expect(liveRegion).not.toBeNull();
+    expect(liveRegion?.textContent).toBe("");
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(liveRegion?.textContent).toContain("taking longer than usual");
+  });
+
+  it("removes the loading status region after did-stop-loading (#9964)", () => {
+    const { container, queryByRole } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+    expect(queryByRole("status")).not.toBeNull();
+
+    act(() => {
+      webview.setMockLoading(false);
+      emitWebviewEvent(webview, "did-stop-loading");
+    });
+    act(() => {
+      vi.advanceTimersByTime(401);
+    });
+
+    expect(queryByRole("status")).toBeNull();
+  });
+
+  describe("back/forward navigation guard (#9942)", () => {
+    function getLoadingOverlay(container: HTMLElement): Element | null {
+      return container.querySelector(".bg-daintree-bg.z-10");
+    }
+
+    function settleLoaded(webview: MockWebviewElement) {
+      // dom-ready arms isWebviewReady; did-stop-loading clears the initial
+      // isLoading so the Doherty overlay isn't already showing.
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+        webview.setMockLoading(false);
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+    }
+
+    it("does not enter a stuck loading state when back is pressed with no history", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goBack).not.toHaveBeenCalled();
+      // No navigation fired, so no load event would ever clear the spinner —
+      // the overlay must never appear in the first place.
+      expect(getLoadingOverlay(container)).toBeNull();
+    });
+
+    it("does not enter a stuck loading state when forward is pressed with no history", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoForward.mockReturnValue(false);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-forward", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goForward).not.toHaveBeenCalled();
+      expect(getLoadingOverlay(container)).toBeNull();
+    });
+
+    it("navigates and shows the loading overlay when back is possible", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(true);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goBack).toHaveBeenCalledTimes(1);
+      expect(getLoadingOverlay(container)).not.toBeNull();
+    });
+
+    it("falls back to app history when native back history is unavailable after address navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-navigate", {
+            detail: { id: "browser-panel-1", url: "http://localhost:5173/page-a" },
+          })
+        );
+      });
+
+      let toolbarProps = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(toolbarProps.canGoBack).toBe(true);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/");
+      toolbarProps = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(toolbarProps.canGoForward).toBe(true);
+    });
+
+    it("navigates and shows the loading overlay when forward is possible", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoForward.mockReturnValue(true);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-forward", { detail: { id: "browser-panel-1" } })
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+
+      expect(webview.goForward).toHaveBeenCalledTimes(1);
+      expect(getLoadingOverlay(container)).not.toBeNull();
+    });
+
+    it("does not dismiss the blocked-navigation banner when back is a no-op", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const onBlocked = (window as any).electron.webview.onNavigationBlocked.mock.calls.at(-1)![0];
+      act(() => {
+        onBlocked({
+          panelId: "browser-panel-1",
+          url: "https://oauth.example.com/authorize",
+          canOpenExternal: true,
+        });
+        vi.advanceTimersByTime(150);
+      });
+      expect(container.textContent).toContain("oauth.example.com");
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+
+      // A no-op Back must not clear the banner — setBlockedNav(null) is gated.
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("oauth.example.com");
+    });
+  });
+
+  describe("history dropdown navigation (#9942)", () => {
+    // The mock webview reports an already-loaded URL at mount, so BrowserPane
+    // settles isWebviewReady/!isLoading immediately and fires its history-refresh
+    // effect once. Stub getNavigationHistory BEFORE render so that mount-time
+    // refresh captures the snapshot, then flush the async chain.
+    async function renderWithSnapshot(snapshot: {
+      entries: Array<{ index: number; url: string; title: string }>;
+      activeIndex: number;
+      canGoBack: boolean;
+      canGoForward: boolean;
+    }) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.webview.getNavigationHistory.mockImplementation(() =>
+        Promise.resolve(snapshot)
+      );
+      let result!: ReturnType<typeof render>;
+      await act(async () => {
+        result = render(<BrowserPane {...baseProps} />);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return result;
+    }
+
+    function getOnGoToHistoryIndex(): (index: number) => Promise<void> {
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      return props.onGoToHistoryIndex as (index: number) => Promise<void>;
+    }
+
+    it("resolves the entry by its Chromium index field, not array position", async () => {
+      // Sparse history: entries filtered upstream keep their original Chromium
+      // .index (0,3,6). Positional lookup of index 3 would read entries[3]
+      // (undefined) and no-op; find-by-field must resolve entries[1].
+      await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 3, url: "http://localhost:5173/b", title: "B" },
+          { index: 6, url: "http://localhost:5173/c", title: "C" },
+        ],
+        activeIndex: 6,
+        canGoBack: true,
+        canGoForward: false,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(3);
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).toHaveBeenCalledWith(42, 3);
+    });
+
+    it("does not navigate to a history entry whose URL fails normalization", async () => {
+      const { container } = await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 1, url: "chrome://settings", title: "Settings" },
+        ],
+        activeIndex: 0,
+        canGoBack: false,
+        canGoForward: true,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(1);
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Allow");
+    });
+
+    it("requires host approval before navigating to an unapproved history entry", async () => {
+      const { container } = await renderWithSnapshot({
+        entries: [
+          { index: 0, url: "http://localhost:5173/a", title: "A" },
+          { index: 1, url: "https://example.com/page", title: "Example" },
+        ],
+        activeIndex: 0,
+        canGoBack: false,
+        canGoForward: true,
+      });
+
+      const goTo = getOnGoToHistoryIndex();
+      await act(async () => {
+        await goTo(1);
+      });
+
+      // Unapproved host: surface the approval prompt, do not navigate yet.
+      expect(container.textContent).toContain("example.com");
+      expect(container.textContent).toContain("Allow browser panel to load");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
+      expect(goToHistoryIndex).not.toHaveBeenCalled();
+    });
   });
 
   it("renders drag protection overlay and hides webview when isDragging is true", () => {
@@ -634,6 +1019,36 @@ describe("BrowserPane webview lifecycle regression", () => {
       const mock = (window as any).electron.clipboard.writeImage;
       expect(mock).not.toHaveBeenCalled();
     });
+
+    it("surfaces an error notification when the clipboard write fails", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.clipboard.writeImage.mockRejectedValueOnce(
+        new Error("clipboard unavailable")
+      );
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-capture-screenshot", {
+            detail: { id: "browser-panel-1" },
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+    });
   });
 
   describe("stale URL detection on initial load", () => {
@@ -768,7 +1183,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
       expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("timeout error overlay shows Retry and Open External buttons", () => {
@@ -907,7 +1322,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("certificate couldn't be verified");
       expect(container.textContent).toContain("mkcert -install");
     });
@@ -925,7 +1340,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Certificate Error");
+      expect(container.textContent).toContain("Certificate error");
       expect(container.textContent).toContain("SSL/TLS handshake failed");
       // -107 is also raised on protocol mismatch — the mkcert hint is wrong here.
       expect(container.textContent).not.toContain("mkcert");
@@ -944,7 +1359,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Unable to Display Page");
+      expect(container.textContent).toContain("Unable to display page");
       expect(container.textContent).toContain("ERR_FILE_NOT_FOUND");
     });
 
@@ -961,7 +1376,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).not.toContain("Unable to Display Page");
+      expect(container.textContent).not.toContain("Unable to display page");
       expect(container.textContent).not.toContain("Couldn't resolve");
     });
 
@@ -989,7 +1404,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("stale ERR_ABORTED from a superseded navigation does not disarm new timers", () => {
@@ -1022,7 +1437,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Page Load Timed Out");
+      expect(container.textContent).toContain("Page load timed out");
     });
 
     it("shows connection-timeout message when validatedURL is empty", () => {
@@ -1038,9 +1453,9 @@ describe("BrowserPane webview lifecycle regression", () => {
         });
       });
 
-      expect(container.textContent).toContain("Connection Failed");
+      expect(container.textContent).toContain("Connection failed");
       expect(container.textContent).toContain("timed out");
-      expect(container.textContent).not.toContain("Unable to Display Page");
+      expect(container.textContent).not.toContain("Unable to display page");
     });
 
     it("cleans slow timer on unmount", () => {
@@ -1174,6 +1589,48 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Reason: oom (exit code 9)");
     });
 
+    it("does not emit a durable notification on the first crash (#9964)", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("emits a durable high-priority notification on the second crash within 60s (#9964)", () => {
+      // A crash loop in a background pane is otherwise silent — the in-flow
+      // banner is only visible when the pane is. Mirrors DevPreviewPane.
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitRenderProcessGone(webview, "crashed");
+      });
+      act(() => {
+        emitRenderProcessGone(webview, "oom", 9);
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Page crashed repeatedly",
+          message: expect.stringContaining("oom"),
+          priority: "high",
+          duration: 0,
+          supersedeKey: "browser-pane-crash-loop:browser-panel-1",
+          correlationId: "browser-panel-1",
+          context: expect.objectContaining({
+            eventKind: "recovery",
+            panelId: "browser-panel-1",
+          }),
+        })
+      );
+    });
+
     it("surfaces the banner on OS-pressure memory-eviction (no Daintree eviction in flight)", () => {
       // Chromium reports `memory-eviction` for two distinct paths:
       //   (1) Daintree's own about:blank src swap from useWebviewEviction
@@ -1282,7 +1739,7 @@ describe("BrowserPane webview lifecycle regression", () => {
     it("clears stuck-load timer so a load timeout does not replace the crash banner", () => {
       // The load-error overlay is rendered as absolute z-30 over the entire
       // pane — without clearing the slow-load timer on crash, a pending 30s
-      // timeout would fire after the crash and stack a "Page Load Timed Out"
+      // timeout would fire after the crash and stack a "Page load timed out"
       // overlay on top of the in-flow crash banner, hiding it entirely.
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1303,7 +1760,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.stop).not.toHaveBeenCalled();
       expect(container.textContent).toContain("Page process crashed");
-      expect(container.textContent).not.toContain("Page Load Timed Out");
+      expect(container.textContent).not.toContain("Page load timed out");
     });
 
     it("auto-reloads again on a crash that lands just outside the 60s window", () => {
@@ -1340,6 +1797,103 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.reload).toHaveBeenCalledTimes(1);
       expect(container.textContent).toContain("Page process crashed");
+    });
+  });
+
+  describe("src binding regression (#9940)", () => {
+    it("seeds src once at mount", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after an in-page guest navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      // A guest SPA navigation (pushState) is reported via did-navigate-in-page.
+      // The resulting history update must NOT feed back into the src attribute
+      // (which Electron's SrcAttribute observer would turn into a full reload).
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate-in-page", {
+          url: "http://localhost:5173/spa/route",
+          isMainFrame: true,
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("does not re-bind src or re-load after a full guest navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      webview.loadURL.mockClear();
+      const setAttributeSpy = vi.spyOn(webview, "setAttribute");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", {
+          url: "http://localhost:5173/page-2",
+        });
+      });
+
+      expect(webview.loadURL).not.toHaveBeenCalled();
+      expect(setAttributeSpy.mock.calls.filter(([name]) => name === "src")).toHaveLength(0);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("re-seeds src to the current URL when a partition change remounts the webview", () => {
+      const { container, rerender } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+
+      // Guest navigates to a new route.
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/dashboard" });
+      });
+
+      // The project id resolves to a different value, changing webviewPartition,
+      // which remounts the <webview> via its key. The fresh element must seed to
+      // the URL the user is currently on — not the URL captured at mount (#9940).
+      useProjectStoreMock.mockImplementation(
+        (selector: (state: { currentProject: { id: string } | null }) => unknown) =>
+          selector({ currentProject: { id: "other-project" } })
+      );
+
+      act(() => {
+        rerender(<BrowserPane {...baseProps} />);
+      });
+
+      const remountedWebview = getWebviewElement(container);
+      expect(remountedWebview.getAttribute("src")).toBe("http://localhost:5173/dashboard");
+    });
+  });
+
+  // #9941: BrowserPane must wire `validateUrl` into the toolbar so the address bar
+  // honors the extended host policy (allowedHosts defaults to [] here, i.e. LAN/
+  // reserved-TLD hosts are implicitly allowed). Removing the prop regresses this —
+  // the toolbar would fall back to strict localhost-only validation.
+  describe("address bar host policy (#9941)", () => {
+    it("passes an extended-policy validateUrl that accepts LAN hosts", () => {
+      render(<BrowserPane {...baseProps} />);
+      expect(browserToolbarPropsSpy).toHaveBeenCalled();
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      const validateUrl = props.validateUrl as
+        | ((url: string) => { url?: string; error?: string })
+        | undefined;
+
+      expect(typeof validateUrl).toBe("function");
+      // LAN host is implicitly allowed under the extended policy — no error.
+      expect(validateUrl!("192.168.1.10:3000")).toMatchObject({
+        url: "http://192.168.1.10:3000/",
+      });
+      // Reserved TLD likewise passes without error.
+      expect(validateUrl!("printer.local").error).toBeUndefined();
     });
   });
 });

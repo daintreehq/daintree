@@ -42,9 +42,21 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
 }));
 
 vi.mock("@/components/Fleet/fleetExecution", () => ({
-  broadcastFleetLiteralPaste: vi
-    .fn()
-    .mockResolvedValue({ failedIds: [], permanentlyFailedIds: [], transientlyFailedIds: [] }),
+  filterEligibleIds: vi.fn((ids: string[]) => ids),
+}));
+
+vi.mock("@/components/Fleet/fleetEnterBroadcast", () => ({
+  runManagedFleetBroadcast: vi.fn().mockResolvedValue({
+    total: 0,
+    successCount: 0,
+    failureCount: 0,
+    perTarget: [],
+    failedIds: [],
+    permanentlyFailedIds: [],
+    transientlyFailedIds: [],
+    cancelled: false,
+    skippedCount: 0,
+  }),
 }));
 
 const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
@@ -52,7 +64,8 @@ const { useFleetPendingActionStore } = await import("@/store/fleetPendingActionS
 const { useFleetFailureStore } = await import("@/store/fleetFailureStore");
 const { usePanelStore } = await import("@/store/panelStore");
 const { terminalClient } = await import("@/clients");
-const { broadcastFleetLiteralPaste } = await import("@/components/Fleet/fleetExecution");
+const { filterEligibleIds } = await import("@/components/Fleet/fleetExecution");
+const { runManagedFleetBroadcast } = await import("@/components/Fleet/fleetEnterBroadcast");
 const { registerFleetActions } = await import("../fleetActions");
 
 type ActionRegistry = Awaited<
@@ -89,7 +102,7 @@ function resetStores(): void {
     lastArmedId: null,
   });
   useFleetPendingActionStore.setState({ pending: null });
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null, recordedAt: null });
+  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
   usePanelStore.setState({
     panelsById: {},
     panelIds: [],
@@ -576,50 +589,92 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: null,
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(broadcastFleetLiteralPaste).not.toHaveBeenCalled();
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
   });
 
   it("no-ops when failedIds is empty", async () => {
     useFleetFailureStore.setState({
       failedIds: new Set(),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(broadcastFleetLiteralPaste).not.toHaveBeenCalled();
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
   });
 
-  it("rebroadcasts the recorded payload to the failed targets when payload is non-null", async () => {
+  it("routes the recorded payload through the managed broadcast as per-target overrides", async () => {
+    // #9950: the retry must run through the primary broadcast path so it gets
+    // batching, progress, directing-state, and a working Cancel button —
+    // passing the already-substituted payload as overrides (empty draft)
+    // bypasses recipe substitution without re-resolving a verbatim literal.
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
-    expect(broadcastFleetLiteralPaste).toHaveBeenCalledTimes(1);
-    const call = (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+    const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(call).toBeDefined();
-    const [payload, targets] = call as [string, string[]];
-    expect(payload).toBe("ls\r");
-    expect((targets as string[]).slice().sort()).toEqual(["t1", "t2"]);
+    const [draft, targets, overrides] = call as [string, string[], Record<string, string>];
+    expect(draft).toBe("");
+    expect(targets.slice().sort()).toEqual(["t1", "t2"]);
+    expect(overrides).toEqual({ t1: "ls\r", t2: "ls\r" });
+  });
+
+  it("filters out targets that went ineligible before dispatch", async () => {
+    // The primary broadcast path gates eligibility in its caller, not inside
+    // executeFleetBroadcast — so the retry action owns the filter. A pane that
+    // died since the failure was recorded must not receive bytes.
+    (filterEligibleIds as ReturnType<typeof vi.fn>).mockReturnValueOnce(["t1"]);
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+    const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, targets, overrides] = call as [string, string[], Record<string, string>];
+    expect(targets).toEqual(["t1"]);
+    expect(overrides).toEqual({ t1: "ls\r" });
+  });
+
+  it("no-ops when every target is filtered out as ineligible", async () => {
+    // All recorded failures point at panes that are gone — skip the broadcast
+    // entirely so the progress store isn't spuriously activated for 0 targets.
+    (filterEligibleIds as ReturnType<typeof vi.fn>).mockReturnValueOnce([]);
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
+    // Store is untouched — nothing was retried.
+    const s = useFleetFailureStore.getState();
+    expect(s.failedIds.size).toBe(2);
+    expect(s.payload).toBe("ls\r");
   });
 
   it("dismisses targets that succeeded on retry and preserves the ones that still fail", async () => {
-    (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      total: 3,
+      successCount: 2,
+      failureCount: 1,
+      perTarget: [],
       failedIds: ["t2"],
       transientlyFailedIds: ["t2"],
       permanentlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 0,
     });
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2", "t3"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
@@ -629,35 +684,67 @@ describe("fleet.retryFailures", () => {
   });
 
   it("clears the store entirely when every target succeeds on retry", async () => {
-    (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      total: 2,
+      successCount: 2,
+      failureCount: 0,
+      perTarget: [],
       failedIds: [],
       transientlyFailedIds: [],
       permanentlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 0,
     });
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();
-    expect(s.recordedAt).toBeNull();
   });
 
   it("leaves the banner intact when invoked with a null payload (no silent clear)", async () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: null,
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(1);
     expect(s.payload).toBeNull();
+  });
+
+  it("disarms permanent failures and dismisses them from the retry chip", async () => {
+    // Dead PTYs auto-disarm so a future retry doesn't keep firing into the
+    // same dead pipes, and the chip clears for them too.
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      total: 2,
+      successCount: 0,
+      failureCount: 2,
+      perTarget: [],
+      failedIds: ["t1", "t2"],
+      transientlyFailedIds: ["t2"],
+      permanentlyFailedIds: ["t1"],
+      cancelled: false,
+      skippedCount: 0,
+    });
+    seedPanels([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(useFleetArmingStore.getState().armedIds.has("t1")).toBe(false);
+    expect(useFleetArmingStore.getState().armedIds.has("t2")).toBe(true);
+    const s = useFleetFailureStore.getState();
+    // t1 dismissed (permanent), t2 retained (still transiently failing).
+    expect(Array.from(s.failedIds)).toEqual(["t2"]);
   });
 
   it("guards against double-dispatch (re-entrant retry while in flight)", async () => {
@@ -667,7 +754,7 @@ describe("fleet.retryFailures", () => {
       permanentlyFailedIds: string[];
     };
     let resolveBroadcast: ((value: BroadcastResult) => void) | null = null;
-    (broadcastFleetLiteralPaste as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () =>
         new Promise<BroadcastResult>((resolve) => {
           resolveBroadcast = resolve;
@@ -676,13 +763,12 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1"]),
       payload: "ls\r",
-      recordedAt: Date.now(),
     });
     const registry = await buildRegistry();
     const first = run(registry, "fleet.retryFailures");
     // Second call happens while the first is awaiting the broadcast.
     await run(registry, "fleet.retryFailures");
-    expect(broadcastFleetLiteralPaste).toHaveBeenCalledTimes(1);
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     (resolveBroadcast as ((value: BroadcastResult) => void) | null)?.({
       failedIds: [],
       transientlyFailedIds: [],

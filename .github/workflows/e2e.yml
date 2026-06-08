@@ -94,10 +94,6 @@ on:
         description: "Enable Playwright blob reporter so downstream jobs can merge reports across shards/OSes (nightly-only)."
         type: boolean
         default: false
-      emit_classification:
-        description: "Enable per-shard failure classification artifact. Set in nightly to feed the auto-issue body. Implies the blob reporter so the JSON results that the classifier reads are written."
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -159,8 +155,9 @@ jobs:
           # has context-menu/custom-preset shards that also exceed the release
           # window at 8 slices, so it uses the same 16-slice Windows split.
           # full-panels is lighter but still needs more than the default 4.
-          # full-resilience's crash/error-recovery specs also need extra Windows
-          # slices after shard 2/4 exceeded the release gate in run 26672763326.
+          # full-resilience's crash/error-recovery specs need the same Windows
+          # split as other restart-heavy buckets; shard 2/8 can exceed the
+          # 45-minute e2e job timeout when its crash-recovery files pack together.
           case "$SUITE" in
             full-platform|full-terminal)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
@@ -176,7 +173,14 @@ jobs:
                 SHARD_TOTAL=4
               fi
               ;;
-            full-resilience|full-panels)
+            full-resilience)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=16
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
+            full-panels)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=8
               else
@@ -350,11 +354,10 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: |
-          ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
-          export npm_config_runtime=electron
-          export npm_config_target=$ELECTRON_VERSION
-          node scripts/ci/npm-ci-retry.mjs
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Verify Electron install
+        run: node scripts/ci/verify-electron-install.mjs
 
       - name: Build app
         run: npm run build:e2e
@@ -505,7 +508,7 @@ jobs:
           # piggybacks on the same file via `PLAYWRIGHT_JSON_REPORT`.
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
-          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
           node scripts/ci/run-e2e-watchdog.mjs \
@@ -521,7 +524,7 @@ jobs:
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
-          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
           node scripts/ci/run-e2e-watchdog.mjs \
@@ -551,7 +554,7 @@ jobs:
           FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
-          PLAYWRIGHT_BLOB_REPORT: ${{ (inputs.enable_blob_report || inputs.emit_classification) && '1' || '' }}
+          PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
         run: |
           set -euo pipefail
           node scripts/ci/run-e2e-watchdog.mjs \
@@ -571,7 +574,11 @@ jobs:
           set -euo pipefail
           rm -f failed-specs.txt
           if [ -f test-results/report.json ] && [ -s test-results/report.json ]; then
-            jq -r '.suites[] | .. | objects | select(.file != null and .ok == false) | .file' test-results/report.json | sort -u > failed-specs.txt
+            # Flaky specs report spec.ok === true but still fail the job under
+            # FAIL_ON_FLAKY_TESTS (core/online), so a `.ok == false` filter
+            # dropped them from the retry list. The extractor includes flaky
+            # specs too — see scripts/ci/extract-failed-specs.mjs (#10039).
+            node scripts/ci/extract-failed-specs.mjs test-results/report.json failed-specs.txt
             echo "[e2e] Extracted $(wc -l < failed-specs.txt) failed spec(s) from JSON report"
           else
             echo "[e2e] JSON report missing or empty — no failures to extract"
@@ -594,21 +601,24 @@ jobs:
       # consumers share a single artifact.
       - name: Extract failure signatures
         if: failure() && inputs.json_report
+        continue-on-error: true
         shell: bash
         run: |
+          mkdir -p test-results
           if [ -f test-results/report.json ]; then
-            node scripts/ci/extract-failures.mjs test-results/report.json /tmp/failure-report.json
+            node scripts/ci/extract-failures.mjs test-results/report.json test-results/failure-report.json
           else
             echo "[extract] No test-results/report.json found — skipping"
-            echo '[]' > /tmp/failure-report.json
+            echo '[]' > test-results/failure-report.json
           fi
 
       - name: Upload failure report
         if: failure() && inputs.json_report
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: failure-report-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
-          path: /tmp/failure-report.json
+          name: failure-report-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}-attempt-${{ github.run_attempt }}
+          path: test-results/failure-report.json
           retention-days: 7
           if-no-files-found: ignore
 
@@ -645,124 +655,6 @@ jobs:
           # Count what we collected
           COLLECTED=$(find "$FALLBACK_DIR" -type f 2>/dev/null | wc -l)
           echo "[e2e] Fallback crash dump collection: $COLLECTED files"
-
-      # Classification regex table — keep in sync with CLASSIFICATION_RULES in
-      # scripts/ci/classify-e2e-failures.mjs. Rules are ordered; the first match
-      # wins. Specific patterns (spawn EPERM) must precede broad ones (bare
-      # EPERM) so the more actionable bucket is chosen.
-      #
-      # Infrastructure (OS / CI runner resource contention):
-      #   spawn EPERM           -> AV on-access scan
-      #   EBUSY on .tmp paths   -> indexer contention
-      #   EPERM / EACCES / ENOSPC -> permission / disk
-      #
-      # Test-Logic (handshake / timing / stale references):
-      #   CDP target not found / Target.targetCreated timeout -> handshake
-      #   Target/Browser/Page has been closed                -> stale ref
-      #   Protocol error (Target.closeTarget)                -> target close
-      #   Selector timeout / Test timeout                     -> timing
-      #
-      # Product-Logic (renderer crashes, actual bugs):
-      #   WebContents crashed / renderer process crash        -> renderer
-      #   GPU process crash / utility process crash           -> GPU/utility
-      #
-      # Unmatched errors land in Unclassified.
-      # Reads the same `test-results/report.json` that the retry-path and
-      # extract-failures steps already consume — no separate JSON output.
-      - name: Classify e2e failures
-        id: classify
-        if: always() && inputs.emit_classification
-        continue-on-error: true
-        shell: bash
-        run: |
-          mkdir -p test-results
-          if [ -f test-results/report.json ]; then
-            node scripts/ci/classify-e2e-failures.mjs \
-              --input test-results/report.json \
-              --output test-results/e2e-failure-classification.json
-          else
-            echo "[e2e] No report.json found; writing empty classification"
-            echo '{"totalUnique":0,"totalAttempts":0,"buckets":{},"failures":[]}' \
-              > test-results/e2e-failure-classification.json
-          fi
-
-      - name: Upload failure classification
-        if: always() && inputs.emit_classification
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-classification-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
-          path: test-results/e2e-failure-classification.json
-          retention-days: 7
-          if-no-files-found: ignore
-
-      # Extract a flat manifest of failing spec file paths from the JSON reporter
-      # output. Consumed by the nightly notify job for git-blame-based assignee
-      # routing (a separate signal from the structured failure-report dedup).
-      - name: Extract failing spec manifest
-        id: failure-manifest
-        if: always() && inputs.json_report
-        continue-on-error: true
-        shell: bash
-        run: |
-          SUITE="${{ inputs.suite || 'core' }}"
-          # Include matrix name + shard so download-artifact merge-multiple
-          # doesn't overwrite manifests from other platforms or shards.
-          MANIFEST="nightly-failure-manifest-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}.json"
-
-          extract_failures() {
-            if [ ! -f test-results/report.json ]; then
-              echo '{"suite":"'"$SUITE"'","failedSpecs":[],"error":"test-results/report.json not found"}' > "$MANIFEST"
-              return
-            fi
-            node -e "
-              const fs = require('fs');
-              const data = JSON.parse(fs.readFileSync('test-results/report.json', 'utf8'));
-              const failed = new Set();
-
-              function walk(suite) {
-                for (const s of suite.suites || []) walk(s);
-                for (const spec of suite.specs || []) {
-                  const tests = spec.tests || [];
-                  if (tests.some(t => {
-                    const lastResult = t.results?.[t.results.length - 1];
-                    const lastStatus = lastResult?.status;
-                    // Final retry passed but test was flaky — Playwright exits non-zero
-                    // when FAIL_ON_FLAKY_TESTS is set.
-                    if (t.status === 'flaky') return true;
-                    return lastStatus && lastStatus !== 'passed' && lastStatus !== 'skipped';
-                  })) {
-                    if (spec.file) failed.add(spec.file);
-                  }
-                }
-              }
-
-              for (const suite of data.suites || []) walk(suite);
-
-              const manifest = {
-                suite: '$SUITE',
-                platform: '${{ runner.os }}',
-                shard: ${{ matrix.shard }},
-                shardTotal: ${{ matrix.shardTotal }},
-                failedSpecs: [...failed].sort(),
-                timestamp: new Date().toISOString(),
-              };
-              fs.writeFileSync('$MANIFEST', JSON.stringify(manifest));
-            "
-          }
-          extract_failures
-          echo "Manifest written:"
-          cat "$MANIFEST"
-
-      - name: Upload failure manifest
-        if: always() && inputs.json_report
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-manifest-${{ inputs.suite || 'core' }}-${{ matrix.name }}-s${{ matrix.shard }}of${{ matrix.shardTotal }}
-          path: nightly-failure-manifest-*.json
-          retention-days: 3
-          if-no-files-found: ignore
 
       - name: Upload test results
         if: always()

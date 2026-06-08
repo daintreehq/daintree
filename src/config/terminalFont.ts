@@ -14,6 +14,29 @@ const FONT_LOAD_TIMEOUT_MS = 3_000;
 
 let fontLoadPromise: Promise<void> | null = null;
 
+// Set once JetBrains Mono finishes loading. Terminals open immediately (there is
+// no font-ready Suspense gate), so any terminal opened before the font resolved
+// measured its cell metrics against the fallback monospace stack and is sized
+// wrong for the rest of the session (#9776, #9809) until a re-measure is forced.
+let fontArrivedLate = false;
+const lateArrivalCallbacks = new Set<() => void>();
+
+function notifyTerminalFontArrivedLate(): void {
+  if (fontArrivedLate) return;
+  fontArrivedLate = true;
+  // Snapshot then clear: this is a one-shot signal, and a callback must not be
+  // able to re-register itself into the set we're iterating.
+  const callbacks = [...lateArrivalCallbacks];
+  lateArrivalCallbacks.clear();
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch {
+      // A misbehaving subscriber must not prevent the others from repairing.
+    }
+  }
+}
+
 export function ensureTerminalFontLoaded(): Promise<void> {
   if (fontLoadPromise) return fontLoadPromise;
 
@@ -23,15 +46,58 @@ export function ensureTerminalFontLoaded(): Promise<void> {
   }
 
   const size = `${DEFAULT_TERMINAL_FONT_SIZE}px 'JetBrains Mono'`;
+  // The race times out terminal creation, but the underlying font fetch keeps
+  // running — `document.fonts.load` is not cancelled. Hold a reference to the
+  // real load so we can tell when JetBrains Mono actually arrived. `allSettled`
+  // (not `all`) so one weight failing — e.g. bold erroring after regular already
+  // loaded — doesn't mask that the other weight arrived and changed cell metrics.
+  const realLoad = Promise.allSettled([
+    document.fonts.load(size),
+    document.fonts.load(`bold ${size}`),
+  ]);
+
   fontLoadPromise = Promise.race([
-    Promise.all([document.fonts.load(size), document.fonts.load(`bold ${size}`)]),
-    new Promise<FontFace[]>((resolve) => setTimeout(() => resolve([]), FONT_LOAD_TIMEOUT_MS)),
+    realLoad,
+    new Promise<void>((resolve) => setTimeout(resolve, FONT_LOAD_TIMEOUT_MS)),
   ]).then(
     () => undefined,
     () => undefined
   );
 
+  // Fire the repair hook as soon as JetBrains Mono actually loads. Without the
+  // old Suspense gate, terminals open immediately against whatever font is
+  // resolved, so any opened before this point are mis-sized and must be
+  // re-measured — regardless of whether the 3s timeout elapsed first (#9809).
+  // `repairFontGrid` no-ops when no terminals are open yet, so firing on the
+  // cache-hit path (font already resolved before any terminal opens) is
+  // harmless. Chaining off `realLoad` (rather than a `document.fonts`
+  // `loadingdone` listener) keys the signal to JetBrains Mono specifically, so
+  // an unrelated late font load can't trigger a spurious repair.
+  void realLoad.then((results) => {
+    const anyLoaded = results.some((result) => result.status === "fulfilled");
+    if (anyLoaded) notifyTerminalFontArrivedLate();
+  });
+
   return fontLoadPromise;
+}
+
+/**
+ * Subscribe to the rare case where JetBrains Mono finishes loading *after* the
+ * startup timeout already unblocked terminal creation (#9776). Fires at most
+ * once. If the font already arrived late by the time you subscribe, the callback
+ * runs synchronously. No-op if the font loads on time or fails to load.
+ *
+ * @returns an unsubscribe function.
+ */
+export function onTerminalFontArrivedLate(callback: () => void): () => void {
+  if (fontArrivedLate) {
+    callback();
+    return () => {};
+  }
+  lateArrivalCallbacks.add(callback);
+  return () => {
+    lateArrivalCallbacks.delete(callback);
+  };
 }
 
 // Eagerly kick off the font load at module import so components can `use()`

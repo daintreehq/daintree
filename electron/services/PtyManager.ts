@@ -108,6 +108,35 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Per-terminal scrollback dimensions for the resource governor's memory-aware
+   * trim/pause ranking. Returns the current scrollback cap and column width so the
+   * governor can estimate `scrollbackLines × cols × 12` bytes per terminal without
+   * serializing any buffer. `cols` falls back to 80 for a freshly-spawned terminal
+   * that hasn't been resized yet, so it never contributes a zero-byte estimate.
+   */
+  getTerminalBufferSizes(): Array<{ id: string; scrollbackLines: number; cols: number }> {
+    return this.registry.getAll().map((terminal) => ({
+      id: terminal.id,
+      scrollbackLines: terminal.getCurrentScrollback(),
+      cols: terminal.getPtyProcess().cols || 80,
+    }));
+  }
+
+  /**
+   * Trim a single terminal's scrollback to `targetLines`. Returns false (rather
+   * than throwing) when the terminal is unknown — e.g. it was disposed between the
+   * governor's `getTerminalBufferSizes()` snapshot and this call — so a stale id in
+   * the targeted-trim map is a silent no-op. The bool is informational; callers may
+   * ignore it. Used by the governor's targeted pre-pause reclaim.
+   */
+  trimTerminalScrollback(id: string, targetLines: number): boolean {
+    const terminal = this.registry.get(id);
+    if (!terminal) return false;
+    terminal.trimScrollback(targetLines);
+    return true;
+  }
+
+  /**
    * Check if SAB mode is enabled.
    */
   isSabMode(): boolean {
@@ -365,10 +394,10 @@ export class PtyManager extends EventEmitter {
    * No-op in SAB mode (which is always enabled in production).
    * Kept for backwards compatibility with IPC fallback mode.
    */
-  acknowledgeData(id: string, charCount: number): void {
+  acknowledgeData(id: string, byteCount: number): void {
     const terminal = this.registry.get(id);
     if (terminal) {
-      terminal.acknowledgeData(charCount);
+      terminal.acknowledgeData(byteCount);
     }
   }
 
@@ -570,7 +599,7 @@ export class PtyManager extends EventEmitter {
       lastInputTime: terminalInfo.lastInputTime,
       lastOutputTime: terminalInfo.lastOutputTime,
       lastStateChange: terminalInfo.lastStateChange,
-      activityTier: terminal.getActivityTier() as "focused" | "visible" | "background",
+      activityTier: terminal.getActivityTier() === "active" ? "focused" : "background",
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
@@ -641,6 +670,15 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Transition agent state from external observer.
+   *
+   * Returns `boolean` — preserved as the load-bearing contract for the
+   * `Promise<boolean>` resolver on the main-side `PtyClient.transitionState`
+   * and the production caller at `electron/ipc/handlers/terminal/io.ts:225`.
+   *
+   * The precise drop reason (hysteresis / stale-session / schema-invalid /
+   * no-op) is emitted on the bus as `agent:state-transition-dropped` from
+   * inside `AgentStateService`. The bus is the source of truth for
+   * diagnostics; the wire carries only the boolean.
    */
   transitionState(
     id: string,
@@ -653,10 +691,6 @@ export class PtyManager extends EventEmitter {
     if (!terminal) {
       return false;
     }
-    // AgentStateService usually expects TerminalInfo.
-    // Let's check if agentStateService can take TerminalProcess or we need to pass info.
-    // Looking at the imports in PtyManager, AgentStateService is imported.
-    // I need to check AgentStateService definition, but likely it takes TerminalInfo.
     return this.agentStateService.transitionState(
       terminal.getInfo(),
       event,
@@ -827,7 +861,7 @@ export class PtyManager extends EventEmitter {
         });
 
         // Keep monitors running but reduce polling frequency for background terminals
-        terminalProcess.setActivityMonitorTier(BACKGROUND_POLLING_MS);
+        terminalProcess.setActivityMonitorTier("background", BACKGROUND_POLLING_MS);
         // Notify caller to sync backpressure tier
         onTierChange?.(id, "background");
         // Process detector remains active to detect new agents
@@ -840,7 +874,7 @@ export class PtyManager extends EventEmitter {
         });
 
         // Active terminals get full-speed polling
-        terminalProcess.setActivityMonitorTier(ACTIVE_POLLING_MS);
+        terminalProcess.setActivityMonitorTier("active", ACTIVE_POLLING_MS);
         // Notify caller to sync backpressure tier
         onTierChange?.(id, "active");
         // Ensure process detector is running
@@ -854,10 +888,14 @@ export class PtyManager extends EventEmitter {
   /**
    * Set activity monitoring tier (active vs background).
    */
-  setActivityMonitorTier(id: string, interval: number): void {
+  setActivityMonitorTier(
+    id: string,
+    tier: "active" | "background",
+    pollingIntervalMs: number
+  ): void {
     const terminal = this.registry.get(id);
     if (terminal) {
-      terminal.setActivityMonitorTier(interval);
+      terminal.setActivityMonitorTier(tier, pollingIntervalMs);
     }
   }
 

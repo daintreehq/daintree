@@ -18,7 +18,7 @@ function escapeRegExp(value: string): string {
 
 const overflowMenuLabels: Record<string, string> = {
   "Open settings": "Settings",
-  "Open Terminal": "Terminal",
+  "Open terminal": "Terminal",
 };
 
 async function expectToolbarActionReachable(page: AppContext["window"], name: string) {
@@ -27,7 +27,9 @@ async function expectToolbarActionReachable(page: AppContext["window"], name: st
     .getByRole("button", { name: new RegExp(`^${escapeRegExp(name)}\\b`, "i") })
     .first();
   const overflowLabel = overflowMenuLabels[name] ?? name;
-  const menuItem = page.getByRole("menuitem", { name: overflowLabel, exact: true });
+  const menuItem = page.getByRole("menuitem", {
+    name: new RegExp(`^${escapeRegExp(overflowLabel)}(?:\\s|$)`, "i"),
+  });
 
   for (let attempt = 0; attempt < 8; attempt++) {
     if (await directButton.isVisible({ timeout: 500 }).catch(() => false)) {
@@ -94,7 +96,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     // actions into overflow on constrained CI displays; the contract is
     // reachability from the toolbar surface.
     await expectToolbarActionReachable(window, "Open settings");
-    await expectToolbarActionReachable(window, "Open Terminal");
+    await expectToolbarActionReachable(window, "Open terminal");
     await expect(toolbarButton(window, "Toggle Sidebar")).toBeVisible({ timeout: T_SHORT });
   });
 
@@ -295,6 +297,6 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     // that the actions are restored to the toolbar surface and remain
     // reachable, either directly or through overflow.
     await expectToolbarActionReachable(window, "Open settings");
-    await expectToolbarActionReachable(window, "Open Terminal");
+    await expectToolbarActionReachable(window, "Open terminal");
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_KEYBINDINGS,
   KeybindingService,
@@ -1609,6 +1609,55 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("terminal recovery chords — issue #9803", () => {
+    // The five per-pane recovery actions (kill, restart, forceResume, redraw,
+    // rename) ship with default 3-part Cmd+K Cmd+<letter> chords. Each test
+    // pins one chord and asserts (a) the display combo resolves to the
+    // expected key glyphs on Mac, and (b) the chord has no exact or prefix
+    // shadow against any other registered binding. The chord family matches
+    // the existing terminal bulk-action convention (closeAll/killAll/
+    // restartAll use the same Cmd+K Cmd+<letter> shape).
+    const RECOVERY_CHORDS: Array<{ actionId: string; combo: string; letter: string }> = [
+      { actionId: "terminal.kill", combo: "Cmd+K Cmd+Q", letter: "Q" },
+      { actionId: "terminal.restart", combo: "Cmd+K Cmd+E", letter: "E" },
+      { actionId: "terminal.forceResume", combo: "Cmd+K Cmd+U", letter: "U" },
+      { actionId: "terminal.redraw", combo: "Cmd+K Cmd+D", letter: "D" },
+      { actionId: "terminal.rename", combo: "Cmd+K Cmd+L", letter: "L" },
+    ];
+
+    for (const { actionId, combo, letter } of RECOVERY_CHORDS) {
+      it(`resolves the display combo for ${actionId} (${combo})`, () => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        const display = service.getDisplayCombo(actionId);
+        expect(display).not.toBe("");
+        expect(display).toContain("⌘");
+        expect(display.toUpperCase()).toContain("K");
+        expect(display.toUpperCase()).toContain(letter.toUpperCase());
+      });
+
+      it(`finds no other-binding conflicts for ${actionId} (${combo})`, () => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        // Exclude the actionId under test so the chord's own registration
+        // doesn't count as a self-conflict; the rest of the registry must
+        // have nothing at the same combo.
+        const conflicts = service.findConflicts(combo, actionId, "global");
+        expect(conflicts.filter((c) => c.kind === "conflict")).toEqual([]);
+        expect(conflicts.filter((c) => c.kind === "shadowed")).toEqual([]);
+      });
+    }
+
+    it("registers the five recovery chords in CORE_KEYBINDINGS", () => {
+      const actionIds = RECOVERY_CHORDS.map((c) => c.actionId);
+      for (const id of actionIds) {
+        const entries = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === id);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.combo).toBe(RECOVERY_CHORDS.find((c) => c.actionId === id)?.combo);
+      }
+    });
+  });
+
   describe("window.zoomIn discoverability alias — issue #7304", () => {
     it("registers both Cmd+= and Cmd+Shift+= as defaults for window.zoomIn", () => {
       const combos = DEFAULT_KEYBINDINGS.filter((b) => b.actionId === "window.zoomIn").map(
@@ -1731,6 +1780,195 @@ describe("KeybindingService", () => {
       expect(service.getEffectiveCombo("plugin.foo")).toBe("Cmd+P");
       expect(warnSpy).not.toHaveBeenCalled();
 
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("loadOverrides degradation on IPC rejection — issue #9931", () => {
+    function mockElectronOverrides(overrides: Record<string, string[]>) {
+      vi.stubGlobal("window", {
+        electron: {
+          keybinding: {
+            getOverrides: vi.fn().mockResolvedValue(overrides),
+            setOverride: vi.fn().mockResolvedValue(undefined),
+            removeOverride: vi.fn().mockResolvedValue(undefined),
+            resetAll: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+      });
+    }
+
+    function mockElectronGetOverridesRejection(reason: unknown) {
+      vi.stubGlobal("window", {
+        electron: {
+          keybinding: {
+            getOverrides: vi.fn().mockRejectedValue(reason),
+            setOverride: vi.fn().mockResolvedValue(undefined),
+            removeOverride: vi.fn().mockResolvedValue(undefined),
+            resetAll: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+      });
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("resolves with defaults and warns when getOverrides rejects with an Error", async () => {
+      setPlatform("MacIntel");
+      mockElectronGetOverridesRejection(new Error("boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+
+      await expect(service.loadOverrides()).resolves.toBeUndefined();
+
+      // Defaults remain active — no override installed because the IPC failed
+      expect(service.getOverride("terminal.close")).toBeUndefined();
+      expect(service.getEffectiveCombo("terminal.close")).toBe(
+        service.getDefaultCombo("terminal.close")
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; keeping prior state: boom"
+        )
+      );
+    });
+
+    it("handles non-Error rejection values without throwing", async () => {
+      setPlatform("MacIntel");
+      mockElectronGetOverridesRejection("string-only failure");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+
+      await expect(service.loadOverrides()).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; keeping prior state: string-only failure"
+        )
+      );
+    });
+
+    it("does not notify listeners on degradation (constructor seed is the stable state)", async () => {
+      setPlatform("MacIntel");
+      mockElectronGetOverridesRejection(new Error("boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+      const listener = vi.fn();
+      service.subscribe(listener);
+
+      await service.loadOverrides();
+
+      expect(listener).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it("tolerates hostile rejection values whose String() throws", async () => {
+      // Some preloads can hand back objects with throwing String coercion.
+      // The catch must not re-throw via String(error) — otherwise we re-introduce
+      // the #9931 failure mode. formatErrorMessage is hostile-safe.
+      setPlatform("MacIntel");
+      const hostile = {
+        toString() {
+          throw new Error("format boom");
+        },
+        [Symbol.toPrimitive]() {
+          throw new Error("format boom");
+        },
+      };
+      mockElectronGetOverridesRejection(hostile);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+
+      await expect(service.loadOverrides()).resolves.toBeUndefined();
+      // formatErrorMessage falls back to the supplied message for hostile values.
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; keeping prior state: Unknown keybinding override load failure"
+        )
+      );
+    });
+
+    it("catches synchronous throws from getOverrides too", async () => {
+      setPlatform("MacIntel");
+      vi.stubGlobal("window", {
+        electron: {
+          keybinding: {
+            getOverrides: vi.fn(() => {
+              throw new Error("sync boom");
+            }),
+            setOverride: vi.fn().mockResolvedValue(undefined),
+            removeOverride: vi.fn().mockResolvedValue(undefined),
+            resetAll: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const service = new KeybindingService();
+
+      await expect(service.loadOverrides()).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; keeping prior state: sync boom"
+        )
+      );
+    });
+
+    it("keeps prior overrides as last-known-good when a reload rejects", async () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      // First load: success — install a custom override.
+      mockElectronOverrides({ "terminal.close": ["Cmd+Shift+W"] });
+      await service.loadOverrides();
+      expect(service.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+W");
+
+      // Second load: IPC rejects. Prior override must persist (not silently
+      // clobbered) and the user keeps their customization.
+      mockElectronGetOverridesRejection(new Error("reload boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await service.loadOverrides();
+
+      expect(service.getOverride("terminal.close")).toEqual(["Cmd+Shift+W"]);
+      expect(service.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+W");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[KeybindingService] Failed to load keybinding overrides; keeping prior state: reload boom"
+        )
+      );
+    });
+
+    it("recovers cleanly when a subsequent loadOverrides succeeds", async () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      mockElectronGetOverridesRejection(new Error("first call fails"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await service.loadOverrides();
+      expect(service.getOverride("terminal.close")).toBeUndefined();
+
+      // A successful reload installs fresh overrides and notifies listeners.
+      mockElectronOverrides({ "terminal.close": ["Cmd+K"] });
+      const listener = vi.fn();
+      service.subscribe(listener);
+      await service.loadOverrides();
+      expect(service.getEffectiveCombo("terminal.close")).toBe("Cmd+K");
+      expect(listener).toHaveBeenCalledTimes(1);
+      warnSpy.mockRestore();
+    });
+
+    it("setOverride still works after a failed loadOverrides", async () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      mockElectronGetOverridesRejection(new Error("load fails"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await service.loadOverrides();
+
+      await service.setOverride("terminal.close", ["Cmd+Shift+W"]);
+      expect(service.getOverride("terminal.close")).toEqual(["Cmd+Shift+W"]);
+      expect(service.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+W");
       warnSpy.mockRestore();
     });
   });

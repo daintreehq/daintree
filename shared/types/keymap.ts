@@ -121,6 +121,11 @@ export type BuiltInKeyAction =
   | "terminal.bulkCommand"
   | "terminal.armDefault"
   | "terminal.disarmAll"
+  | "terminal.kill"
+  | "terminal.restart"
+  | "terminal.forceResume"
+  | "terminal.redraw"
+  | "terminal.rename"
 
   // Fleet quick-actions (scoped to "fleet ribbon visible" at dispatch time)
   | "fleet.accept"
@@ -319,6 +324,11 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.bulkCommand",
   "terminal.armDefault",
   "terminal.disarmAll",
+  "terminal.kill",
+  "terminal.restart",
+  "terminal.forceResume",
+  "terminal.redraw",
+  "terminal.rename",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",

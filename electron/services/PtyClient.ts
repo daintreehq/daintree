@@ -65,6 +65,7 @@ import type {
   PtyHostActivityTier,
   CrashType,
   SpawnResult,
+  FlowControlSnapshot,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -87,6 +88,8 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: string;
   lastStateChange?: number;
+  lastInputTime?: number;
+  lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
@@ -823,8 +826,19 @@ export class PtyClient extends EventEmitter {
     }
   }
 
-  setActiveProject(windowId: number, projectId: string | null, projectPath?: string): void {
+  setActiveProject(
+    windowId: number,
+    projectId: string | null,
+    projectPath?: string,
+    panelCwds?: string[],
+    projectEnv?: Record<string, string> | null
+  ): void {
     this.activeProjectId = projectId;
+    // panelCwds / projectEnv are transient warm hints for the first send only —
+    // they are NOT stored in windowProjectContexts. A host restart replays via
+    // syncProjectContext against a freshly-empty pool with no pending restore
+    // spawns, so re-warming saved panel cwds (or refiring the env hash) would
+    // be wasted work.
     this.windowProjectContexts.set(windowId, { projectId, projectPath, mode: "active" });
 
     if (!this.lifecycle.child) {
@@ -837,6 +851,8 @@ export class PtyClient extends EventEmitter {
       windowId,
       projectId,
       ...(projectPath ? { projectPath } : {}),
+      ...(panelCwds && panelCwds.length > 0 ? { panelCwds } : {}),
+      ...(projectEnv ? { projectEnv } : {}),
     });
   }
 
@@ -882,7 +898,8 @@ export class PtyClient extends EventEmitter {
   }
 
   async gracefulKillByProject(
-    projectId: string
+    projectId: string,
+    options?: { preserveSession?: boolean }
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
     const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
@@ -892,7 +909,14 @@ export class PtyClient extends EventEmitter {
         timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
       }
     );
-    this.send({ type: "graceful-kill-by-project", projectId, requestId });
+    this.send({
+      type: "graceful-kill-by-project",
+      projectId,
+      requestId,
+      ...(options?.preserveSession !== undefined
+        ? { preserveSession: options.preserveSession }
+        : {}),
+    });
     return promise.catch(() => []);
   }
 
@@ -924,8 +948,8 @@ export class PtyClient extends EventEmitter {
   /**
    * Acknowledge data processing for flow control.
    */
-  acknowledgeData(id: string, charCount: number): void {
-    this.send({ type: "acknowledge-data", id, charCount });
+  acknowledgeData(id: string, byteCount: number): void {
+    this.send({ type: "acknowledge-data", id, byteCount });
   }
 
   /**
@@ -977,6 +1001,33 @@ export class PtyClient extends EventEmitter {
     const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
     this.send({ type: "get-all-terminals", requestId });
     return promise.catch(() => []);
+  }
+
+  /**
+   * Get an on-demand structured flow-control snapshot from the pty-host
+   * (per-terminal flow status, held pause tokens, queue depths, backpressure
+   * stats, and resource-governor state). Used by `DiagnosticsCollector` for
+   * support bundles. Resolves to an empty snapshot on IPC failure/timeout —
+   * the diagnostics caller never throws.
+   */
+  async getFlowControlSnapshotAsync(): Promise<FlowControlSnapshot> {
+    const requestId = this.broker.generateId("flow-control-snapshot");
+    const promise = this.broker.register<FlowControlSnapshot>(requestId);
+    this.send({ type: "get-flow-control-snapshot", requestId });
+    return promise.catch(() => ({
+      timestamp: Date.now(),
+      terminals: [],
+      queueDepth: [],
+      totalPendingBytes: 0,
+      stats: { pauseCount: 0, resumeCount: 0, suspendCount: 0, forceResumeCount: 0 },
+      resourceGovernor: {
+        isThrottling: false,
+        isWarning: false,
+        activeProfile: "balanced",
+        smoothedUtilizationPercent: null,
+        throttleDurationMs: 0,
+      },
+    }));
   }
 
   /**

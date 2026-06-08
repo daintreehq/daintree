@@ -9,11 +9,11 @@ const worktreeClientMock = vi.hoisted(() => ({
   fetchPRBranch: vi.fn(),
 }));
 
-const githubClientMock = vi.hoisted(() => ({
-  getIssueByNumber: vi.fn(),
-  getPRByNumber: vi.fn(),
+const forgeClientMock = vi.hoisted(() => ({
+  getCurrentUser: vi.fn(),
   assignIssue: vi.fn(),
-  getConfig: vi.fn(),
+  getIssue: vi.fn(),
+  getPR: vi.fn(),
 }));
 
 const projectClientMock = vi.hoisted(() => ({
@@ -34,10 +34,14 @@ const selectorMock = vi.hoisted(() => ({
 }));
 
 const gitGetStagingStatusMock = vi.hoisted(() => vi.fn());
+const notifySpawnFailuresMock = vi.hoisted(() => vi.fn());
 
+vi.mock("@/utils/recipeNotify", () => ({
+  notifyRecipeSpawnFailures: notifySpawnFailuresMock,
+}));
 vi.mock("@/clients", () => ({
   worktreeClient: worktreeClientMock,
-  githubClient: githubClientMock,
+  forgeClient: forgeClientMock,
   projectClient: projectClientMock,
   copyTreeClient: copyTreeClientMock,
 }));
@@ -103,22 +107,32 @@ function setMainWorktree(branch: string | null) {
 }
 
 function setGithubUser(username: string | null) {
-  githubClientMock.getConfig.mockResolvedValue(
-    username ? { hasToken: true, username } : { hasToken: false }
-  );
+  forgeClientMock.getCurrentUser.mockResolvedValue(username ? { login: username } : null);
 }
 
 function setAssignPreference(value: boolean) {
   preferencesStoreMock.getState.mockReturnValue({ assignWorktreeToSelf: value });
 }
 
-function setRecipe(recipeId: string | null, runImpl?: () => Promise<void>) {
-  const runRecipe = vi.fn().mockImplementation(runImpl ?? (async () => {}));
+type SpawnResults = {
+  spawned: Array<{ index: number; terminalId: string }>;
+  failed: Array<{ index: number; error: string }>;
+};
+
+const OK_SPAWN_RESULTS: SpawnResults = {
+  spawned: [{ index: 0, terminalId: "term-recipe" }],
+  failed: [],
+};
+
+function setRecipe(recipeId: string | null, runImpl?: () => Promise<SpawnResults>) {
+  const runRecipeWithResults = vi
+    .fn()
+    .mockImplementation(runImpl ?? (async () => OK_SPAWN_RESULTS));
   recipeStoreMock.getState.mockReturnValue({
-    getRecipeById: vi.fn().mockReturnValue(recipeId ? { id: recipeId } : null),
-    runRecipe,
+    getRecipeById: vi.fn().mockReturnValue(recipeId ? { id: recipeId, name: "Recipe" } : null),
+    runRecipeWithResults,
   });
-  return runRecipe;
+  return runRecipeWithResults;
 }
 
 function setPanelTerminals(
@@ -146,7 +160,7 @@ beforeEach(() => {
   worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/feature/issue-6609-add-tools");
   worktreeClientMock.create.mockResolvedValue("wt-new");
   worktreeClientMock.fetchPRBranch.mockResolvedValue(undefined);
-  githubClientMock.assignIssue.mockResolvedValue(undefined);
+  forgeClientMock.assignIssue.mockResolvedValue(undefined);
   copyTreeClientMock.injectToTerminal.mockResolvedValue(undefined);
   setProject({ id: "p1", path: "/repo" });
   setMainWorktree("main");
@@ -183,7 +197,7 @@ describe("worktree.createWithRecipe", () => {
       }),
       "/repo"
     );
-    expect(githubClientMock.getPRByNumber).not.toHaveBeenCalled();
+    expect(forgeClientMock.getPR).not.toHaveBeenCalled();
     expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
     expect(result.worktreeId).toBe("wt-new");
     expect(result.branch).toBe("feature/issue-6609-add-tools");
@@ -191,9 +205,9 @@ describe("worktree.createWithRecipe", () => {
   });
 
   it("PR path: resolves head branch, fetches PR, creates worktree on existing local branch", async () => {
-    githubClientMock.getPRByNumber.mockResolvedValue({
+    forgeClientMock.getPR.mockResolvedValue({
       number: 42,
-      headRefName: "contrib/feature-x",
+      headRef: "contrib/feature-x",
       title: "Some PR",
       url: "https://github.com/x/y/pull/42",
     });
@@ -205,7 +219,7 @@ describe("worktree.createWithRecipe", () => {
       unknown
     >;
 
-    expect(githubClientMock.getPRByNumber).toHaveBeenCalledWith("/repo", 42);
+    expect(forgeClientMock.getPR).toHaveBeenCalledWith("/repo", 42);
     expect(worktreeClientMock.fetchPRBranch).toHaveBeenCalledWith("/repo", 42, "contrib/feature-x");
     // PR path uses the head ref directly — must not call getAvailableBranch (which would suffix on conflict).
     expect(worktreeClientMock.getAvailableBranch).not.toHaveBeenCalled();
@@ -225,7 +239,7 @@ describe("worktree.createWithRecipe", () => {
   });
 
   it("PR path throws when the PR is not found", async () => {
-    githubClientMock.getPRByNumber.mockResolvedValue(null);
+    forgeClientMock.getPR.mockResolvedValue(null);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     await expect(def.run({ pullRequestNumber: 999 }, {} as never)).rejects.toThrow(
       /Pull request #999 not found/
@@ -234,8 +248,8 @@ describe("worktree.createWithRecipe", () => {
     expect(worktreeClientMock.create).not.toHaveBeenCalled();
   });
 
-  it("PR path throws when headRefName is missing on the resolved PR", async () => {
-    githubClientMock.getPRByNumber.mockResolvedValue({
+  it("PR path throws when headRef is missing on the resolved PR", async () => {
+    forgeClientMock.getPR.mockResolvedValue({
       number: 42,
       title: "x",
       url: "u",
@@ -247,9 +261,9 @@ describe("worktree.createWithRecipe", () => {
   });
 
   it("PR path surfaces fetchPRBranch failures (no worktree created)", async () => {
-    githubClientMock.getPRByNumber.mockResolvedValue({
+    forgeClientMock.getPR.mockResolvedValue({
       number: 42,
-      headRefName: "contrib/x",
+      headRef: "contrib/x",
       title: "x",
       url: "u",
     });
@@ -274,34 +288,36 @@ describe("worktree.createWithRecipe", () => {
   });
 
   it("recipe context carries prNumber (not issueNumber) when pullRequestNumber is provided", async () => {
-    githubClientMock.getPRByNumber.mockResolvedValue({
+    forgeClientMock.getPR.mockResolvedValue({
       number: 42,
-      headRefName: "contrib/feature-x",
+      headRef: "contrib/feature-x",
       title: "x",
       url: "u",
     });
     worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/contrib/feature-x");
-    const runRecipe = vi.fn().mockResolvedValue(undefined);
-    recipeStoreMock.getState.mockReturnValue({
-      getRecipeById: vi.fn().mockReturnValue({ id: "recipe-1" }),
-      runRecipe,
-    });
+    const runRecipeWithResults = setRecipe("recipe-1");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { pullRequestNumber: 42, recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
-    expect(runRecipe).toHaveBeenCalledWith("recipe-1", "/repo/contrib/feature-x", "wt-new", {
-      worktreePath: "/repo/contrib/feature-x",
-      branchName: "contrib/feature-x",
-      issueNumber: undefined,
-      prNumber: 42,
-    });
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      "/repo/contrib/feature-x",
+      "wt-new",
+      {
+        worktreePath: "/repo/contrib/feature-x",
+        branchName: "contrib/feature-x",
+        issueNumber: undefined,
+        prNumber: 42,
+      },
+      { spawnedBy: undefined, focusPolicy: undefined, dispatchSource: undefined }
+    );
     expect(result.recipeLaunched).toBe(true);
   });
 
   it("passes spawnedBy through to recipes launched from MCP-created worktrees", async () => {
-    const runRecipe = setRecipe("recipe-1");
+    const runRecipeWithResults = setRecipe("recipe-1");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     await def.run(
@@ -309,7 +325,7 @@ describe("worktree.createWithRecipe", () => {
       {} as never
     );
 
-    expect(runRecipe).toHaveBeenCalledWith(
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
       "recipe-1",
       "/repo/feature/issue-6609-add-tools",
       "wt-new",
@@ -317,7 +333,24 @@ describe("worktree.createWithRecipe", () => {
         worktreePath: "/repo/feature/issue-6609-add-tools",
         branchName: "feature/issue-6609-add-tools",
       }),
-      { spawnedBy: "mcp" }
+      { spawnedBy: "mcp", focusPolicy: undefined, dispatchSource: undefined }
+    );
+  });
+
+  it("forwards ctx.dispatchSource so agent-driven recipe runs stay capped", async () => {
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
+      dispatchSource: "agent",
+    } as never);
+
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "recipe-1",
+      expect.any(String),
+      "wt-new",
+      expect.any(Object),
+      expect.objectContaining({ dispatchSource: "agent" })
     );
   });
 
@@ -340,10 +373,96 @@ describe("worktree.createWithRecipe", () => {
     expect(worktreeClientMock.create).toHaveBeenCalled();
   });
 
-  it("treats empty-string headRefName the same as missing", async () => {
-    githubClientMock.getPRByNumber.mockResolvedValue({
+  it("reports recipeLaunched: false when every recipe terminal fails to spawn", async () => {
+    const results = {
+      spawned: [],
+      failed: [
+        { index: 0, error: "Panel limit reached" },
+        { index: 1, error: "Panel limit reached" },
+      ],
+    };
+    setRecipe("recipe-1", async () => results);
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run(
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(false);
+    expect(result.spawnedTerminalCount).toBe(0);
+    expect(result.failedTerminalCount).toBe(2);
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+      recipeName: "Recipe",
+      projectId: "p1",
+    });
+  });
+
+  it("reports recipeLaunched: true with failure counts on partial spawn", async () => {
+    setRecipe("recipe-1", async () => ({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    }));
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run(
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(true);
+    expect(result.spawnedTerminalCount).toBe(1);
+    expect(result.failedTerminalCount).toBe(1);
+  });
+
+  it("does not notify spawn failures when all recipe terminals spawn", async () => {
+    setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run(
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(true);
+    expect(result.spawnedTerminalCount).toBe(1);
+    expect(result.failedTerminalCount).toBe(0);
+    // The helper itself no-ops on zero failures; the action still routes
+    // results through it so the gate lives in one place.
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(
+      OK_SPAWN_RESULTS,
+      expect.objectContaining({ recipeName: "Recipe" })
+    );
+  });
+
+  it("does not notify when the recipe store throws (PARTIAL_SUCCESS path)", async () => {
+    setRecipe("recipe-1", async () => {
+      throw new Error("recipe boom");
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    await expect(
+      def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {} as never)
+    ).rejects.toThrow(/PARTIAL_SUCCESS:/);
+    expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
+  });
+
+  it("treats empty-string headRef the same as missing", async () => {
+    forgeClientMock.getPR.mockResolvedValue({
       number: 42,
-      headRefName: "",
+      headRef: "",
+      title: "x",
+      url: "u",
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
+  });
+
+  it("treats whitespace-only headRef the same as missing", async () => {
+    forgeClientMock.getPR.mockResolvedValue({
+      number: 42,
+      headRef: "   ",
       title: "x",
       url: "u",
     });
@@ -355,7 +474,7 @@ describe("worktree.createWithRecipe", () => {
 
 describe("workflow.startWorkOnIssue", () => {
   it("happy path: fetches issue, creates worktree, launches agent, injects context", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({
+    forgeClientMock.getIssue.mockResolvedValue({
       number: 6609,
       title: "Add workflow macro tools",
       url: "https://github.com/x/y/issues/6609",
@@ -368,8 +487,11 @@ describe("workflow.startWorkOnIssue", () => {
       unknown
     >;
 
-    expect(githubClientMock.getIssueByNumber).toHaveBeenCalledWith("/repo", 6609);
-    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalled();
+    expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 6609);
+    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalledWith(
+      "/repo",
+      "feature/issue-6609-add-workflow-macro-tools"
+    );
     expect(worktreeClientMock.create).toHaveBeenCalled();
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "claude",
@@ -385,7 +507,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("passes spawnedBy through to agents launched by MCP workflow actions", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({
+    forgeClientMock.getIssue.mockResolvedValue({
       number: 6959,
       title: "Assistant focus is stolen",
       url: "https://github.com/x/y/issues/6959",
@@ -395,10 +517,13 @@ describe("workflow.startWorkOnIssue", () => {
 
     await def.run({ issueNumber: 6959, agentId: "claude", spawnedBy: "mcp" }, {} as never);
 
+    expect(worktreeClientMock.getAvailableBranch).toHaveBeenCalledWith(
+      "/repo",
+      "feature/issue-6959-assistant-focus-is-stolen"
+    );
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "claude",
       expect.objectContaining({
-        cwd: "/repo/feature/issue-6609-add-tools",
         worktreeId: "wt-new",
         spawnedBy: "mcp",
       })
@@ -414,15 +539,15 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("throws when issue is not found", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue(null);
+    forgeClientMock.getIssue.mockResolvedValue(null);
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     await expect(def.run({ issueNumber: 999, agentId: "claude" }, {} as never)).rejects.toThrow(
-      /issue #999 not found/
+      /Issue #999 not found/
     );
   });
 
   it("throws PARTIAL_SUCCESS when agent.launch returns null after worktree creation", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({
+    forgeClientMock.getIssue.mockResolvedValue({
       number: 1,
       title: "x",
       url: "u",
@@ -438,7 +563,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("partial-success error embeds message + partial result as a single JSON envelope", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 7, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 7, title: "t", url: "u" });
     const callbacks = makeCallbacks();
     callbacks.onLaunchAgent.mockResolvedValue(null);
     const def = setupActions(callbacks)("workflow.startWorkOnIssue");
@@ -459,7 +584,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("partial-success encoding stays parseable when the human message itself contains '{'", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 5, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 5, title: "t", url: "u" });
     setRecipe("recipe-1", async () => {
       throw new Error('config parse failed: {"key": null}');
     });
@@ -477,7 +602,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("recipe failure throws PARTIAL_SUCCESS with worktree info before agent is launched", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
     setRecipe("recipe-1", async () => {
       throw new Error("recipe boom");
     });
@@ -490,8 +615,72 @@ describe("workflow.startWorkOnIssue", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
+  it("reports recipeLaunched: false when every recipe terminal fails to spawn", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    const results = {
+      spawned: [],
+      failed: [{ index: 0, error: "Panel limit reached" }],
+    };
+    setRecipe("recipe-1", async () => results);
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run(
+      { issueNumber: 1, agentId: "claude", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(false);
+    expect(result.spawnedTerminalCount).toBe(0);
+    expect(result.failedTerminalCount).toBe(1);
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
+      recipeName: "Recipe",
+      projectId: "p1",
+    });
+  });
+
+  it("reports recipeLaunched: true with failure counts on partial spawn", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    setRecipe("recipe-1", async () => ({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "PTY spawn failed" }],
+    }));
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run(
+      { issueNumber: 1, agentId: "claude", recipeId: "recipe-1" },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(result.recipeLaunched).toBe(true);
+    expect(result.spawnedTerminalCount).toBe(1);
+    expect(result.failedTerminalCount).toBe(1);
+  });
+
+  it("PARTIAL_SUCCESS from a failed agent launch preserves partial spawn counts", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    setRecipe("recipe-1", async () => ({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    }));
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockRejectedValue(new Error("PTY spawn failed"));
+    const def = setupActions(callbacks)("workflow.startWorkOnIssue");
+
+    try {
+      await def.run({ issueNumber: 1, agentId: "claude", recipeId: "recipe-1" }, {} as never);
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("PARTIAL_SUCCESS:");
+      const payload = JSON.parse(message.slice(message.indexOf("{")));
+      expect(payload.partialResult.recipeLaunched).toBe(true);
+      expect(payload.partialResult.spawnedTerminalCount).toBe(1);
+      expect(payload.partialResult.failedTerminalCount).toBe(1);
+    }
+  });
+
   it("agent.launch throwing (not just returning null) becomes PARTIAL_SUCCESS", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
     const callbacks = makeCallbacks();
     callbacks.onLaunchAgent.mockRejectedValue(new Error("PTY spawn failed"));
     const def = setupActions(callbacks)("workflow.startWorkOnIssue");
@@ -510,7 +699,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("context injection failure is best-effort — agent stays launched, contextInjected: false", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
     copyTreeClientMock.injectToTerminal.mockRejectedValue(new Error("nope"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run({ issueNumber: 1, agentId: "claude" }, {} as never)) as Record<
@@ -522,7 +711,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("injectContext: false skips injection entirely", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 1, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 1, title: "t", url: "u" });
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 1, agentId: "claude", injectContext: false },
@@ -533,22 +722,22 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("assignToSelf assigns the issue to the configured user", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignmentError).toBeNull();
   });
 
   it("assignToSelf is best-effort — failure surfaces in assignmentError without aborting the macro", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
@@ -560,7 +749,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("assignToSelf omitted falls back to assignWorktreeToSelf preference (true)", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
     setAssignPreference(true);
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
@@ -568,13 +757,13 @@ describe("workflow.startWorkOnIssue", () => {
       string,
       unknown
     >;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6609, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignmentError).toBeNull();
   });
 
   it("assignToSelf omitted with preference (false) does not assign", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
     setAssignPreference(false);
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
@@ -582,13 +771,13 @@ describe("workflow.startWorkOnIssue", () => {
       string,
       unknown
     >;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
 
   it("explicit assignToSelf: false overrides a true preference", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
     setAssignPreference(true);
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
@@ -596,27 +785,27 @@ describe("workflow.startWorkOnIssue", () => {
       { issueNumber: 6609, agentId: "claude", assignToSelf: false },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
 
   it("assignToSelf with no GitHub username configured surfaces a descriptive assignmentError", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser(null);
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("No GitHub username configured");
+    expect(result.assignmentError).toBe("No forge viewer available");
     expect(result.terminalId).toBe("term-1");
   });
 
-  it("preference fallback also surfaces 'No GitHub username configured' when assignToSelf is omitted", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+  it("preference fallback also surfaces 'No forge viewer available' when assignToSelf is omitted", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser(null);
     setAssignPreference(true);
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
@@ -624,15 +813,15 @@ describe("workflow.startWorkOnIssue", () => {
       string,
       unknown
     >;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("No GitHub username configured");
+    expect(result.assignmentError).toBe("No forge viewer available");
   });
 
   it("assignment failure does not clobber other result fields", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("rate limit"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("rate limit"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
@@ -645,15 +834,15 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.assignmentError).toBe("rate limit");
   });
 
-  it("getConfig() rejection surfaces in assignmentError, worktree still returned", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({ number: 6609, title: "t", url: "u" });
-    githubClientMock.getConfig.mockRejectedValue(new Error("IPC unavailable"));
+  it("getCurrentUser() rejection surfaces in assignmentError, worktree still returned", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
+    forgeClientMock.getCurrentUser.mockRejectedValue(new Error("IPC unavailable"));
     const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
     const result = (await def.run(
       { issueNumber: 6609, agentId: "claude", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.worktreeId).toBe("wt-new");
     expect(result.terminalId).toBe("term-1");
     expect(result.assignedToSelf).toBe(false);
@@ -661,7 +850,7 @@ describe("workflow.startWorkOnIssue", () => {
   });
 
   it("derives a sane branch name from the issue title when none is provided", async () => {
-    githubClientMock.getIssueByNumber.mockResolvedValue({
+    forgeClientMock.getIssue.mockResolvedValue({
       number: 42,
       title: "Fix: weird $$$ characters & SPACES",
       url: "u",
@@ -684,7 +873,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     >;
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
   });
 
   it("explicit assignToSelf: true with issueNumber assigns and returns null error", async () => {
@@ -694,7 +883,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignedUsername).toBe("ada");
     expect(result.assignmentError).toBeNull();
@@ -713,7 +902,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
 
   it("assignedUsername is null when assignment fails", async () => {
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
@@ -732,7 +921,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625 },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
     expect(result.assignedToSelf).toBe(true);
     expect(result.assignmentError).toBeNull();
   });
@@ -745,7 +934,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625 },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
@@ -758,14 +947,14 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: false },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
 
   it("assignment failure surfaces in assignmentError but worktree still succeeds", async () => {
     setGithubUser("ada");
-    githubClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
+    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
@@ -783,9 +972,9 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("No GitHub username configured");
+    expect(result.assignmentError).toBe("No forge viewer available");
   });
 
   it("assignToSelf without issueNumber is a no-op (nothing to assign)", async () => {
@@ -795,19 +984,19 @@ describe("worktree.createWithRecipe — issue assignment", () => {
       { branchName: "feature/foo", assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBeNull();
   });
 
-  it("getConfig() rejection during assignment surfaces in assignmentError, worktree still created", async () => {
-    githubClientMock.getConfig.mockRejectedValue(new Error("IPC unavailable"));
+  it("getCurrentUser() rejection during assignment surfaces in assignmentError, worktree still created", async () => {
+    forgeClientMock.getCurrentUser.mockRejectedValue(new Error("IPC unavailable"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
       { branchName: "feature/foo", issueNumber: 6609, assignToSelf: true },
       {} as never
     )) as Record<string, unknown>;
-    expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
+    expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
     expect(result.worktreeId).toBe("wt-new");
     expect(result.assignedToSelf).toBe(false);
     expect(result.assignmentError).toBe("IPC unavailable");

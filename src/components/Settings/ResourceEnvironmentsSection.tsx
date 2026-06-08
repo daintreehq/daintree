@@ -293,7 +293,7 @@ export function ResourceEnvironmentsSection({
   };
 
   return (
-    <div className="space-y-6 p-1">
+    <div id="tab-nav-project:environments" className="space-y-6 p-1">
       <div className="flex items-center gap-2 mb-2">
         <Server className="h-5 w-5 text-daintree-text/60" />
         <h2 className="text-base font-semibold text-text-primary">Resource Environments</h2>

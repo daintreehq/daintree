@@ -13,10 +13,12 @@ vi.mock("@/clients", () => ({
   terminalClient: {
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
+    onTierChanged: vi.fn(() => vi.fn()),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
     getSerializedState: vi.fn(),
     getSharedBuffer: vi.fn(() => null),
+    discardPortAcks: vi.fn(),
   },
   systemClient: {
     openExternal: vi.fn(),

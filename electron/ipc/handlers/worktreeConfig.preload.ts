@@ -12,6 +12,7 @@ export const WORKTREE_CONFIG_METHOD_CHANNELS = {
   setPattern: "worktree-config:set-pattern",
   setWslGit: "worktree-config:set-wsl-git",
   dismissWslBanner: "worktree-config:dismiss-wsl-banner",
+  reprobeWsl: "worktree-config:reprobe-wsl",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 export interface WorktreeConfigPreloadBindings {
@@ -19,6 +20,7 @@ export interface WorktreeConfigPreloadBindings {
   setPattern(pattern: string): Promise<IpcInvokeMap["worktree-config:set-pattern"]["result"]>;
   setWslGit(worktreeId: string, enabled: boolean): Promise<void>;
   dismissWslBanner(worktreeId: string): Promise<void>;
+  reprobeWsl(worktreeId: string): Promise<void>;
 }
 
 type Invoker = (channel: string, ...args: unknown[]) => Promise<unknown>;
@@ -37,5 +39,7 @@ export function buildWorktreeConfigPreloadBindings(invoke: Invoker): WorktreeCon
       invoke(WORKTREE_CONFIG_METHOD_CHANNELS.setWslGit, { worktreeId, enabled }) as Promise<void>,
     dismissWslBanner: (worktreeId) =>
       invoke(WORKTREE_CONFIG_METHOD_CHANNELS.dismissWslBanner, { worktreeId }) as Promise<void>,
+    reprobeWsl: (worktreeId) =>
+      invoke(WORKTREE_CONFIG_METHOD_CHANNELS.reprobeWsl, { worktreeId }) as Promise<void>,
   };
 }

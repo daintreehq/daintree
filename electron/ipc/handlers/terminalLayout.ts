@@ -95,8 +95,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
 
         const validTerminals = sanitizeTerminals(terminals, `project:set-terminals(${projectId})`);
 
-        const existingState = await projectStore.getProjectState(projectId);
-        const newState = {
+        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
@@ -107,9 +106,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusPanelState: existingState?.focusPanelState,
           terminalSizes: existingState?.terminalSizes,
           draftInputs: existingState?.draftInputs,
-        };
-
-        await projectStore.saveProjectState(projectId, newState);
+        }));
       }
     ),
     getTerminalSizes: op(
@@ -146,8 +143,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
 
         const sanitizedSizes = sanitizeTerminalSizes(terminalSizes as Record<string, unknown>);
 
-        const existingState = await projectStore.getProjectState(projectId);
-        const newState = {
+        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
@@ -158,9 +154,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusPanelState: existingState?.focusPanelState,
           terminalSizes: sanitizedSizes,
           draftInputs: existingState?.draftInputs,
-        };
-
-        await projectStore.saveProjectState(projectId, newState);
+        }));
       }
     ),
     getTabGroups: op(
@@ -189,8 +183,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
 
         const sanitizedTabGroups = sanitizeTabGroups(tabGroups, projectId) as TabGroup[];
 
-        const existingState = await projectStore.getProjectState(projectId);
-        const newState = {
+        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
@@ -201,8 +194,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusPanelState: existingState?.focusPanelState,
           terminalSizes: existingState?.terminalSizes,
           draftInputs: existingState?.draftInputs,
-        };
-        await projectStore.saveProjectState(projectId, newState);
+        }));
       }
     ),
     getFocusMode: op(TERMINAL_LAYOUT_METHOD_CHANNELS.getFocusMode, async (projectId: string) => {
@@ -255,8 +247,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           };
         }
 
-        const existingState = await projectStore.getProjectState(projectId);
-        const newState = {
+        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
@@ -267,9 +258,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusPanelState: validFocusPanelState,
           terminalSizes: existingState?.terminalSizes,
           draftInputs: existingState?.draftInputs,
-        };
-
-        await projectStore.saveProjectState(projectId, newState);
+        }));
       }
     ),
     getDraftInputs: op(
@@ -306,8 +295,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
 
         const sanitized = sanitizeDraftInputs(draftInputs as Record<string, unknown>);
 
-        const existingState = await projectStore.getProjectState(projectId);
-        const newState = {
+        await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,
           activeWorktreeId: existingState?.activeWorktreeId,
           sidebarWidth: existingState?.sidebarWidth ?? 350,
@@ -318,9 +306,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           focusPanelState: existingState?.focusPanelState,
           terminalSizes: existingState?.terminalSizes,
           draftInputs: sanitized,
-        };
-
-        await projectStore.saveProjectState(projectId, newState);
+        }));
       }
     ),
   },

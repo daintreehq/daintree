@@ -46,6 +46,15 @@ describe("webviewCsp", () => {
       expect(classifyPartition("persist:browser")).toBe("browser");
     });
 
+    it("identifies dynamic per-project browser partitions", () => {
+      expect(classifyPartition("persist:browser-myproject")).toBe("browser");
+      expect(classifyPartition("persist:browser-some-uuid")).toBe("browser");
+    });
+
+    it("does not over-match browser-like partitions", () => {
+      expect(classifyPartition("persist:browserish")).toBe("unknown");
+    });
+
     it("identifies portal partition", () => {
       expect(classifyPartition("persist:portal")).toBe("portal");
     });
@@ -101,6 +110,7 @@ describe("webviewCsp", () => {
 
     it("browser partition is NOT eligible — hosts arbitrary remote sites", () => {
       expect(classifyPartition("persist:browser")).toBe("browser");
+      expect(classifyPartition("persist:browser-myproject")).toBe("browser");
       expect(partitionsThatSkipOverlay).toContain("browser");
       expect(partitionsThatReceiveOverlay).not.toContain("browser" as never);
     });

@@ -23,6 +23,15 @@ export { scrubSecrets };
 export function scrubReportPath(str: string): string {
   return (
     str
+      // WSL UNC paths — `\\wsl$\<distro>\home\USER` and
+      // `\\wsl.localhost\<distro>\home\USER`. The username lives after the
+      // distro segment, so the generic /home/ pattern can't reach it (it uses
+      // backslash separators). `[$.]` matches both the `wsl$` and
+      // `wsl.localhost` prefixes without `$` acting as an end-of-line anchor.
+      // Handle the JSON-doubled backslash form before the raw form. The distro
+      // is kept (useful WSL signal); only the username is redacted.
+      .replace(/(\\\\\\\\wsl[$.][^\\"]*\\\\[^\\"]+\\\\home\\\\)[^\\"]+/gi, "$1USER")
+      .replace(/(\\\\wsl[$.][^\\"]*\\[^\\"]+\\home\\)[^\\"]+/gi, "$1USER")
       // macOS / Linux — the username is the segment after /Users/ or /home/,
       // ending at a path separator, JSON-string quote, or end of string. Matching
       // only the username (not requiring a trailing slash) also catches paths that
@@ -30,11 +39,43 @@ export function scrubReportPath(str: string): string {
       .replace(/(\/Users\/)[^/"\\]+/g, "$1USER")
       .replace(/(\/home\/)[^/"\\]+/g, "$1USER")
       // Windows backslash — JSON.stringify doubles backslashes, so handle the
-      // double-backslash form before the single-backslash (raw path) form.
-      .replace(/(C:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
-      .replace(/(C:\\Users\\)[^\\"]+/gi, "$1USER")
+      // double-backslash form before the single-backslash (raw path) form. The
+      // drive letter is generalized to any letter so non-`C:` profiles
+      // (e.g. `D:\Users\alice`) are scrubbed too.
+      .replace(/([A-Za-z]:\\\\Users\\\\)[^\\"]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\\Users\\)[^\\"]+/gi, "$1USER")
       // Windows forward-slash form (e.g. from a posix-normalized path).
-      .replace(/(C:\/Users\/)[^/"\\]+/gi, "$1USER")
+      .replace(/([A-Za-z]:\/Users\/)[^/"\\]+/gi, "$1USER")
+      // Git remotes — the org/repo segment names private projects. The host is
+      // kept (useful signal, same rationale as keeping the WSL distro). SSH
+      // form first (a `.git` suffix folds into the redaction — repo names may
+      // themselves contain dots), then HTTPS (requires the `.git` suffix so
+      // ordinary web URLs in output are left alone). Both replacements
+      // re-match to themselves, so the pass stays idempotent.
+      .replace(
+        // Trailing (?:\/segment)* consumes GitLab nested groups
+        // (group/subgroup/repo) so the leaf repo name can't survive.
+        /\b(git@[A-Za-z0-9.-]{1,253}:)[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,10}/g,
+        "$1REDACTED/REDACTED"
+      )
+      .replace(
+        // Optional userinfo (`token:x@`) before the host — authenticated
+        // remotes must still match here; the credentials themselves are
+        // scrubbed later by the url-basic-auth pattern in scrubSecrets.
+        /(https?:\/\/(?:[^@/\s"'`]{1,512}@)?[A-Za-z0-9.-]{1,253}\/)(?:[A-Za-z0-9._-]{1,100}\/){0,5}[A-Za-z0-9._-]{1,100}\.git\b/g,
+        "$1REDACTED/REDACTED.git"
+      )
+      // Tilde-relative home paths — the segments after `~/` can name private
+      // projects (terminal prompts and agent CWD lines print them constantly),
+      // and there is no username segment to scrub selectively, so the whole
+      // remainder is collapsed. The lookbehind avoids matching a `~` embedded
+      // in a token (e.g. `backup~/file`).
+      .replace(/(?<![\w~.-])~\/[^\s"'`)\]}>,;:]+/g, "~/REDACTED")
+      // Temp dirs — `/tmp/...` and macOS `/var/folders/...` entries embed
+      // usernames and per-session tokens. Also covers `/private/tmp/...`
+      // (matched at the inner `/tmp/`).
+      .replace(/(\/tmp\/)[^\s"'`)\]}>,;:]+/g, "$1REDACTED")
+      .replace(/(\/var\/folders\/)[^\s"'`)\]}>,;:]+/g, "$1REDACTED")
   );
 }
 

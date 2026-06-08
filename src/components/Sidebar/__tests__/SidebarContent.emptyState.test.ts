@@ -124,14 +124,19 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
       const branch = source.slice(branchStart, branchEnd);
       expect(branch).toContain('"No matching worktrees"');
       expect(branch).toContain('No matches for "${truncateSearchQuery(deferredQuery.trim())}"');
-      // The search-aware copy is the hasQuery arm, the plain copy the fallback —
-      // guard against an inverted ternary by checking the query arm comes first.
+      // The title gates on the deferred query — same source the filtered list is
+      // computed from — not the instant hasQuery flag, which could diverge for a
+      // render and render `No matches for ""` (issue #10314). The search-aware
+      // copy is the gate's truthy arm, the plain copy the fallback — guard
+      // against an inverted ternary by checking the query arm comes first.
+      const gateIdx = branch.indexOf("deferredQuery.trim()");
       const queryIdx = branch.indexOf(
         'No matches for "${truncateSearchQuery(deferredQuery.trim())}"'
       );
       const fallbackIdx = branch.indexOf('"No matching worktrees"');
-      expect(branch.indexOf("hasQuery")).toBeLessThan(queryIdx);
+      expect(gateIdx).toBeLessThan(queryIdx);
       expect(queryIdx).toBeLessThan(fallbackIdx);
+      expect(branch).not.toContain("hasQuery");
       // The old title-cased, count-suffixed copy is gone.
       expect(branch).not.toContain("QUICK_STATE_LABELS[quickStateFilter]");
       expect(branch).not.toContain("activeFacetFilterCount");
@@ -326,7 +331,7 @@ describe("SidebarContent zero-worktrees taxonomy alignment — issue #6934", () 
     const branchStart = source.indexOf("if (worktrees.length === 0) {");
     const branchEnd = source.indexOf("const hasNonMainWorktrees", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toContain('title="Open a Git repository to get started"');
+    expect(branch).toContain('title="Open a Git repository"');
     expect(branch).not.toContain("No worktrees yet");
   });
 
@@ -388,6 +393,20 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toMatch(/<h2[^>]*>Worktrees<\/h2>/);
+    // The loading header's vertical padding must match the loaded header's, or
+    // the bar shrinks and the list jumps up when worktrees finish loading
+    // (#10318). Compare the two against each other rather than pinning a literal.
+    const loadingHeaderDiv = branch.match(
+      /<div className="flex items-center [^"]*border-b[^"]*"/
+    )?.[0];
+    const loadedHeaderDiv = source.match(
+      /<div className="group\/header flex items-center [^"]*border-b[^"]*"/
+    )?.[0];
+    const loadingPy = loadingHeaderDiv?.match(/\bpy-\d+\b/)?.[0];
+    const loadedPy = loadedHeaderDiv?.match(/\bpy-\d+\b/)?.[0];
+    expect(loadingPy).toBeDefined();
+    expect(loadedPy).toBeDefined();
+    expect(loadingPy).toBe(loadedPy);
   });
 
   it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {

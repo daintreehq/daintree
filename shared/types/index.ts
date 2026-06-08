@@ -29,6 +29,7 @@ export type {
   WorktreeLifecycleStatus,
   Worktree,
   WorktreeState,
+  WslGitEligibility,
 } from "./worktree.js";
 
 // Notification types
@@ -51,6 +52,7 @@ export type {
   TerminalScrollbackRestoreError,
   TerminalRuntimeStatus,
   PersistableFlowStatus,
+  FutureSABFlowStatus,
   TerminalSpawnSource,
   AddPanelFocusPolicy,
   TerminalInstance,
@@ -123,6 +125,7 @@ export type {
   CopyTreeInjectPayload,
   CopyTreeCancelPayload,
   CopyTreeGetFileTreePayload,
+  CopyTreeTestConfigOptions,
   CopyTreeTestConfigPayload,
   CopyTreeTestConfigResult,
   CopyTreeResult,
@@ -169,6 +172,7 @@ export type {
   // GitHub IPC types
   RepositoryStats,
   RepoStatsAndPagePayload,
+  RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
   ProjectHealthData,
   GitHubCliStatus,
@@ -254,6 +258,8 @@ export type {
   HelpAssistantSettings,
   HelpAssistantAuditRetention,
   HelpAssistantIdleHibernateMinutes,
+  HelpSessionLiveStatus,
+  HelpSessionActiveGrant,
   MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,
@@ -342,6 +348,10 @@ export type {
   McpAuditStats,
   McpAuditSeverity,
   McpConfirmationDecision,
+  McpGrantRecord,
+  McpGrantRecordType,
+  McpGrantRevokedReason,
+  McpLogRecord,
   AssistantTurnRecord,
   TurnOutcomeClass,
   McpAnomalySeverity,
@@ -350,12 +360,15 @@ export type {
   McpRuntimeSnapshot,
   McpRuntimeState,
   ActiveBearerRecord,
+  HelpSessionBearerRecord,
   DisconnectBearerResult,
 } from "./ipc/mcpServer.js";
 export {
   MCP_AUDIT_MIN_RECORDS,
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_DEFAULT_MAX_RECORDS,
+  isAuditRecord,
+  isGrantRecord,
 } from "./ipc/mcpServer.js";
 export type {
   PluginActionAuditRecord,
@@ -368,6 +381,23 @@ export {
   PLUGIN_AUDIT_MAX_RECORDS,
   PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
 } from "./ipc/pluginAudit.js";
+
+// Run history types - durable recipe/fleet automation outcomes (#9949)
+export type {
+  RunHistoryRecord,
+  RecipeRunHistoryRecord,
+  FleetRunHistoryRecord,
+  RunHistoryTargetOutcome,
+  RunHistoryAppendInput,
+} from "./ipc/runHistory.js";
+export {
+  RUN_HISTORY_SCHEMA_VERSION,
+  RUN_HISTORY_DEFAULT_MAX_RECORDS,
+  RUN_HISTORY_REASON_MAX_LENGTH,
+  RUN_HISTORY_DRAFT_PREVIEW_MAX_LENGTH,
+  RUN_HISTORY_TITLE_MAX_LENGTH,
+  RUN_HISTORY_MAX_TARGETS,
+} from "./ipc/runHistory.js";
 
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";

@@ -1,7 +1,11 @@
-import v8 from "node:v8";
 import type { AgentState } from "../../shared/types/agent.js";
-import type { PtyHostEvent, TerminalFlowStatus } from "../../shared/types/pty-host.js";
+import type {
+  PtyHostEvent,
+  ResourceGovernorSnapshot,
+  TerminalFlowStatus,
+} from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
@@ -28,6 +32,20 @@ export interface ResourceGovernorDeps {
   ) => void;
   getTerminalActivity: () => TerminalActivityInfo[];
   trimBuffers?: () => void;
+  /**
+   * Per-terminal scrollback dimensions for memory-aware ranking and targeted
+   * trimming. `scrollbackLines × cols × 12` is the cheap closed-form estimate of
+   * each terminal's headless-buffer footprint (3 uint32s per cell). Read at the
+   * metric tick; never serializes a buffer.
+   */
+  getTerminalBufferSizes?: () => Array<{ id: string; scrollbackLines: number; cols: number }>;
+  /**
+   * Targeted pre-pause reclaim: trim each listed terminal's scrollback to its
+   * mapped target-line count (heaviest contributors trimmed hardest). Replaces the
+   * uniform `trimBuffers` flatten in the non-critical pre-pause path so lighter
+   * terminals keep their history. Best-effort per terminal; never throws to caller.
+   */
+  trimBuffersTargeted?: (targetsByTerminalId: Map<string, number>) => void;
   getPendingBytesSnapshot?: () => {
     totalPendingBytes: number;
     perTerminal: Array<{ terminalId: string; pendingBytes: number }>;
@@ -39,7 +57,47 @@ export interface ResourceGovernorDeps {
     perTerminal: Array<{ terminalId: string; byteCount: number; packetCount: number }>;
     pauseCount: number;
   } | null;
+  /**
+   * Per-paused-terminal held duration snapshot, aggregated across SAB, IPC,
+   * and per-window MessagePort pause sources via a closure-scoped map in
+   * pty-host.ts. `heldDurationMs` is sampled at the metric tick.
+   */
+  getPausedDurationsSnapshot?: () => Array<{
+    terminalId: string;
+    heldDurationMs: number;
+  }>;
+  /**
+   * Per-terminal queue depth for the live IPC + per-window MessagePort
+   * paths. Excludes the FUTURE_SAB path (dead in production). Each entry
+   * is tagged with the path `layer` so consumers can attribute bytes per
+   * transport.
+   */
+  getQueueDepthSnapshot?: () => Array<{
+    terminalId: string;
+    layer: "ipc" | "port";
+    pendingBytes: number;
+  }>;
+  /**
+   * Data-loss counter snapshot. Returns accumulated drop-event count and
+   * dropped bytes since the last call. Counter is unconditional in
+   * pty-host.ts (gated only by drop site entry); this emission is gated
+   * separately by `metricsEnabled()`. Reset semantics: snapshot-and-reset.
+   */
+  getDropSnapshot?: () => {
+    droppedBytesDelta: number;
+    dataLossCountDelta: number;
+  };
 }
+
+// Process memory budget for the combined heap + external signal. The pty-host
+// is forked with --max-old-space-size matching PtyClient's DEFAULT_CONFIG
+// memoryLimitMb (512) — keep HEAP_BUDGET_MB in sync with it. That flag bounds
+// only the V8 heap; ArrayBuffer backing stores (queued PTY output slabs,
+// xterm typed arrays) are allocated outside it and show up in
+// process.memoryUsage().external, so the governor budgets them separately.
+const HEAP_BUDGET_MB = 512;
+const EXTERNAL_HEADROOM_MB = 256;
+const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
 
 export class ResourceGovernor {
   private readonly MEMORY_LIMIT_PERCENT = 85;
@@ -65,13 +123,17 @@ export class ResourceGovernor {
   // flap that issue #8616 reports — terminals keep running (possibly slowly
   // under OS-level backpressure) rather than getting repeatedly hard-paused.
   private readonly REENGAGE_COOLDOWN_MS = 30000;
+  // Bytes per headless-buffer cell: xterm stores 3 uint32s per cell (codepoint +
+  // fg attr + bg attr). `scrollbackLines × cols × BYTES_PER_CELL` is the cheap
+  // closed-form estimate used to rank per-terminal buffer-memory contribution.
+  private readonly BYTES_PER_CELL = 12;
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private throttleStartTime = 0;
   private readonly fdMonitor: FdMonitor;
   private readonly killedPids = new Map<number, number>();
   private readonly ORPHAN_GRACE_MS = 4000;
-  private prevThroughputTimestamp = 0;
+  private hasThroughputBaseline = false;
   private prevPauseCount = 0;
   private readonly pausedTerminalIds = new Set<string>();
   private isWarning = false;
@@ -98,6 +160,22 @@ export class ResourceGovernor {
 
   trackKilledPid(pid: number): void {
     this.killedPids.set(pid, Date.now());
+  }
+
+  /**
+   * Point-in-time governor state for the on-demand flow-control diagnostics
+   * snapshot. `smoothedUtilizationPercent` is passed through as null during EMA
+   * warmup (it starts undefined for ~5 ticks; see #8660) rather than coerced to
+   * 0, so consumers can distinguish "not yet warmed up" from "0% heap used".
+   */
+  getSnapshot(): ResourceGovernorSnapshot {
+    return {
+      isThrottling: this.isThrottling,
+      isWarning: this.isWarning,
+      activeProfile: this.profileOverride ?? "balanced",
+      smoothedUtilizationPercent: this.smoothedUtilizationPercent ?? null,
+      throttleDurationMs: this.isThrottling ? Date.now() - this.throttleStartTime : 0,
+    };
   }
 
   setResourceProfile(profile: ResourceProfile): void {
@@ -140,13 +218,27 @@ export class ResourceGovernor {
   private checkResources(): void {
     const memory = process.memoryUsage();
     const heapUsedMb = memory.heapUsed / 1024 / 1024;
-    const heapStats = v8.getHeapStatistics();
-    const heapLimitMb = heapStats.heap_size_limit / 1024 / 1024;
-    const utilizationPercent = (heapUsedMb / heapLimitMb) * 100;
+    // `external` already includes all ArrayBuffer/Buffer backing stores —
+    // memory.arrayBuffers is a subset of it, so adding it would double-count.
+    const externalMb = (memory.external ?? 0) / 1024 / 1024;
+    // Combined signal: V8 heap + external. Heap-only was blind to the memory
+    // this governor actually manages — queued PTY output and xterm backing
+    // stores live in external, outside the --max-old-space-size cap (#9905).
+    const combinedMb = heapUsedMb + externalMb;
+    // Utilization is the binding constraint: heap against its own V8 cap AND
+    // combined against the total process budget. The combined ratio alone can
+    // never reach the engage thresholds on pure heap pressure — heap is capped
+    // at HEAP_BUDGET_MB, only ~67% of the total budget — so a runaway JS heap
+    // must be measured against its own ceiling. max() keeps this a single
+    // continuous signal feeding one EMA, and the disengage hysteresis then
+    // requires BOTH ratios to clear the resume threshold.
+    const utilizationPercent =
+      Math.max(combinedMb / TOTAL_PROCESS_BUDGET_MB, heapUsedMb / HEAP_BUDGET_MB) * 100;
 
     // EMA smoothing — rejects single-tick GC sawtooth spikes. Seeded with the
     // first real reading (not 0) to avoid a warmup ramp that falsely stays
-    // below threshold. Mirrors the seeding idiom used by prevThroughputTimestamp.
+    // below threshold. Mirrors the hasThroughputBaseline seeding idiom used
+    // by the throughput gauge.
     let smoothedPercent: number;
     if (this.smoothedUtilizationPercent === undefined) {
       this.smoothedUtilizationPercent = utilizationPercent;
@@ -166,24 +258,30 @@ export class ResourceGovernor {
     if (!this.isWarning && utilizationPercent > warnThreshold) {
       this.isWarning = true;
       console.warn(
-        `[ResourceGovernor] Memory warning: ${utilizationPercent.toFixed(1)}% heap used ` +
-          `(threshold: ${warnThreshold}%).`
+        `[ResourceGovernor] Memory warning: ${utilizationPercent.toFixed(1)}% of process budget ` +
+          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB, ` +
+          `threshold: ${warnThreshold}%).`
       );
       this.deps.sendEvent({
         type: "host-memory-warning",
         isWarning: true,
         utilizationPercent: Math.round(utilizationPercent),
+        heapMb: Math.round(heapUsedMb),
+        externalMb: Math.round(externalMb),
         timestamp: Date.now(),
       });
     } else if (this.isWarning && utilizationPercent < warnClear) {
       this.isWarning = false;
       console.log(
-        `[ResourceGovernor] Memory warning cleared: ${utilizationPercent.toFixed(1)}% heap used.`
+        `[ResourceGovernor] Memory warning cleared: ${utilizationPercent.toFixed(1)}% of process budget ` +
+          `(heap ${Math.round(heapUsedMb)}MB + external ${Math.round(externalMb)}MB).`
       );
       this.deps.sendEvent({
         type: "host-memory-warning",
         isWarning: false,
         utilizationPercent: Math.round(utilizationPercent),
+        heapMb: Math.round(heapUsedMb),
+        externalMb: Math.round(externalMb),
         timestamp: Date.now(),
       });
     }
@@ -201,24 +299,22 @@ export class ResourceGovernor {
       const aboveThreshold = smoothedPercent > limitPercent;
 
       if (isCritical || (aboveThreshold && warmedUp && cooledDown)) {
-        if (!isCritical && !this.trimAttemptedForCurrentPressure && this.deps.trimBuffers) {
+        const canTrim =
+          !isCritical &&
+          !this.trimAttemptedForCurrentPressure &&
+          (this.deps.trimBuffersTargeted != null || this.deps.trimBuffers != null);
+        if (canTrim) {
           // Trim first as a one-shot reclaim — drops JS references synchronously
-          // so the next GC can collect old-gen scrollback strings. heapUsed won't
-          // drop in this tick (GC hasn't run yet) so we wait one tick before
-          // escalating to pause. Wrapped in try/catch because trim is best-effort:
-          // a failure shouldn't block the eventual pause path.
-          try {
-            this.deps.trimBuffers();
-            console.log(
-              `[ResourceGovernor] Trimmed buffers as pre-pause reclaim ` +
-                `(${utilizationPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
-            );
-          } catch (err) {
-            console.warn("[ResourceGovernor] trimBuffers failed:", err);
-          }
+          // so the next GC can collect old-gen scrollback strings and ArrayBuffer
+          // backing stores. Neither heapUsed nor external drops in this tick (GC
+          // hasn't run yet) so we wait one tick before escalating to pause.
+          // Best-effort: a failure shouldn't block the eventual pause path. At
+          // critical pressure (≥95%) this branch is skipped entirely — the global
+          // pause runs immediately.
+          this.performPrePauseTrim(utilizationPercent, smoothedPercent);
           this.trimAttemptedForCurrentPressure = true;
         } else {
-          this.engageThrottle(heapUsedMb, utilizationPercent);
+          this.engageThrottle(combinedMb, utilizationPercent);
         }
       } else if (!aboveThreshold && this.trimAttemptedForCurrentPressure) {
         // Pressure cleared after trim but before engage — preserve the
@@ -236,13 +332,109 @@ export class ResourceGovernor {
       const belowThreshold = utilizationPercent < resumePercent;
 
       if (maxPauseExceeded || belowThreshold) {
-        this.disengageThrottle(heapUsedMb, utilizationPercent, maxPauseExceeded);
+        this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded);
       }
     }
 
     this.checkFdUsage();
     this.emitPendingBytesGauge();
     this.emitThroughputRateGauge();
+    this.emitPausedDurationGauge();
+    this.emitQueueDepthGauge();
+    this.emitDataLossCount();
+    this.emitBufferMemoryGauge();
+  }
+
+  /**
+   * Pre-pause buffer reclaim. Prefers the targeted path — trims only terminals
+   * whose scrollback exceeds SCROLLBACK_MIN, heaviest contributor first — so a
+   * single chatty agent's history is reclaimed without flattening every quiet
+   * terminal to 100 lines. Falls back to the uniform flatten when buffer-size
+   * attribution isn't wired (or the targeted call throws). Pure reclaim: no pause,
+   * no governor state mutation. Caller owns the one-shot `trimAttemptedForCurrentPressure`.
+   */
+  private performPrePauseTrim(rawPercent: number, smoothedPercent: number): void {
+    if (this.deps.trimBuffersTargeted && this.deps.getTerminalBufferSizes) {
+      try {
+        const sizes = this.deps.getTerminalBufferSizes();
+        // Heaviest-first so the Map's insertion order (and the log) leads with the
+        // biggest contributor. All targets are SCROLLBACK_MIN today; the Map shape
+        // keeps per-terminal targets future-proof.
+        const targets = new Map<string, number>();
+        for (const t of sizes
+          .filter((s) => s.scrollbackLines > SCROLLBACK_MIN)
+          .sort(
+            (a, b) =>
+              b.scrollbackLines * b.cols * this.BYTES_PER_CELL -
+              a.scrollbackLines * a.cols * this.BYTES_PER_CELL
+          )) {
+          targets.set(t.id, SCROLLBACK_MIN);
+        }
+        if (targets.size > 0) {
+          this.deps.trimBuffersTargeted(targets);
+          console.log(
+            `[ResourceGovernor] Targeted pre-pause trim of ${targets.size} heaviest buffer(s) ` +
+              `(${rawPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
+          );
+        }
+        return;
+      } catch (err) {
+        console.warn("[ResourceGovernor] targeted trim failed, falling back to uniform trim:", err);
+      }
+    }
+
+    if (this.deps.trimBuffers) {
+      try {
+        this.deps.trimBuffers();
+        console.log(
+          `[ResourceGovernor] Trimmed buffers as pre-pause reclaim ` +
+            `(${rawPercent.toFixed(1)}% raw, ${smoothedPercent.toFixed(1)}% smoothed).`
+        );
+      } catch (err) {
+        console.warn("[ResourceGovernor] trimBuffers failed:", err);
+      }
+    }
+  }
+
+  /**
+   * Advisory per-terminal buffer-memory attribution. Emits every warning-band
+   * tick (matching the other persistent-state gauges) so operators can see which
+   * terminals drive scrollback memory under sustained pressure. PURE observability
+   * — it must never trim or mutate governor state; all reclaim lives in
+   * `performPrePauseTrim`, gated by the one-shot flag.
+   */
+  private emitBufferMemoryGauge(): void {
+    if (!metricsEnabled()) return;
+    if (!this.isWarning) return;
+    if (!this.deps.getTerminalBufferSizes) return;
+
+    const sizes = this.deps.getTerminalBufferSizes();
+    if (sizes.length === 0) return;
+
+    const perTerminalBufferMemory = sizes
+      .map((t) => ({
+        terminalId: t.id,
+        scrollbackEstimateBytes: t.scrollbackLines * t.cols * this.BYTES_PER_CELL,
+        scrollbackLines: t.scrollbackLines,
+        cols: t.cols,
+      }))
+      .sort((a, b) => b.scrollbackEstimateBytes - a.scrollbackEstimateBytes);
+
+    const estimatedBufferMemoryBytes = perTerminalBufferMemory.reduce(
+      (sum, t) => sum + t.scrollbackEstimateBytes,
+      0
+    );
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "buffer-memory-gauge",
+        timestamp: Date.now(),
+        estimatedBufferMemoryBytes,
+        perTerminalBufferMemory,
+      },
+    });
   }
 
   private checkFdUsage(): void {
@@ -323,23 +515,27 @@ export class ResourceGovernor {
     const snapshot = this.deps.getThroughputSnapshot();
     if (!snapshot) return;
 
-    // First tick: seed baselines without emitting. Prevents epoch-scale
-    // division on the first real interval (prevThroughputTimestamp starts at 0).
-    if (this.prevThroughputTimestamp === 0) {
-      this.prevThroughputTimestamp = snapshot.timestamp;
+    // First non-null snapshot seeds the pause baseline without emitting.
+    // Throughput snapshots are already bounded by the fixed poll interval
+    // (the accumulator in pty-host.ts is reset on every tick), so we don't
+    // need a timestamp baseline to compute the rate.
+    if (!this.hasThroughputBaseline) {
+      this.hasThroughputBaseline = true;
       this.prevPauseCount = snapshot.pauseCount;
       return;
     }
 
-    // Always track pauseCount baseline so idle ticks don't accumulate deltas
-    // that get misattributed to the next byte-producing tick.
+    // Always track pauseCount baseline on sampled ticks so zero-byte
+    // windows don't get misattributed to the next byte-producing tick.
     const pauseCountDelta = snapshot.pauseCount - this.prevPauseCount;
     this.prevPauseCount = snapshot.pauseCount;
 
     if (snapshot.totalBytes <= 0) return;
 
-    const elapsedMs = snapshot.timestamp - this.prevThroughputTimestamp;
-    const elapsedSec = elapsedMs > 0 ? elapsedMs / 1000 : 2;
+    // The accumulator in pty-host.ts is reset on every poll, so the byte
+    // count always represents the last CHECK_INTERVAL_MS window — no need
+    // to subtract a stored timestamp.
+    const elapsedSec = this.CHECK_INTERVAL_MS / 1000;
     const totalBytesPerSecond = Math.round(snapshot.totalBytes / elapsedSec);
 
     const perTerminalThroughput = snapshot.perTerminal.map((entry) => ({
@@ -360,8 +556,80 @@ export class ResourceGovernor {
         perTerminalThroughput,
       },
     });
+  }
 
-    this.prevThroughputTimestamp = snapshot.timestamp;
+  private emitPausedDurationGauge(): void {
+    // The pause-duration gauge is a load-bearing recovery signal (the renderer's
+    // Tier-1 paused-flow pill held-duration tooltip depends on it), so it
+    // bypasses the `DAINTREE_TERMINAL_METRICS` opt-in gate. Other ResourceGovernor
+    // gauges (pending-bytes-gauge, throughput-rate, queue-depth-gauge,
+    // data-loss-count) stay gated as diagnostic-only telemetry.
+    //
+    // Emits directly via `this.deps.sendEvent` rather than routing through
+    // the host funnel (`emitReliabilityMetricWithTracking`) because the
+    // gauge has no per-source pause attribution to track — the snapshot is
+    // already aggregated by `getPausedDurationsSnapshot` from the closure
+    // `pausedTerminals` map. Routing through the funnel would re-do the
+    // same aggregation the snapshot already performed.
+    if (!this.deps.getPausedDurationsSnapshot) return;
+
+    const snapshot = this.deps.getPausedDurationsSnapshot();
+    if (snapshot.length === 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: Date.now(),
+        perTerminalHeld: snapshot,
+      },
+    });
+  }
+
+  private emitQueueDepthGauge(): void {
+    if (!metricsEnabled()) return;
+    if (!this.deps.getQueueDepthSnapshot) return;
+
+    const snapshot = this.deps.getQueueDepthSnapshot();
+    if (snapshot.length === 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "queue-depth-gauge",
+        timestamp: Date.now(),
+        perTerminalQueueDepth: snapshot,
+      },
+    });
+  }
+
+  private emitDataLossCount(): void {
+    if (!this.deps.getDropSnapshot) return;
+
+    // Always call the snapshotter so the counter resets on every tick
+    // regardless of the metrics gate. Without this, the counter would
+    // accumulate indefinitely while `DAINTREE_TERMINAL_METRICS=0`, then
+    // dump the entire historical backlog as a single "regression" on the
+    // first emit after the gate opens. Counter is therefore bounded to
+    // "since last tick" regardless of gate state.
+    const snapshot = this.deps.getDropSnapshot();
+    if (!metricsEnabled()) return;
+    // Skip-when-zero matches the throughput-rate gauge contract: a tick
+    // with no drops produces no wire event.
+    if (snapshot.dataLossCountDelta === 0 && snapshot.droppedBytesDelta === 0) return;
+
+    this.deps.sendEvent({
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "data-loss-count",
+        timestamp: Date.now(),
+        dataLossCountDelta: snapshot.dataLossCountDelta,
+        droppedBytesDelta: snapshot.droppedBytesDelta,
+      },
+    });
   }
 
   private engageThrottle(currentUsageMb: number, percent: number): void {
@@ -475,7 +743,7 @@ export class ResourceGovernor {
       }
       if (!coordinator?.isPaused) {
         this.deps.emitTerminalStatus(id, "running", undefined, duration);
-      } else if (coordinator.hasToken("backpressure")) {
+      } else if (coordinator.hasAnyBackpressureToken()) {
         // Restore backpressure status — the governor's pause
         // overwrote it in the dedup map during engage.
         this.deps.emitTerminalStatus(id, "paused-backpressure", undefined, duration);
@@ -520,6 +788,8 @@ export class ResourceGovernor {
     this.sampleCount = 0;
     this.lastDisengageAt = 0;
     this.trimAttemptedForCurrentPressure = false;
+    this.hasThroughputBaseline = false;
+    this.prevPauseCount = 0;
     console.log("[ResourceGovernor] Disposed");
   }
 }

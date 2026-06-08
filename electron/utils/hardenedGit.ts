@@ -1,6 +1,7 @@
 import path from "path";
 import { simpleGit } from "simple-git";
 import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
+import { detectWslPath } from "./wsl.js";
 
 const SAFE_GIT_CONFIG = [
   "core.fsmonitor=false",
@@ -110,18 +111,10 @@ export function getGitLocaleEnv(
   return { LC_CTYPE: "C.UTF-8", GIT_OPTIONAL_LOCKS: "0" };
 }
 
-export function createHardenedGit(
-  cwd: string,
-  signal?: AbortSignal,
+export function buildHardenedGitEnv(
   platform: NodeJS.Platform = process.platform
-): SimpleGit {
-  return simpleGit({
-    baseDir: cwd,
-    config: [...HARDENED_GIT_CONFIG],
-    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
-    ...(signal ? { abort: signal } : {}),
-    unsafe: UNSAFE_FLAGS,
-  }).env({
+): NodeJS.ProcessEnv {
+  return {
     ...getSanitizedProcessEnv(),
     ...getGitLocaleEnv(platform),
     // Clear inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES
@@ -150,7 +143,21 @@ export function createHardenedGit(
     // dialogs in background processes where no user can interact. No effect
     // on POSIX or on local read operations.
     GCM_INTERACTIVE: "Never",
-  });
+  };
+}
+
+export function createHardenedGit(
+  cwd: string,
+  signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform
+): SimpleGit {
+  return simpleGit({
+    baseDir: cwd,
+    config: [...HARDENED_GIT_CONFIG],
+    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
+    ...(signal ? { abort: signal } : {}),
+    unsafe: UNSAFE_FLAGS,
+  }).env(buildHardenedGitEnv(platform));
 }
 
 export interface WslGitInvocation {
@@ -209,8 +216,17 @@ export function createWslHardenedGit(
   if (typeof posixPath !== "string" || !posixPath.startsWith("/")) {
     throw new Error("WSL posix path must start with /");
   }
-  if (typeof uncPath !== "string" || !uncPath.startsWith("\\\\wsl")) {
-    throw new Error("WSL UNC path must start with \\\\wsl");
+  const parsed = detectWslPath(uncPath);
+  if (typeof uncPath !== "string" || parsed === null) {
+    throw new Error("WSL UNC path is not a valid WSL UNC");
+  }
+  // Defense in depth: verify the supplied distro/posixPath match the parsed
+  // UNC, so a caller can't bypass the route with mismatched metadata.
+  if (parsed.distro.toLowerCase() !== distro.trim().toLowerCase()) {
+    throw new Error("WSL distro does not match parsed UNC");
+  }
+  if (parsed.posixPath !== posixPath) {
+    throw new Error("WSL posix path does not match parsed UNC");
   }
 
   return simpleGit({

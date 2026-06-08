@@ -31,6 +31,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
   }, [options]);
 
   useEffect(() => {
+    installE2EActionDispatchBridge();
     if (registeredRef.current) return;
 
     // Create a proxy that reads from the ref, ensuring fresh values on every call
@@ -106,7 +107,6 @@ export function useActionRegistry(options: ActionCallbacks): void {
       };
     });
 
-    installE2EActionDispatchBridge();
     registeredRef.current = true;
   }, []);
 

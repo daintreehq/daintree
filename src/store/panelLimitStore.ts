@@ -51,6 +51,14 @@ interface PanelLimitState {
   hardwareDefaultsApplied: boolean;
   lastSoftWarningDismissedAt: number | null;
   pendingConfirm: PendingConfirmation | null;
+  /**
+   * Monotonic counter bumped on every request. Used as the always-mounted host's
+   * ErrorBoundary `resetKeys` signal so a crashed dialog auto-recovers when a new
+   * request arrives — including the back-to-back supersede case where
+   * `pendingConfirm` never returns to null between requests (#9918). Transient
+   * runtime state — intentionally excluded from `partialize`.
+   */
+  requestSeq: number;
   setSoftWarningLimit: (limit: number) => void;
   setConfirmationLimit: (limit: number) => void;
   setHardLimit: (limit: number) => void;
@@ -86,6 +94,7 @@ export const usePanelLimitStore = create<PanelLimitState>()(
       hardwareDefaultsApplied: false,
       lastSoftWarningDismissedAt: null,
       pendingConfirm: null,
+      requestSeq: 0,
 
       setSoftWarningLimit: (limit: number) => {
         if (!Number.isFinite(limit)) return;
@@ -117,7 +126,10 @@ export const usePanelLimitStore = create<PanelLimitState>()(
         }
 
         return new Promise<boolean>((resolve) => {
-          set({ pendingConfirm: { resolve, panelCount, memoryMB } });
+          set((state) => ({
+            pendingConfirm: { resolve, panelCount, memoryMB },
+            requestSeq: state.requestSeq + 1,
+          }));
         });
       },
 

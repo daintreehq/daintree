@@ -136,3 +136,7 @@ export { useResizeObserverRaf } from "./useResizeObserverRaf";
 export { useConnectivity, useConnectivitySnapshot } from "./useConnectivity";
 
 export { useImageError } from "./useImageError";
+
+export { useKeepMounted } from "./useKeepMounted";
+
+export { useHelpSessionLiveStatus } from "./useHelpSessionLiveStatus";

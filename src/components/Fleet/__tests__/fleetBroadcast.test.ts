@@ -96,6 +96,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
     isReconnecting: false,
     reconnectingAt: null,
     watcherDegraded: false,
+    topologyWatcherDark: false,
     applySnapshot: () => {},
     applyUpdate: () => {},
     applyRemove: () => {},
@@ -115,6 +116,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
     setFatalError: () => {},
     setReconnecting: () => {},
     setWatcherDegraded: () => {},
+    setTopologyWatcherDark: () => {},
     applyIssueNotFound: () => {},
   }));
   setCurrentViewStore(store);

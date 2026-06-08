@@ -20,18 +20,12 @@ import {
   useErrors,
   useReEntrySummary,
 } from "./hooks";
-import { useHibernationNotifications } from "./hooks/useHibernationNotifications";
-import { useIdleTerminalNotifications } from "./hooks/useIdleTerminalNotifications";
-import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
-import { useGitHubTokenHealth } from "./hooks/useGitHubTokenHealth";
-import { useGitHubRateLimit } from "./hooks/useGitHubRateLimit";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { useUpdateListener } from "./hooks/useUpdateListener";
-import { useStoreUpdateListener } from "./hooks/useStoreUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
 import { useActionPalette } from "./hooks/useActionPalette";
@@ -40,20 +34,20 @@ import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
+import { useKeepMounted } from "./hooks/useKeepMounted";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
-import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { notifyViewPainted, removeStartupSkeleton } from "./utils/removeStartupSkeleton";
-// Attaches the notification E2E backdoor when launched with DAINTREE_E2E_MODE=1.
-// The installer self-gates on `__DAINTREE_E2E_MODE__`, so this is inert in
-// production sessions.
-import { installE2ENotificationBackdoor } from "./lib/e2eNotificationBackdoor";
+// Imported for its module side-effect: the module self-installs the notification
+// E2E backdoor at eval time, gated on `__DAINTREE_E2E_MODE__`, so it is inert in
+// production sessions. No symbol is referenced — the import is load-bearing.
+import "./lib/e2eNotificationBackdoor";
 import { useAppBoot } from "./hooks/app/useAppBoot";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import {
   useAppHydration,
-  useProjectSwitchRehydration,
   useShortcutHints,
   usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
@@ -65,7 +59,6 @@ import {
   useFocusOnActivateIntent,
   usePluginDeepLink,
   useNotificationHistoryPruning,
-  useRecipeFocusReload,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -75,10 +68,10 @@ import {
   useThemeBrowserSettingsBridge,
   useErrorRetry,
   useActiveWorktreeSync,
-  useWorktreeDevServerStateSync,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
+import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { ContentGrid } from "./components/Terminal";
 import { PanelTransitionOverlay } from "./components/Panel";
 
@@ -333,6 +326,13 @@ import {
 import { usePerfMetricsStore } from "./store/perfMetricsStore";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useRecipeConflictStore } from "./store/recipeConflictStore";
+import { useGitPushConfirmStore } from "./store/gitPushConfirmStore";
+import { useGitPullRebaseConfirmStore } from "./store/gitPullRebaseConfirmStore";
+import { usePanelLimitStore } from "./store/panelLimitStore";
+import { useMcpConfirmStore } from "./store/mcpConfirmStore";
+import { usePluginConfirmStore } from "./store/pluginConfirmStore";
+import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
+import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
 // Eager side-effect import: registers the GitHub plugin's builtin view slots
 // (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
 // render. Must stay static — a deferred/idle import races the user, so
@@ -342,7 +342,7 @@ import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
 import type { BuiltInPanelKind } from "./types";
-import { actionService } from "./services/ActionService";
+import { actionService, installE2EActionDispatchBridge } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
@@ -352,57 +352,57 @@ const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mo
 
 function AppInner() {
   useErrors();
-  useHibernationNotifications();
-  useIdleTerminalNotifications();
-  useDiskSpaceWarnings();
-  useGitHubTokenHealth();
-  useGitHubRateLimit();
   useUnloadCleanup();
   useResourceProfile();
-  useRecipeFocusReload();
-  useWorktreeDevServerStateSync();
 
   useEffect(() => {
-    window.__DAINTREE_E2E_ERROR_STORE__ = () =>
-      useErrorStore.getState().errors.map((e) => ({
-        id: e.id,
-        source: e.source,
-        message: e.message,
-        fromPreviousSession: e.fromPreviousSession,
-      }));
-    window.__DAINTREE_E2E_ADD_ERROR__ = (message: string) => {
-      useErrorStore.getState().addError({
-        type: "unknown",
-        message,
-        retryability: "none",
-        source: "e2e-test",
-      });
-    };
-    window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
-      useErrorStore.getState().reset();
-    };
-    // Refreshes the GitHub config store from the main process. Used by
-    // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
-    // so the no-token empty state doesn't short-circuit IPC fault paths.
-    window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () => useGitHubConfigStore.getState().refresh();
-    // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
-    // the RecipeConflictDialog without racing a real on-disk file mutation. The
-    // returned promise resolves with the user's choice; tests don't await it —
-    // they assert the dialog renders and that reload/overwrite dismiss it.
-    window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__ = (recipeName: string) => {
-      void useRecipeConflictStore.getState().requestConflict({
-        recipeId: `inrepo-${recipeName}`,
-        recipeName,
-        updates: { name: recipeName },
-      });
-    };
+    installE2EActionDispatchBridge();
+  }, []);
 
-    // Per-window store accessors for the multi-window isolation spec (#9599).
-    // Each project view is its own V8 context, so these Zustand singletons are
-    // per-window — mutating one window's store must not leak into another's.
-    // Gated on the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
-    // DAINTREE_E2E_MODE=1) so the accessors never attach in production.
+  useEffect(() => {
+    // All E2E renderer backdoors are gated on the preload-injected
+    // __DAINTREE_E2E_MODE__ flag (set only under DAINTREE_E2E_MODE=1 on
+    // non-packaged builds) so none of these store accessors attach in
+    // production sessions.
     if (window.__DAINTREE_E2E_MODE__ === true) {
+      window.__DAINTREE_E2E_ERROR_STORE__ = () =>
+        useErrorStore.getState().errors.map((e) => ({
+          id: e.id,
+          source: e.source,
+          message: e.message,
+          fromPreviousSession: e.fromPreviousSession,
+        }));
+      window.__DAINTREE_E2E_ADD_ERROR__ = (message: string) => {
+        useErrorStore.getState().addError({
+          type: "unknown",
+          message,
+          retryability: "none",
+          source: "e2e-test",
+        });
+      };
+      window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
+        useErrorStore.getState().reset();
+      };
+      // Refreshes the GitHub config store from the main process. Used by
+      // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
+      // so the no-token empty state doesn't short-circuit IPC fault paths.
+      window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () =>
+        useGitHubConfigStore.getState().refresh();
+      // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
+      // the RecipeConflictDialog without racing a real on-disk file mutation. The
+      // returned promise resolves with the user's choice; tests don't await it —
+      // they assert the dialog renders and that reload/overwrite dismiss it.
+      window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__ = (recipeName: string) => {
+        void useRecipeConflictStore.getState().requestConflict({
+          recipeId: `inrepo-${recipeName}`,
+          recipeName,
+          updates: { name: recipeName },
+        });
+      };
+
+      // Per-window store accessors for the multi-window isolation spec (#9599).
+      // Each project view is its own V8 context, so these Zustand singletons are
+      // per-window — mutating one window's store must not leak into another's.
       window.__DAINTREE_E2E_DIAGNOSTICS_STATE__ = () => ({
         isOpen: useDiagnosticsStore.getState().isOpen,
       });
@@ -459,8 +459,8 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
+  useMcpAnomalyStats();
   usePluginBridge();
-  useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
@@ -486,6 +486,20 @@ function AppInner() {
   const cloneRepoDialogOpen = useProjectStore((state) => state.cloneRepoDialogOpen);
   const closeCloneRepoDialog = useProjectStore((state) => state.closeCloneRepoDialog);
   const handleCloneSuccess = useProjectStore((state) => state.handleCloneSuccess);
+
+  const shouldMountCreateFolderDialog = useKeepMounted(createFolderDialogOpen);
+  const shouldMountCloneRepoDialog = useKeepMounted(cloneRepoDialogOpen);
+  // GitInitDialog mounts on the directory path (its `directoryPath` prop is
+  // non-nullable), but closeGitInitDialog() clears both `gitInitDialogOpen` and
+  // `gitInitDirectoryPath` in one set(). Latch the last non-null path so the
+  // dialog keeps a valid prop through its exit animation window (#9917). On the
+  // next open the store sets the path before isOpen, so a fresh path wins.
+  const shouldMountGitInitDialog = useKeepMounted(gitInitDialogOpen);
+  const [latchedGitInitPath, setLatchedGitInitPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (gitInitDirectoryPath) setLatchedGitInitPath(gitInitDirectoryPath);
+  }, [gitInitDirectoryPath]);
+  const effectiveGitInitPath = gitInitDirectoryPath ?? latchedGitInitPath;
   const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
@@ -508,10 +522,7 @@ function AppInner() {
     handleOpenSettingsTab,
     setIsSettingsOpen,
   } = useSettingsDialog();
-  const [hasOpenedSettings, setHasOpenedSettings] = useState(false);
-  useEffect(() => {
-    if (isSettingsOpen) setHasOpenedSettings(true);
-  }, [isSettingsOpen]);
+  const shouldMountSettings = useKeepMounted(isSettingsOpen);
 
   useThemeBrowserSettingsBridge(isSettingsOpen, setIsSettingsOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
@@ -521,10 +532,7 @@ function AppInner() {
   const isPluginManagerOpen = usePluginManagerStore((s) => s.isOpen);
   // Keep the view mounted after its first open so the plugin list and any
   // pending operation state survive a close/reopen (mirrors SettingsDialog).
-  const [hasOpenedPluginManager, setHasOpenedPluginManager] = useState(false);
-  useEffect(() => {
-    if (isPluginManagerOpen) setHasOpenedPluginManager(true);
-  }, [isPluginManagerOpen]);
+  const shouldMountPluginManager = useKeepMounted(isPluginManagerOpen);
   // Close Settings when the manager opens so the two surfaces don't stack —
   // covers both entry points (the `app.pluginManager` action dispatched from
   // the Plugins settings tab, and the deep-link path below). Mirrors the
@@ -543,6 +551,26 @@ function AppInner() {
     openWorktreeOverview,
     closeWorktreeOverview,
   } = useWorktreeOverview();
+
+  // Keep each palette/dialog mounted after its first open so its exit animation
+  // (driven by useAnimatedPresence) can run — gating directly on `isOpen`
+  // unmounts in the same React commit that flips it false, killing the exit
+  // (#9917). The component still receives `isOpen` and gates its own DOM via
+  // `shouldRender`.
+  const isProjectSwitcherModalOpen =
+    projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal";
+  const shouldMountQuickSwitcher = useKeepMounted(quickSwitcher.isOpen);
+  const shouldMountSendToAgentPalette = useKeepMounted(sendToAgentPalette.isOpen);
+  const shouldMountNewTerminalPalette = useKeepMounted(newTerminalPalette.isOpen);
+  const shouldMountWorktreePalette = useKeepMounted(worktreePalette.isOpen);
+  const shouldMountQuickCreatePalette = useKeepMounted(quickCreatePalette.isOpen);
+  const shouldMountPanelPalette = useKeepMounted(panelPalette.isOpen);
+  const shouldMountThemePalette = useKeepMounted(isThemePaletteOpen);
+  const shouldMountLogLevelPalette = useKeepMounted(isLogLevelPaletteOpen);
+  const shouldMountActionPalette = useKeepMounted(actionPalette.isOpen);
+  const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
+  const shouldMountShortcutsDialog = useKeepMounted(isShortcutsOpen);
+
   const onLayoutRender = useRenderProfiler("app-layout", { sampleRate: 0.15 });
   const onContentGridRender = useRenderProfiler("content-grid", { sampleRate: 0.15 });
 
@@ -577,6 +605,38 @@ function AppInner() {
   useEffect(() => {
     if (isStateLoaded) removeStartupSkeleton();
   }, [isStateLoaded]);
+
+  // ErrorBoundary reset signals for the always-mounted dialog hosts (#9918).
+  // A static `[Number(isStateLoaded)]` collapses to `[1]` after hydration and
+  // never changes, so a host that crashes once stays dead for the session (and
+  // its deferred promise leaks). Each host instead resets on its own
+  // pending-request signal, so a fresh request remounts the crashed boundary:
+  //   - request-counter stores bump `requestSeq` on every request (covers the
+  //     back-to-back supersede case where `pendingConfirm` never returns to null)
+  //   - FIFO-queue stores key off the live `current.requestId` UUID
+  //   - the diagnostics host toggles on its own `isOpen`
+  //   - the event-driven hosts (terminal-info, file-viewer) hold no store state,
+  //     so a local counter increments on each open event below.
+  const gitPushResetKey = useGitPushConfirmStore((s) => s.requestSeq);
+  const gitPullRebaseResetKey = useGitPullRebaseConfirmStore((s) => s.requestSeq);
+  const panelLimitResetKey = usePanelLimitStore((s) => s.requestSeq);
+  const recipeConflictResetKey = useRecipeConflictStore((s) => s.requestSeq);
+  const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
+  const pluginConfirmResetKey = usePluginConfirmStore((s) => s.current?.requestId ?? "");
+  const pluginMcpConfirmResetKey = usePluginMcpConfirmStore((s) => s.current?.requestId ?? "");
+  const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
+  const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
+  const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
+  useEffect(() => {
+    const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
+    const onViewFile = () => setFileViewerResetKey((k) => k + 1);
+    window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
+    window.addEventListener("daintree:view-file", onViewFile);
+    return () => {
+      window.removeEventListener("daintree:open-terminal-info", onTerminalInfo);
+      window.removeEventListener("daintree:view-file", onViewFile);
+    };
+  }, []);
   // Cross-project focus intent receiver. Subscribes unconditionally so the
   // listener is registered before `notifyViewPainted` fires, then defers the
   // local `agent.focusNextWaiting` dispatch until hydration completes (the
@@ -597,7 +657,9 @@ function AppInner() {
   // the dialog would be visible but unclickable until hydration finishes
   // (which it can't, since the user must resolve the crash first).
   useEffect(() => {
-    if (crashState.status === "pending") removeStartupSkeleton();
+    if (crashState.status === "pending" || crashState.status === "failed") {
+      removeStartupSkeleton();
+    }
   }, [crashState.status]);
   useEffect(() => {
     void useNotificationSettingsStore.getState().hydrate();
@@ -609,12 +671,10 @@ function AppInner() {
     });
     return () => unsubscribe?.();
   }, []);
-  useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);
-  useStoreUpdateListener();
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
   useNotificationHistoryPruning();
@@ -773,7 +833,7 @@ function AppInner() {
     );
   }
 
-  if (crashState.status === "pending") {
+  if (crashState.status === "pending" || crashState.status === "failed") {
     return (
       <div className="h-screen w-screen bg-daintree-bg">
         <Suspense fallback={null}>
@@ -782,6 +842,7 @@ function AppInner() {
             config={crashState.config}
             onResolve={resolveCrash}
             onUpdateConfig={updateCrashConfig}
+            {...(crashState.status === "failed" && { initialError: crashState.errorMessage })}
           />
         </Suspense>
         {/* Diagnostics host stays reachable while the crash dialog is blocking
@@ -836,7 +897,7 @@ function AppInner() {
             skipDelayDuration={UI_TOOLTIP_SKIP_DELAY_DURATION}
             disableHoverableContent
           >
-            <E2EFaultInjector />
+            {window.__DAINTREE_E2E_MODE__ === true && <E2EFaultInjector />}
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
@@ -880,7 +941,7 @@ function AppInner() {
               componentName="QuickSwitcher"
               resetKeys={[Number(quickSwitcher.isOpen)]}
             >
-              {quickSwitcher.isOpen && (
+              {shouldMountQuickSwitcher && (
                 <Suspense fallback={null}>
                   <LazyQuickSwitcher
                     isOpen={quickSwitcher.isOpen}
@@ -905,7 +966,7 @@ function AppInner() {
               componentName="SendToAgentPalette"
               resetKeys={[Number(sendToAgentPalette.isOpen)]}
             >
-              {sendToAgentPalette.isOpen && (
+              {shouldMountSendToAgentPalette && (
                 <Suspense fallback={null}>
                   <LazySendToAgentPalette
                     isOpen={sendToAgentPalette.isOpen}
@@ -928,7 +989,7 @@ function AppInner() {
               componentName="NewTerminalPalette"
               resetKeys={[Number(newTerminalPalette.isOpen)]}
             >
-              {newTerminalPalette.isOpen && (
+              {shouldMountNewTerminalPalette && (
                 <Suspense fallback={null}>
                   <LazyNewTerminalPalette
                     isOpen={newTerminalPalette.isOpen}
@@ -951,7 +1012,7 @@ function AppInner() {
               componentName="WorktreePalette"
               resetKeys={[Number(worktreePalette.isOpen)]}
             >
-              {worktreePalette.isOpen && (
+              {shouldMountWorktreePalette && (
                 <Suspense fallback={null}>
                   <LazyWorktreePalette
                     isOpen={worktreePalette.isOpen}
@@ -976,7 +1037,7 @@ function AppInner() {
               componentName="QuickCreatePalette"
               resetKeys={[Number(quickCreatePalette.isOpen)]}
             >
-              {quickCreatePalette.isOpen && (
+              {shouldMountQuickCreatePalette && (
                 <Suspense fallback={null}>
                   <LazyQuickCreatePalette palette={quickCreatePalette} />
                 </Suspense>
@@ -987,7 +1048,7 @@ function AppInner() {
               componentName="PanelPalette"
               resetKeys={[Number(panelPalette.isOpen)]}
             >
-              {panelPalette.isOpen && (
+              {shouldMountPanelPalette && (
                 <Suspense fallback={null}>
                   <LazyPanelPalette
                     isOpen={panelPalette.isOpen}
@@ -1082,16 +1143,12 @@ function AppInner() {
             <ErrorBoundary
               variant="component"
               componentName="ProjectSwitcherPalette"
-              resetKeys={[
-                Number(projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"),
-              ]}
+              resetKeys={[Number(isProjectSwitcherModalOpen)]}
             >
-              {projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal" && (
+              {isProjectSwitcherModalOpen && (
                 <Suspense fallback={null}>
                   <LazyProjectSwitcherPalette
-                    isOpen={
-                      projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"
-                    }
+                    isOpen={isProjectSwitcherModalOpen}
                     query={projectSwitcherPalette.query}
                     results={projectSwitcherPalette.results}
                     selectedIndex={projectSwitcherPalette.selectedIndex}
@@ -1172,7 +1229,7 @@ function AppInner() {
               componentName="ThemePalette"
               resetKeys={[Number(isThemePaletteOpen)]}
             >
-              {isThemePaletteOpen && (
+              {shouldMountThemePalette && (
                 <Suspense fallback={null}>
                   <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
                 </Suspense>
@@ -1184,7 +1241,7 @@ function AppInner() {
               componentName="LogLevelPalette"
               resetKeys={[Number(isLogLevelPaletteOpen)]}
             >
-              {isLogLevelPaletteOpen && (
+              {shouldMountLogLevelPalette && (
                 <Suspense fallback={null}>
                   <LazyLogLevelPalette
                     isOpen={isLogLevelPaletteOpen}
@@ -1199,7 +1256,7 @@ function AppInner() {
               componentName="ActionPalette"
               resetKeys={[Number(actionPalette.isOpen)]}
             >
-              {actionPalette.isOpen && (
+              {shouldMountActionPalette && (
                 <Suspense fallback={null}>
                   <LazyActionPalette
                     isOpen={actionPalette.isOpen}
@@ -1256,7 +1313,7 @@ function AppInner() {
               componentName="CrossWorktreeDiff"
               resetKeys={[Number(crossDiffDialog.isOpen)]}
             >
-              {crossDiffDialog.isOpen && (
+              {shouldMountCrossDiffDialog && (
                 <Suspense fallback={null}>
                   <LazyCrossWorktreeDiff
                     isOpen={crossDiffDialog.isOpen}
@@ -1272,7 +1329,7 @@ function AppInner() {
               componentName="SettingsDialog"
               resetKeys={[Number(isSettingsOpen)]}
             >
-              {(isSettingsOpen || hasOpenedSettings) && (
+              {shouldMountSettings && (
                 <Suspense fallback={null}>
                   <LazySettingsDialog
                     isOpen={isSettingsOpen}
@@ -1292,7 +1349,7 @@ function AppInner() {
               componentName="ShortcutReferenceDialog"
               resetKeys={[Number(isShortcutsOpen)]}
             >
-              {isShortcutsOpen && (
+              {shouldMountShortcutsDialog && (
                 <Suspense fallback={null}>
                   <LazyShortcutReferenceDialog
                     isOpen={isShortcutsOpen}
@@ -1308,7 +1365,7 @@ function AppInner() {
               resetKeys={[Number(isPluginManagerOpen)]}
               onError={() => usePluginManagerStore.getState().close()}
             >
-              {(isPluginManagerOpen || hasOpenedPluginManager) && (
+              {shouldMountPluginManager && (
                 <Suspense fallback={null}>
                   <LazyPluginManagerView
                     deepLinkIntent={pluginDeepLink.intent}
@@ -1321,7 +1378,7 @@ function AppInner() {
             <ErrorBoundary
               variant="component"
               componentName="TerminalInfoDialogHost"
-              resetKeys={[Number(isStateLoaded)]}
+              resetKeys={[terminalInfoResetKey]}
             >
               <TerminalInfoDialogHost />
             </ErrorBoundary>
@@ -1329,7 +1386,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="McpConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[mcpConfirmResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyMcpConfirmDialog />
@@ -1340,7 +1397,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="PluginConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[pluginConfirmResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyPluginConfirmDialog />
@@ -1351,7 +1408,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="PluginMcpConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[pluginMcpConfirmResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyPluginMcpConfirmDialog />
@@ -1362,7 +1419,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="FileViewerModalHost"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[fileViewerResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyFileViewerModalHost />
@@ -1375,11 +1432,11 @@ function AppInner() {
               componentName="GitInitDialog"
               resetKeys={[Number(gitInitDialogOpen)]}
             >
-              {gitInitDirectoryPath && (
+              {shouldMountGitInitDialog && effectiveGitInitPath && (
                 <Suspense fallback={null}>
                   <LazyGitInitDialog
                     isOpen={gitInitDialogOpen}
-                    directoryPath={gitInitDirectoryPath}
+                    directoryPath={effectiveGitInitPath}
                     onSuccess={handleGitInitSuccess}
                     onCancel={closeGitInitDialog}
                   />
@@ -1392,7 +1449,7 @@ function AppInner() {
               componentName="CreateProjectFolderDialog"
               resetKeys={[Number(createFolderDialogOpen)]}
             >
-              {createFolderDialogOpen && (
+              {shouldMountCreateFolderDialog && (
                 <Suspense fallback={null}>
                   <LazyCreateProjectFolderDialog
                     isOpen={createFolderDialogOpen}
@@ -1407,7 +1464,7 @@ function AppInner() {
               componentName="CloneRepoDialog"
               resetKeys={[Number(cloneRepoDialogOpen)]}
             >
-              {cloneRepoDialogOpen && (
+              {shouldMountCloneRepoDialog && (
                 <Suspense fallback={null}>
                   <LazyCloneRepoDialog
                     isOpen={cloneRepoDialogOpen}
@@ -1423,7 +1480,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="PanelLimitConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[panelLimitResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyPanelLimitConfirmDialog />
@@ -1435,7 +1492,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="DiagnosticsReviewDialogHost"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[diagnosticsReviewResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyDiagnosticsReviewDialogHost />
@@ -1447,7 +1504,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="GitPushConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[gitPushResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyGitPushConfirmDialog />
@@ -1459,7 +1516,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="GitPullRebaseConfirmDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[gitPullRebaseResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyGitPullRebaseConfirmDialog />
@@ -1471,7 +1528,7 @@ function AppInner() {
               <ErrorBoundary
                 variant="component"
                 componentName="RecipeConflictDialog"
-                resetKeys={[Number(isStateLoaded)]}
+                resetKeys={[recipeConflictResetKey]}
               >
                 <Suspense fallback={null}>
                   <LazyRecipeConflictDialog />
@@ -1482,6 +1539,9 @@ function AppInner() {
             <Toaster />
             <ShortcutHint />
             <ReEntrySummary state={reEntrySummary} />
+            {/* Listener hooks deferred out of the first commit flush — mount once
+                hydration settles so their effects stay off the first effect flush (#9769). */}
+            {isStateLoaded && <PostHydrationListeners />}
             {isStateLoaded && (
               <ErrorBoundary
                 variant="component"
@@ -1538,10 +1598,6 @@ function AppInner() {
 // the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
 // flight — it's removed by `removeStartupSkeleton()` once hydration completes.
 function App() {
-  useEffect(() => {
-    installE2ENotificationBackdoor();
-  }, []);
-
   // Signal the main process that React has committed its first frame so
   // ProjectViewManager can release the outgoing view of a cold project switch.
   // This lives in the Suspense *parent* (not `AppInner`) so it fires the moment

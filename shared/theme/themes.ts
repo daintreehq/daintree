@@ -803,6 +803,7 @@ export function getAppThemeWarnings(scheme: AppColorScheme): AppThemeValidationW
     accentRgb === "0, 0, 0"
   ) {
     warnings.push({
+      kind: "accent-rgb-fallback",
       message:
         'accent-rgb falls back to "0, 0, 0" because accent-primary is non-hex and no explicit accent-rgb override was provided. Components using rgba(var(--theme-accent-rgb), …) will render black tints.',
     });

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -117,6 +117,7 @@ vi.mock("../SettingsInput", () => ({
 
 const helpPanelState = {
   preferredAgentId: null as string | null,
+  sessionId: null as string | null,
   setPreferredAgent: vi.fn(),
 };
 
@@ -146,7 +147,10 @@ vi.mock("@/config/agents", () => ({
   },
 }));
 
-import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
+import {
+  DaintreeAssistantSettingsTab,
+  formatGrantRemaining,
+} from "../DaintreeAssistantSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
@@ -154,6 +158,7 @@ const writeText = vi.fn().mockResolvedValue(undefined);
 interface HelpAssistantApi {
   getSettings: ReturnType<typeof vi.fn>;
   setSettings: ReturnType<typeof vi.fn>;
+  getLiveSessionStatus: ReturnType<typeof vi.fn>;
 }
 
 interface McpServerApi {
@@ -163,7 +168,9 @@ interface McpServerApi {
   rotateApiKey: ReturnType<typeof vi.fn>;
   getConfigSnippet: ReturnType<typeof vi.fn>;
   onRuntimeStateChanged: ReturnType<typeof vi.fn>;
+  onGrantLifecycle: ReturnType<typeof vi.fn>;
   getAuditRecords: ReturnType<typeof vi.fn>;
+  getLogRecords: ReturnType<typeof vi.fn>;
   getAuditStats: ReturnType<typeof vi.fn>;
   getTurnOutcomeRecords: ReturnType<typeof vi.fn>;
   clearAuditLog: ReturnType<typeof vi.fn>;
@@ -183,6 +190,9 @@ function installApi(
       customArgs: "",
     }),
     setSettings: vi.fn().mockResolvedValue(undefined),
+    getLiveSessionStatus: vi
+      .fn()
+      .mockResolvedValue({ connected: false, tier: "workbench", activeGrants: [] }),
   };
   const mcpDefaults: McpServerApi = {
     getStatus: vi.fn().mockResolvedValue({
@@ -206,7 +216,9 @@ function installApi(
     rotateApiKey: vi.fn().mockResolvedValue("dnt-key-new"),
     getConfigSnippet: vi.fn().mockResolvedValue('{ "url": "http://127.0.0.1:45454/sse" }'),
     onRuntimeStateChanged: vi.fn(() => () => {}),
+    onGrantLifecycle: vi.fn(() => () => {}),
     getAuditRecords: vi.fn().mockResolvedValue([]),
+    getLogRecords: vi.fn().mockResolvedValue([]),
     getAuditStats: vi.fn().mockResolvedValue({ auth401Count: 0 }),
     getTurnOutcomeRecords: vi.fn().mockResolvedValue([]),
     clearAuditLog: vi.fn().mockResolvedValue(undefined),
@@ -221,6 +233,7 @@ describe("DaintreeAssistantSettingsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     helpPanelState.preferredAgentId = null;
+    helpPanelState.sessionId = null;
     helpPanelState.setPreferredAgent = vi.fn();
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
     Object.defineProperty(navigator, "clipboard", {
@@ -836,5 +849,115 @@ describe("DaintreeAssistantSettingsTab", () => {
         customArgs: "",
       });
     });
+  });
+});
+
+describe("SessionLiveStatusCard (live help session)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.sessionId = "help-1";
+    helpPanelState.setPreferredAgent = vi.fn();
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    helpPanelState.sessionId = null;
+  });
+
+  const settingsWithTier = (tier: "workbench" | "action" | "system") => ({
+    docSearch: true,
+    daintreeControl: true,
+    tier,
+    bypassPermissions: false,
+    auditRetention: 7 as const,
+    customArgs: "",
+    idleHibernateMinutes: 30 as const,
+  });
+
+  it("reports the live tier as elevated above the configured default", async () => {
+    installApi(
+      {
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getLiveSessionStatus: vi
+          .fn()
+          .mockResolvedValue({ connected: true, tier: "system", activeGrants: [] }),
+      },
+      {}
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
+    expect(container.textContent).toContain("elevated above the configured action default");
+  });
+
+  it("reports a live tier below the configured default without claiming a match", async () => {
+    installApi(
+      {
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("system")),
+        getLiveSessionStatus: vi
+          .fn()
+          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+      },
+      {}
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
+    expect(container.textContent).toContain("below the configured system default");
+    expect(container.textContent).not.toContain("matches the configured default");
+  });
+
+  it("passes the public help-session id to the live-status bridge call", async () => {
+    const getLiveSessionStatus = vi
+      .fn()
+      .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] });
+    installApi(
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")), getLiveSessionStatus },
+      {}
+    );
+    render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-1" }));
+  });
+});
+
+describe("formatGrantRemaining", () => {
+  it("renders sub-minute durations as bare seconds", () => {
+    expect(formatGrantRemaining(0)).toBe("0s");
+    expect(formatGrantRemaining(1)).toBe("1s");
+    expect(formatGrantRemaining(59)).toBe("59s");
+  });
+
+  it("renders an exact minute without a trailing seconds component", () => {
+    expect(formatGrantRemaining(60)).toBe("1m");
+    expect(formatGrantRemaining(120)).toBe("2m");
+  });
+
+  it("renders mixed minute+second durations", () => {
+    expect(formatGrantRemaining(61)).toBe("1m 1s");
+    expect(formatGrantRemaining(125)).toBe("2m 5s");
+  });
+
+  it("floors fractional seconds and clamps negatives to zero", () => {
+    expect(formatGrantRemaining(61.9)).toBe("1m 1s");
+    expect(formatGrantRemaining(-5)).toBe("0s");
   });
 });

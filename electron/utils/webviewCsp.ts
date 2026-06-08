@@ -1,5 +1,6 @@
 import type { OnHeadersReceivedListenerDetails } from "electron";
 import { getDaintreeAppCSP } from "../../shared/config/csp.js";
+import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 
 export { getDaintreeAppCSP };
 
@@ -9,8 +10,8 @@ export type WebviewPartitionType = "browser" | "dev-preview" | "portal" | "proje
  * Checks if a partition is a valid dev-preview partition.
  * Matches exact "persist:dev-preview" or dynamic "persist:dev-preview-*" patterns.
  */
-export function isDevPreviewPartition(partition: string): boolean {
-  return partition === "persist:dev-preview" || partition.startsWith("persist:dev-preview-");
+export function isDevPreviewPartition(value: string): boolean {
+  return value === "persist:dev-preview" || value.startsWith("persist:dev-preview-");
 }
 
 /**
@@ -18,7 +19,7 @@ export function isDevPreviewPartition(partition: string): boolean {
  * Used to apply appropriate CSP policies to different webview partitions.
  */
 export function classifyPartition(partition: string): WebviewPartitionType {
-  if (partition === "persist:browser") {
+  if (isBrowserPartition(partition)) {
     return "browser";
   }
   if (partition === "persist:portal") {

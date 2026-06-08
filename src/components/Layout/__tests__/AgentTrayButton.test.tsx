@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 
 const dispatchMock = vi.fn();
 const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
@@ -205,6 +206,48 @@ vi.mock("@/components/ui/context-menu", () => ({
       {children}
     </div>
   ),
+  ContextMenuActionItem: ({
+    actionId,
+    args,
+    children,
+    onSelect,
+  }: {
+    actionId: string;
+    args?: unknown;
+    children: React.ReactNode;
+    onSelect?: (e: { defaultPrevented: boolean; preventDefault: () => void }) => void;
+  }) => (
+    <div
+      role="menuitem"
+      data-action-id={actionId}
+      data-args={JSON.stringify(args)}
+      onClick={() => {
+        const fakeEvent = {
+          defaultPrevented: false,
+          preventDefault: () => {
+            (fakeEvent as { defaultPrevented: boolean }).defaultPrevented = true;
+          },
+        };
+        onSelect?.(fakeEvent);
+        if (!fakeEvent.defaultPrevented) {
+          void dispatchMock(actionId, args, { source: "user" });
+        }
+      }}
+    >
+      {children}
+    </div>
+  ),
+  ContextMenuSeparator: () => <hr />,
+  ContextMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuCheckboxItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  ContextMenuPortal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
@@ -249,6 +292,42 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       className={className}
       onClick={(e) => onSelect?.(e as unknown as Event)}
       onKeyDown={onKeyDown}
+      tabIndex={0}
+      {...props}
+    >
+      {children}
+    </div>
+  ),
+  DropdownMenuActionItem: ({
+    actionId,
+    args,
+    dispatchOptions,
+    children,
+    onSelect,
+    ...props
+  }: {
+    actionId: string;
+    args?: unknown;
+    dispatchOptions?: { source?: string };
+    children: React.ReactNode;
+    onSelect?: (e: { defaultPrevented: boolean; preventDefault: () => void }) => void;
+  } & React.HTMLAttributes<HTMLDivElement>) => (
+    <div
+      role="menuitem"
+      data-action-id={actionId}
+      data-args={JSON.stringify(args)}
+      onClick={() => {
+        const fakeEvent = {
+          defaultPrevented: false,
+          preventDefault: () => {
+            (fakeEvent as { defaultPrevented: boolean }).defaultPrevented = true;
+          },
+        };
+        onSelect?.(fakeEvent);
+        if (!fakeEvent.defaultPrevented) {
+          void dispatchMock(actionId, args, { source: "user" });
+        }
+      }}
       tabIndex={0}
       {...props}
     >
@@ -662,15 +741,18 @@ describe("AgentTrayButton", () => {
 
     const { container } = render(<AgentTrayButton agentAvailability={availability} />);
     const footer = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
-      el.textContent?.includes("Customize Toolbar")
+      el.textContent?.includes(TOOLBAR_CUSTOMIZE_LABEL)
     );
     expect(footer).toBeTruthy();
     fireEvent.click(footer!);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "toolbar" },
-      { source: "user" }
+    // The Customize entry routes through DropdownMenuActionItem, so the
+    // source is whatever the wrapping DropdownMenu provides ("menu" when
+    // Radix primitives load, "user" when the fallback path is taken).
+    const calls = dispatchMock.mock.calls.filter(
+      ([id, args]: unknown[]) =>
+        id === "app.settings.openTab" && JSON.stringify(args) === JSON.stringify({ tab: "toolbar" })
     );
+    expect(calls.length).toBeGreaterThan(0);
   });
 
   it("shows loading placeholder when availability is undefined", () => {
@@ -1312,25 +1394,24 @@ describe("AgentTrayButton", () => {
       return row.querySelector('span.relative span[aria-hidden="true"]');
     }
 
-    it.each([["waiting"], ["directing"]] as const)(
-      "renders the badge for actionable state %s",
-      (state) => {
-        const availability = arrangeClaudePanel(state);
-        const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-        const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)).not.toBeNull();
-      }
-    );
+    it.each([
+      ["waiting", /bg-state-waiting/],
+      ["directing", /bg-state-working/],
+    ] as const)("renders the badge for actionable state %s", (state, colorPattern) => {
+      const availability = arrangeClaudePanel(state);
+      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const row = getByTestId("agent-tray-row-claude");
+      const badge = badgeIn(row);
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge?.className).toMatch(colorPattern);
+    });
 
-    it.each([["working"], ["idle"]] as const)(
-      "does not render the badge for passive state %s",
-      (state) => {
-        const availability = arrangeClaudePanel(state);
-        const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-        const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)).toBeNull();
-      }
-    );
+    it.each([["working"], ["idle"]] as const)("hides the badge for passive state %s", (state) => {
+      const availability = arrangeClaudePanel(state);
+      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const row = getByTestId("agent-tray-row-claude");
+      expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
+    });
 
     // `completed` and `exited` are excluded from ACTIVE_AGENT_STATES, so the
     // panel never enters the dominant-state aggregation in the first place;
@@ -1338,22 +1419,22 @@ describe("AgentTrayButton", () => {
     // here so the consumer-level contract ("no badge for passive states") is
     // tested end-to-end regardless of which guard fires.
     it.each([["completed"], ["exited"]] as const)(
-      "does not render the badge for terminal state %s",
+      "hides the badge for terminal state %s",
       (state) => {
         const availability = arrangeClaudePanel(state);
         const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
         const row = getByTestId("agent-tray-row-claude");
-        expect(badgeIn(row)).toBeNull();
+        expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
       }
     );
 
-    it("does not render the badge when there is no active session", () => {
+    it("hides the badge when there is no active session", () => {
       const availability = { claude: "ready" } as unknown as CliAvailability;
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
       const row = getByTestId("agent-tray-row-claude");
-      expect(badgeIn(row)).toBeNull();
+      expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
     });
   });
 

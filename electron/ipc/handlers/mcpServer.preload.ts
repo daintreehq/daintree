@@ -8,6 +8,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   getConfigSnippet: "mcp-server:get-config-snippet",
   listActiveClients: "mcp-server:list-active-clients",
   getAuditRecords: "mcp-server:get-audit-records",
+  getLogRecords: "mcp-server:get-log-records",
   getAuditConfig: "mcp-server:get-audit-config",
   getAuditStats: "mcp-server:get-audit-stats",
   clearAuditLog: "mcp-server:clear-audit-log",
@@ -20,7 +21,9 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   setSessionTier: "mcp-server:set-session-tier",
   issueGrant: "mcp-server:issue-grant",
   revokeSessionGrants: "mcp-server:revoke-session-grants",
+  resetDenialCounts: "mcp-server:reset-denial-counts",
   listActiveBearers: "mcp-server:list-active-bearers",
+  listHelpSessionBearers: "mcp-server:list-help-session-bearers",
   disconnectBearer: "mcp-server:disconnect-bearer",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 

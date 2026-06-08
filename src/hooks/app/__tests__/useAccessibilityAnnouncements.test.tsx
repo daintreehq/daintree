@@ -2,16 +2,22 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { AgentState } from "@shared/types/agent";
-import type { PersistableFlowStatus } from "@shared/types/panel";
+import type { PanelLocation, TerminalFlowStatus } from "@shared/types/panel";
 
 interface Terminal {
   id: string;
   title: string;
-  kind?: "terminal";
+  kind?: string;
   agentState?: AgentState;
   stateChangeConfidence?: number;
-  flowStatus?: PersistableFlowStatus;
+  // FUTURE_SAB: widened to `TerminalFlowStatus` (not `PersistableFlowStatus`)
+  // so the suspended-flow tests can drive the formatter with a skeleton
+  // value (#9900). In production the panel's flowStatus is always
+  // `PersistableFlowStatus`; the wider type here is purely so the test
+  // fixture matches the formatter's accepted input.
+  flowStatus?: TerminalFlowStatus;
   exitCode?: number;
+  location?: PanelLocation;
 }
 
 const { panelMockStore } = vi.hoisted(() => {
@@ -24,11 +30,13 @@ const { panelMockStore } = vi.hoisted(() => {
       panelsById: Record<string, Terminal>;
       panelIds: string[];
       commandQueueCountById: Record<string, number>;
+      maximizedId: string | null;
     }>(() => ({
       focusedId: null,
       panelsById: {},
       panelIds: [],
       commandQueueCountById: {},
+      maximizedId: null,
     })),
   };
 });
@@ -87,6 +95,10 @@ function setPanels(panels: Terminal[], queueCounts: Record<string, number> = {})
     panelIds: panels.map((p) => p.id),
     commandQueueCountById: queueCounts,
   });
+}
+
+function setMaximizedId(maximizedId: string | null) {
+  panelMockStore.setState({ maximizedId });
 }
 
 describe("useAccessibilityAnnouncements — agent-state announcements (#8937)", () => {
@@ -262,7 +274,11 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output paused, memory pressure");
   });
 
-  it("announces flow status entering 'suspended'", () => {
+  // FUTURE_SAB: `suspended` is a skeleton value with no production
+  // producer (#9900). The formatter accepts the full union and emits the
+  // message; in production the formatter never sees this value because
+  // the lifecycle listener drops it at the boundary.
+  it("announces flow status entering 'suspended' (FUTURE_SAB; #9900)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
     act(() => {
@@ -311,7 +327,9 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output resumed");
   });
 
-  it("announces resume from 'suspended' to 'running'", () => {
+  // FUTURE_SAB: `suspended` is a skeleton value (#9900); the resume
+  // edge in the formatter is exercised here for the future state.
+  it("announces resume from 'suspended' to 'running' (FUTURE_SAB; #9900)", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
     act(() => {
@@ -643,6 +661,279 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     act(() => {
       vi.advanceTimersByTime(500);
     });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+});
+
+// #9932 — panel location changes (minimize → dock, restore → grid) and
+// maximize/unmaximize were silent to screen readers. They now route through the
+// global announcer immediately (discrete user actions — no debounce).
+describe("useAccessibilityAnnouncements — location and maximize announcements (#9932)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+    panelMockStore.setState({
+      focusedId: null,
+      panelsById: {},
+      panelIds: [],
+      commandQueueCountById: {},
+      maximizedId: null,
+    });
+    hibernationState.clear();
+    hibernationListeners.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("announces 'minimized to dock' on a grid → dock transition", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A minimized to dock");
+  });
+
+  it("announces 'restored to grid' on a dock → grid transition", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A restored to grid");
+  });
+
+  it("announces location changes immediately without debounce", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+
+    // No timer advance — the announcement is already present.
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A minimized to dock");
+  });
+
+  it("announces location changes for non-PTY panels (browser/dev-preview/review)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      panelMockStore.setState({
+        focusedId: null,
+        panelsById: { b1: { id: "b1", title: "Preview", kind: "browser", location: "grid" } },
+        panelIds: ["b1"],
+        commandQueueCountById: {},
+      });
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      panelMockStore.setState({
+        panelsById: { b1: { id: "b1", title: "Preview", kind: "browser", location: "dock" } },
+      });
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Preview minimized to dock");
+  });
+
+  it("does not announce on first mount with a location set", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("does not announce for internal locations (overlay, background, trash)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    for (const dest of ["overlay", "background", "trash"] as const) {
+      act(() => {
+        setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+      });
+      rerender();
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+
+      act(() => {
+        setPanels([{ id: "t1", title: "Pane A", location: dest }]);
+      });
+      rerender();
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    }
+
+    // dock → trash is also silent (only dock → grid is reported).
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "dock" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "trash" }]);
+    });
+    rerender();
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("announces 'maximized' when maximizedId goes null → id", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setMaximizedId("t1");
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A maximized");
+  });
+
+  it("announces 'unmaximized' when maximizedId goes id → null", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setMaximizedId(null);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A unmaximized");
+  });
+
+  it("does not announce on first mount when nothing is maximized", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("does not announce on first mount when a panel is already maximized", () => {
+    act(() => {
+      setMaximizedId("t1");
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+    });
+
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("announces only the new panel on an in-group representative switch (t1 → t2)", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", location: "grid" },
+        { id: "t2", title: "Pane B", location: "grid" },
+      ]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setMaximizedId("t2");
+    });
+    rerender();
+
+    // The group is still maximized; only the new representative is announced —
+    // no spurious "Pane A unmaximized".
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane B maximized");
+  });
+
+  it("falls back to a generic title when the panel was removed before unmaximize", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", location: "grid" }]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([]);
+      setMaximizedId(null);
+    });
+    rerender();
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Panel unmaximized");
+  });
+
+  it("does not re-announce maximize when an unrelated panel updates", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", location: "grid" },
+        { id: "t2", title: "Pane B", location: "grid" },
+      ]);
+      setMaximizedId("t1");
+    });
+    rerender();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    // Update an unrelated panel's title while t1 stays maximized.
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", location: "grid" },
+        { id: "t2", title: "Pane B renamed", location: "grid" },
+      ]);
+      setMaximizedId("t1");
+    });
+    rerender();
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });

@@ -56,7 +56,7 @@ vi.mock("@/services/terminal/optimisticPanelClose", () => ({
 
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 
-type MockPanel = { id: string; location: "grid" | "dock" | "trash" };
+type MockPanel = { id: string; location: "grid" | "dock" | "trash" | "background" };
 
 function setPanelState(options: {
   focusedId?: string | null;
@@ -141,6 +141,35 @@ describe("terminal.close", () => {
     const { trashPanel } = setPanelState({
       focusedId: null,
       panels: [{ id: "p1", location: "trash" }],
+      postTrashFocusedId: null,
+    });
+    const run = setupActions();
+
+    await run("terminal.close");
+
+    expect(trashPanel).not.toHaveBeenCalled();
+  });
+
+  it("fallback skips background panels (#9937)", async () => {
+    const { trashPanel } = setPanelState({
+      focusedId: null,
+      panels: [
+        { id: "bg1", location: "background" },
+        { id: "p2", location: "grid" },
+      ],
+      postTrashFocusedId: null,
+    });
+    const run = setupActions();
+
+    await run("terminal.close");
+
+    expect(trashPanel).toHaveBeenCalledWith("p2");
+  });
+
+  it("no-ops when only background panels remain (#9937)", async () => {
+    const { trashPanel } = setPanelState({
+      focusedId: null,
+      panels: [{ id: "bg1", location: "background" }],
       postTrashFocusedId: null,
     });
     const run = setupActions();

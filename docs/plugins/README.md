@@ -1,6 +1,6 @@
 # Daintree Plugins
 
-> **Status: pre-release, in active development.** The runtime (`PluginService`: load/activate/unload, manifest validation, panel/toolbar/menu/keybinding/context-menu registration, host settings, MCP supervision, worktree observation) is implemented, and the `daintree-plugin` CLI ships `new`, `validate`, `package`, `install`, and `uninstall`. Still pending: the CLI `dev` (hot-reload) command. `@daintreehq/plugin-vite` now lives in-repo at `packages/plugin-vite` but is unpublished (`private: true`); `@daintreehq/plugin-sdk` and `@daintreehq/plugin-testing` have no package directory yet. Per-contribution-point status lives in [Contribution points](./contribution-points.md); APIs may still change before 1.0.
+> **Status: pre-release, in active development.** The runtime (`PluginService`: load/activate/unload, manifest validation, panel/toolbar/menu/keybinding/context-menu registration, host settings, MCP supervision, worktree observation) is implemented, and the `daintree-plugin` CLI ships `new`, `validate`, `package`, `install`, and `uninstall`. None of the npm packages are published yet: `daintree-plugin` and `create-daintree-plugin` are not on npm (`npx`/`npm install` returns E404 today), `@daintreehq/plugin-vite` lives in-repo at `packages/plugin-vite` but is unpublished (`private: true`), and `@daintreehq/plugin-sdk` and `@daintreehq/plugin-testing` have no package directory yet. Still pending: the CLI `dev` (hot-reload) command. Per-contribution-point status lives in [Contribution points](./contribution-points.md); APIs may still change before 1.0.
 
 Plugins extend Daintree with new panels, actions, keybindings, MCP servers, agents, and — planned — skills. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
 
@@ -42,7 +42,7 @@ The plugin system is under active development. Each contribution point in the [c
 
 ## Stability
 
-`@daintreehq/plugin-sdk` follows semver but is pre-1.0 until the SDK stabilizes. Breaking changes may occur between 0.x minor versions. Pin to an exact version during early development and upgrade deliberately.
+`@daintreehq/plugin-sdk` is not yet published on npm (see the [status banner](#daintree-plugins) above); once it ships it will follow semver but stay pre-1.0 until the SDK stabilizes. Breaking changes may occur between 0.x minor versions, so pin to an exact version during early development and upgrade deliberately.
 
 The `engines.daintree` field in your manifest controls host compatibility. Plugins declaring a range that doesn't match the running Daintree version are rejected at load time with a user-visible warning.
 

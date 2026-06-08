@@ -40,6 +40,10 @@ The activity monitor starts when an agent identity is detected or expected, and 
 
 Activity detection is deliberately layered. No single layer is authoritative in all terminal modes.
 
+### Simple Output Mode
+
+Agent monitors run in simple output mode (`simpleOutputState`, set by `buildActivityMonitorOptions` whenever an agent id is present): busy/idle is driven by output observation — the visible-tail temperature model, the OSC 9;4 heartbeat, and the 8s idle debounce — rather than the non-simple working-signal arbitration. The detection layers below still run inside simple mode (#9873): compiled working patterns are matched against the rolling raw-stream buffer in `onData`, completion patterns are scanned from the polling cycle (feeding the `completed` transition with extracted cost/tokens), prompt patterns can exit boot early, every busy→idle transition classifies a `waitingReason`, and the polling cycle stays busy while boot is in progress. The synchronized-frame layer is the exception: `onSynchronizedFrame` returns early in simple mode, so frame signals currently have no consumer for agent terminals.
+
 ### Raw Stream And Pattern Layer
 
 `ActivityMonitor.onData()` receives PTY output. It:
@@ -63,6 +67,8 @@ Some CLIs bracket redraws with DEC mode 2026 synchronized output. The headless t
 
 Spinner and time-counter frames are activity evidence. Cosmetic-only frames can keep an already-working agent alive, but idle-to-working recovery still needs sustained signal.
 
+This layer applies to non-simple monitors only — simple-output agent monitors return early from `onSynchronizedFrame`, so frame signals have no consumer for live agent terminals.
+
 ### Escape-Sequence Progress Layer
 
 `electron/services/pty/Osc94Parser.ts` taps raw PTY output for OSC 9;4 taskbar-progress sequences upstream of the rest of the pipeline, so the signal is viewport-independent. This matters for small grid tiles where the visible-tail snapshot is too small to feed the temperature/output detectors. `TerminalProcess` instantiates the parser and feeds every output chunk through `osc94Parser.feed(data, now)`; its callbacks drive `ActivityMonitor.onOscProgressWorking()` and `onOscProgressIdle()`.
@@ -70,10 +76,10 @@ Spinner and time-counter frames are activity evidence. Cosmetic-only frames can 
 State codes follow the de-facto ConEmu spec that Claude Code adopted (v2.0.56):
 
 - `1` (normal/determinate) and `3` (indeterminate) mean working;
-- `0` (remove/hide) is emitted between every tool call, so the idle path is debounced (200ms) — any working state inside that window cancels it;
+- `0` (remove/hide) is emitted between every tool call, so it is treated as advisory only — `onOscProgressIdle` is a deliberate no-op; real idle comes from natural `lastActivityTimestamp` decay through the 8s gate;
 - `2` (error) and `4` (paused) are ignored — there is no matching agent state.
 
-The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSequences` still removes the sequence from the byte-volume and renderer-bound paths downstream, so other detectors stay clean. `onOscProgressWorking` acts as a heartbeat: it refreshes the working hold without bypassing focus suppression or the `MAX_WORKING_SILENCE_MS` safety net.
+The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSequences` still removes the sequence from the ActivityMonitor byte-volume / activity-gate path, so those detectors stay clean (the renderer keeps the raw bytes and renders the progress bar). `onOscProgressWorking` acts as a heartbeat: it refreshes the working hold without bypassing focus suppression or the `MAX_WORKING_SILENCE_MS` safety net.
 
 ### Visible-Tail Temperature Layer
 
@@ -90,13 +96,13 @@ The parser is a read-only side channel. `IdleSequenceFilter.stripIdleTerminalSeq
 
 Visible changes add heat. Silence decays heat exponentially. The model emits a `busy` hint only when heat is above the working threshold for the working dwell. It emits an `idle` hint only when heat has cooled below the waiting threshold for the waiting dwell.
 
-The important design rule is that status indicators are high-value activity evidence. A one-character spinner change should not be treated the same as a cursor blink or layout reflow. If the implementation needs separate weights, the intended categories are:
+The important design rule is that status indicators are high-value activity evidence. A one-character spinner change should not be treated the same as a cursor blink or layout reflow. Observations carry a `signalKind` (#9874):
 
-- content output: ordinary visible text changes;
-- activity indicator: spinner, status line, token counter, time counter;
-- decorative/noise: changes known not to represent agent progress.
+- `content`: ordinary visible text changes — max change gap `900ms`, minimum `4` changed samples;
+- `indicator`: spinner, status line, token counter, time counter — max change gap `2000ms`, minimum `2` changed samples, so a 1Hz countdown or elapsed-time tick can still recover waiting→working;
+- `decorative`: changes known not to represent agent progress — heat-capped and unable to drive working by itself.
 
-Only the decorative/noise category should be unable to drive working by itself.
+`ActivityMonitor` owns the classification: the simple-output data path latches `lastStatusRewriteAt` when raw PTY data matches `isStatusLineRewrite`, and the polling cycle classifies a visible-content change as `indicator` when that latch is within `SPINNER_ACTIVE_MS` (`1500ms`). The tight `900ms` content gap (introduced to guard against scroll/resize repaint bursts) is unchanged for unclassified changes. Both directions of this timing contract are pinned by tests: 1Hz indicator output must recover, and 1Hz generic content must not.
 
 ### Waiting And Prompt Layer
 
@@ -137,7 +143,7 @@ The FSM then produces canonical agent states:
 - `working -> completed` on completion
 - any non-exited state -> `exited` on exit
 
-Agent state changes are emitted through the event bus as `agent:state-changed` (from `PtyEventsBridge`). A listener-friendly variant, `terminal:state-changed`, is declared and bridge-eligible in `electron/services/events.ts` but currently has no producer — only `agent:state-changed` is emitted.
+Agent state changes are emitted through the event bus as `agent:state-changed` (from `PtyEventsBridge`). Suppressed and rejected transition attempts (hysteresis, stale-session, schema validation, no-op) are emitted as `agent:state-transition-dropped` for diagnostics, with the same correlation context (`terminalId`, `cwd`, `traceId`) and an `outcome` discriminator so user reports of false `working`/`waiting` can be triaged from the event inspector. The dropped event is diagnostics tier only — no user-facing UI consumes it.
 
 ## Resize Handling
 
@@ -206,6 +212,7 @@ Use these focused tests when changing the monitor:
 - `electron/services/pty/__tests__/SynchronizedFrameAnalyzer.test.ts`
 - `electron/services/pty/__tests__/AgentPatternDetector.test.ts`
 - `electron/services/pty/__tests__/Osc94Parser.test.ts`
+- `electron/services/__tests__/ActivityMonitor.replay.test.ts` — golden-trace replay of `.cast` fixtures through the production `buildActivityMonitorOptions` path (see [Adding replay fixtures](#adding-replay-fixtures)).
 
 Manual release checks live in [activity-testing.md](../activity-testing.md).
 
@@ -220,11 +227,28 @@ Important scenarios:
 - prompt redraws and protocol noise do not enter working;
 - completion patterns produce completed before waiting.
 
+## Adding Replay Fixtures
+
+The replay suite (`electron/services/__tests__/ActivityMonitor.replay.test.ts`) feeds asciinema v2 `.cast` recordings through the harness in `electron/services/__tests__/replay/castReplayHarness.ts`, which builds the monitor via the production `buildActivityMonitorOptions` path and asserts the recorded state transitions against a sibling `.expected.json`. Fixtures live in `electron/services/__tests__/fixtures/activity-monitor/` and are named `{agent}-{scenario}` (e.g. `aider-working-to-idle`).
+
+### Workflow: corpus → convert → trim → calibrate
+
+1. **Get a recording.** Either convert a pattern-discovery JSONL corpus (`scripts/pattern-discovery/corpus/*.jsonl`, recorded via `npm run pattern-discovery:record -- --agent <id>`) with `npm run pattern-discovery:jsonl-to-cast -- --corpus <corpus.jsonl> --out electron/services/__tests__/fixtures/activity-monitor/{agent}-{scenario} --width 120 --height 10`, or redact a real terminal capture with `npm run pattern-discovery:redact-cast -- --in capture.cast`.
+2. **Redaction is mandatory for field recordings.** Both tools run `scrubReportText` (user paths, git remotes, tilde/temp paths, all secret sigils in `shared/utils/secretScrubber.ts`) over every event at the write boundary, so converter output is safe by construction; for hand-edited or externally recorded casts, run `redact-cast` before committing and eyeball the result — the scrubbers are a backstop, not a substitute for review. Never commit the `.bak` file the in-place mode leaves behind.
+3. **Trim.** Cut events that don't serve the scenario (post-prompt chatter, resume hints) so the fixture ends on the signal you're asserting — a trailing low-byte hint line can re-arm output-activity detection and turn a clean prompt-idle into a timeout-idle.
+4. **Calibrate.** The converter writes a stub `.expected.json` with a `STUB_REPLACE_ME` sentinel that always fails. Add the fixture to `REPLAY_CASES`, run the replay test, copy the timings from the `Recorded transitions` block in the failure output into real `transitions` entries, and delete the `_stub` field. Re-run to confirm green. A fixture needing custom `pollingMaxBootMs`/`maxWorkingSilenceMs` overrides follows the bespoke `it()` pattern of `input-event-triggers-busy` instead of `REPLAY_CASES`.
+
+### Fixture-authoring gotchas
+
+- **Terminal geometry is load-bearing.** Prompt and visible-tail detection read the bottom rows of the viewport, so size `height` small enough (existing fixtures use `120x10`) that meaningful content lands in the bottom `promptScanLineCount` rows — a 30-row terminal with 14 lines of content leaves the scan window empty and silently downgrades prompt/completion detection to timeout-idle.
+- **Line-structured vs raw events.** Synthetic corpora store bare strings with no control characters; the converter auto-prepends `\r\n` to each event (`--line-events`/`--raw` to force) so cursor-line prompt detection works. Raw PTY captures already carry their own line discipline and must convert with `--raw` semantics (the auto-detect handles this).
+- **Timing pins.** The harness pins `idleDebounceMs`/`promptFastPathMinQuietMs` to the legacy 6000ms floor (production is 8000ms); new fixtures should state both fields explicitly in `.expected.json` so the calibrated `atMs` values are self-documenting.
+- **OSC 9;4 is not routed yet** (#9870): casts captured from agents that emit progress sequences (e.g. Claude Code) replay through the pattern path only; when OSC routing lands, those fixtures will need recalibration.
+- **Cast format is v2** (absolute timestamps). The harness also parses v3, but v2 is what the tooling emits and what hand-editing expects.
+
 ## Future Work
 
 - Add marker-anchored visible snapshots for structural resize immunity.
-- Add an explicit activity-indicator weight in the temperature model so spinner and status-line changes are stronger than generic one-character churn.
 - Add transition telemetry that records temperature, heat, changed chars, trigger, and suppression reason.
-- Add golden trace replay from real terminal captures.
 - Add property tests for decay invariants, dwell impossibility, resize suppression, and external temperature reads.
 - Parse OSC 133/633 shell-integration signals when agents provide them, while keeping passive observation as the fallback.

@@ -9,8 +9,25 @@ export const PERF_MARKS = {
   EARLY_PATH_REFRESH_START: "early_path_refresh_start",
   EARLY_PATH_REFRESH_COMPLETE: "early_path_refresh_complete",
   MAIN_WINDOW_CREATED: "main_window_created",
+  /**
+   * Recorded the moment `win.show()` is called from the dom-ready-gated
+   * `showOnce()` path in `createWindow.ts` — i.e. when the OS is asked to map
+   * the window on screen. Pairs with `MAIN_WINDOW_CREATED` and `APP_BOOT_START`
+   * to expose the window-reveal phase the cold-start harness was previously
+   * blind to. Carries `meta: { fallback: true }` when the 5s fallback timer
+   * fired instead of dom-ready.
+   */
+  MAIN_WINDOW_SHOWN: "main_window_shown",
   RENDERER_READY: "renderer_ready",
   RENDERER_FIRST_INTERACTIVE: "renderer_first_interactive",
+  /**
+   * The post-hydration listener set (notification/GitHub/store/sound/dev-server
+   * hooks) mounts once `isStateLoaded` flips true, after the startup skeleton
+   * fades. Staging these out of `AppInner`'s first commit keeps their effects
+   * off the first flush; this mark anchors the staged mount so LoAF attribution
+   * windows stay readable (#9769).
+   */
+  POST_HYDRATION_LISTENERS_MOUNT: "post_hydration_listeners_mount",
 
   SERVICE_INIT_START: "service_init_start",
   WINDOW_SERVICES_START: "window_services_start",
@@ -67,11 +84,48 @@ export const PERF_MARKS = {
   TERMINAL_DATA_PARSED: "terminal_data_parsed",
   TERMINAL_DATA_RENDERED: "terminal_data_rendered",
 
+  /**
+   * Bracket the synchronous `terminal.open(hostElement)` call in
+   * `TerminalInstanceService.attach()` — the cold-path first-paint step that
+   * builds xterm's DOM, forces a reflow to measure the cell grid, and inits
+   * the active renderer. Paired so the cold-start harness can attribute how
+   * much of the new-terminal latency is `open()` itself vs. font/addon work
+   * around it (#9809).
+   */
+  TERMINAL_OPEN_START: "terminal_open_start",
+  TERMINAL_OPEN_END: "terminal_open_end",
+  /**
+   * First real PTY write to reach `terminal.write()` for a given terminal —
+   * fired once per terminal after the hibernation/serialized-restore early
+   * exits. Carries `elapsedSinceOpenMs` (time from `open()` to first visible
+   * byte) so the gap between an opened-but-empty grid and first content is
+   * measurable in `perf:cold-start` (#9809).
+   */
+  TERMINAL_FIRST_WRITE: "terminal_first_write",
+
+  /**
+   * Emitted per spawn from the pty-host when `acquireByKey` finds (HIT) or
+   * misses (MISS) a pre-warmed entry for the requested (cwd, envHash). Lets
+   * `perf:cold-start` measure pool hit rate on session restore instead of the
+   * DAINTREE_VERBOSE-only log line (#9774).
+   */
+  POOL_HIT: "pty_pool_hit",
+  POOL_MISS: "pty_pool_miss",
+
   IPC_REQUEST_START: "ipc_request_start",
   IPC_REQUEST_END: "ipc_request_end",
 
   RENDERER_CLS_SAMPLE: "renderer_cls_sample",
   RENDERER_CLS_FINAL: "renderer_cls_final",
+
+  // Per-WebContentsView preload evaluation cost (#9770). Captured in the
+  // sandboxed preload and flushed via PERF_FLUSH_RENDERER_MARKS at preload
+  // bottom; the main-process handler correlates each pair with its view via
+  // the sender's webContents id.
+  PRELOAD_EVAL_START: "preload.eval:start",
+  PRELOAD_EVAL_END: "preload.eval:end",
+  PRELOAD_EXPOSE_IN_MAIN_WORLD_START: "preload.exposeInMainWorld:start",
+  PRELOAD_EXPOSE_IN_MAIN_WORLD_END: "preload.exposeInMainWorld:end",
 } as const;
 
 export type PerfMarkName = (typeof PERF_MARKS)[keyof typeof PERF_MARKS];

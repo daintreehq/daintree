@@ -46,6 +46,59 @@ export interface AgentStateChangePayload {
   sessionCost?: number;
   /** Extracted session token count (only present when state is "completed" or "exited" and legacy format is used) */
   sessionTokens?: number;
+  /**
+   * Live activity-temperature reading at the moment the transition was
+   * committed. Present only on transitions that flow through the activity
+   * detector (i.e. `handleActivityState`). Higher temperature = more visible
+   * content churn immediately before the transition; useful for the diagnostics
+   * event inspector to disambiguate `working` from `flapping`.
+   *
+   * Intentionally NOT exposed: the resize `suppressed` flag from
+   * `AgentActivityObservationResult` is a separate signal (resize-quiet
+   * observation) that would conflate with transition semantics here.
+   */
+  temperature?: number;
+  /** Heat impulse that drove the live temperature sample. Paired with `temperature`. */
+  heatAdded?: number;
+  /** Number of changed characters in the most recent sample. Paired with `temperature`. */
+  changedChars?: number;
+}
+
+/**
+ * Payload for `agent:state-transition-dropped` events. Records every
+ * transition attempt the `AgentStateService` rejected (hysteresis, stale
+ * session, schema validation, or no-op). Diagnostics tier — the event
+ * inspector surfaces it; no user-visible UI consumes it.
+ */
+export interface AgentStateTransitionDroppedPayload {
+  /** Terminal ID the drop applies to. */
+  terminalId: string;
+  /** Optional agent identity for inspector grouping. */
+  agentId?: AgentId;
+  /** Why the transition was dropped. */
+  outcome: "no-op" | "hysteresis" | "stale-session" | "schema-invalid";
+  /** State the terminal was in when the drop fired. */
+  currentState: AgentState;
+  /** The state we attempted to transition to. */
+  attemptedState?: AgentState;
+  /** Trigger that drove the attempt. */
+  trigger?: AgentStateChangeTrigger;
+  /** Confidence the attempt was made with. */
+  confidence?: number;
+  /** CWD at the time of the drop. */
+  cwd?: string;
+  /** Session token the attempt carried (stale-session drops). */
+  spawnedAt?: number;
+  /** Live session token (stale-session drops). */
+  terminalSpawnedAt?: number;
+  /** Human-readable explanation — validation error text for `schema-invalid`. */
+  reason?: string;
+  /** Zod issue messages for `schema-invalid` drops. */
+  validationErrors?: string[];
+  /** Trace ID for correlation with related events. */
+  traceId?: string;
+  /** Unix timestamp in milliseconds when the drop was recorded. */
+  timestamp: number;
 }
 
 /** Agent detected payload */

@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { forgeClient, systemClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { logError, logWarn } from "@/utils/logger";
 
 export function registerWorktreeForgeActions(
   actions: ActionRegistry,
@@ -23,9 +22,10 @@ export function registerWorktreeForgeActions(
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return;
+        if (!targetWorktreeId) throw new Error("No active worktree");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree?.issueNumber) return;
+        if (!worktree) throw new Error("Worktree not found");
+        if (!worktree.issueNumber) throw new Error("Worktree has no associated issue");
         await forgeClient.openIssue(worktree.path, worktree.issueNumber);
       },
     })
@@ -44,22 +44,25 @@ export function registerWorktreeForgeActions(
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return;
+        if (!targetWorktreeId) throw new Error("No active worktree");
         const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree?.linked?.pr?.url) return;
-
-        try {
-          const url = new URL(worktree.linked.pr.url);
-          if (!["https:", "http:"].includes(url.protocol)) {
-            logWarn(`Invalid PR URL protocol: ${url.protocol}`);
-            return;
-          }
-        } catch (error) {
-          logError(`Invalid PR URL: ${worktree.linked.pr.url}`, error);
-          return;
+        if (!worktree) throw new Error("Worktree not found");
+        if (!worktree.linked?.pr?.url) {
+          throw new Error("Worktree has no associated pull request");
         }
 
-        await systemClient.openExternal(worktree.linked.pr.url);
+        const prUrl = worktree.linked.pr.url;
+        let url: URL;
+        try {
+          url = new URL(prUrl);
+        } catch {
+          throw new Error(`Pull request URL is invalid: ${prUrl}`);
+        }
+        if (!["https:", "http:"].includes(url.protocol)) {
+          throw new Error(`Pull request URL must use http(s): ${prUrl}`);
+        }
+
+        await systemClient.openExternal(prUrl);
       },
     })
   );

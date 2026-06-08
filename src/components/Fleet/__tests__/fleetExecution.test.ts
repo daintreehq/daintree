@@ -1,10 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  broadcastFleetLiteralPaste,
-  buildFleetTargetPreviews,
-  executeFleetBroadcast,
-} from "../fleetExecution";
+import { buildFleetTargetPreviews, executeFleetBroadcast } from "../fleetExecution";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -12,10 +8,23 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
+import type { RecipeContext } from "@/utils/recipeVariables";
+
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
 const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
+const buildFleetBroadcastRecipeContextMock = vi.hoisted(() =>
+  vi.fn<(id: string) => RecipeContext | undefined>()
+);
+
+vi.mock("../fleetBroadcast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../fleetBroadcast")>();
+  return {
+    ...actual,
+    buildFleetBroadcastRecipeContext: buildFleetBroadcastRecipeContextMock,
+  };
+});
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
@@ -64,20 +73,14 @@ function seedPanels(terminals: PanelInstance[]): void {
   usePanelStore.setState({ panelsById, panelIds });
 }
 
-function armTwo() {
-  usePanelStore.setState({
-    panelsById: { t1: makeAgent("t1"), t2: makeAgent("t2") },
-    panelIds: ["t1", "t2"],
-  });
-  useFleetArmingStore.getState().armIds(["t1", "t2"]);
-}
-
 function reset() {
   submitMock.mockReset();
   submitMock.mockResolvedValue(undefined);
   notifyUserInputMock.mockReset();
   notifyEnterPressedMock.mockReset();
   clearDirectingStateMock.mockReset();
+  buildFleetBroadcastRecipeContextMock.mockReset();
+  buildFleetBroadcastRecipeContextMock.mockReturnValue({});
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -86,87 +89,6 @@ function reset() {
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }
-
-describe("broadcastFleetLiteralPaste", () => {
-  beforeEach(() => {
-    reset();
-  });
-
-  it("submits verbatim paste text to each target (no recipe substitution)", async () => {
-    armTwo();
-    const result = await broadcastFleetLiteralPaste("hello {{branch_name}}");
-    expect(submitMock).toHaveBeenCalledTimes(2);
-    expect(submitMock.mock.calls.map(([, text]) => text)).toEqual([
-      "hello {{branch_name}}",
-      "hello {{branch_name}}",
-    ]);
-    expect(result.successCount).toBe(2);
-    expect(result.failureCount).toBe(0);
-  });
-
-  it("collects failures into failedIds without rejecting the aggregate", async () => {
-    submitMock.mockReset();
-    submitMock.mockResolvedValueOnce(undefined);
-    submitMock.mockRejectedValueOnce(new Error("nope"));
-    armTwo();
-
-    const result = await broadcastFleetLiteralPaste("x");
-    expect(result.successCount).toBe(1);
-    expect(result.failureCount).toBe(1);
-    expect(result.failedIds).toEqual(["t2"]);
-  });
-
-  it("classifies rejections by errno token into permanent / transient buckets", async () => {
-    submitMock.mockReset();
-    submitMock.mockImplementation(async (id: string) => {
-      if (id === "dead") throw new Error("EPIPE: terminal dead has no live PTY (exited)");
-      if (id === "slow") throw new Error("ENOSPC: device full");
-    });
-    seedPanels([makeAgent("ok"), makeAgent("dead"), makeAgent("slow")]);
-    const result = await broadcastFleetLiteralPaste("x", ["ok", "dead", "slow"]);
-    expect(result.failedIds.sort()).toEqual(["dead", "slow"]);
-    expect(result.permanentlyFailedIds).toEqual(["dead"]);
-    expect(result.transientlyFailedIds).toEqual(["slow"]);
-    const deadEntry = result.perTarget.find((t) => t.terminalId === "dead");
-    const slowEntry = result.perTarget.find((t) => t.terminalId === "slow");
-    expect(deadEntry?.kind).toBe("permanent");
-    expect(slowEntry?.kind).toBe("transient");
-  });
-
-  it("treats rejections without a recognized errno as transient (retry chip wins over silent disarm)", async () => {
-    // Submit rejections come from many sources (IPC framework, handler
-    // errors). Disarming on unknown would silently drop fleet membership
-    // for an infra blip — leave arming alone and let the user retry.
-    submitMock.mockReset();
-    submitMock.mockImplementation(async (id: string) => {
-      if (id === "mystery") throw new Error("submit blew up for reasons unknown");
-    });
-    seedPanels([makeAgent("ok"), makeAgent("mystery")]);
-    const result = await broadcastFleetLiteralPaste("x", ["ok", "mystery"]);
-    expect(result.transientlyFailedIds).toEqual(["mystery"]);
-    expect(result.permanentlyFailedIds).toEqual([]);
-  });
-
-  it("returns an empty result on zero targets", async () => {
-    const result = await broadcastFleetLiteralPaste("x");
-    expect(submitMock).not.toHaveBeenCalled();
-    expect(result.total).toBe(0);
-    expect(result.successCount).toBe(0);
-  });
-
-  it("filters explicit targetIds through fleet eligibility (drops dock/trash)", async () => {
-    seedPanels([
-      makeAgent("ok"),
-      makeAgent("docked", { location: "dock" }),
-      makeAgent("trashed", { location: "trash" }),
-    ]);
-    const result = await broadcastFleetLiteralPaste("x", ["ok", "docked", "trashed"]);
-    expect(submitMock).toHaveBeenCalledTimes(1);
-    expect(submitMock).toHaveBeenCalledWith("ok", "x");
-    expect(result.successCount).toBe(1);
-    expect(result.failureCount).toBe(0);
-  });
-});
 
 describe("executeFleetBroadcast", () => {
   beforeEach(() => {
@@ -608,5 +530,82 @@ describe("buildFleetTargetPreviews", () => {
     const ghost = previews.find((p) => p.terminalId === "ghost");
     expect(ghost?.excluded).toBe(true);
     expect(ghost?.title).toBe("Unknown");
+  });
+
+  describe("unresolved-variable detection (#9954)", () => {
+    function armOneEligible(ctx: RecipeContext) {
+      seedPanels([makeAgent("t1")]);
+      useFleetArmingStore.getState().armIds(["t1"]);
+      buildFleetBroadcastRecipeContextMock.mockReturnValue(ctx);
+    }
+
+    it("does NOT flag unknown placeholders that recipes leave literal", () => {
+      // The root cause: the fleet preview must match the actual sent payload.
+      // `replaceRecipeVariables` leaves `{{foo}}` literal, so the preview must
+      // not warn about it — the warning and the payload have to agree.
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("hello {{foo}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("hello {{foo}}");
+    });
+
+    it("flags a known variable with no value in context", () => {
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("on {{branch_name}}");
+      expect(previews[0]?.unresolvedVars).toEqual(["branch_name"]);
+    });
+
+    it("flags only the known-missing var in a mixed known/unknown draft", () => {
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("{{branch_name}} {{foo}}");
+      expect(previews[0]?.unresolvedVars).toEqual(["branch_name"]);
+    });
+
+    it("flags {{number}} when neither issue nor PR number is set", () => {
+      armOneEligible({});
+      const previews = buildFleetTargetPreviews("see {{number}}");
+      expect(previews[0]?.unresolvedVars).toEqual(["number"]);
+    });
+
+    it("resolves {{number}} from issueNumber and reports no unresolved vars", () => {
+      armOneEligible({ issueNumber: 9954 });
+      const previews = buildFleetTargetPreviews("see {{number}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("see #9954");
+    });
+
+    it("resolves {{number}} from prNumber when only a PR number is set", () => {
+      armOneEligible({ prNumber: 42 });
+      const previews = buildFleetTargetPreviews("see {{number}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("see #42");
+    });
+
+    it("keeps warning and payload in agreement for mixed resolved/unknown drafts", () => {
+      // The original bug was a warning/payload disagreement, so both sides
+      // must be asserted together: the known var resolves, the unknown one
+      // stays literal, and neither shows up as unresolved.
+      armOneEligible({ branchName: "main" });
+      const previews = buildFleetTargetPreviews("{{branch_name}} {{foo}}");
+      expect(previews[0]?.unresolvedVars).toEqual([]);
+      expect(previews[0]?.resolvedPayload).toBe("main {{foo}}");
+    });
+
+    it("routes each target's own context (no cross-target context bleed)", () => {
+      seedPanels([makeAgent("t1"), makeAgent("t2")]);
+      useFleetArmingStore.getState().armIds(["t1", "t2"]);
+      buildFleetBroadcastRecipeContextMock.mockImplementation((id: string) =>
+        id === "t1" ? { branchName: "main" } : {}
+      );
+
+      const previews = buildFleetTargetPreviews("on {{branch_name}}");
+      const t1 = previews.find((p) => p.terminalId === "t1");
+      const t2 = previews.find((p) => p.terminalId === "t2");
+      expect(t1?.unresolvedVars).toEqual([]);
+      expect(t1?.resolvedPayload).toBe("on main");
+      expect(t2?.unresolvedVars).toEqual(["branch_name"]);
+      expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t1");
+      expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t2");
+    });
   });
 });

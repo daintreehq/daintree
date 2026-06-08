@@ -160,6 +160,7 @@ export function WorktreeActionsToolbar({
           aria-label={isCollapsed ? "Expand card" : "Collapse card"}
         >
           <ChevronRight
+            data-animated-chevron
             className={cn(
               "w-3.5 h-3.5 transition-transform duration-150",
               isCollapsed ? "rotate-0" : "rotate-90"

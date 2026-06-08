@@ -1530,4 +1530,115 @@ describe("AgentNotificationService", () => {
       );
     });
   });
+
+  describe("waiting burst buffer purge (#9867)", () => {
+    function makePayloadFor(
+      terminalId: string,
+      agentId: string,
+      state: AgentState,
+      previousState: AgentState = "working"
+    ) {
+      return {
+        state,
+        previousState,
+        worktreeId: "wt-1",
+        terminalId,
+        agentId,
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      };
+    }
+
+    function makeMultiTerminalAppState(count: number) {
+      return {
+        activeWorktreeId: "wt-1",
+        terminals: Array.from({ length: count }, (_, i) => ({
+          id: `term-${i + 1}`,
+          kind: "terminal",
+          agentId: `agent-${i + 1}`,
+          title: `Agent ${i + 1}`,
+          location: "dock" as const,
+          worktreeId: "wt-1",
+        })),
+      };
+    }
+
+    it("purges a buffered waiting entry when the same terminal transitions to completed", () => {
+      mockStore({ waitingEnabled: true });
+      agentNotificationService.syncWatchedPanels(["term-1"]);
+
+      // Buffer a waiting entry.
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      // Before the 200ms burst window elapses, the terminal completes.
+      events.emit(
+        "agent:state-changed",
+        makePayloadFor("term-1", "agent-1", "completed", "waiting")
+      );
+      vi.advanceTimersByTime(500);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("purges a buffered waiting entry when the same terminal transitions to exited", () => {
+      mockStore({ waitingEnabled: true });
+      agentNotificationService.syncWatchedPanels(["term-1"]);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "exited", "waiting"));
+      vi.advanceTimersByTime(500);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("only splices the matching terminal — entries for other terminals are preserved", () => {
+      const appState = makeMultiTerminalAppState(2);
+      mockStore({ waitingEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+
+      // Both terminals go waiting inside the same burst window.
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      // term-1 completes — its entry should be purged, term-2's should remain.
+      events.emit(
+        "agent:state-changed",
+        makePayloadFor("term-1", "agent-1", "completed", "waiting")
+      );
+      vi.advanceTimersByTime(300);
+
+      // The grouped notification still fires for the surviving term-2 entry.
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.stringContaining("agent-2 is waiting for input"),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("flushWaitingBurst is a no-op when the in-handler purge emptied the buffer", () => {
+      // Idempotency: if a `completed`/`exited` event lands during the
+      // 200ms burst window and the in-handler splice drains the buffer,
+      // the flush must not throw and must not emit any notification.
+      // (Earlier review draft added a pre-flush live-state re-check; that
+      // was removed because appState.terminals is renderer-pushed with
+      // round-trip latency — it would drop legitimate waiting entries
+      // and is also ambiguous between "absent" and "removed" terminals.
+      // The in-handler splice is the only correct defense, since it runs
+      // on the same event tick as the `completed`/`exited` event and
+      // uses the event's own `state` field.)
+      mockStore({ waitingEnabled: true });
+      agentNotificationService.syncWatchedPanels(["term-1"]);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit(
+        "agent:state-changed",
+        makePayloadFor("term-1", "agent-1", "completed", "waiting")
+      );
+      vi.advanceTimersByTime(300);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -17,6 +17,7 @@ const closeDockTerminalMock = vi.fn();
 const moveTerminalToGridMock = vi.fn();
 
 let mockActiveDockTerminalId: string | null = null;
+let mockDockAgentState: string | undefined = undefined;
 
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -73,7 +74,8 @@ vi.mock("../dockPanelPortalContext", () => ({
 
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
-  getDockDisplayAgentState: () => undefined,
+  getDockDisplayAgentState: () => mockDockAgentState,
+  isDockAgentStateDeprioritized: () => false,
 }));
 
 vi.mock("../dockPopoverGuard", () => ({
@@ -89,6 +91,7 @@ vi.mock("@/utils/terminalChrome", () => ({
 vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   getEffectiveStateIcon: () => null,
   getEffectiveStateColor: () => "",
+  getEffectiveStateLabel: (state: string) => state,
 }));
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
@@ -140,6 +143,21 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     closeDockTerminalMock.mockReset();
     moveTerminalToGridMock.mockReset();
     mockActiveDockTerminalId = null;
+    mockDockAgentState = undefined;
+  });
+
+  // #10024 — the dock chip's state icon is aria-hidden, so the agent state must
+  // be carried in the button's accessible name for screen-reader users.
+  it("announces the agent state in the chip aria-label when an agent is active", () => {
+    mockDockAgentState = "working";
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(screen.getByRole("button", { name: /— agent working/ })).not.toBeNull();
+  });
+
+  it("omits agent state from the chip aria-label for a plain shell", () => {
+    mockDockAgentState = undefined;
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(screen.queryByRole("button", { name: /agent/i })).toBeNull();
   });
 
   it("does not render a dedicated Open in grid button on the chip", () => {

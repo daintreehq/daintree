@@ -205,7 +205,7 @@ export function AppPaletteDialog({
         aria-label={ariaLabel}
         tabIndex={-1}
         className={cn(
-          "w-full max-w-xl mx-4 bg-surface-panel-elevated border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
+          "w-full max-w-xl mx-4 bg-surface-dialog border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
           "transition-[opacity,transform]",
           "motion-reduce:transition-opacity motion-reduce:scale-100",
           isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
@@ -217,7 +217,7 @@ export function AppPaletteDialog({
               ? `${UI_PALETTE_ENTER_DURATION}ms`
               : `${UI_PALETTE_EXIT_DURATION}ms`,
             transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-            "--scroll-shadow-color": "var(--color-surface-panel-elevated)",
+            "--scroll-shadow-color": "var(--color-surface-dialog)",
           } as CSSProperties
         }
         onClick={(e) => e.stopPropagation()}
@@ -257,7 +257,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
   return (
     <div
       className={cn(
-        "relative overflow-hidden px-3 pt-2 pb-1 border-b border-daintree-border",
+        "relative overflow-hidden px-3 pt-2 pb-1 border-b border-border-strong",
         className
       )}
     >
@@ -326,7 +326,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-daintree-border bg-surface-panel text-xs text-daintree-text/65 flex items-center gap-4",
+        "px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-daintree-text/65 flex items-center gap-4",
         className
       )}
     >

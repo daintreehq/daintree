@@ -198,6 +198,13 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Agent state changed (idle, working, completed, etc.)",
   },
+  "agent:state-transition-dropped": {
+    category: "agent",
+    requiresContext: true,
+    requiresTimestamp: true,
+    description:
+      "Agent state transition attempt was dropped (hysteresis, stale-session, schema-invalid, no-op) — diagnostics tier",
+  },
   "agent:all-clear": {
     category: "agent",
     requiresContext: false,
@@ -436,7 +443,7 @@ export type DaintreeEventMap = {
     worktreeId: string;
     prNumber: number;
     prUrl: string;
-    prState: "open" | "merged" | "closed";
+    prState: import("../../shared/types/forge.js").NormalizedPRState;
     prCiStatus?: GitHubPRCIStatus;
     /**
      * True on the synchronous phase-1 emit that precedes a fire-and-forget CI
@@ -509,6 +516,12 @@ export type DaintreeEventMap = {
   /**
    * Emitted when an agent's state changes (e.g., idle → working → completed).
    * Use this for status indicators and monitoring agent activity.
+   *
+   * The optional `temperature`/`heatAdded`/`changedChars` fields are populated
+   * only for transitions that flow through `handleActivityState` — i.e. when
+   * the activity detector's live temperature reading was the proximate cause
+   * of the transition. They are absent for transitions sourced from
+   * `transitionState` (the external observer path), which has no temperature.
    */
   "agent:state-changed": WithContext<{
     agentId?: string;
@@ -521,6 +534,43 @@ export type DaintreeEventMap = {
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
     sessionTokens?: number;
+    /** Live activity-temperature reading at the moment the transition was committed. */
+    temperature?: number;
+    /** Heat impulse that drove the live temperature sample. */
+    heatAdded?: number;
+    /** Number of changed characters in the most recent sample. */
+    changedChars?: number;
+  }>;
+
+  /**
+   * Emitted when an agent state transition *attempt* is dropped before it can
+   * land. Distinct from `agent:state-changed` — `state-changed` fires for
+   * accepted transitions; this fires for rejected attempts. Diagnostics tier
+   * only; the event inspector surfaces it.
+   */
+  "agent:state-transition-dropped": WithContext<{
+    /** Terminal ID the drop applies to. */
+    terminalId: string;
+    /** Why the transition was dropped. */
+    outcome: "no-op" | "hysteresis" | "stale-session" | "schema-invalid";
+    /** State the terminal was in when the drop fired. */
+    currentState: AgentState;
+    /** The state we attempted to transition to. */
+    attemptedState?: AgentState;
+    /** Trigger that drove the attempt. */
+    trigger?: AgentStateChangeTrigger;
+    /** Confidence the attempt was made with. */
+    confidence?: number;
+    /** CWD at the time of the drop. */
+    cwd?: string;
+    /** Session token the attempt carried (stale-session drops). */
+    spawnedAt?: number;
+    /** Live session token (stale-session drops). */
+    terminalSpawnedAt?: number;
+    /** Human-readable explanation. */
+    reason?: string;
+    /** Zod issue messages for `schema-invalid` drops. */
+    validationErrors?: string[];
   }>;
 
   /**
@@ -803,6 +853,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:issue:not-found",
   "agent:spawned",
   "agent:state-changed",
+  "agent:state-transition-dropped",
   "agent:all-clear",
   "agent:detected",
   "agent:exited",

@@ -636,14 +636,30 @@ describe("system action hardening", () => {
     ).resolves.toEqual({ ok: true, result: { nodes: [{ path: "src", type: "directory" }] } });
   });
 
-  it("allows agent-driven artifact patches (danger:safe — patches are an IDE primitive)", async () => {
-    mocks.artifactClient.applyPatch.mockResolvedValueOnce({ ok: true });
+  it("blocks unconfirmed agent-driven artifact patches (danger:confirm — worktree mutation, #10020)", async () => {
     const { service } = buildService(registerSystemActions);
 
     const result = await service.dispatch(
       "artifact.applyPatch",
       { patchContent: "--- a\n+++ b", cwd: "/repo" },
       { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+    }
+    expect(mocks.artifactClient.applyPatch).not.toHaveBeenCalled();
+  });
+
+  it("allows agent-driven artifact patches with confirmed:true", async () => {
+    mocks.artifactClient.applyPatch.mockResolvedValueOnce({ ok: true });
+    const { service } = buildService(registerSystemActions);
+
+    const result = await service.dispatch(
+      "artifact.applyPatch",
+      { patchContent: "--- a\n+++ b", cwd: "/repo" },
+      { source: "agent", confirmed: true }
     );
 
     expect(result.ok).toBe(true);
@@ -714,6 +730,7 @@ describe("preferences action hardening", () => {
       "worktreeConfig.setPattern",
       "help.shortcuts",
       "help.shortcutsAlt",
+      "help.displayImage",
       "help.gettingStarted.show",
       "help.launchAgent",
       "help.togglePanel",

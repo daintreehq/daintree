@@ -160,6 +160,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./demo.js").DemoScrollPayload];
     result: void;
   };
+  "demo:send-key-to-terminal": {
+    args: [payload: import("./demo.js").DemoSendKeyToTerminalPayload];
+    result: void;
+  };
   "demo:sleep": {
     args: [payload: import("./demo.js").DemoSleepPayload];
     result: void;
@@ -178,6 +182,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "demo:type": {
     args: [payload: import("./demo.js").DemoTypePayload];
+    result: void;
+  };
+  "demo:type-in-terminal": {
+    args: [payload: import("./demo.js").DemoTypeInTerminalPayload];
     result: void;
   };
   "demo:wait-for-idle": {
@@ -346,12 +354,16 @@ export interface GeneratedIpcInvokeMap {
         updates: Partial<
           Omit<
             import("../project.js").TerminalRecipe,
-            "id" | "projectId" | "worktreeId" | "createdAt"
+            "id" | "worktreeId" | "projectId" | "createdAt"
           >
         >;
       },
     ];
     result: void;
+  };
+  "help-assistant:get-live-session-status": {
+    args: [__1: { sessionId: string }];
+    result: import("./api.js").HelpSessionLiveStatus;
   };
   "help-assistant:get-settings": {
     args: [];
@@ -440,7 +452,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").DisconnectBearerResult;
   };
   "mcp-server:export-audit-log": {
-    args: [records: import("./mcpServer.js").McpAuditRecord[]];
+    args: [records: import("./mcpServer.js").McpLogRecord[]];
     result: boolean;
   };
   "mcp-server:get-audit-config": {
@@ -452,12 +464,16 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").McpAuditRecord[];
   };
   "mcp-server:get-audit-stats": {
-    args: [];
+    args: [markSeen?: boolean | undefined];
     result: import("./mcpServer.js").McpAuditStats;
   };
   "mcp-server:get-config-snippet": {
     args: [];
     result: string;
+  };
+  "mcp-server:get-log-records": {
+    args: [];
+    result: import("./mcpServer.js").McpLogRecord[];
   };
   "mcp-server:get-runtime-state": {
     args: [];
@@ -482,6 +498,14 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:list-active-clients": {
     args: [];
     result: import("./mcpServer.js").McpActiveClientInfo[];
+  };
+  "mcp-server:list-help-session-bearers": {
+    args: [];
+    result: import("./mcpServer.js").HelpSessionBearerRecord[];
+  };
+  "mcp-server:reset-denial-counts": {
+    args: [payload: { sessionId: string }];
+    result: void;
   };
   "mcp-server:revoke-session-grants": {
     args: [payload: { sessionId: string }];
@@ -886,6 +910,18 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { projectId: string; terminals: import("../project.js").PanelSnapshot[] }];
     result: void;
   };
+  "run-history:append": {
+    args: [input: import("./runHistory.js").RunHistoryAppendInput];
+    result: void;
+  };
+  "run-history:clear": {
+    args: [];
+    result: void;
+  };
+  "run-history:get-records": {
+    args: [];
+    result: import("./runHistory.js").RunHistoryRecord[];
+  };
   "scratch:create": {
     args: [name?: string | undefined];
     result: import("../scratch.js").Scratch;
@@ -1161,6 +1197,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./worktree.js").WorktreeConfig;
   };
+  "worktree-config:reprobe-wsl": {
+    args: [payload: { worktreeId: string }];
+    result: void;
+  };
   "worktree-config:set-pattern": {
     args: [payload: { pattern: string }];
     result: import("./worktree.js").WorktreeConfig;
@@ -1222,10 +1262,6 @@ export interface GeneratedIpcInvokeMap {
   "worktree:get-default-path": {
     args: [payload: { rootPath: string; branchName: string }];
     result: string;
-  };
-  "worktree:get-issue-association": {
-    args: [worktreeId: string];
-    result: import("./worktree.js").IssueAssociation | null;
   };
   "worktree:get-recent-branches": {
     args: [payload: { rootPath: string }];

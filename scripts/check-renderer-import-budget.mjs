@@ -13,8 +13,11 @@
 // (vendor-react, vendor-xterm, ...). The trade-off vs. source-module counts is
 // stability — the chunk graph is what actually loads at runtime.
 //
+// This budget is not wired into CI pre-1.0 (see .github/workflows/ci.yml) — it
+// runs locally on demand.
+//
 // Usage:
-//   node scripts/check-renderer-import-budget.mjs                    # check (CI)
+//   node scripts/check-renderer-import-budget.mjs                    # check mode (local, not wired to CI pre-1.0)
 //   node scripts/check-renderer-import-budget.mjs --update           # rewrite baseline
 //   node scripts/check-renderer-import-budget.mjs --update --force   # bypass 10% shrink guard
 //   node scripts/check-renderer-import-budget.mjs --threshold 0.10   # 10% byte growth allowed

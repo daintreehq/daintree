@@ -157,7 +157,7 @@ export function ContentGridEmptyState({
             scale="canvas"
             icon={<FolderOpen />}
             title="Select a worktree"
-            description="Choose a worktree from the sidebar to open it in the canvas."
+            description="Choose a worktree from the sidebar to open it in the canvas"
           />
         )}
         {!hasActiveWorktree && isWorktreeInitialized && !hasWorktrees && (
@@ -165,8 +165,8 @@ export function ContentGridEmptyState({
             variant="zero-data"
             scale="canvas"
             icon={<FolderOpen />}
-            title="Open a Git repository to get started"
-            description="Worktrees let you work on multiple tasks in isolated environments."
+            title="Open a Git repository"
+            description="Worktrees let you work on multiple tasks in isolated environments"
             action={
               <Button
                 variant="outline"

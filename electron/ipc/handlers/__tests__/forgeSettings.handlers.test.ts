@@ -60,6 +60,7 @@ vi.mock("../../../services/GitServiceCache.js", () => ({
 }));
 
 import { registerForgeSettingsHandlers } from "../forgeSettings.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { forgeAuditService } from "../../../services/forge/forgeAuditService.js";
 
 function findHandler(channel: string): (...args: unknown[]) => unknown {
@@ -71,6 +72,7 @@ function findHandler(channel: string): (...args: unknown[]) => unknown {
 describe("registerForgeSettingsHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
     for (const key of Object.keys(storeMock._data)) {
       delete storeMock._data[key];
     }
@@ -359,7 +361,8 @@ describe("registerForgeSettingsHandlers", () => {
   it("setCredential validates the primary field, persists the record, and syncs the host", async () => {
     registerGiteaProvider();
     const validateToken = vi.fn().mockResolvedValue({ valid: true, scopes: ["repo"] });
-    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+    const setCredentials = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken, setCredentials });
     registerForgeSettingsHandlers();
     const setCredential = findHandler("forge:set-credential");
 
@@ -375,11 +378,94 @@ describe("registerForgeSettingsHandlers", () => {
         baseUrl: "https://gitea.example.com",
       }),
     });
+    // The credential must reach the live impl as a bearer credential (#9983),
+    // not just the store — otherwise forge API calls run unauthenticated.
+    expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "secret-token" });
     expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", {
       kind: "bearer",
       value: "secret-token",
     });
     expect(result).toEqual({ valid: true, scopes: ["repo"] });
+  });
+
+  it("setCredential delivers the password-typed field even when it is declared second", async () => {
+    registryMock.getRegisteredForgeProviders.mockReturnValue([
+      {
+        pluginId: "acme",
+        contribution: {
+          id: "gitea",
+          name: "Gitea",
+          matches: ["gitea.example.com"],
+          // Password field second so a `fields[0]`-always bug would validate/deliver the URL.
+          credentialFields: [
+            { id: "baseUrl", label: "Base URL", type: "text" },
+            { id: "token", label: "API token", type: "password" },
+          ],
+        },
+      },
+    ]);
+    const validateToken = vi.fn().mockResolvedValue({ valid: true });
+    const setCredentials = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken, setCredentials });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", {
+      baseUrl: "https://gitea.example.com",
+      token: "secret-token",
+    });
+
+    expect(validateToken).toHaveBeenCalledWith("secret-token");
+    expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "secret-token" });
+  });
+
+  it("setCredential succeeds when the impl does not implement the optional setCredentials", async () => {
+    registerGiteaProvider();
+    const validateToken = vi.fn().mockResolvedValue({ valid: true });
+    // No setCredentials on the impl — the optional-call guard must not throw.
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    const result = await setCredential(null, "acme.gitea", { token: "secret-token" });
+
+    expect(result).toEqual({ valid: true });
+    expect(storeMock.set).toHaveBeenCalledWith("forgeCredentials", {
+      "acme.gitea": JSON.stringify({ token: "secret-token" }),
+    });
+  });
+
+  it("setCredential does not call setCredentials when validation fails", async () => {
+    registerGiteaProvider();
+    const setCredentials = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      validateToken: vi.fn().mockResolvedValue({ valid: false, error: "Bad token" }),
+      setCredentials,
+    });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    await setCredential(null, "acme.gitea", { token: "nope" });
+
+    expect(setCredentials).not.toHaveBeenCalled();
+  });
+
+  it("setCredential rate-limits after 5 calls in the window and skips validation (#9956)", async () => {
+    registerGiteaProvider();
+    const validateToken = vi.fn().mockResolvedValue({ valid: true, scopes: ["repo"] });
+    registryMock.getForgeProviderImpl.mockReturnValue({ validateToken });
+    registerForgeSettingsHandlers();
+    const setCredential = findHandler("forge:set-credential");
+
+    for (let i = 0; i < 5; i++) {
+      await setCredential(null, "acme.gitea", { token: `secret-${i}` });
+    }
+    expect(validateToken).toHaveBeenCalledTimes(5);
+
+    await expect(setCredential(null, "acme.gitea", { token: "secret-6" })).rejects.toThrow(
+      "Rate limit exceeded"
+    );
+    expect(validateToken).toHaveBeenCalledTimes(5);
   });
 
   it("setCredential does not persist or sync when validation fails", async () => {
@@ -523,5 +609,27 @@ describe("registerForgeSettingsHandlers", () => {
       "corp.gitlab": JSON.stringify({ token: "b" }),
     });
     expect(workspaceClientMock.updateForgeCredentials).toHaveBeenCalledWith("acme.gitea", null);
+  });
+
+  it("clearCredential clears the live impl's in-memory auth via setCredentials(null)", async () => {
+    storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify({ token: "a" }) };
+    const setCredentials = vi.fn();
+    registryMock.getForgeProviderImpl.mockReturnValue({ setCredentials });
+    registerForgeSettingsHandlers();
+    const clearCredential = findHandler("forge:clear-credential");
+
+    await clearCredential(null, "acme.gitea");
+
+    expect(setCredentials).toHaveBeenCalledWith(null);
+  });
+
+  it("clearCredential is a no-op for the impl when none is bound (no throw)", async () => {
+    storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify({ token: "a" }) };
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    registerForgeSettingsHandlers();
+    const clearCredential = findHandler("forge:clear-credential");
+
+    await expect(clearCredential(null, "acme.gitea")).resolves.toBeUndefined();
+    expect(storeMock.set).toHaveBeenCalledWith("forgeCredentials", {});
   });
 });

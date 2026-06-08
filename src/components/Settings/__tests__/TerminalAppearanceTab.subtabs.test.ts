@@ -35,7 +35,7 @@ describe("TerminalAppearanceTab subtab derivation logic", () => {
 
 describe("Appearance tab search index subtab metadata", () => {
   const appearanceFieldEntries = SETTINGS_SEARCH_INDEX.filter(
-    (e) => e.tab === "terminalAppearance" && !e.id.startsWith("tab-nav-")
+    (e) => e.tab === "terminalAppearance" && e.kind === "section"
   );
 
   it("has exactly 6 appearance field entries", () => {

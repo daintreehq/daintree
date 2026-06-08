@@ -14,12 +14,15 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 
 const ptyManagerMock = vi.hoisted(() => ({
-  getAll: vi.fn<() => unknown[]>(() => []),
+  getAllTerminalsAsync: vi.fn<() => Promise<unknown[]>>(async () => []),
   gracefulKillByProject: vi.fn(
     async () => [] as Array<{ id: string; agentSessionId: string | null }>
   ),
+  on: vi.fn(),
+  off: vi.fn(),
 }));
 
+vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyManagerMock }));
 vi.mock("../../store.js", () => ({ store: storeMock }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
@@ -30,10 +33,6 @@ const hibernateProjectOnDemandMock = vi.hoisted(() =>
 );
 
 vi.mock("../../utils/logger.js", () => ({ logInfo: vi.fn(), logError: vi.fn() }));
-
-vi.mock("../PtyManager.js", () => ({
-  getPtyManager: () => ptyManagerMock,
-}));
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
@@ -56,6 +55,14 @@ vi.mock("../HibernationService.js", () => ({
 }));
 
 import { IdleTerminalNotificationService } from "../IdleTerminalNotificationService.js";
+import type { PtyClient } from "../PtyClient.js";
+
+/** Construct a service with the PtyClient-shaped mock injected (#10054). */
+function makeService(): IdleTerminalNotificationService {
+  const service = new IdleTerminalNotificationService();
+  service.setPtyClient(ptyManagerMock as unknown as PtyClient);
+  return service;
+}
 
 const SIXTY_MIN_MS = 60 * 60 * 1000;
 
@@ -93,25 +100,25 @@ describe("IdleTerminalNotificationService", () => {
   describe("normalizeConfig", () => {
     it("returns defaults for malformed persisted config", () => {
       storeBacking.idleTerminalNotify = { enabled: "yes", thresholdMinutes: Number.NaN };
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       // Default enabled is true (issue: idle notifications should be on by default)
       expect(service.getConfig()).toEqual({ enabled: true, thresholdMinutes: 60 });
     });
 
     it("clamps threshold to [15, 1440]", () => {
       storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 5 };
-      let service = new IdleTerminalNotificationService();
+      let service = makeService();
       expect(service.getConfig().thresholdMinutes).toBe(15);
 
       storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 9999 };
-      service = new IdleTerminalNotificationService();
+      service = makeService();
       expect(service.getConfig().thresholdMinutes).toBe(1440);
     });
   });
 
   describe("updateConfig", () => {
     it("ignores invalid values and persists normalized config", () => {
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.updateConfig({
         enabled: "true" as unknown as boolean,
         thresholdMinutes: Number.NaN,
@@ -123,17 +130,41 @@ describe("IdleTerminalNotificationService", () => {
     });
 
     it("starts the service when toggled on", () => {
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.updateConfig({ enabled: true });
       expect((service as unknown as { checkInterval: unknown }).checkInterval).not.toBeNull();
       service.stop();
     });
 
     it("stops the service when toggled off", () => {
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.updateConfig({ enabled: true });
       service.updateConfig({ enabled: false });
       expect((service as unknown as { checkInterval: unknown }).checkInterval).toBeNull();
+    });
+
+    it("re-acquires PtyClient after a toggle off→on (#10054)", async () => {
+      // stop() clears the injected PtyClient; start() must re-acquire it via
+      // getPtyClient() or checkAndNotify() stays guarded-out forever.
+      storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active");
+      projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([]);
+
+      const service = makeService();
+      service.start();
+      service.updateConfig({ enabled: false }); // → stop(), clears ptyClient
+      service.updateConfig({ enabled: true }); // → start(), must re-acquire
+
+      // Bypass the startup/wake quiet windows so the check body runs.
+      (service as unknown as { quietUntil: number | null }).quietUntil = null;
+      (service as unknown as { wakeQuietUntil: number | null }).wakeQuietUntil = null;
+
+      ptyManagerMock.getAllTerminalsAsync.mockClear();
+      await runCheck(service);
+
+      expect(ptyManagerMock.getAllTerminalsAsync).toHaveBeenCalled();
+      service.stop();
     });
   });
 
@@ -142,19 +173,19 @@ describe("IdleTerminalNotificationService", () => {
       storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1", "Old")]);
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal()]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal()]);
     }
 
     it("does nothing when disabled", async () => {
       storeBacking.idleTerminalNotify = { enabled: false, thresholdMinutes: 60 };
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
     it("emits a single aggregate broadcast for one idle background project", async () => {
       setup();
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
 
       expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
@@ -176,12 +207,12 @@ describe("IdleTerminalNotificationService", () => {
         makeProject("proj-1"),
         makeProject("proj-2"),
       ]);
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({ id: "t1", projectId: "proj-1" }),
         makeTerminal({ id: "t2", projectId: "proj-2" }),
       ]);
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
 
       expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
@@ -195,22 +226,24 @@ describe("IdleTerminalNotificationService", () => {
     it("skips the current active project", async () => {
       setup();
       projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1");
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
     it("skips projects with active agent terminals", async () => {
       setup();
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "working" })]);
-      const service = new IdleTerminalNotificationService();
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+        makeTerminal({ agentState: "working" }),
+      ]);
+      const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
     it("skips projects when any terminal is below the idle threshold", async () => {
       setup();
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({ id: "t1" }),
         makeTerminal({
           id: "t2",
@@ -218,14 +251,14 @@ describe("IdleTerminalNotificationService", () => {
           lastOutputTime: Date.now() - 5 * 60 * 1000,
         }),
       ]);
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
     it("ignores hasPty:false (orphaned) terminals when evaluating idleness", async () => {
       setup();
-      ptyManagerMock.getAll.mockReturnValue([
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal({ id: "t1" }), // idle, has pty
         makeTerminal({
           id: "t2",
@@ -234,7 +267,7 @@ describe("IdleTerminalNotificationService", () => {
           lastOutputTime: Date.now(),
         }),
       ]);
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
       expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
       const [, payload] = broadcastToRendererMock.mock.calls[0];
@@ -243,7 +276,7 @@ describe("IdleTerminalNotificationService", () => {
 
     it("respects the dismissal cooldown", async () => {
       setup();
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.dismissProject("proj-1");
       await runCheck(service);
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
@@ -253,9 +286,9 @@ describe("IdleTerminalNotificationService", () => {
       storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 15 };
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
-      ptyManagerMock.getAll.mockReturnValue([makeTerminal()]);
+      ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal()]);
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       // Dismissal 30min ago — would be expired under threshold (15) but not under 60min floor.
       storeBacking.idleTerminalDismissals = { "proj-1": Date.now() - 30 * 60 * 1000 };
       await runCheck(service);
@@ -270,7 +303,7 @@ describe("IdleTerminalNotificationService", () => {
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([]);
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await runCheck(service);
 
       const persisted = storeBacking.idleTerminalDismissals as Record<string, number>;
@@ -279,7 +312,7 @@ describe("IdleTerminalNotificationService", () => {
 
     it("does not fire during the startup quiet period", async () => {
       setup();
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       // Simulate the service having just started: set quietUntil 30s in the future
       (service as unknown as { quietUntil: number | null }).quietUntil = Date.now() + 30_000;
       await runCheck(service);
@@ -292,7 +325,7 @@ describe("IdleTerminalNotificationService", () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1", "Old")]);
       hibernateProjectOnDemandMock.mockResolvedValueOnce(2);
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       const killed = await service.closeProject("proj-1");
 
       expect(killed).toBe(2);
@@ -305,7 +338,7 @@ describe("IdleTerminalNotificationService", () => {
       projectStoreMock.getAllProjects.mockReturnValue([]);
       hibernateProjectOnDemandMock.mockResolvedValueOnce(1);
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await service.closeProject("ghost-proj");
 
       expect(hibernateProjectOnDemandMock).toHaveBeenCalledWith(
@@ -319,7 +352,7 @@ describe("IdleTerminalNotificationService", () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
       hibernateProjectOnDemandMock.mockResolvedValueOnce(0);
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await service.closeProject("proj-1");
 
       expect(storeBacking.idleTerminalDismissals).toBeUndefined();
@@ -329,12 +362,12 @@ describe("IdleTerminalNotificationService", () => {
       projectStoreMock.getAllProjects.mockReturnValue([makeProject("proj-1")]);
       hibernateProjectOnDemandMock.mockRejectedValueOnce(new Error("boom"));
 
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       await expect(service.closeProject("proj-1")).rejects.toThrow("boom");
     });
 
     it("rejects empty projectId without delegating", async () => {
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       const killed = await service.closeProject("");
       expect(killed).toBe(0);
       expect(hibernateProjectOnDemandMock).not.toHaveBeenCalled();
@@ -344,7 +377,7 @@ describe("IdleTerminalNotificationService", () => {
   describe("startup quiet period", () => {
     it("is seeded on the first start() and not re-bumped by a subsequent start()", () => {
       storeBacking.idleTerminalNotify = { enabled: true, thresholdMinutes: 60 };
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.start();
       const initialQuietUntil = (service as unknown as { quietUntil: number | null }).quietUntil;
       expect(initialQuietUntil).not.toBeNull();
@@ -363,14 +396,14 @@ describe("IdleTerminalNotificationService", () => {
 
   describe("dismissProject", () => {
     it("persists a dismissal timestamp", () => {
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.dismissProject("proj-1");
       const persisted = storeBacking.idleTerminalDismissals as Record<string, number>;
       expect(persisted["proj-1"]).toBeGreaterThan(0);
     });
 
     it("ignores empty projectId", () => {
-      const service = new IdleTerminalNotificationService();
+      const service = makeService();
       service.dismissProject("");
       expect(storeBacking.idleTerminalDismissals).toBeUndefined();
     });

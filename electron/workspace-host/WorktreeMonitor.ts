@@ -9,6 +9,7 @@ import type {
   WorktreeMood,
   WorktreeLifecycleStatus,
   WorktreeLifecyclePhaseResult,
+  WslGitEligibility,
 } from "../../shared/types/worktree.js";
 import type { GitHubPRCIStatus } from "../../shared/types/github.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
@@ -30,8 +31,22 @@ import {
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
 import { ResourcePollTimer, type ResourcePollTimerHost } from "./ResourcePollTimer.js";
 import { WatcherController, type WatcherControllerHost } from "./WatcherController.js";
+import { timeoutSignal, withTimeout } from "../utils/withTimeout.js";
 
 const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
+
+// Hard ceiling for individual filesystem syscalls on the poll path. On a
+// healthy disk these return in well under a millisecond; on a stalled mount
+// (disconnected NFS/SMB, sleeping external drive) they would otherwise block
+// forever with no abort, pinning a libuv threadpool slot. Passed as an
+// AbortSignal so the syscall is actually cancelled, not merely abandoned.
+const FS_OP_TIMEOUT_MS = 5_000;
+
+// Backstop watchdog around a full git-status pass. The git calls inside carry a
+// 30s simple-git block timeout and the fs calls are bounded above, so a normal
+// pass settles well under this; the watchdog only catches an await we didn't
+// individually bound, guaranteeing the poll loop always reschedules.
+const POLL_WATCHDOG_TIMEOUT_MS = 40_000;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 300_000;
 const HEARTBEAT_GAP_MULTIPLIER = 3;
@@ -142,7 +157,7 @@ export class WorktreeMonitor {
   private _issueNumber: number | undefined;
   private prNumber: number | undefined;
   private prUrl: string | undefined;
-  private prState: "open" | "closed" | "merged" | undefined;
+  private prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
   private prCiStatus: GitHubPRCIStatus | undefined;
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
@@ -263,7 +278,7 @@ export class WorktreeMonitor {
   // WSL routing state (Windows only)
   private _isWslPath: boolean = false;
   private _wslDistro: string | undefined;
-  private _wslGitEligible: boolean = false;
+  private _wslGitEligible: WslGitEligibility = "unprobed";
   private _wslGitOptIn: boolean = false;
   private _wslGitDismissed: boolean = false;
   private _wslPosixPath: string | undefined;
@@ -406,14 +421,10 @@ export class WorktreeMonitor {
 
     this._isWslPath = Boolean(worktree.isWslPath);
     this._wslDistro = worktree.wslDistro;
-    this._wslGitEligible = Boolean(worktree.wslGitEligible);
+    this._wslPosixPath = worktree.wslPosixPath;
+    this._wslGitEligible = worktree.wslGitEligible ?? "unprobed";
     this._wslGitOptIn = Boolean(worktree.wslGitOptIn);
     this._wslGitDismissed = Boolean(worktree.wslGitDismissed);
-    if (this._isWslPath && this._wslDistro) {
-      const m = /^\\\\wsl(?:\$|\.localhost)\\[^\\]+(.*)/i.exec(worktree.path);
-      const remainder = m ? (m[1] ?? "") : "";
-      this._wslPosixPath = remainder.replace(/\\/g, "/") || "/";
-    }
   }
 
   /**
@@ -424,7 +435,8 @@ export class WorktreeMonitor {
    */
   private get wslInvocation(): WslGitInvocation | undefined {
     if (process.platform !== "win32") return undefined;
-    if (!this._isWslPath || !this._wslGitEligible || !this._wslGitOptIn) return undefined;
+    if (!this._isWslPath || this._wslGitEligible !== "eligible" || !this._wslGitOptIn)
+      return undefined;
     if (!this._wslDistro || !this._wslPosixPath) return undefined;
     return {
       distro: this._wslDistro,
@@ -451,6 +463,31 @@ export class WorktreeMonitor {
     if (changed && this._hasInitialStatus) {
       this.emitUpdate();
     }
+  }
+
+  /**
+   * Update the WSL git eligibility at runtime. Called by `WorkspaceService`
+   * when the WSL default distro changes (background poll) or the user triggers
+   * a re-probe. Re-emits a snapshot so the renderer banner reflects the new
+   * state. Safe to flip while running: `createWslHardenedGit` is built per
+   * invocation from the `wslInvocation` getter, so the next poll/fetch picks up
+   * the routing change without swapping a stored git instance.
+   */
+  setWslEligible(eligibility: WslGitEligibility): void {
+    if (this._wslGitEligible === eligibility) return;
+    this._wslGitEligible = eligibility;
+    if (this._hasInitialStatus) {
+      this.emitUpdate();
+    }
+  }
+
+  /** WSL routing inputs, read by `WorkspaceService` to recompute eligibility. */
+  get isWslPath(): boolean {
+    return this._isWslPath;
+  }
+
+  get wslDistro(): string | undefined {
+    return this._wslDistro;
   }
 
   /**
@@ -624,7 +661,7 @@ export class WorktreeMonitor {
   setPRInfo(info: {
     prNumber?: number;
     prUrl?: string;
-    prState?: "open" | "closed" | "merged";
+    prState?: import("../../shared/types/forge.js").NormalizedPRState;
     prCiStatus?: GitHubPRCIStatus;
     prTitle?: string;
     issueTitle?: string;
@@ -1004,15 +1041,20 @@ export class WorktreeMonitor {
     // including a topology-reconcile-triggered one — clears the phantom row
     // immediately. Mirrors the WorktreeRemovedError handling in updateGitStatus.
     try {
-      await access(this.path);
+      await withTimeout(
+        access(this.path),
+        FS_OP_TIMEOUT_MS,
+        `refresh access preflight: ${this.path}`
+      );
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         this.stop();
         this.callbacks.onRemoved?.(this.id);
         return;
       }
-      // Non-ENOENT (EACCES/EPERM/transient) — fall through to normal refresh
-      // rather than misclassify a permission blip as a removal.
+      // Non-ENOENT (EACCES/EPERM/transient) or a timeout — fall through to a
+      // normal refresh rather than misclassify a permission blip or a stalled
+      // filesystem as a removal.
     }
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
       this.pollingStrategy.reset();
@@ -1098,7 +1140,7 @@ export class WorktreeMonitor {
       issueNumber: linkedIssue?.ref.number ?? this._issueNumber,
       prNumber: linkedPr?.ref.number ?? this.prNumber,
       prUrl: linkedPr?.url ?? this.prUrl,
-      prState: linkedPr ? linkedPrState : this.prState,
+      prState: linkedPr ? linkedPrState : this.prState === "declined" ? "closed" : this.prState,
       prCiStatus: linkedPr ? linkedPrCiStatus : this.prCiStatus,
       prTitle: linkedPr ? linkedPr.title : this.prTitle,
       issueTitle: linkedIssue ? linkedIssue.title : this.issueTitle,
@@ -1141,7 +1183,11 @@ export class WorktreeMonitor {
       isGitHubRemote: this._isGitHubRemote || undefined,
       isWslPath: this._isWslPath || undefined,
       wslDistro: this._wslDistro,
-      wslGitEligible: this._wslGitEligible || undefined,
+      wslPosixPath: this._wslPosixPath,
+      // Emit the three-state value directly for WSL paths so the renderer can
+      // tell "ineligible" (distro mismatch) from "unprobed" (probe pending /
+      // failed). Suppressed for non-WSL worktrees to keep snapshots lean.
+      wslGitEligible: this._isWslPath ? this._wslGitEligible : undefined,
       wslGitOptIn: this._wslGitOptIn || undefined,
       wslGitDismissed: this._wslGitDismissed || undefined,
       linked: this._linked,
@@ -1350,9 +1396,18 @@ export class WorktreeMonitor {
 
     if (!force && this.pollingStrategy.isCircuitBreakerTripped()) {
       try {
-        await access(this.path);
-      } catch {
-        this.callbacks.onExternalRemoval?.(this.id);
+        await withTimeout(
+          access(this.path),
+          FS_OP_TIMEOUT_MS,
+          `circuit-breaker access probe: ${this.path}`
+        );
+      } catch (err) {
+        // Only ENOENT proves the worktree is gone. A timeout or permission blip
+        // must not be misread as an external removal — that would wrongly drop
+        // a live worktree from the sidebar the moment its disk stalls.
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          this.callbacks.onExternalRemoval?.(this.id);
+        }
       }
       return;
     }
@@ -1369,7 +1424,15 @@ export class WorktreeMonitor {
         // coverage — both no-watcher and git-only modes can miss mid-edit
         // changes that haven't reached .git/ yet.
         const forceRefresh = this._isCurrent && this.watcherController.currentMode !== "recursive";
-        await this.updateGitStatus(forceRefresh);
+        // Watchdog the whole pass: if any await inside updateGitStatus hangs
+        // past the ceiling, treat it as a failure and move on rather than let
+        // this monitor's loop (and, via the shared pollQueue slot, the whole
+        // sidebar) wedge permanently.
+        await withTimeout(
+          this.updateGitStatus(forceRefresh),
+          POLL_WATCHDOG_TIMEOUT_MS,
+          `poll watchdog: ${this.path}`
+        );
         this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (_error) {
         tripped = this.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
@@ -1393,21 +1456,26 @@ export class WorktreeMonitor {
 
     this._pendingPollPromise = runPoll
       .catch(() => {
-        // Queue abort or execution failure — swallowed intentionally
+        // Queue abort, watchdog timeout, or execution failure — swallowed
+        // intentionally; the finally below always reschedules so the loop can
+        // never die on a single bad pass.
       })
       .finally(() => {
         this._pendingPollPromise = null;
       });
 
-    await this._pendingPollPromise;
-
-    if (tripped) {
-      this.scheduleCircuitBreakerRetry();
-      return;
-    }
-
-    if (this._isRunning && this.pollingEnabled) {
-      this.scheduleNextPoll();
+    try {
+      await this._pendingPollPromise;
+    } finally {
+      // Reschedule unconditionally — even if the await above rejected (it can't,
+      // it's already caught) or the task was dropped by the queue's own
+      // watchdog. The only paths that must NOT reschedule are stop()/pause(),
+      // both guarded by the _isRunning / pollingEnabled checks.
+      if (tripped) {
+        this.scheduleCircuitBreakerRetry();
+      } else if (this._isRunning && this.pollingEnabled) {
+        this.scheduleNextPoll();
+      }
     }
   }
 
@@ -1542,7 +1610,13 @@ export class WorktreeMonitor {
         this.callbacks.onBranchChanged?.(this.id, currentBranch);
       }
 
-      const noteData = await this.noteReader.read();
+      // Bound the AI-note read: a slow/stalled note file must degrade to "no
+      // note" for this pass, not hang the whole git-status update.
+      const noteData = await withTimeout(
+        this.noteReader.read(),
+        FS_OP_TIMEOUT_MS,
+        `note read: ${this.path}`
+      ).catch(() => undefined);
 
       const hasUpstream = !!newChanges.tracking;
       const nextAheadCount = hasUpstream ? (newChanges.ahead ?? 0) : undefined;
@@ -1552,7 +1626,13 @@ export class WorktreeMonitor {
       const baseDivergencePromise = this.computeBaseDivergence(hasUpstream);
 
       const planResults = await Promise.allSettled(
-        PLAN_FILE_CANDIDATES.map((candidate) => access(pathJoin(this.path, candidate)))
+        PLAN_FILE_CANDIDATES.map((candidate) =>
+          withTimeout(
+            access(pathJoin(this.path, candidate)),
+            FS_OP_TIMEOUT_MS,
+            `plan-file probe: ${candidate}`
+          )
+        )
       );
       const detectedPlanFile = PLAN_FILE_CANDIDATES.find(
         (_, i) => planResults[i].status === "fulfilled"
@@ -1720,13 +1800,22 @@ export class WorktreeMonitor {
    * Mirrors `GitFileWatcher.resolveCommonDir` but uses async `readFile`.
    */
   private async resolveCommonDirAsync(gitDir: string): Promise<string> {
+    const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this._pollAbortController.signal);
     try {
-      const commondirContent = await readFile(pathJoin(gitDir, "commondir"), "utf-8");
+      const commondirContent = await readFile(pathJoin(gitDir, "commondir"), {
+        encoding: "utf-8",
+        signal,
+      });
       const trimmed = commondirContent.trim();
       if (!trimmed) return gitDir;
       return isAbsolute(trimmed) ? trimmed : pathJoin(gitDir, trimmed);
     } catch {
+      // Missing file, timeout, or poll abort — fall back to gitDir. A timeout
+      // here just degrades the next poll to a full git check rather than the
+      // stat fast path; it never freezes the loop.
       return gitDir;
+    } finally {
+      dispose();
     }
   }
 
@@ -1772,7 +1861,12 @@ export class WorktreeMonitor {
    */
   private async statMtime(filePath: string): Promise<number> {
     try {
-      const result = await stat(filePath);
+      // fs.stat has no AbortSignal option (unlike readFile), so it can't be
+      // cancelled — bound the await with withTimeout instead. The timeout
+      // surfaces as a TimeoutError (not ENOENT), so it propagates and
+      // buildStatBaseline falls back to a full git check rather than trusting a
+      // half-captured baseline.
+      const result = await withTimeout(stat(filePath), FS_OP_TIMEOUT_MS, `stat: ${filePath}`);
       return result.mtimeMs;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
@@ -1798,8 +1892,9 @@ export class WorktreeMonitor {
       return undefined;
     }
 
+    const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this._pollAbortController.signal);
     try {
-      const headContent = await readFile(pathJoin(gitDir, "HEAD"), "utf-8");
+      const headContent = await readFile(pathJoin(gitDir, "HEAD"), { encoding: "utf-8", signal });
       const trimmed = headContent.trim();
       const prefix = "ref: refs/heads/";
       if (trimmed.startsWith(prefix)) {
@@ -1817,9 +1912,13 @@ export class WorktreeMonitor {
       }
       return undefined;
     } catch {
+      // Includes a timeout/abort (AbortError) on a stalled filesystem — treat
+      // as "branch unchanged" rather than letting the read hang the poll.
       this._isDetached = false;
       this._head = undefined;
       return undefined;
+    } finally {
+      dispose();
     }
   }
 

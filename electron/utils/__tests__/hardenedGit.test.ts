@@ -21,6 +21,7 @@ import {
   createBackgroundFetchGit,
   createWslHardenedGit,
   getGitLocaleEnv,
+  buildHardenedGitEnv,
   HARDENED_GIT_CONFIG,
   AUTHENTICATED_GIT_CONFIG,
 } from "../hardenedGit.js";
@@ -702,6 +703,58 @@ describe("createWslHardenedGit", () => {
     ).toThrow("UNC path");
   });
 
+  it("rejects strings starting with \\\\wsl but missing the WSL UNC shape", () => {
+    // Old `startsWith("\\\\wsl")` gate let this through; tightened check
+    // (detectWslPath) fails closed on the malformed shape.
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wslfoo\\bar",
+        posixPath: "/home/user/proj",
+      })
+    ).toThrow("UNC path");
+  });
+
+  it("rejects bare \\\\wsl$\\ with no distro segment", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\",
+        posixPath: "/",
+      })
+    ).toThrow("UNC path");
+  });
+
+  it("rejects bare \\\\wsl.localhost\\ with no distro segment", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl.localhost\\",
+        posixPath: "/",
+      })
+    ).toThrow("UNC path");
+  });
+
+  it("rejects when supplied distro does not match parsed UNC distro", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Debian\\home\\user\\proj",
+        posixPath: "/home/user/proj",
+      })
+    ).toThrow("distro does not match");
+  });
+
+  it("rejects when supplied posixPath does not match parsed UNC remainder", () => {
+    expect(() =>
+      createWslHardenedGit({
+        distro: "Ubuntu",
+        uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
+        posixPath: "/some/other/path",
+      })
+    ).toThrow("posix path does not match");
+  });
+
   it("uses the UNC path as baseDir so simple-git's statSync succeeds on Windows", () => {
     createWslHardenedGit({
       distro: "Ubuntu",
@@ -864,5 +917,38 @@ describe("config constants", () => {
       expect(HARDENED_GIT_CONFIG).toContain(entry);
       expect(AUTHENTICATED_GIT_CONFIG).toContain(entry);
     }
+  });
+});
+
+describe("buildHardenedGitEnv", () => {
+  it("returns the same env shape that createHardenedGit applies via .env()", () => {
+    const env = buildHardenedGitEnv("linux");
+    expect(env).toEqual(
+      expect.objectContaining({
+        LC_ALL: "",
+        LC_MESSAGES: "C",
+        LANGUAGE: "",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "true",
+        GCM_INTERACTIVE: "Never",
+        LC_CTYPE: expect.stringMatching(/UTF-8$/),
+      })
+    );
+  });
+
+  it("does not set GIT_ASKPASS on win32", () => {
+    const env = buildHardenedGitEnv("win32");
+    expect(env.GIT_ASKPASS).toBeUndefined();
+  });
+
+  it("sets GIT_ASKPASS=true on darwin", () => {
+    const env = buildHardenedGitEnv("darwin");
+    expect(env.GIT_ASKPASS).toBe("true");
+  });
+
+  it("uses the platform arg instead of process.platform when supplied", () => {
+    const env = buildHardenedGitEnv("darwin");
+    expect(env.LC_CTYPE).toBe("en_US.UTF-8");
   });
 });

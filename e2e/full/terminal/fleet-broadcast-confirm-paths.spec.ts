@@ -121,6 +121,39 @@ async function clearFleet(page: Page): Promise<void> {
   await expect(page.locator(SEL.fleet.ribbon)).toBeHidden({ timeout: T_MEDIUM });
 }
 
+async function openSavedFleetRow(page: Page, fleetName: string) {
+  const savedRow = page.locator(SEL.fleet.savedRow).filter({ hasText: fleetName });
+  if (await savedRow.isVisible({ timeout: 500 }).catch(() => false)) {
+    return savedRow;
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.locator(SEL.fleet.selectionMenuTrigger).click({ timeout: T_MEDIUM });
+    if (await savedRow.isVisible({ timeout: 1000 }).catch(() => false)) {
+      return savedRow;
+    }
+  }
+  await expect(savedRow).toBeVisible({ timeout: T_MEDIUM });
+  return savedRow;
+}
+
+async function requestSavedFleetDelete(page: Page, fleetName: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await openSavedFleetRow(page, fleetName);
+    const clicked = await page.evaluate((name) => {
+      const buttons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[data-testid="fleet-saved-row-delete"]')
+      );
+      const button = buttons.find(
+        (candidate) => candidate.getAttribute("aria-label") === `Delete fleet "${name}"`
+      );
+      button?.click();
+      return Boolean(button);
+    }, fleetName);
+    if (clicked) return;
+  }
+  throw new Error(`Could not request delete for saved fleet "${fleetName}"`);
+}
+
 // The pending-action confirm and bare-Escape cancel both rely on global
 // document listeners that bail when focus sits inside an input / xterm /
 // contentEditable. Blur to <body> first so a synthetic Enter / Escape lands
@@ -261,17 +294,21 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
       await window.keyboard.press("Escape");
     });
 
-    await test.step("Disarm one pane, then recall the snapshot to re-arm all three", async () => {
-      await dispatchAction(window, "terminal.disarm", { terminalId: ids[0]! }, { source: "user" });
+    await test.step("Leave one pane out, then recall the snapshot to re-arm all three", async () => {
+      const disarmAll = await dispatchAction(window, "terminal.disarmAll", undefined, {
+        source: "user",
+      });
+      expect(disarmAll.ok, disarmAll.error?.message).toBe(true);
+      await expect(window.locator(SEL.fleet.ribbon)).toBeHidden({ timeout: T_MEDIUM });
+
+      await armPanels(window, ids.slice(1));
       await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
         "aria-label",
         /^2 in fleet/,
         { timeout: T_MEDIUM }
       );
 
-      await window.locator(SEL.fleet.selectionMenuTrigger).click();
-      const savedRow = window.locator(SEL.fleet.savedRow).filter({ hasText: fleetName });
-      await expect(savedRow).toBeVisible({ timeout: T_MEDIUM });
+      const savedRow = await openSavedFleetRow(window, fleetName);
       await savedRow.click({ force: true });
       await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
         "aria-label",
@@ -293,22 +330,10 @@ test.describe.serial("Fleet broadcast: confirm and lifecycle paths", () => {
         { timeout: T_MEDIUM }
       );
 
-      const confirmButton = window.getByRole("button", { name: "Delete fleet" });
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        await (async () => {
-          await window.locator(SEL.fleet.selectionMenuTrigger).click({ timeout: 2_000 });
-          const savedRow = window.locator(SEL.fleet.savedRow).filter({ hasText: fleetName });
-          await expect(savedRow).toBeVisible({ timeout: 2_000 });
-          const deleteButton = savedRow.locator(SEL.fleet.savedRowDelete);
-          await expect(deleteButton).toBeVisible({ timeout: 2_000 });
-          await deleteButton.click({ force: true, timeout: 2_000 });
-        })().catch(async (error: unknown) => {
-          if (await confirmButton.isVisible({ timeout: 500 }).catch(() => false)) return;
-          await window.keyboard.press("Escape").catch(() => undefined);
-          if (attempt === 4) throw error;
-        });
-        if (await confirmButton.isVisible({ timeout: 500 }).catch(() => false)) break;
-      }
+      const confirmButton = window.locator('[data-confirm-role="confirm"]').filter({
+        hasText: "Delete fleet",
+      });
+      await requestSavedFleetDelete(window, fleetName);
       await expect(confirmButton).toBeVisible({ timeout: T_MEDIUM });
       await confirmButton.click();
 

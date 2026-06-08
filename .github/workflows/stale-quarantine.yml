@@ -23,7 +23,7 @@ jobs:
 
       - name: Bootstrap test-quarantine label
         run: |
-          if ! gh label list --search test-quarantine --limit 1 | grep -q test-quarantine; then
+          if ! gh label list --json name --jq '.[].name' | grep -qx 'test-quarantine'; then
             gh label create test-quarantine --force --color "FF0000" --description "Test quarantine tracking for stale annotations"
           fi
         env:
@@ -31,7 +31,21 @@ jobs:
 
       - name: Extract quarantine annotations
         run: |
-          rg --no-heading --json --type ts 'type:\s*"quarantine"' e2e/ > "$RUNNER_TEMP/quarantine-matches.json" || true
+          # rg exits 0 (matches) or 1 (no matches); any other code is a real
+          # error and must fail the job — otherwise an empty match file would
+          # later be read as "no stale quarantines" and close every open issue.
+          rg --no-heading --json --type ts 'type:\s*"quarantine"' e2e/ > "$RUNNER_TEMP/quarantine-matches.json" || rg_exit=$?
+          if [ "${rg_exit:-0}" -gt 1 ]; then
+            echo "ripgrep failed with exit ${rg_exit}" >&2
+            exit "${rg_exit}"
+          fi
+
+      - name: Resolve stale quarantines
+        run: |
+          node scripts/quarantine-scan-lib.mjs \
+            --root "$GITHUB_WORKSPACE" \
+            --matches "$RUNNER_TEMP/quarantine-matches.json" \
+            --out "$RUNNER_TEMP/stale-quarantines.json"
 
       - name: Report stale quarantines
         uses: actions/github-script@v8
@@ -40,108 +54,36 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
-            const matchesPath = path.join(process.env.RUNNER_TEMP, 'quarantine-matches.json');
-            let raw;
+            const resultPath = path.join(process.env.RUNNER_TEMP, 'stale-quarantines.json');
+            let parsed;
             try {
-              raw = fs.readFileSync(matchesPath, 'utf8').trim();
-            } catch {
-              console.log('No quarantine annotations found.');
+              parsed = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+            } catch (err) {
+              // A missing/unreadable artifact must NOT be treated as "zero stale" —
+              // that would make the close loop purge every open quarantine issue.
+              core.setFailed(`Could not read scan result (${err.message}); aborting to avoid incorrect issue closure.`);
               return;
             }
-            if (!raw) {
-              console.log('No quarantine annotations found.');
-              return;
-            }
-
-            const lines = raw.split('\n');
-            const quarantineMatches = [];
-
-            for (const line of lines) {
-              try {
-                const entry = JSON.parse(line);
-                if (entry.type !== 'match') continue;
-                const filePath = entry.data.path.text;
-                const lineNum = entry.data.line_number;
-                quarantineMatches.push({ filePath, lineNum });
-              } catch {
-                // skip non-JSON or summary lines
-              }
-            }
-
-            if (quarantineMatches.length === 0) {
-              console.log('No quarantine annotations found.');
+            if (parsed.scanCompleted !== true) {
+              core.setFailed('Scan result is incomplete; aborting to avoid incorrect issue closure.');
               return;
             }
 
-            // Deduplicate by file+line (rg may report same match across multiple search contexts)
-            const seen = new Set();
-            const unique = quarantineMatches.filter(m => {
-              const key = `${m.filePath}:${m.lineNum}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-
-            // Compute threshold: 30 days ago in UTC
-            const now = new Date();
-            const threshold = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 30));
-            const thresholdStr = threshold.toISOString().split('T')[0];
-
-            // Extract annotation dates from source files
-            const dateRegex = /"(\d{4}-\d{2}-\d{2})\s?/;
-            const staleBySpec = new Map(); // relativePath -> [{line, date, reason}]
-
-            for (const match of unique) {
-              const content = fs.readFileSync(match.filePath, 'utf8');
-              const fileLines = content.split('\n');
-
-              // Search from the match line (rg is 1-based, array is 0-based)
-              let annotationDate = null;
-              let reason = '';
-              for (let i = match.lineNum - 1; i < Math.min(match.lineNum + 4, fileLines.length); i++) {
-                const m = fileLines[i].match(dateRegex);
-                if (m) {
-                  annotationDate = m[1];
-                  // Extract the rest of the description text after the date
-                  const rest = fileLines[i].slice(fileLines[i].indexOf(m[1]) + m[1].length);
-                  reason = rest.replace(/[",;]*\s*$/, '').replace(/^[\s"]+/, '').trim();
-                  // If the description spans multiple lines, grab the next line too
-                  if (!reason && i + 1 < fileLines.length) {
-                    const nextLine = fileLines[i + 1].trim();
-                    if (nextLine && !nextLine.startsWith('//') && !nextLine.startsWith('}')) {
-                      reason = nextLine.replace(/[",;]*\s*$/, '').replace(/^["']+/, '').trim();
-                    }
-                  }
-                  break;
-                }
-              }
-
-              if (!annotationDate) continue;
-
-              // Lexicographic comparison: date < threshold means older than 30 days
-              if (annotationDate >= thresholdStr) continue;
-
-              const relPath = match.filePath.replace(process.env.GITHUB_WORKSPACE + '/', '');
-
-              if (!staleBySpec.has(relPath)) {
-                staleBySpec.set(relPath, []);
-              }
-              staleBySpec.get(relPath).push({
-                line: match.lineNum,
-                date: annotationDate,
-                reason: reason || '(no reason provided)',
-              });
-            }
+            const thresholdStr = parsed.thresholdStr || '';
+            // relativePath -> [{line, date, reason}]
+            const staleBySpec = new Map(Object.entries(parsed.staleBySpec || {}));
 
             if (staleBySpec.size === 0) {
               console.log(`No stale quarantine annotations found (threshold: ${thresholdStr}).`);
-              return;
+            } else {
+              console.log(`Found ${staleBySpec.size} spec(s) with stale quarantine annotations (threshold: ${thresholdStr}):`);
+              for (const [relPath, annotations] of staleBySpec) {
+                console.log(`  ${relPath}: ${annotations.length} stale annotation(s)`);
+              }
             }
 
-            console.log(`Found ${staleBySpec.size} spec(s) with stale quarantine annotations (threshold: ${thresholdStr}):`);
-            for (const [relPath, annotations] of staleBySpec) {
-              console.log(`  ${relPath}: ${annotations.length} stale annotation(s)`);
-            }
+            // Strip the moving threshold date so an unchanged report dedups across weekly runs
+            const normalize = (s) => (s || '').replace(/\(threshold: `[^`]*`\)/g, '(threshold: NORMALIZED)');
 
             // List all open test-quarantine issues (may be more than one page)
             const existingIssues = await github.paginate(github.rest.issues.listForRepo, {
@@ -177,18 +119,27 @@ jobs:
                 const existing = existingIssues.find(i => i.title === title);
 
                 if (existing) {
-                  // Check if the most recent comment already matches this body
-                  const { data: comments } = await github.rest.issues.listComments({
+                  // The first report for an issue lives in the issue body, not a
+                  // comment, so dedup against it too or run 2 would always re-post.
+                  if (normalize(existing.body) === normalize(body)) {
+                    console.log(`Skipped commenting on #${existing.number}: issue body already matches.`);
+                    continue;
+                  }
+
+                  // Skip if our most recent bot comment already matches this body.
+                  // The list endpoint returns comments oldest-first (sort/direction
+                  // are ignored), so paginate and take the LAST bot-authored one.
+                  // Filtering to Bot comments means a maintainer replying in between
+                  // doesn't trick us into re-posting an identical stale table.
+                  const comments = await github.paginate(github.rest.issues.listComments, {
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     issue_number: existing.number,
-                    per_page: 1,
-                    sort: 'created',
-                    direction: 'desc',
+                    per_page: 100,
                   });
-
-                  if (comments.length > 0 && comments[0].body === body) {
-                    console.log(`Skipped commenting on #${existing.number}: most recent comment already matches.`);
+                  const lastBotComment = comments.filter(c => c.user?.type === 'Bot').at(-1);
+                  if (lastBotComment && normalize(lastBotComment.body) === normalize(body)) {
+                    console.log(`Skipped commenting on #${existing.number}: latest bot comment already matches.`);
                     continue;
                   }
 
@@ -212,6 +163,37 @@ jobs:
               } catch (err) {
                 console.error(`Error processing ${relPath}:`, err.message);
                 errors.push({ spec: relPath, error: err.message });
+              }
+            }
+
+            // Close issues whose spec is no longer stale (annotation fixed/removed,
+            // refreshed, or the file was renamed/deleted). Only act on issues this
+            // workflow opened — identified by the machine title prefix — so manually
+            // created test-quarantine issues are left untouched.
+            const MACHINE_PREFIX = '[Quarantine] Stale annotations in ';
+            for (const issue of existingIssues) {
+              if (!issue.title.startsWith(MACHINE_PREFIX)) continue;
+              const relPath = issue.title.slice(MACHINE_PREFIX.length);
+              if (staleBySpec.has(relPath)) continue;
+
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Quarantine annotations in \`${relPath}\` are no longer stale (fixed, removed, refreshed, or the file was renamed/deleted). Closing automatically.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+                console.log(`Closed #${issue.number}: ${issue.title}`);
+              } catch (err) {
+                console.error(`Error closing #${issue.number}:`, err.message);
+                errors.push({ spec: issue.title, error: err.message });
               }
             }
 

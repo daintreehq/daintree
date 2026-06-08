@@ -184,21 +184,16 @@ jobs:
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
-          export npm_config_runtime=electron
-          export npm_config_target=$ELECTRON_VERSION
-          node scripts/ci/npm-ci-retry.mjs
+        run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
         if: runner.os != 'Windows'
-        run: |
-          ELECTRON_VERSION=$(node scripts/ci/resolve-electron-version.mjs) || exit 1
-          export npm_config_runtime=electron
-          export npm_config_target=$ELECTRON_VERSION
-          node scripts/ci/npm-ci-retry.mjs
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Verify Electron install
+        run: node scripts/ci/verify-electron-install.mjs
 
       - name: Build app
         run: npm run build:e2e

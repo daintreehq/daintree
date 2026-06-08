@@ -5,27 +5,39 @@ import { SEL } from "./selectors";
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 const toolbarOverflowLabels: Record<string, string> = {
-  "Open Terminal": "Terminal",
-  "Open Browser": "Browser",
+  "Open terminal": "Terminal",
+  "Open browser": "Browser",
   "Open settings": "Settings",
-  "Copy Context": "Copy Context",
+  "Open dev preview": "Dev preview",
+  "Copy context": "Copy context",
   Notifications: "Notifications",
 };
 
 const toolbarButtonIds: Record<string, string> = {
-  "Open Terminal": "terminal",
-  "Open Browser": "browser",
+  "Open terminal": "terminal",
+  "Open browser": "browser",
   "Open settings": "settings",
-  "Copy Context": "copy-tree",
+  "Open dev preview": "dev-server",
+  "Copy context": "copy-tree",
   Notifications: "notification-center",
 };
 
 const toolbarShortcuts: Record<string, string> = {
-  "Open Terminal": `${mod}+Alt+t`,
-  "Open Browser": `${mod}+Alt+b`,
+  "Open terminal": `${mod}+Alt+t`,
+  "Open browser": `${mod}+Alt+b`,
   "Open settings": `${mod}+,`,
-  "Copy Context": `${mod}+Shift+c`,
+  "Copy context": `${mod}+Shift+c`,
 };
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function toolbarOverflowMenuItem(page: Page, menuLabel: string): Locator {
+  return page.getByRole("menuitem", {
+    name: new RegExp(`^${escapeRegExp(menuLabel)}(?:\\s|$)`),
+  });
+}
 
 function extractToolbarLabel(selector: string): string | null {
   return selector.match(/aria-label(?:\^)?="([^"]+)"/)?.[1] ?? null;
@@ -193,7 +205,7 @@ async function clickToolbarOverflowItem(
 
     try {
       await trigger.click({ timeout: 1000 });
-      const menuItem = page.getByRole("menuitem", { name: menuLabel, exact: true });
+      const menuItem = toolbarOverflowMenuItem(page, menuLabel);
       if (await menuItem.isVisible({ timeout: 500 }).catch(() => false)) {
         const isActionable = await menuItem
           .click({ timeout: 1000, trial: true })
@@ -238,7 +250,7 @@ async function hasToolbarOverflowItem(
 
     try {
       await trigger.click({ timeout: 1000 });
-      const menuItem = page.getByRole("menuitem", { name: menuLabel, exact: true });
+      const menuItem = toolbarOverflowMenuItem(page, menuLabel);
       const visible = await menuItem.isVisible({ timeout: 500 }).catch(() => false);
       await page.keyboard.press("Escape").catch(() => undefined);
       if (visible) {

@@ -1389,6 +1389,141 @@ describe("CrashRecoveryService", () => {
 
       expect(svc.getBackupPanelCount()).toBeNull();
     });
+
+    it("falls back to disk when allowDiskFallback is true and no crash marker is present", () => {
+      // Renderer-crash mid-session: no marker was ever consumed, so the
+      // cache is empty. The default-arg call must still return null
+      // (the line-1346 contract), but opting in to the disk fallback must
+      // surface the live session's terminal count.
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+
+      const svc = makeService();
+      svc.initialize();
+
+      // capturedAt must be >= sessionStartMs (the freshness gate at
+      // line 131 of CrashRecoveryService.ts) — write the snapshot AFTER
+      // initialize() so the timestamp is deterministically fresh.
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "t1", kind: "terminal" },
+              { id: "t2", kind: "terminal" },
+              { id: "t3", kind: "browser" },
+              { id: "t4", kind: "terminal" },
+            ],
+          },
+        })
+      );
+
+      expect(svc.getBackupPanelCount()).toBeNull();
+      expect(svc.getBackupPanelCount(true)).toBe(4);
+    });
+
+    it("returns cached count even when allowDiskFallback is true (cache wins over disk)", () => {
+      // consumeMarker() reads the disk backup into cachedBackupSnapshot.
+      // After that, the disk file is rotated/overwritten by the live backup
+      // tick. The cache must continue to drive getBackupPanelCount(true)
+      // so the main-crash dialog keeps showing the pre-crash panel count
+      // (mirrors the "snapshot at the moment we learned about the crash"
+      // contract on consumeMarker).
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const preCrash = {
+        capturedAt: Date.now() - 60_000,
+        appState: {
+          terminals: [
+            { id: "t1", kind: "terminal" },
+            { id: "t2", kind: "terminal" },
+            { id: "t3", kind: "terminal" },
+          ],
+        },
+      };
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(preCrash));
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      // Overwrite the disk file with a divergent post-recovery snapshot.
+      // The cache must NOT be replaced; the fallback must not perturb it.
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "n1", kind: "terminal" },
+              { id: "n2", kind: "terminal" },
+              { id: "n3", kind: "terminal" },
+              { id: "n4", kind: "terminal" },
+              { id: "n5", kind: "browser" },
+              { id: "n6", kind: "terminal" },
+              { id: "n7", kind: "terminal" },
+            ],
+          },
+        })
+      );
+
+      expect(svc.getBackupPanelCount(true)).toBe(3);
+    });
+
+    it("returns null on malformed disk snapshot when fallback is allowed", () => {
+      // readBackupFile + Array.isArray already defend the wiring. This test
+      // pins that the fallback returns null (not garbage, not a throw) when
+      // the disk snapshot has a non-array `terminals` field.
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: { terminals: "not an array" },
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount(true)).toBeNull();
+    });
+
+    it("returns null when on-disk snapshot is from a prior session (freshness gate)", () => {
+      // The freshness gate prevents a previous session's snapshot from
+      // surfacing on a fresh boot that happens to crash the renderer
+      // immediately. Mirrors the watchdog freshness pattern at
+      // consumeWatchdogKillFlag (line 637).
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const svc = makeService();
+      const sessionStart = Date.now();
+      // Service constructor already called Date.now() once for sessionStartMs;
+      // make the snapshot strictly older.
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: sessionStart - 5_000,
+          appState: {
+            terminals: [{ id: "t1", kind: "terminal" }],
+          },
+        })
+      );
+      svc.initialize();
+
+      expect(svc.getBackupPanelCount(true)).toBeNull();
+    });
   });
 
   describe("resetToFresh", () => {
@@ -1764,6 +1899,194 @@ describe("CrashRecoveryService", () => {
       } finally {
         getPathMock.mockReturnValue(userData);
       }
+    });
+  });
+
+  describe("marker-only persistence", () => {
+    function osUptimeSpy(returnValue: number): ReturnType<typeof vi.spyOn> {
+      return vi.spyOn(os, "uptime").mockReturnValue(returnValue);
+    }
+
+    it("writes crash-{id}.json to crashesDir when marker has no crashLogPath (external-kill)", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const pending = svc.getPendingCrash();
+        expect(pending).not.toBeNull();
+        expect(pending!.entry.crashCause).toBe("external-kill");
+
+        // The on-disk log file is now real and lives under userData/crashes/.
+        const crashesDir = path.join(userData, "crashes");
+        const logFile = path.join(crashesDir, `crash-${pending!.entry.id}.json`);
+        expect(fs.existsSync(logFile)).toBe(true);
+        expect(pending!.logPath).toBe(logFile);
+
+        // Round-trip the JSON and verify the cause survives.
+        const persisted = JSON.parse(fs.readFileSync(logFile, "utf-8"));
+        expect(persisted.id).toBe(pending!.entry.id);
+        expect(persisted.crashCause).toBe("external-kill");
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("PendingCrash.logPath points at the persisted file for power-loss (marker-only)", () => {
+      const uptime = osUptimeSpy(10);
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 5 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 60_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const pending = svc.getPendingCrash();
+        expect(pending!.entry.crashCause).toBe("power-loss");
+        expect(fs.existsSync(pending!.logPath)).toBe(true);
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("writes the synthesized log before deleteMarker (preserve-before-delete per #8728)", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      // Track the order in which the marker is unlinked and the synthesized
+      // crash log is written. The marker must still be present at the moment
+      // writeCrashLog fires — a kill in the gap would otherwise leave the
+      // next launch with a real log file but no marker to consume it.
+      const events: string[] = [];
+      const realUnlink = fs.unlinkSync;
+      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
+        if (String(target).endsWith("running.lock")) events.push("unlink-marker");
+        return realUnlink(target);
+      }) as typeof fs.unlinkSync);
+      utilsMock.resilientAtomicWriteFileSync.mockImplementation((fp, data, enc) => {
+        if (fp.includes("crash-") && !fp.includes("session-state")) events.push("write-crash-log");
+        fs.writeFileSync(fp, data, enc ?? "utf-8");
+      });
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        // The crash log was written first; the marker was unlinked afterwards.
+        const writeIdx = events.indexOf("write-crash-log");
+        const unlinkIdx = events.indexOf("unlink-marker");
+        expect(writeIdx).toBeGreaterThanOrEqual(0);
+        expect(unlinkIdx).toBeGreaterThan(writeIdx);
+      } finally {
+        unlinkSpy.mockRestore();
+        uptime.mockRestore();
+      }
+    });
+
+    it("falls back to the synthetic path without throwing when writeCrashLog fails", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      // Force the atomic write to throw — the dialog's defensive openPath
+      // handler covers the missing-file case, but the path field must stay
+      // stable so the renderer never sees `undefined`.
+      utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
+        throw new Error("ENOSPC: disk full");
+      });
+      try {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const pending = svc.getPendingCrash();
+        expect(pending).not.toBeNull();
+        expect(pending!.entry.crashCause).toBe("external-kill");
+        // Falls back to the synthetic path so the renderer always gets a string.
+        expect(pending!.logPath).toBe(
+          path.join(userData, "crashes", `crash-${pending!.entry.id}.json`)
+        );
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+
+    it("prunes old crash logs after writing a synthesized marker-only log", () => {
+      const uptime = osUptimeSpy(24 * 60 * 60);
+      try {
+        // Seed 12 pre-existing crash-{id}.json files to exceed MAX_CRASH_LOGS=10.
+        const crashesDir = path.join(userData, "crashes");
+        fs.mkdirSync(crashesDir, { recursive: true });
+        for (let i = 0; i < 12; i++) {
+          fs.writeFileSync(
+            path.join(crashesDir, `crash-seed-${i}.json`),
+            JSON.stringify({ id: `seed-${i}`, timestamp: Date.now() - (12 - i) * 1000 })
+          );
+        }
+
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: Date.now() - 10 * 60 * 1000,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: Date.now() - 5 * 60 * 1000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        const remaining = fs.readdirSync(crashesDir).filter((f) => f.startsWith("crash-"));
+        // 12 seeded + 1 synthesized = 13 → pruned down to MAX_CRASH_LOGS=10.
+        expect(remaining.length).toBeLessThanOrEqual(10);
+      } finally {
+        uptime.mockRestore();
+      }
+    });
+  });
+
+  describe("recordCrash crashCause default", () => {
+    it("persists crashCause: 'uncaught-exception' on the entry", () => {
+      const svc = makeService();
+      svc.recordCrash(new Error("boom"));
+
+      const crashesDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashesDir).filter((f) => f.startsWith("crash-"));
+      expect(files.length).toBe(1);
+      const persisted = JSON.parse(fs.readFileSync(path.join(crashesDir, files[0]!), "utf-8"));
+      expect(persisted.crashCause).toBe("uncaught-exception");
+      expect(persisted.errorMessage).toBe("boom");
     });
   });
 
@@ -2267,6 +2590,375 @@ describe("CrashRecoveryService", () => {
       svc.initialize();
 
       expect(svc.getPendingCrash()!.entry.cause).toBeUndefined();
+    });
+  });
+
+  describe("marker-only crash timestamp", () => {
+    // Each test pins a marker at T0, advances the wall clock by DEAD_MS, then
+    // initializes. The dead interval is the gap between when the previous
+    // session died and when the current session discovered its corpse; the
+    // bug (per #10062) was that the new entry stamped DEAD_MS as its
+    // sessionDurationMs and relaunch time as the crash time.
+
+    const T0 = 1_700_000_000_000;
+    const DEAD_MS = 7_200_000; // 2 hours
+
+    function writeMarkerWithHeartbeat(
+      lastHeartbeatMs: number,
+      extras: Record<string, unknown> = {}
+    ): void {
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: T0,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          lastHeartbeatMs,
+          ...extras,
+        })
+      );
+    }
+
+    function writeBackup(terminals: Array<{ id: string; createdAt: number }>): string {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const backupPath = path.join(backupDir, "session-state.json");
+      fs.writeFileSync(
+        backupPath,
+        JSON.stringify({ capturedAt: T0 + 60_000, appState: { terminals } })
+      );
+      return backupPath;
+    }
+
+    beforeEach(() => {
+      // Fake timers must include Date so Date.now() advances with the clock —
+      // the existing boundary test (1018-1069) collapses T0 and now because
+      // they share the same tick, hiding the bug. Lesson #7917.
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+      });
+      vi.setSystemTime(T0 + DEAD_MS);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("uses the last heartbeat as the crash time when no other signal exists", () => {
+      const heartbeat = T0 + 5 * 60_000; // 5 minutes into the session
+      writeMarkerWithHeartbeat(heartbeat);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      // The bug: this used to be T0 + DEAD_MS (relaunch time).
+      expect(pending!.entry.timestamp).toBe(heartbeat);
+      expect(pending!.entry.sessionDurationMs).toBe(heartbeat - T0);
+    });
+
+    it("prefers the watchdog killedAt over the heartbeat when both exist", () => {
+      const heartbeat = T0 + 30 * 60_000;
+      const killedAt = T0 + 45 * 60_000;
+      writeMarkerWithHeartbeat(heartbeat);
+      // Flag mtime must be fresh (>= sessionStartMs - GRACE_MS) for
+      // consumeWatchdogKillFlag to surface the annotation.
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(
+        flagPath,
+        JSON.stringify({ killedAt, missedBeats: 3, mainPid: 4242 }),
+        "utf8"
+      );
+      fs.utimesSync(flagPath, new Date(killedAt), new Date(killedAt));
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(killedAt);
+      expect(pending!.entry.sessionDurationMs).toBe(killedAt - T0);
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("prefers lastSuspendStart over backup mtime and heartbeat", () => {
+      const heartbeat = T0 + 30 * 60_000;
+      const suspendStart = T0 + 50 * 60_000;
+      // Write a backup whose mtime is later than suspendStart; if the
+      // priority order is wrong (suspend < backup), this test will fail.
+      const backupPath = writeBackup([{ id: "t1", createdAt: T0 }]);
+      const backupMtime = suspendStart + 5 * 60_000;
+      fs.utimesSync(backupPath, new Date(backupMtime), new Date(backupMtime));
+
+      writeMarkerWithHeartbeat(heartbeat, { lastSuspendStart: suspendStart });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(suspendStart);
+      expect(pending!.entry.crashCause).toBe("suspended-then-lost");
+    });
+
+    it("prefers backup capturedAt over the heartbeat when suspend/watchdog are absent", () => {
+      const heartbeat = T0 + 30 * 60_000;
+      const capturedAt = T0 + 40 * 60_000;
+      const backupPath = writeBackup([{ id: "t1", createdAt: T0 }]);
+      // Override capturedAt — it's the in-snapshot timestamp the resolver
+      // reads, not the on-disk mtime. (See the Windows/EPERM regression
+      // test below for why we trust capturedAt over the file mtime.)
+      const raw = JSON.parse(fs.readFileSync(backupPath, "utf-8"));
+      raw.capturedAt = capturedAt;
+      fs.writeFileSync(backupPath, JSON.stringify(raw));
+      fs.utimesSync(backupPath, new Date(T0 + 50 * 60_000), new Date(T0 + 50 * 60_000));
+
+      writeMarkerWithHeartbeat(heartbeat);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(capturedAt);
+    });
+
+    it("clamps a heartbeat in the future down to the relaunch time", () => {
+      // Clock skew: heartbeat is 5 minutes past relaunch (laptop woke from
+      // sleep, NTP correction, or fs mtime precision drift). Must clamp to
+      // relaunch time so sessionDurationMs is non-negative and the suspect
+      // window is not future-dated.
+      const futureHeartbeat = T0 + DEAD_MS + 5 * 60_000;
+      writeMarkerWithHeartbeat(futureHeartbeat);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(T0 + DEAD_MS);
+      expect(pending!.entry.sessionDurationMs).toBe(DEAD_MS);
+    });
+
+    it("ignores NaN/Infinity candidates and falls through to a finite one", () => {
+      const heartbeat = T0 + 5 * 60_000;
+      writeMarkerWithHeartbeat(heartbeat, {
+        lastSuspendStart: Number.NaN,
+        // backup mtime is undefined (no backup), but the marker has
+        // a finite heartbeat that must still win.
+      });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(heartbeat);
+    });
+
+    it("falls back to the relaunch time when no candidate is usable", () => {
+      // Marker with no heartbeat, no suspend, no backup — pathological but
+      // the fallback must still produce a finite, clamped timestamp.
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: T0,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(T0 + DEAD_MS);
+      expect(pending!.entry.sessionDurationMs).toBe(DEAD_MS);
+    });
+
+    it("drives the suspect window from the corrected timestamp (#10062 regression)", () => {
+      // Headline regression test: a panel created 5min into the session
+      // should be flagged as a suspect after a 2h dead interval, because
+      // the crash happened (per the heartbeat) at T0+5min, not at the
+      // relaunch time. The pre-fix code stamped relaunch time and the
+      // panel would have been classified as safe — silently breaking
+      // the OOM-kill-loop signal in PanelSuspectLedgerService.
+      const heartbeat = T0 + 5 * 60_000;
+      const backupPath = writeBackup([
+        { id: "near", createdAt: heartbeat - 5_000 },
+        { id: "far", createdAt: heartbeat + 3 * 60_000 },
+      ]);
+      // Pin the backup's capturedAt to the heartbeat. The resolver reads
+      // capturedAt (not disk mtime) per the Windows/EPERM fix, so this
+      // is the value that wins the priority chain. Make it equal to the
+      // heartbeat so the heartbeat is the chosen estimate; set
+      // heartbeat a hair after capturedAt so the "near" panel lands
+      // inside the 30s window.
+      const raw = JSON.parse(fs.readFileSync(backupPath, "utf-8"));
+      raw.capturedAt = heartbeat - 1_000; // just before heartbeat
+      fs.writeFileSync(backupPath, JSON.stringify(raw));
+      fs.utimesSync(backupPath, new Date(heartbeat), new Date(heartbeat));
+      writeMarkerWithHeartbeat(heartbeat);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      const near = pending!.panels!.find((p) => p.id === "near")!;
+      const far = pending!.panels!.find((p) => p.id === "far")!;
+      expect(near.isSuspect).toBe(true);
+      expect(near.suspectReason).toBe("crash-window");
+      // 3min past heartbeat is well outside the 30s window.
+      expect(far.isSuspect).toBe(false);
+      expect(far.suspectReason).toBeUndefined();
+    });
+
+    it("preserves the timestamp of an existing crash log (does not override with killedAt)", () => {
+      // The recorder path wrote a crash log with its own timestamp; the
+      // marker-only fix must not touch that path. The watchdog annotation
+      // (cause + watchdogKilledAt) still applies, but the entry's timestamp
+      // is the recorder's.
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-recorder.json");
+      const recorderTimestamp = T0 + 12 * 60_000;
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "recorder",
+          timestamp: recorderTimestamp,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          osVersion: "23.0",
+          arch: "arm64",
+          errorMessage: "uncaught exception",
+        })
+      );
+      fs.writeFileSync(
+        path.join(userData, "running.lock"),
+        JSON.stringify({
+          sessionStartMs: T0,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          lastHeartbeatMs: T0 + 10 * 60_000,
+          crashLogPath,
+        })
+      );
+      const killedAt = T0 + 14 * 60_000;
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(
+        flagPath,
+        JSON.stringify({ killedAt, missedBeats: 3, mainPid: 4242 }),
+        "utf8"
+      );
+      fs.utimesSync(flagPath, new Date(killedAt), new Date(killedAt));
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(recorderTimestamp);
+      expect(pending!.entry.errorMessage).toBe("uncaught exception");
+      expect(pending!.entry.cause).toBe("watchdog-deadlock");
+    });
+
+    it("uses the snapshot capturedAt as backup mtime (not the disk mtime of the copied crashed-* file)", () => {
+      // Windows/EPERM copy-fallback regression: when preserveBackupForRecovery
+      // falls back to copy-then-unlink, the new crashed-* file's disk mtime
+      // is the relaunch time. Reading capturedAt from the parsed snapshot
+      // (in-memory, set by the backup write itself) preserves the pre-crash
+      // mtime, so the priority chain picks the heartbeat-derived estimate
+      // instead of the relaunch time.
+      const heartbeat = T0 + 5 * 60_000;
+      const capturedAt = T0 + 4 * 60_000; // snapshot's capturedAt (older than heartbeat)
+      const backupPath = writeBackup([{ id: "t1", createdAt: T0 }]);
+      // Simulate the snapshot's capturedAt being the pre-crash write time.
+      const raw = JSON.parse(fs.readFileSync(backupPath, "utf-8"));
+      raw.capturedAt = capturedAt;
+      fs.writeFileSync(backupPath, JSON.stringify(raw));
+      writeMarkerWithHeartbeat(heartbeat);
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      // capturedAt (T0+4m) wins over the heartbeat (T0+5m) per the
+      // priority chain. Without the capturedAt fix, the on-disk mtime
+      // (≈T0+DEAD_MS) would win and reproduce #10062.
+      expect(pending!.entry.timestamp).toBe(capturedAt);
+    });
+
+    it("rejects Infinity in the watchdog killedAt payload", () => {
+      // JSON.parse('{"killedAt":1e309}') returns Infinity, which passes
+      // `typeof === "number" && > 0`. Without the Number.isFinite guard
+      // the report would render "Crashed at: Infinity" and the dialog
+      // would show "Invalid Date".
+      const sessionStartMs = T0;
+      const flagMtime = T0 + 5 * 60_000;
+      writeMarkerWithHeartbeat(sessionStartMs);
+      const flagPath = path.join(userData, "watchdog-kill.flag");
+      fs.writeFileSync(
+        flagPath,
+        // eslint-disable-next-line no-loss-of-precision -- sentinel: forces Infinity, exercises 2f134fabf hardening
+        JSON.stringify({ killedAt: 1e309, missedBeats: 3, mainPid: 4242 }),
+        "utf8"
+      );
+      fs.utimesSync(flagPath, new Date(flagMtime), new Date(flagMtime));
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.cause).toBeUndefined();
+      expect(pending!.entry.watchdogKilledAt).toBeUndefined();
+      // The resolver should still surface a real crash time from the
+      // heartbeat — Infinity must not poison the priority chain.
+      expect(pending!.entry.timestamp).toBe(T0);
+    });
+
+    it("clamps an out-of-range suspendStart to the relaunch time (not the heartbeat)", () => {
+      // The clamp is applied to every priority source, not just the
+      // heartbeat. A future suspendStart (e.g. clock-skewed file) must
+      // clamp to nowMs.
+      const heartbeat = T0 + 5 * 60_000;
+      const futureSuspend = T0 + DEAD_MS + 60_000;
+      writeMarkerWithHeartbeat(heartbeat, { lastSuspendStart: futureSuspend });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.timestamp).toBe(T0 + DEAD_MS);
+    });
+
+    it("ignores a marker with a non-finite or non-positive sessionStartMs", () => {
+      // isValidMarker was tightened to require finite positive sessionStartMs.
+      // Infinity, -1, NaN, or 0 in sessionStartMs would let the resolver
+      // clamp to zero / produce a negative sessionDurationMs.
+      for (const bad of [Number.POSITIVE_INFINITY, -1, Number.NaN, 0]) {
+        fs.writeFileSync(
+          path.join(userData, "running.lock"),
+          JSON.stringify({
+            sessionStartMs: bad,
+            appVersion: "1.0.0",
+            platform: "darwin",
+            lastHeartbeatMs: T0 + 5 * 60_000,
+          })
+        );
+
+        const svc = makeService();
+        svc.initialize();
+
+        // Corrupt marker is rejected — no pending crash, no entry built.
+        expect(svc.getPendingCrash()).toBeNull();
+      }
     });
   });
 });

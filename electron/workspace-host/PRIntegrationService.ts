@@ -29,7 +29,7 @@ export interface PRIntegrationCallbacks {
     data: {
       prNumber: number;
       prUrl: string;
-      prState: "open" | "closed" | "merged";
+      prState: import("../../shared/types/forge.js").NormalizedPRState;
       prCiStatus?: GitHubPRCIStatus;
       /** Phase-1 detection: CI status is still being fetched. The receiver preserves the prior rollup so the dot doesn't blink. */
       isCiStatusLoading?: boolean;
@@ -74,15 +74,38 @@ export interface PRIntegrationCallbacks {
   onDetectionStateChanged?(tripped: boolean): void;
 }
 
+export interface PRIntegrationServiceOptions {
+  /**
+   * Worker instances never start the automatic PR polling loop — detection
+   * wiring and on-demand `refresh()` stay fully functional, only the
+   * background `start()` paths become no-ops (#10123).
+   */
+  isWorker?: boolean;
+}
+
 export class PRIntegrationService {
   private prEventUnsubscribers: (() => void)[] = [];
   private initializedForPath: string | null = null;
+  private readonly isWorker: boolean;
 
   constructor(
     private readonly prService: PullRequestServiceLike,
     private readonly eventBus: TypedEventBus,
-    private readonly callbacks: PRIntegrationCallbacks
-  ) {}
+    private readonly callbacks: PRIntegrationCallbacks,
+    options?: PRIntegrationServiceOptions
+  ) {
+    this.isWorker = options?.isWorker === true;
+  }
+
+  /**
+   * Background polling entry point — every automatic `prService.start()` call
+   * funnels through here so worker instances stay quiet. On-demand paths
+   * (`refresh()`) bypass this intentionally.
+   */
+  private startPolling(startupDelayMs?: number): Promise<void> {
+    if (this.isWorker) return Promise.resolve();
+    return this.prService.start(startupDelayMs);
+  }
 
   isInitializedFor(path: string): boolean {
     return this.initializedForPath === path;
@@ -178,7 +201,7 @@ export class PRIntegrationService {
       }
     }
 
-    return this.prService.start();
+    return this.startPolling();
   }
 
   getStatus(): PRServiceStatus {
@@ -207,7 +230,7 @@ export class PRIntegrationService {
     this.prService.reset();
     if (projectRootPath) {
       this.prService.initialize(projectRootPath);
-      void this.prService.start();
+      void this.startPolling();
     }
   }
 
@@ -219,7 +242,7 @@ export class PRIntegrationService {
     // Focus-restore, not a crash-recovery path — skip the startup jitter so
     // the user sees fresh PR state promptly. The 5s checkForPRs() floor still
     // prevents a double-check if a poll just ran.
-    void this.prService.start(0);
+    void this.startPolling(0);
   }
 
   updateForgeCredentials(
@@ -243,7 +266,7 @@ export class PRIntegrationService {
       this.prService.reset();
       if (projectRootPath) {
         this.prService.initialize(projectRootPath);
-        void this.prService.start();
+        void this.startPolling();
       }
     }
   }

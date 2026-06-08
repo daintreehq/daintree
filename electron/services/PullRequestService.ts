@@ -12,6 +12,7 @@ import type {
   PRSnapshot,
   RateLimitInfo,
   CIStatus,
+  NormalizedPRState,
 } from "../../shared/types/forge.js";
 
 // Focus-aware polling cadence: faster when any Daintree window is focused so
@@ -93,7 +94,7 @@ interface InternalLinkedPR {
   number: number;
   title: string;
   url: string;
-  state: "open" | "closed" | "merged";
+  state: NormalizedPRState;
   isDraft?: boolean;
   ciStatus?: import("../../shared/types/github.js").GitHubPRCIStatus;
   _ciStatus?: import("../../shared/types/forge.js").CIStatus;
@@ -111,7 +112,7 @@ export interface PRDetectionResult {
   worktreeId: string;
   prNumber: number;
   prUrl: string;
-  prState: "open" | "merged" | "closed";
+  prState: NormalizedPRState;
 }
 
 function isCandidateBranch(branchName: string | undefined): boolean {
@@ -135,6 +136,14 @@ class PullRequestService {
   private nextRetryAt: number = 0;
   private detectionStateTripped: boolean = false;
   private boostExpiresAt: number | null = null;
+  // Drop the GraphQL CI-status enrichment when the instance is unattended:
+  // worker-role instances (which never have a focused window) start disabled,
+  // and attended instances toggle it off on window blur. When disabled, the
+  // cheap REST probe (probeOpenPRList) still tracks PR existence/state, but the
+  // ~2-point-per-PR getCIStatuses fan-out is skipped — absent CI reads as
+  // "unknown" (undefined), never SUCCESS (#6240). Initialized at field-
+  // declaration time so it's correct before the singleton's first checkForPRs.
+  private ciEnrichmentEnabled: boolean = process.env.DAINTREE_INSTANCE_ROLE !== "worker";
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
@@ -161,6 +170,14 @@ class PullRequestService {
   private projectId: string | null = null;
   private providerNamespacedId: string | null = null;
   private repoRef: RepoRef | null = null;
+  // Outcome of the last `resolveProvider()` round-trip. `"no-match"` is a
+  // definitive answer (plugin scan complete, no provider matches the remote):
+  // polling pauses and re-resolution is skipped until `invalidateProvider()`
+  // clears it back to null — without this, a GitLab/Bitbucket project would
+  // spin on the 5s cold-start cap forever (#9997). `"not-ready"` and null
+  // keep the cold-start retry cap. Re-armed by forge settings changes,
+  // manual refresh, and `forge:provider-registry-updated` pushes from main.
+  private providerResolutionStatus: "resolved" | "no-match" | "not-ready" | null = null;
   // Forge provider routing settings, pushed in from the main process. The
   // workspace-host can't read `projectStore` or `electron-store` directly —
   // those modules pull `BrowserWindow`/`app` into the bundle and crash the
@@ -389,19 +406,31 @@ class PullRequestService {
 
       // The bridge does provider resolution and `parseRemote` in one IPC
       // roundtrip: the registry lives in main (where plugins activate), so
-      // there's no point trying to consult it locally. Returns null when no
-      // provider matches the remote OR no remote URL is available.
+      // there's no point trying to consult it locally. A miss is
+      // discriminated (#9997): "not-ready" (plugin scan still running —
+      // retry on the cold-start cap) vs "no-match" (definitive — pause
+      // polling until invalidation).
       const resolved = await getForgeBridge().resolveProvider({
         remoteUrl,
         forgeProviderOverride: this.forgeProviderOverride,
         globalDefaultProviderId: this.globalDefaultProviderId,
       });
-      if (!resolved) {
+      if (resolved.status !== "resolved") {
+        this.providerResolutionStatus = resolved.status;
         this.providerNamespacedId = null;
         this.repoRef = null;
         this.disposeLoaders();
+        if (resolved.status === "no-match") {
+          logInfo(
+            "PullRequestService: no forge provider matches this project — pausing PR polling",
+            {
+              hasRemoteUrl: remoteUrl !== null,
+            }
+          );
+        }
         return;
       }
+      this.providerResolutionStatus = "resolved";
       this.providerNamespacedId = resolved.namespacedId;
       this.repoRef = resolved.repo;
       this.createLoaders(resolved.namespacedId, resolved.repo);
@@ -414,6 +443,9 @@ class PullRequestService {
       logWarn("PullRequestService provider resolution failed", {
         error: formatErrorMessage(error, "Provider resolution failed"),
       });
+      // A thrown resolution (git read or IPC failure) is transient — leave
+      // the status null so the cold-start retry cap stays in effect.
+      this.providerResolutionStatus = null;
       this.providerNamespacedId = null;
       this.repoRef = null;
       this.disposeLoaders();
@@ -421,9 +453,27 @@ class PullRequestService {
   }
 
   private invalidateProvider(): void {
+    this.providerResolutionStatus = null;
     this.providerNamespacedId = null;
     this.repoRef = null;
     this.disposeLoaders();
+  }
+
+  /**
+   * Main pushed `forge:provider-registry-updated` — a forge provider
+   * descriptor was registered (startup scan or runtime plugin
+   * install/enable). A cached "no-match"/"not-ready" miss may now resolve, so
+   * drop it and re-check. A resolved provider is left alone: provider-affecting
+   * settings changes arrive via `setForgeSettings()`, which always invalidates.
+   */
+  public notifyForgeProviderRegistryUpdated(): void {
+    if (this.providerResolutionStatus === "resolved") return;
+    this.invalidateProvider();
+    if (!this.isPolling || this.startupDelayTimer !== null) return;
+    // Re-enter the poll loop: "no-match" pauses without an armed timer, so a
+    // debounced check (which respects the 5s floor and re-arms the poll
+    // timer when none is pending) is the wake-up.
+    this.scheduleDebounceCheck();
   }
 
   private async clearProviderPullRequestCaches(): Promise<void> {
@@ -462,13 +512,19 @@ class PullRequestService {
           error: formatErrorMessage(error, "findPRsByBranches failed"),
         });
       }
-      // A branch missing from the batch map falls back to a per-branch call,
-      // matching the old `perBranchFallback`. A transient per-branch error
-      // resolves to null (treated as "no PR"), as the prior path did.
+      // A present key (even null-valued) is authoritative "found / not found";
+      // a branch missing from the batch map falls back to a per-branch call.
+      // The fallback preserves the transient-vs-not-found distinction:
+      // findPRByBranch resolves null for a confirmed missing PR but throws on
+      // transient failure, which we surface as a per-key Error so the loader
+      // rejects it and the caller skips (never clears) that branch.
       return Promise.all(
         list.map((branch) => {
           if (batchMap?.has(branch)) return batchMap.get(branch) ?? null;
-          return bridge.findPRByBranch(providerId, repo, branch).catch(() => null);
+          return bridge.findPRByBranch(providerId, repo, branch).then(
+            (pr) => pr,
+            (error: unknown) => (error instanceof Error ? error : new Error(String(error)))
+          );
         })
       );
     });
@@ -640,14 +696,6 @@ class PullRequestService {
     this.boostExpiresAt = null;
     this.clearStagnantPollCounts();
     this.isPolling = false;
-    // Cooperative release so a sibling can poll immediately. Best-effort —
-    // the host's `dispose()` also clears any leases this holder owns, and
-    // the TTL expires within FORGE_POLL_LEASE_TTL_MS regardless.
-    try {
-      getForgeBridge().releasePollLease();
-    } catch {
-      // Bridge not initialized yet (early stop before bootstrap); nothing to release.
-    }
     logInfo("PullRequestService stopped");
   }
 
@@ -770,6 +818,101 @@ class PullRequestService {
       .finally(() => this.scheduleNextPoll());
   }
 
+  /**
+   * Toggle the GraphQL CI-status enrichment. Driven by window focus (blur →
+   * disable, focus → enable) for attended instances; worker-role instances stay
+   * disabled. The probe loop is untouched — only the per-PR getCIStatuses
+   * fan-out is gated.
+   *
+   * On disable we must sweep any in-flight CI state so the adaptive boost
+   * collapses: a PENDING/EXPECTED entry left in `detectedPRs` keeps
+   * `updateBoostFromDetectedPRs` re-arming the 30s boost every revalidation
+   * tick with no fetch behind it (#6149). Clearing those entries to `undefined`
+   * — not SUCCESS — also keeps "no CI fetched" from reading as passing (#6240),
+   * and re-emits so the renderer drops any preserved dot rather than holding it
+   * stale forever (no phase-2 emit is coming while disabled).
+   */
+  public setCIEnrichmentEnabled(enabled: boolean): void {
+    // Worker instances must stay disabled regardless of any focus signal that
+    // reaches them — the env role is the authoritative invariant, not the
+    // transient IPC cadence flag.
+    if (enabled && process.env.DAINTREE_INSTANCE_ROLE === "worker") {
+      return;
+    }
+    if (this.ciEnrichmentEnabled === enabled) {
+      return;
+    }
+
+    if (!enabled) {
+      this.sweepStaleCiStatus();
+    }
+
+    this.ciEnrichmentEnabled = enabled;
+
+    if (!enabled) {
+      // The boost just collapsed (boostExpiresAt = null), but an already-armed
+      // boosted revalidationTimer would still fire early. Reschedule now so the
+      // next tick lands at the 90s baseline instead of the stale 30s.
+      this.scheduleRevalidation();
+    }
+  }
+
+  // Clear in-flight CI state and re-emit the affected PRs without a CI status so
+  // the boost decays and the renderer stops showing a stale spinner/dot. Only
+  // PENDING/EXPECTED entries are touched — terminal states (SUCCESS/FAILURE) and
+  // already-unknown PRs are correct as-is, so re-emitting them would be noise.
+  private sweepStaleCiStatus(): void {
+    const repo = this.repoRef;
+    // Track the exact worktrees we sweep, not the PR numbers: sibling worktrees
+    // on the same branch share one InternalLinkedPR object (so clearing it once
+    // covers them all), while two worktrees that coincidentally resolve the same
+    // PR number through different objects must not cross-clear — re-emitting a
+    // SUCCESS worktree without its CI field would wrongly blank its dot.
+    const sweptWorktrees: string[] = [];
+    const sweptObjects = new Set<InternalLinkedPR>();
+
+    for (const [worktreeId, pr] of this.detectedPRs) {
+      if (pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED") {
+        sweptWorktrees.push(worktreeId);
+        sweptObjects.add(pr);
+      }
+    }
+    for (const pr of sweptObjects) {
+      pr.ciStatus = undefined;
+      pr._ciStatus = undefined;
+      pr.stagnantPollCount = 0;
+    }
+
+    // updateBoostFromDetectedPRs runs unconditionally — with no PENDING entries
+    // left it collapses boostExpiresAt to null so the next scheduleRevalidation
+    // picks the 90s baseline instead of the boosted 30s.
+    this.updateBoostFromDetectedPRs();
+
+    if (!repo || sweptWorktrees.length === 0) {
+      return;
+    }
+
+    for (const worktreeId of sweptWorktrees) {
+      const detected = this.detectedPRs.get(worktreeId);
+      if (!detected) continue;
+      events.emit("sys:pr:detected", {
+        worktreeId,
+        prNumber: detected.number,
+        prUrl: detected.url,
+        prState: detected.state,
+        // No prCiStatus / ciStatus / isCiStatusLoading: an absent CI field means
+        // "unknown", which the renderer must not treat as passing or loading.
+        prTitle: detected.title,
+        issueNumber: this.candidates.get(worktreeId)?.issueNumber,
+        branchName: this.candidates.get(worktreeId)?.branchName,
+        providerId: detected.providerId,
+        owner: repo.owner,
+        repo: repo.repo,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
   private updatePollInterval(ms: number): void {
     if (this.pollIntervalMs === ms) {
       return;
@@ -833,6 +976,17 @@ class PullRequestService {
       return;
     }
 
+    // Definitive "no provider matches this remote" (#9997): pause without a
+    // timer, exactly like the all-resolved case above. Re-armed by
+    // `invalidateProvider()` (forge settings change, manual refresh, or a
+    // `forge:provider-registry-updated` push when a plugin registers a new
+    // provider). Without this, the cold-start cap below would re-poll a
+    // GitLab/Bitbucket project every 5s forever.
+    if (this.providerResolutionStatus === "no-match") {
+      logDebug("No matching forge provider - pausing polling until invalidation");
+      return;
+    }
+
     let interval = this.pollIntervalMs;
     if (this.consecutiveErrors > 0) {
       interval = computeBackoff(this.consecutiveErrors);
@@ -850,7 +1004,9 @@ class PullRequestService {
     // fires before that completes, leaving `providerNamespacedId` null. At the
     // blurred cadence (120s) the user would otherwise stare at empty PR
     // sub-rows for two minutes after every cold start. Once the bridge returns
-    // a real provider the next poll uses the normal cadence again.
+    // a real provider the next poll uses the normal cadence again. This cap
+    // only ever applies to a transient miss ("not-ready"/null) — a definitive
+    // "no-match" already paused above (#9997).
     //
     // Skip this when `consecutiveErrors > 0`: the circuit-breaker backoff is
     // deliberate (the last call failed against the API), and punching through
@@ -957,16 +1113,17 @@ class PullRequestService {
   }
 
   /**
-   * Consult the active forge provider's rate-limit state and return a blocking
-   * decision. Fails open (unblocked) when the provider is absent, lacks
+   * Consult the active forge provider's rate-limit state and return the active
+   * block (`kind` matches `handleError`'s rate-limit marker) or null when
+   * unblocked. Fails open (null) when the provider is absent, lacks
    * `getRateLimit`, or the call throws — a provider bug must not stall polling.
    */
   private async checkRateLimitGate(): Promise<{
-    blocked: boolean;
-    resumeAt: number | null;
-  }> {
+    kind: "primary" | "secondary";
+    resumeAt: number;
+  } | null> {
     if (!this.providerNamespacedId) {
-      return { blocked: false, resumeAt: null };
+      return null;
     }
     try {
       const info: RateLimitInfo | null = await getForgeBridge().getRateLimit(
@@ -974,23 +1131,23 @@ class PullRequestService {
       );
       // `null` here means the provider does not implement `getRateLimit` —
       // fail open, polling proceeds without a rate-limit gate.
-      if (!info) return { blocked: false, resumeAt: null };
+      if (!info) return null;
       const now = Date.now();
       if (info.secondaryThrottled) {
         const resumeAt = info.resetAt ?? now + RATE_LIMIT_SECONDARY_FALLBACK_MS;
-        if (resumeAt <= now) return { blocked: false, resumeAt: null };
-        return { blocked: true, resumeAt };
+        if (resumeAt <= now) return null;
+        return { kind: "secondary", resumeAt };
       }
       if (info.remaining === 0) {
         const resumeAt = info.resetAt
           ? info.resetAt + RATE_LIMIT_CLOCK_SKEW_MS
           : now + RATE_LIMIT_SECONDARY_FALLBACK_MS;
-        if (resumeAt <= now) return { blocked: false, resumeAt: null };
-        return { blocked: true, resumeAt };
+        if (resumeAt <= now) return null;
+        return { kind: "primary", resumeAt };
       }
-      return { blocked: false, resumeAt: null };
+      return null;
     } catch {
-      return { blocked: false, resumeAt: null };
+      return null;
     }
   }
 
@@ -1004,28 +1161,13 @@ class PullRequestService {
     if (!repo || !providerId) return;
     const bridge = getForgeBridge();
 
-    const { blocked, resumeAt } = await this.checkRateLimitGate();
-    if (blocked && resumeAt) {
-      this.nextRetryAt = resumeAt;
+    const rateLimitBlock = await this.checkRateLimitGate();
+    if (rateLimitBlock) {
+      this.nextRetryAt = rateLimitBlock.resumeAt;
       logDebug("Skipping PR revalidation — rate limit active", {
         providerId,
-        resumeAt,
+        resumeAt: rateLimitBlock.resumeAt,
       });
-      return;
-    }
-
-    // Per-project poll lease (#9055): only the elected window revalidates per
-    // cycle; siblings receive the resulting sys:pr:detected / sys:pr:cleared
-    // updates through main → renderer fan-out, exactly as checkForPRs relies on.
-    // Gating here is also what makes the open-PR-list ETag baseline single-owner:
-    // the cache is a main-process singleton keyed by owner/repo, so if every
-    // window committed it against its own tracked subset, one window's clean diff
-    // could advance the baseline past a change another window hasn't consumed and
-    // mask it behind a later 304. One revalidating window removes that race (and
-    // the redundant cross-window conditional GETs). Fails open on IPC timeout.
-    const leaseAcquired = await getForgeBridge().acquirePollLease();
-    if (!leaseAcquired) {
-      logDebug("Skipping PR revalidation — sibling window holds poll lease");
       return;
     }
 
@@ -1156,7 +1298,7 @@ class PullRequestService {
             continue;
           }
 
-          const newState = pr.state === "declined" ? "closed" : pr.state;
+          const newState = pr.state;
           const prChanged =
             detectedPR.state !== newState ||
             detectedPR.number !== pr.number ||
@@ -1211,7 +1353,7 @@ class PullRequestService {
           // worktrees on the same branch share the same detectedPR object
           // reference — deduplicating avoids double-counting stagnant polls
           // and redundant API calls.
-          if (!enrichedPRNumbers.has(prNumber)) {
+          if (this.ciEnrichmentEnabled && !enrichedPRNumbers.has(prNumber)) {
             enrichedPRNumbers.add(prNumber);
             this.enrichPRWithCIStatus(detectedPR, repo);
           }
@@ -1222,11 +1364,17 @@ class PullRequestService {
       // not bump updated_at, so the probe reports those PRs unchanged. Keep
       // polling CI for any in-flight PR not already enriched above, so green/red
       // transitions still surface promptly even on an otherwise-quiet tick.
-      for (const detectedPR of this.detectedPRs.values()) {
-        if (enrichedPRNumbers.has(detectedPR.number)) continue;
-        if (detectedPR.ciStatus === "PENDING" || detectedPR.ciStatus === "EXPECTED") {
-          enrichedPRNumbers.add(detectedPR.number);
-          this.enrichPRWithCIStatus(detectedPR, repo);
+      // Skipped entirely when enrichment is disabled (unattended instance): the
+      // sweep on disable already cleared PENDING/EXPECTED, so this loop would be
+      // a no-op anyway, but the guard keeps it from re-fetching after a
+      // re-detection re-seeds a PENDING state mid-blur.
+      if (this.ciEnrichmentEnabled) {
+        for (const detectedPR of this.detectedPRs.values()) {
+          if (enrichedPRNumbers.has(detectedPR.number)) continue;
+          if (detectedPR.ciStatus === "PENDING" || detectedPR.ciStatus === "EXPECTED") {
+            enrichedPRNumbers.add(detectedPR.number);
+            this.enrichPRWithCIStatus(detectedPR, repo);
+          }
         }
       }
 
@@ -1335,18 +1483,6 @@ class PullRequestService {
       return;
     }
 
-    // Per-project poll lease (#9055): only one workspace-host polls per
-    // cycle when multiple windows watch the same project. Siblings receive
-    // PR updates via the elected host's `sys:pr:detected` / `sys:pr:cleared`
-    // events as they propagate through main → renderer fan-out. Fails open
-    // (returns true) on IPC timeout so a lost lease message can't wedge
-    // polling — `dispatchForgeRpc`'s cross-window singleflight still dedupes
-    // the actual GraphQL calls in that fallback path.
-    const leaseAcquired = await getForgeBridge().acquirePollLease();
-    if (!leaseAcquired) {
-      logDebug("Skipping PR check — sibling window holds poll lease");
-      return;
-    }
     this.lastCheckAt = Date.now();
 
     logDebug("Checking PRs for candidates", { count: activeCandidates.length });
@@ -1355,9 +1491,16 @@ class PullRequestService {
     // lives in main and is populated by `PluginService.initialize()`; the
     // workspace-host UtilityProcess starts polling before that finishes, so a
     // one-shot resolution at `start()` would lose the race permanently. Each
-    // poll retries until main answers with a real provider — and once resolved
-    // we keep the cache (cleared explicitly by `refresh()`/`setForgeSettings`).
-    if (!this.providerNamespacedId || !this.repoRef) {
+    // poll retries until main answers definitively — and both definitive
+    // answers are then cached (cleared explicitly by `refresh()` /
+    // `setForgeSettings()` / `forge:provider-registry-updated`): a resolved
+    // provider, or a "no-match" miss, which would otherwise re-spawn
+    // `resolveProvider()`'s git-config reads on every debounced worktree
+    // update (#9997).
+    if (
+      (!this.providerNamespacedId || !this.repoRef) &&
+      this.providerResolutionStatus !== "no-match"
+    ) {
       await this.resolveProvider();
     }
 
@@ -1372,13 +1515,13 @@ class PullRequestService {
     }
     const bridge = getForgeBridge();
 
-    const { blocked, resumeAt } = await this.checkRateLimitGate();
-    if (blocked && resumeAt) {
-      this.nextRetryAt = resumeAt;
+    const rateLimitBlock = await this.checkRateLimitGate();
+    if (rateLimitBlock) {
+      this.nextRetryAt = rateLimitBlock.resumeAt;
       logDebug("Skipping PR check — rate limit active", {
         providerId,
-        resumeAt,
-        waitMs: resumeAt - Date.now(),
+        resumeAt: rateLimitBlock.resumeAt,
+        waitMs: rateLimitBlock.resumeAt - Date.now(),
       });
       return;
     }
@@ -1472,11 +1615,22 @@ class PullRequestService {
         return;
       }
 
-      this.consecutiveErrors = 0;
+      let branchErrorCount = 0;
+      let firstBranchError: Error | null = null;
 
-      for (const { branch, pr } of prResults) {
+      for (const { branch, pr, error } of prResults) {
         const worktreeIds = uniqueBranches.get(branch);
         if (!worktreeIds) continue;
+
+        if (error) {
+          // Transient lookup failure — NOT authoritative absence. Skip the
+          // branch so any existing PR row survives; the loader evicts settled
+          // keys, so the branch retries fresh next cycle. Routed to
+          // handleError once per cycle after the loop.
+          branchErrorCount++;
+          firstBranchError ??= error;
+          continue;
+        }
 
         if (!pr) {
           // Authoritative "no PR found" for a fresh candidate. Without this,
@@ -1484,6 +1638,11 @@ class PullRequestService {
           // and the renderer's preservation rule (#8870) would hold any
           // `linked.pr` carried over from a prior session indefinitely.
           for (const worktreeId of worktreeIds) {
+            // Drop any stale detection alongside the clear: refresh() empties
+            // `resolvedWorktrees` but keeps `detectedPRs`, so a PR that
+            // disappeared between cycles would otherwise leave a PENDING
+            // entry keeping the 30s revalidation boost armed indefinitely.
+            this.detectedPRs.delete(worktreeId);
             events.emit("sys:pr:cleared", {
               worktreeId,
               branchName: branch,
@@ -1498,7 +1657,7 @@ class PullRequestService {
           number: pr.number,
           title: pr.title,
           url: pr.url,
-          state: pr.state === "declined" ? "closed" : pr.state,
+          state: pr.state,
           isDraft: pr.isDraft,
           providerId,
           stagnantPollCount: 0,
@@ -1525,8 +1684,11 @@ class PullRequestService {
             prState: internalPR.state,
             // CI status is omitted here and resolved by the fire-and-forget
             // enrichment below; flag it so the renderer keeps its prior dot
-            // instead of blinking to "no checks" between the two emits.
-            isCiStatusLoading: true,
+            // instead of blinking to "no checks" between the two emits. When
+            // enrichment is disabled there is no phase-2 emit coming, so omit
+            // the flag entirely (`|| undefined` → absent, not false) — a held
+            // "loading" with no resolution would spin forever (#6240).
+            isCiStatusLoading: this.ciEnrichmentEnabled || undefined,
             prTitle: pr.title,
             issueNumber,
             branchName: lookupBranch,
@@ -1538,11 +1700,34 @@ class PullRequestService {
           });
         }
 
-        // Fire-and-forget CI status enrichment
-        this.enrichPRWithCIStatus(internalPR, repo);
+        // Fire-and-forget CI status enrichment (skipped on unattended
+        // instances; enrichPRWithCIStatus also self-guards, but skipping here
+        // avoids the needless call).
+        if (this.ciEnrichmentEnabled) {
+          this.enrichPRWithCIStatus(internalPR, repo);
+        }
       }
 
       this.updateBoostFromDetectedPRs();
+
+      if (branchErrorCount > 0 && firstBranchError) {
+        // Route the cycle's transient lookup failures through the breaker
+        // exactly once — per cycle, not per branch, so breaker behavior isn't
+        // topology-dependent on how many branches a repo happens to have.
+        // Re-consult the rate-limit gate first: a 429 that landed mid-cycle
+        // (after the top-of-cycle gate passed) must pause polling via the
+        // rate-limit path rather than count toward the circuit breaker.
+        const rateLimit = await this.checkRateLimitGate();
+        this.handleError(
+          `PR branch lookup failed for ${branchErrorCount} of ${prResults.length} branches: ${firstBranchError.message}`,
+          rateLimit ?? undefined
+        );
+      } else if (prResults.length > 0) {
+        // Only a cycle that actually completed a PR lookup counts as success
+        // for the breaker — an issue-title-only retry cycle (no unresolved
+        // branch candidates) must not clear a real PR-lookup error streak.
+        this.consecutiveErrors = 0;
+      }
     } catch (error) {
       this.handleError(formatErrorMessage(error, "PR check failed"));
     }
@@ -1553,12 +1738,13 @@ class PullRequestService {
    * `prByBranchLoader`. All `load()` calls here enqueue synchronously, so the
    * loader coalesces them into a single `findPRsByBranches` batch (or per-branch
    * fallback) and dedups any branch already in flight from an overlapping
-   * cycle. The loader resolves a transient error to `null` ("no PR"), matching
-   * the prior `perBranchFallback` behavior.
+   * cycle. A resolved `pr` (including null) is authoritative; a transient
+   * lookup failure surfaces as a non-null `error` so the caller skips the
+   * branch (never clears it) and routes the failure to the circuit breaker.
    */
   private async resolvePRsForBranches(
     branches: string[]
-  ): Promise<Array<{ branch: string; pr: ForgePR | null }>> {
+  ): Promise<Array<{ branch: string; pr: ForgePR | null; error: Error | null }>> {
     if (branches.length === 0) return [];
 
     const loader = this.prByBranchLoader;
@@ -1570,18 +1756,26 @@ class PullRequestService {
       return [];
     }
 
-    // Absorb a per-load rejection as `null` ("no PR found"). The only source of
-    // rejection here is the loader being disposed by a mid-cycle provider swap
-    // (`invalidateProvider()` from refresh()/setForgeSettings()); propagating it
-    // would land in checkForPRs's catch and wrongly bump `consecutiveErrors`
+    // A disposal rejection comes from a mid-cycle provider swap
+    // (`invalidateProvider()` from refresh()/setForgeSettings()), not a lookup
+    // failure — absorb it as `null` so it never bumps `consecutiveErrors`
     // toward the circuit breaker. The downstream stale-provider guard discards
     // the whole cycle once it sees the provider changed, so the null is never
-    // written as a spurious `sys:pr:cleared`.
+    // written as a spurious `sys:pr:cleared`. Any other rejection is a
+    // transient lookup failure surfaced via the per-key Error contract.
     return Promise.all(
       branches.map((branch) =>
         loader.load(branch).then(
-          (pr) => ({ branch, pr }),
-          () => ({ branch, pr: null as ForgePR | null })
+          (pr) => ({ branch, pr, error: null as Error | null }),
+          (error: unknown) => {
+            const err = error instanceof Error ? error : new Error(String(error));
+            const isDisposed = err.message === "BatchLoader disposed";
+            return {
+              branch,
+              pr: null as ForgePR | null,
+              error: isDisposed ? null : err,
+            };
+          }
         )
       )
     );
@@ -1593,6 +1787,7 @@ class PullRequestService {
    * with the enriched CI status so the renderer can update the badge.
    */
   private enrichPRWithCIStatus(pr: InternalLinkedPR, repo: RepoRef): void {
+    if (!this.ciEnrichmentEnabled) return;
     const loader = this.ciStatusLoader;
     if (!loader) return;
     // Synchronous `load()` here: enrichPRWithCIStatus is called fire-and-forget
@@ -1602,6 +1797,10 @@ class PullRequestService {
     loader
       .load(pr.number)
       .then((ciStatus) => {
+        // Enrichment may have been disabled (window blur) while this batch was
+        // in flight — discard the result rather than write a CI status back and
+        // re-arm the boost the sweep just collapsed.
+        if (!this.ciEnrichmentEnabled) return;
         const prevCiStatus = pr.ciStatus;
         // A resolved value is authoritative: the batch contract surfaces a
         // transient miss as a rejection (→ .catch below), so a `null` here is a
@@ -1629,7 +1828,10 @@ class PullRequestService {
               worktreeId,
               prNumber: pr.number,
               prUrl: pr.url,
-              prState: pr.state,
+              // Read state from the live map entry, not the captured `pr` — a
+              // re-detection may have replaced the entry while this enrichment
+              // was in flight, and the stale capture would revert its state.
+              prState: detected.state,
               prCiStatus: pr.ciStatus,
               prTitle: pr.title,
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,
@@ -1661,6 +1863,11 @@ class PullRequestService {
     // can escalate to a permanent ban.
     if (rateLimit) {
       this.nextRetryAt = rateLimit.resumeAt;
+      // Clear the streak: failures preceding the pause were likely the same
+      // rate limit manifesting as transient errors before the gate caught it,
+      // so carrying them over would leave the breaker on a hair trigger for
+      // the first post-pause hiccup.
+      this.consecutiveErrors = 0;
       logWarn("PR check hit a GitHub rate limit — pausing without tripping circuit breaker", {
         reason: rateLimit.kind,
         resumeAt: rateLimit.resumeAt,
@@ -1675,11 +1882,11 @@ class PullRequestService {
       const backoffMs = computeBackoff(this.consecutiveErrors);
       this.nextRetryAt = Date.now() + backoffMs;
       logWarn("Too many consecutive errors - pausing PR polling", { retryInMs: backoffMs });
-      events.emit("ui:notify", {
-        type: "warning",
-        message: "PR detection paused due to errors. Will retry automatically.",
-        id: "pr-service-circuit-breaker",
-      });
+      // No ui:notify here: this service runs in the workspace-host UtilityProcess,
+      // where the EventBuffer subscriber (main-process only) does not exist, so the
+      // emit was inert. The breaker trip is surfaced ambiently via setDetectionState
+      // (sys:pr:detection-state → PRDetectionPausedIndicator), the correct tier for
+      // auto-recovering state.
       this.setDetectionState(true);
     }
   }

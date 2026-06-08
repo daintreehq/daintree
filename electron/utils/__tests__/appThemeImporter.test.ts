@@ -39,7 +39,11 @@ describe("appThemeImporter", () => {
     if (!result.ok) return;
 
     expect(result.scheme.type).toBe("light");
-    expect(result.warnings.some((warning) => warning.message.includes('Add "type"'))).toBe(true);
+    const inferredWarning = result.warnings.find((warning) =>
+      warning.message.includes('Add "type"')
+    );
+    expect(inferredWarning).toBeDefined();
+    expect(inferredWarning?.kind).toBe("type-inferred");
   });
 
   it("warns about unknown nested tokens but still imports the scheme", () => {
@@ -58,9 +62,11 @@ describe("appThemeImporter", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(
-      result.warnings.some((warning) => warning.message.includes("Ignored unknown tokens"))
-    ).toBe(true);
+    const unknownWarning = result.warnings.find((warning) =>
+      warning.message.includes("Ignored unknown tokens")
+    );
+    expect(unknownWarning).toBeDefined();
+    expect(unknownWarning?.kind).toBe("unknown-tokens");
   });
 
   it("preserves location and heroImage metadata through import", () => {

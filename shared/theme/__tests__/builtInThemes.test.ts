@@ -380,6 +380,94 @@ describe("built-in themes", () => {
         }
       }
 
+      // Cross-key invariant: on dark, the toolbar-control armed/active fill
+      // must read as MORE prominent than the hover fill, with at least a
+      // +0.04 alpha step (#9827). Without this the armed and hover fills
+      // both fall through to overlay-emphasis (alpha 0.10) and the only
+      // signal separating them is a 1px hairline — the user can't see the
+      // toggle is on. Presence is enforced structurally by
+      // TOOLBAR_ARMED_FILL in the extension registry (required for dark,
+      // forbidWhenNotRequired for light); this block is the relationship
+      // check on top of structural enforcement.
+      if (polarity === "dark") {
+        const toolbarHover = extensions["toolbar-control-hover-bg"];
+        const toolbarArmed = extensions["toolbar-control-armed-bg"];
+        const toolbarActive = extensions["toolbar-control-active-bg"];
+        if (
+          toolbarHover !== undefined &&
+          toolbarArmed !== undefined &&
+          toolbarActive !== undefined
+        ) {
+          const hoverAlpha = parseAlpha(toolbarHover);
+          const armedAlpha = parseAlpha(toolbarArmed);
+          const activeAlpha = parseAlpha(toolbarActive);
+          if (Number.isNaN(hoverAlpha) || Number.isNaN(armedAlpha) || Number.isNaN(activeAlpha)) {
+            failures.push(
+              `${source.id} toolbar-control alpha unparseable; got hover="${toolbarHover}" ` +
+                `armed="${toolbarArmed}" active="${toolbarActive}"`
+            );
+          } else {
+            if (!(armedAlpha > hoverAlpha)) {
+              failures.push(
+                `${source.id} toolbar-control-armed-bg (alpha ${armedAlpha}) must be stronger ` +
+                  `than toolbar-control-hover-bg (alpha ${hoverAlpha})`
+              );
+            }
+            if (!(activeAlpha > hoverAlpha)) {
+              failures.push(
+                `${source.id} toolbar-control-active-bg (alpha ${activeAlpha}) must be stronger ` +
+                  `than toolbar-control-hover-bg (alpha ${hoverAlpha})`
+              );
+            }
+            if (armedAlpha - hoverAlpha < 0.04 - MIN_STEP_TOLERANCE) {
+              failures.push(
+                `${source.id} toolbar-control armed-vs-hover alpha step ` +
+                  `(${(armedAlpha - hoverAlpha).toFixed(2)}) is below the 0.04 minimum; the ` +
+                  `fill separation will be invisible (#9827)`
+              );
+            }
+            if (activeAlpha - hoverAlpha < 0.04 - MIN_STEP_TOLERANCE) {
+              failures.push(
+                `${source.id} toolbar-control active-vs-hover alpha step ` +
+                  `(${(activeAlpha - hoverAlpha).toFixed(2)}) is below the 0.04 minimum; the ` +
+                  `fill separation will be invisible (#9827)`
+              );
+            }
+          }
+        }
+      }
+
+      // Cross-key invariant: toolbar-stats-divider must match toolbar-divider —
+      // the stats pill's inter-segment seams use the same separator ink as the
+      // rest of the toolbar chrome. Arashiyama drifted by copy-pasting the
+      // toolbar-stats-bg fill tint instead, leaving the seams invisible (#10029).
+      const toolbarDivider = extensions["toolbar-divider"];
+      const statsDivider = extensions["toolbar-stats-divider"];
+      const statsBg = extensions["toolbar-stats-bg"];
+      if (
+        toolbarDivider !== undefined &&
+        statsDivider !== undefined &&
+        statsDivider !== toolbarDivider
+      ) {
+        failures.push(
+          `${source.id} toolbar-stats-divider ("${statsDivider}") must equal toolbar-divider ` +
+            `("${toolbarDivider}"); the stats pill uses the toolbar's separator ink (#10029)`
+        );
+      }
+      if (statsDivider !== undefined && statsDivider === statsBg) {
+        failures.push(
+          `${source.id} toolbar-stats-divider ("${statsDivider}") matches the toolbar-stats-bg ` +
+            `fill tint; the seams would be invisible against the pill fill (#10029)`
+        );
+      }
+      if (statsBg !== undefined && statsDivider === undefined) {
+        failures.push(
+          `${source.id} styles the stats pill (toolbar-stats-bg) without toolbar-stats-divider; ` +
+            `the seams would fall back to --theme-border-subtle instead of the toolbar's ` +
+            `separator ink (#10029)`
+        );
+      }
+
       // Extra-key regression: no built-in source ships an unregistered extension
       // key. TypeScript enforces this at compile time, but a runtime check
       // catches `as unknown as` casts and ad-hoc fixture mutations.
@@ -735,6 +823,14 @@ function parseAlpha(value: string): number {
   const match = value.match(/rgba?\([^)]*?,\s*([0-9.]+)\s*\)/);
   return match ? Number(match[1]) : NaN;
 }
+
+// Epsilon for the toolbar-control alpha-step floor: rgba alpha values are
+// specified to 2 decimal places, but the difference of two such values can
+// drift below the spec value by a few ULPs of IEEE-754 (e.g. 0.12 - 0.08
+// computes as 0.03999999999999999, not 0.04). The tolerance below is
+// generous enough to absorb that drift without letting a 0.00 step slip
+// through (1e-9 is many orders of magnitude under the 0.01 UI threshold).
+const MIN_STEP_TOLERANCE = 1e-9;
 
 function hexToRgbTuple(hex: string): [number, number, number] {
   const clean = hex.replace("#", "");

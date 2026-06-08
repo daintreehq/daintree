@@ -7,6 +7,18 @@ import { useProjectStore } from "@/store/projectStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
+const notifyMock = vi.fn<(payload: unknown) => string>(() => "notif-id");
+vi.mock("@/lib/notify", () => ({
+  notify: (payload: unknown) => notifyMock(payload),
+}));
+
+const dispatchMock = vi.fn();
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: (...args: unknown[]) => dispatchMock(...args),
+  },
+}));
+
 type PortEventName =
   | "worktree-update"
   | "worktree-removed"
@@ -18,7 +30,9 @@ type PortEventName =
   | "issue-not-found"
   | "inotify-limit-reached"
   | "emfile-limit-reached"
-  | "watcher-recovered";
+  | "watcher-recovered"
+  | "topology-watcher-dark"
+  | "topology-watcher-recovered";
 
 const listeners = new Map<PortEventName, Set<(data: unknown) => void>>();
 
@@ -34,10 +48,14 @@ function setCurrentProject(path: string | null): void {
 }
 
 let initialWatcherDegraded = false;
+let initialTopologyWatcherDark = false;
 
 beforeEach(() => {
   listeners.clear();
   initialWatcherDegraded = false;
+  initialTopologyWatcherDark = false;
+  notifyMock.mockClear();
+  dispatchMock.mockClear();
   setCurrentProject("/repo/proj");
 
   (globalThis as unknown as { window: Window }).window.electron = {
@@ -47,6 +65,7 @@ beforeEach(() => {
         Promise.resolve({
           states: [] as WorktreeSnapshot[],
           watcherDegraded: initialWatcherDegraded,
+          topologyWatcherDark: initialTopologyWatcherDark,
         }),
       onEvent: (name: PortEventName, cb: (data: unknown) => void) => {
         let set = listeners.get(name);
@@ -146,5 +165,120 @@ describe("WorktreeStoreProvider — watcher degraded indicator", () => {
 
     act(() => emit("inotify-limit-reached", { type: "inotify-limit-reached" }));
     expect(store.getState().watcherDegraded).toBe(true);
+  });
+});
+
+describe("WorktreeStoreProvider — topology-watcher-dark indicator (#9908)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("defaults topologyWatcherDark to false when the handshake reports healthy", async () => {
+    const store = await renderProvider();
+    expect(store.getState().topologyWatcherDark).toBe(false);
+  });
+
+  it("hydrates topologyWatcherDark from the get-all-states handshake", async () => {
+    initialTopologyWatcherDark = true;
+    const store = await renderProvider();
+    expect(store.getState().topologyWatcherDark).toBe(true);
+  });
+
+  it("sets topologyWatcherDark on topology-watcher-dark and clears on recovered", async () => {
+    const store = await renderProvider();
+    expect(store.getState().topologyWatcherDark).toBe(false);
+
+    act(() => emit("topology-watcher-dark", { type: "topology-watcher-dark" }));
+    expect(store.getState().topologyWatcherDark).toBe(true);
+
+    act(() => emit("topology-watcher-recovered", { type: "topology-watcher-recovered" }));
+    expect(store.getState().topologyWatcherDark).toBe(false);
+  });
+
+  it("escalates to a low-priority reconcile notification after 30s of sustained dark", async () => {
+    vi.useFakeTimers();
+    const store = await renderProvider();
+
+    act(() => emit("topology-watcher-dark", { type: "topology-watcher-dark" }));
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0] as {
+      priority?: string;
+      action?: { label?: string; actionId?: string };
+    };
+    expect(payload.priority).toBe("low");
+    expect(payload.action?.actionId).toBe("worktree.reconcileTopology");
+    void store;
+  });
+
+  it("does not escalate if the dark state clears before 30s", async () => {
+    vi.useFakeTimers();
+    await renderProvider();
+
+    act(() => emit("topology-watcher-dark", { type: "topology-watcher-dark" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    act(() => emit("topology-watcher-recovered", { type: "topology-watcher-recovered" }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("arms the 30s escalation when a view mounts while already dark (hydration path)", async () => {
+    vi.useFakeTimers();
+    initialTopologyWatcherDark = true;
+    const store = await renderProvider();
+    expect(store.getState().topologyWatcherDark).toBe(true);
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to an unscoped supersedeKey when no project is loaded", async () => {
+    vi.useFakeTimers();
+    setCurrentProject(null);
+    await renderProvider();
+
+    act(() => emit("topology-watcher-dark", { type: "topology-watcher-dark" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    const payload = notifyMock.mock.calls[0]![0] as { supersedeKey?: string };
+    expect(payload.supersedeKey).toBe("topology-watcher-dark");
+  });
+
+  it("dispatches worktree.reconcileTopology when the escalation action fires", async () => {
+    vi.useFakeTimers();
+    await renderProvider();
+
+    act(() => emit("topology-watcher-dark", { type: "topology-watcher-dark" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    const payload = notifyMock.mock.calls[0]![0] as { action?: { onClick?: () => void } };
+    act(() => {
+      payload.action?.onClick?.();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.reconcileTopology",
+      undefined,
+      expect.objectContaining({ source: "user" })
+    );
   });
 });

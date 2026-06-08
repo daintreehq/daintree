@@ -68,9 +68,11 @@ export type ForgeProviderMethodName =
   | "getIssue"
   | "getPR"
   | "getRepoMetadata"
+  | "createIssue"
   | "assignIssue"
   | "unassignIssue"
-  | "validateToken";
+  | "validateToken"
+  | "getCurrentUser";
 
 export const FORGE_AUDIT_SCHEMA_VERSION = 1;
 

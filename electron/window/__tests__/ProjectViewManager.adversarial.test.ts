@@ -78,7 +78,12 @@ vi.mock("electron", () => {
   }
 
   return {
-    app: { isPackaged: false, commandLine: { appendSwitch: vi.fn() } },
+    app: {
+      isPackaged: false,
+      commandLine: { appendSwitch: vi.fn() },
+      getPath: vi.fn(() => "/tmp/daintree-test-appdata"),
+      setPath: vi.fn(),
+    },
     BrowserWindow: vi.fn(),
     WebContentsView: MockWebContentsView,
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
@@ -130,8 +135,18 @@ vi.mock("../skeletonCss.js", () => ({
   injectSkeletonProjectIdentity: vi.fn(),
   INITIAL_COLOR_SCHEME_ARG: "--daintree-initial-color-scheme-id",
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
+  INSTANCE_ROLE_ARG: "--daintree-instance-role",
+  resolveInstanceRole: vi.fn(() => "attended"),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
+}));
+
+// ProjectViewManager imports isDemoMode from setup/environment.js, whose
+// module-level side effects (deepLinkUrlQueue app.on, userData setPath) need
+// the real electron app API the partial mock above does not provide.
+vi.mock("../../setup/environment.js", () => ({
+  isDemoMode: false,
+  isSmokeTest: false,
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({

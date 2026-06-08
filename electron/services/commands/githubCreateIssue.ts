@@ -1,6 +1,8 @@
 import type { DaintreeCommand, CommandResult } from "../../../shared/types/commands.js";
-import { getGitHubToken, getRepoContext, clearGitHubCaches } from "../GitHubService.js";
-import { GITHUB_API_TIMEOUT_MS } from "../github/index.js";
+import type { CreateIssueInput } from "../../../shared/types/forge.js";
+import { getGitHubToken, clearGitHubCaches } from "../GitHubService.js";
+import { resolveForCwd } from "../../ipc/handlers/forgeResolution.js";
+import { auditForgeCall, summarizeForgeArgs } from "../forge/forgeAuditService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 const NETWORK_ERROR_CODES = new Set([
@@ -103,8 +105,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
   },
 
   execute: async (context, args): Promise<CommandResult<CreateIssueResult>> => {
-    const token = getGitHubToken();
-    if (!token) {
+    if (!getGitHubToken()) {
       return {
         success: false,
         error: {
@@ -125,39 +126,14 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
       };
     }
 
-    let repoContext;
-    try {
-      repoContext = await getRepoContext(cwd);
-    } catch (error) {
-      const message = formatErrorMessage(error, "Failed to determine repository context");
-      return {
-        success: false,
-        error: {
-          code: "NOT_GIT_REPO",
-          message: `Failed to determine repository context: ${message}`,
-        },
-      };
-    }
-
-    if (!repoContext) {
-      return {
-        success: false,
-        error: {
-          code: "NOT_GIT_REPO",
-          message: "Not in a GitHub repository or cannot determine repository from git remote",
-        },
-      };
-    }
-
-    const { owner, repo } = repoContext;
     const { labels } = args;
 
     // Trim values if provided
     const title = args.title?.trim() || "";
     const body = args.body?.trim() || "";
 
-    // If no title and no body provided, return message for agent interpretation
-    // The agent in the terminal will handle generating appropriate content
+    // If no title and no body provided, return message for agent interpretation.
+    // The agent in the terminal will handle generating appropriate content.
     if (!title && !body) {
       return {
         success: false,
@@ -172,7 +148,7 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
     const issueTitle = title || body.split("\n")[0].replace(/\r$/, "").slice(0, 100);
     const issueBody = body || title;
 
-    const requestBody: Record<string, unknown> = {
+    const input: CreateIssueInput = {
       title: issueTitle,
       body: issueBody,
     };
@@ -183,88 +159,49 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
         .map((l) => l.trim())
         .filter((l) => l.length > 0);
       if (labelArray.length > 0) {
-        requestBody.labels = labelArray;
+        input.labels = labelArray;
       }
     }
 
+    // Resolve the active forge provider for this repo. Routing through the
+    // contract (rather than a raw GitHub fetch) lets any registered provider
+    // answer, matching the other forge command surfaces.
+    let resolved;
     try {
-      const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-          "Content-Type": "application/json",
-          "User-Agent": "Daintree-Electron",
+      resolved = await resolveForCwd(cwd);
+    } catch (error) {
+      const message = formatErrorMessage(error, "Failed to determine repository context");
+      return {
+        success: false,
+        error: {
+          code: "NOT_GIT_REPO",
+          message: `Failed to determine repository context: ${message}`,
         },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage: string;
-
-        if (response.status === 401) {
-          errorMessage = "Invalid GitHub token. Please update in Settings.";
-        } else if (response.status === 403) {
-          // Check for rate limit or SSO in error body
-          if (errorText.includes("rate limit") || errorText.includes("API rate limit")) {
-            errorMessage = "GitHub rate limit exceeded. Try again in a few minutes.";
-          } else if (errorText.includes("SAML") || errorText.includes("SSO")) {
-            errorMessage = "SSO authorization required. Re-authorize at github.com.";
-          } else {
-            errorMessage = "Token lacks required permissions. Required scopes: repo";
-          }
-        } else if (response.status === 404) {
-          errorMessage = "Repository not found or you don't have access";
-        } else if (response.status === 422) {
-          try {
-            const errorData = JSON.parse(errorText) as { message?: string };
-            errorMessage = errorData.message ?? "Validation failed";
-          } catch {
-            errorMessage = "Validation failed";
-          }
-        } else {
-          errorMessage = `GitHub API error: ${response.status} ${response.statusText}`;
-        }
-
-        return {
-          success: false,
-          error: {
-            code: "API_ERROR",
-            message: errorMessage,
-            details: { status: response.status, body: errorText },
-          },
-        };
-      }
-
-      const data = (await response.json()) as {
-        html_url?: string;
-        number?: number;
-        title?: string;
       };
+    }
 
-      if (!data.html_url || !data.number || !data.title) {
-        return {
-          success: false,
-          error: {
-            code: "INVALID_RESPONSE",
-            message: "Invalid response from GitHub API",
-          },
-        };
-      }
+    try {
+      const issue = await auditForgeCall(
+        {
+          providerId: resolved.namespaceId,
+          methodName: "createIssue",
+          repoOwner: resolved.repoRef.owner,
+          repoName: resolved.repoRef.repo,
+          argsSummary: summarizeForgeArgs("createIssue", input),
+        },
+        () => resolved.impl.createIssue(resolved.repoRef, input)
+      );
 
-      // Clear GitHub caches to ensure the new issue appears in lists
+      // Clear forge/GitHub caches so the new issue appears in subsequent lists.
       clearGitHubCaches();
 
       return {
         success: true,
-        message: `Issue #${data.number} created successfully`,
+        message: `Issue #${issue.number} created successfully`,
         data: {
-          url: data.html_url,
-          number: data.number,
-          title: data.title,
+          url: issue.url,
+          number: issue.number,
+          title: issue.title,
         },
       };
     } catch (error) {

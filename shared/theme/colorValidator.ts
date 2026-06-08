@@ -388,6 +388,7 @@ export function getOverlayContrastWarnings(scheme: AppColorScheme): AppThemeVali
   const weber = weberContrast(compositedHex, canvas.trim());
   if (weber < OVERLAY_HOVER_WEBER_FLOOR) {
     warnings.push({
+      kind: "overlay-contrast",
       message: `overlay-hover over surface-canvas Weber contrast is ${(weber * 100).toFixed(1)}%; floor is ${(OVERLAY_HOVER_WEBER_FLOOR * 100).toFixed(0)}% (RC-2 interactive overlay must be perceptible in both polarities)`,
     });
   }

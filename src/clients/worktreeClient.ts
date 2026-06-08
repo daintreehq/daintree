@@ -94,10 +94,6 @@ export const worktreeClient = {
     return window.electron.worktree.detachIssue(worktreeId);
   },
 
-  getIssueAssociation: (worktreeId: string): Promise<IssueAssociation | null> => {
-    return window.electron.worktree.getIssueAssociation(worktreeId);
-  },
-
   getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> => {
     return window.electron.worktree.getAllIssueAssociations();
   },

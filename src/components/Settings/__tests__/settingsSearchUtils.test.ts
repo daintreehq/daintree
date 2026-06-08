@@ -38,6 +38,8 @@ const GOLDEN_QUERIES = [
   { query: "appearance", expectedTopResults: ["tab-nav-terminalAppearance", "appearance-theme"] },
   { query: "hibernate", expectedTopResults: ["general-hibernation"] },
   { query: "github", expectedTopResults: ["github-token", "tab-nav-code-forge"] },
+  { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
+  { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
 ] as const;
 
 describe("filterSettings", () => {
@@ -200,6 +202,7 @@ describe("subtab-aware search", () => {
         id: "test-entry",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "Settings",
         title: "Some Setting",
@@ -219,6 +222,7 @@ describe("subtab-aware search", () => {
         id: "sub-entry",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "Runtime",
         title: "Enable Agent",
@@ -239,6 +243,7 @@ describe("subtab-aware search", () => {
         id: "no-subtab",
         tab: "general" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "General",
         section: "About",
         title: "App Version",
@@ -256,6 +261,7 @@ describe("subtab-aware search", () => {
         id: "a",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "S",
         title: "Enable",
@@ -266,6 +272,7 @@ describe("subtab-aware search", () => {
         id: "b",
         tab: "agents" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "CLI agents",
         section: "S",
         title: "Enable Gemini",
@@ -327,6 +334,10 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       expect(entry.section, "section should be defined").toBeTruthy();
       expect(entry.title, "title should be defined").toBeTruthy();
       expect(entry.description, "description should be defined").toBeTruthy();
+      expect(
+        ["tab-nav", "section"],
+        `entry "${entry.id}" kind should be a valid discriminator`
+      ).toContain(entry.kind);
     }
   });
 
@@ -358,6 +369,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       mcp: "MCP Server",
       plugins: "Plugins",
       "plugin-actions": "Plugin actions",
+      "run-history": "Run history",
       environment: "Environment",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
@@ -397,6 +409,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       mcp: "MCP Server",
       plugins: "Plugins",
       "plugin-actions": "Plugin actions",
+      "run-history": "Run history",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
@@ -449,7 +462,7 @@ describe("tab-name ranking", () => {
     for (const query of queries) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(
-        results[0]?.id.startsWith("tab-nav-"),
+        results[0]?.kind === "tab-nav",
         `"${query}" should return a tab-nav entry first, got "${results[0]?.id}"`
       ).toBe(true);
     }
@@ -469,7 +482,7 @@ describe("tab-name ranking", () => {
     for (const group of groups) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, group);
       expect(
-        results.some((r) => r.id.startsWith("tab-nav-")),
+        results.some((r) => r.kind === "tab-nav"),
         `"${group}" should return at least one tab-nav result`
       ).toBe(true);
     }
@@ -524,6 +537,7 @@ describe("fuzzy matching", () => {
         id: "a",
         tab: "general" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "General",
         section: "S",
         title: "Font Size",
@@ -533,6 +547,7 @@ describe("fuzzy matching", () => {
         id: "b",
         tab: "general" as const,
         scope: "global" as const,
+        kind: "section" as const,
         tabLabel: "General",
         section: "S",
         title: "Color Scheme",
@@ -868,4 +883,77 @@ describe("golden-query ranking", () => {
       }
     }
   );
+});
+
+describe("Resources section ranking (#10044)", () => {
+  // The Resources section keeps a historical id of "tab-nav-project:environments"
+  // for deep-link backward compat (see settingsTabRegistry.tsx). Pre-fix, the
+  // post-scoring pass classified entries by `id.startsWith("tab-nav-")` and
+  // applied a -3 penalty to multi-token queries, so the Resources section was
+  // wrongly demoted in favor of any matching tab-nav row. With `kind: "section"`
+  // on the Resources entry, the ranker now correctly classifies it as a
+  // content section and applies no penalty.
+  //
+  // The fixtures below are constructed to be byte-identical in EVERY indexed
+  // field (title, description, keywords, tab, tabLabel, section) and in
+  // `scope` — so the only differentiator in the ranker is the -3 penalty
+  // applied to `kind: "tab-nav"`. The tab-nav entry is listed first in the
+  // array so that under the broken `id.startsWith` discriminator (which
+  // penalises both), input-order tie-breaking would put the tab-nav first
+  // and the assertion would fail. Under the fixed `kind` discriminator, only
+  // the tab-nav entry is penalised, so the section outranks it and the
+  // assertion passes.
+  const sectionFixture = {
+    id: "tab-nav-project:environments",
+    tab: "project:automation" as const,
+    scope: "project" as const,
+    kind: "section" as const,
+    tabLabel: "Worktree Setup",
+    section: "Resource Environments",
+    title: "Resource Environments",
+    description: "Remote resource definitions and default worktree mode",
+    keywords: ["resources", "remote", "docker", "akash"],
+  };
+
+  const tabNavFixture = {
+    id: "tab-nav-project:automation",
+    tab: "project:automation" as const,
+    scope: "project" as const,
+    kind: "tab-nav" as const,
+    tabLabel: "Worktree Setup",
+    section: "Resource Environments",
+    title: "Resource Environments",
+    description: "Remote resource definitions and default worktree mode",
+    keywords: ["resources", "remote", "docker", "akash"],
+  };
+
+  // Use `as never` to satisfy the strict SettingsTab union without importing
+  // the full SettingsTab enum at this test site — the ranker only reads
+  // tab/tabLabel/scope/kind/id, not exhaustive tab constraints.
+  const fixtureIndex = [tabNavFixture, sectionFixture] as never;
+
+  for (const query of ["remote resources", "docker akash", "remote docker"]) {
+    it(`"${query}" ranks Resources content section above a byte-identical tab-nav row`, () => {
+      // Under the fixed `kind` discriminator: section wins (no -3 penalty).
+      // Under the broken `id.startsWith` discriminator: both get -3, so they
+      // tie on score; stable sort preserves input order and the tab-nav
+      // (listed first) wins — assertion fails. This is the discriminator
+      // isolation test.
+      const results = filterSettings(fixtureIndex, query);
+      const sectionIdx = results.findIndex((r) => r.id === "tab-nav-project:environments");
+      const tabNavIdx = results.findIndex((r) => r.id === "tab-nav-project:automation");
+      expect(
+        sectionIdx,
+        `section entry must be present in results for "${query}"`
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        tabNavIdx,
+        `tab-nav entry must be present in results for "${query}"`
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        sectionIdx,
+        `section (kind="section") should outrank byte-identical tab-nav (kind="tab-nav") for "${query}"`
+      ).toBeLessThan(tabNavIdx);
+    });
+  }
 });

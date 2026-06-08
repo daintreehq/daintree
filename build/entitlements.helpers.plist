@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Minimal (empty) entitlements for the spawned helper executables
+     spawn-helper and daintree_pty_supervisor. electron-builder's binaries[]
+     signing inherits the full app plist (build/entitlements.mac.plist), which
+     carries com.apple.security.device.audio-input — a RESTRICTED entitlement.
+     On macOS 26 (Tahoe) amfid kills any spawned executable claiming a
+     restricted entitlement without an embedded provisioning profile, so the
+     helpers must be re-signed with no entitlements (#9775). Hardened runtime is
+     conveyed by the codesign runtime option, not via this plist. -->
+<dict/>
+</plist>

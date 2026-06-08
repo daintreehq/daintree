@@ -125,6 +125,7 @@
  * hover and :active, preserving both the source-order tiebreaker above and
  * the momentary :active background on other pressed buttons. */
 .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+.toolbar-icon-button[aria-checked="true"],
 .toolbar-icon-button[aria-expanded="true"],
 .toolbar-icon-button[data-state="open"],
 .toolbar-agent-button[aria-pressed="true"],
@@ -152,6 +153,7 @@
  * override still wins on light. Dark never matches this block. */
 :where(.light, [data-color-mode="light"])
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+:where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-checked="true"],
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-expanded="true"],
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[data-state="open"],
 :where(.light, [data-color-mode="light"]) .toolbar-agent-button[aria-pressed="true"],
@@ -167,6 +169,28 @@
 
 .toolbar-divider {
   background: var(--toolbar-divider, var(--theme-border-divider));
+}
+
+/* Split-button seam: persistent 1px hairline at rest so the chevron half
+ * reads as a separate control. The color chain mirrors .toolbar-divider so
+ * per-theme --toolbar-divider overrides apply identically. Suppressed when
+ * the chevron dropdown is open via the named group/agent-split parent: the
+ * chevron's armed-state inset ring (above) would otherwise stack with this
+ * 1px right border and read as a 2px smudge on light themes (same failure
+ * the L97-117 comment block above documents). Forced-colors mode keeps a
+ * 1px system-color edge so the seam survives Windows High Contrast. */
+.toolbar-agent-split-seam {
+  border-right-color: var(--toolbar-divider, var(--theme-border-divider));
+}
+
+.group\/agent-split:has(.toolbar-agent-button[data-state="open"]) .toolbar-agent-split-seam {
+  border-right-color: transparent;
+}
+
+@media (forced-colors: active) {
+  .toolbar-agent-split-seam {
+    border-right-color: ButtonText;
+  }
 }
 
 .toolbar-stats {
@@ -187,10 +211,76 @@
   --_border: var(--toolbar-project-border, var(--theme-border-subtle));
   --_shadow: var(--toolbar-project-shadow, var(--theme-shadow-ambient));
   --_radius: var(--toolbar-pill-radius, 0.5rem);
+  position: relative;
+  isolation: isolate;
   background: var(--_bg);
   border-color: var(--_border);
   box-shadow: var(--_shadow);
   border-radius: var(--_radius);
+  /* Only the label color fades on this element. The hover/armed/active surface
+   * lift lives on the ::before overlay below — stacked OVER the pill's own
+   * background (a near-transparent wash by default, an opaque near-white capsule
+   * on light themes) rather than replacing it. Replacing erased the capsule fill
+   * on hover; layering preserves it. Press-scale is owned by the base Button cva,
+   * so transform stays out of the transition. */
+  transition: color 150ms ease;
+}
+
+/* Surface-lift overlay. Sits above the pill's background fill but below its
+ * content — direct children are lifted to z-index 1 so the tint never washes out
+ * the label. Fading opacity keeps the Tier 1 150ms ease without animating the
+ * background-image layer (gradients can't be transitioned). Hover paints the
+ * elevated overlay; armed/active escalate to emphasis (raised on light). */
+.toolbar-project-pill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
+  transition: opacity 150ms ease;
+}
+
+.toolbar-project-pill > * {
+  position: relative;
+  z-index: 1;
+}
+
+.toolbar-project-pill:hover::before {
+  opacity: 1;
+}
+
+/* Keyboard focus is delivered by the focus-visible:outline-* utilities on the
+ * button element in Toolbar.tsx (same 2px accent ring as .toolbar-icon-button).
+ * It is authored in JSX, not here, so the focusRingFallback contract test scans
+ * the className and no toolbar.css allowlist exemption is needed. */
+
+/* Armed state (dropdown open). aria-expanded is hand-authored only when a project
+ * is selected; data-state="open" is injected by the Radix trigger and covers the
+ * no-project case. The overlay escalates to the emphasis fill. */
+.toolbar-project-pill[aria-expanded="true"]::before,
+.toolbar-project-pill[data-state="open"]::before {
+  opacity: 1;
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+}
+
+.toolbar-project-pill:active::before {
+  opacity: 1;
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+}
+
+/* LIGHT-only: flip the armed/active fill to the elevate-to-select overlay-raised
+ * lift, mirroring the icon-button block above — overlay-emphasis subtracts
+ * luminance and reads as a smudge on near-white light themes. Dark never matches. */
+:where(.light, [data-color-mode="light"]) .toolbar-project-pill[aria-expanded="true"]::before,
+:where(.light, [data-color-mode="light"]) .toolbar-project-pill[data-state="open"]::before {
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
+}
+
+:where(.light, [data-color-mode="light"]) .toolbar-project-pill:active::before {
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
 }
 
 .toolbar-project-chip {
@@ -208,17 +298,13 @@
   color: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
 }
 
+/* The chip drops as a single step at 700px. The previous two-stage degradation
+ * hid the branch label at 700px and the chip at 560px, leaving a lone GitBranch
+ * icon between the two — an icon-only chip that shifts visual weight without
+ * conveying anything. Dropping label + icon together skips that vestigial stage;
+ * the full project + branch stays available in the pill tooltip, which is the
+ * recovery surface once the chip is gone. */
 @container toolbar (max-width: 700px) {
-  .toolbar-project-chip-label {
-    display: none;
-  }
-}
-
-/* Below 560px the chip itself becomes noise — keeping the vestigial GitBranch
- * icon while hiding the branch name shifts visual weight without conveying
- * anything. The full project + branch is still available in the pill tooltip,
- * which is the recovery surface once the chip drops out. */
-@container toolbar (max-width: 560px) {
   .toolbar-project-chip {
     display: none;
   }
@@ -237,11 +323,14 @@
  *    McpRuntimeSnapshot.state and surface as MCP health; `working`,
  *    `directing`, `waiting` come from AgentStateMachine and surface as the
  *    agent activity pip, which is suppressed when the panel is open or the
- *    state has been acknowledged. NotificationCenterToolbarButton owns the
- *    `unread` dot on its own surface — it doesn't compete with the assistant
- *    pips, so the ordering reads:
+ *    state has been acknowledged. Below those, the audit-anomaly pip
+ *    (mcpAnomalyStore.hasAnomaly, bg-status-warning) is the lowest-precedence
+ *    ambient signal — it only shows when no health or agent pip is competing,
+ *    and unlike the agent pip it stays visible while the panel is open (#10022).
+ *    NotificationCenterToolbarButton owns the `unread` dot on its own surface —
+ *    it doesn't compete with the assistant pips, so the ordering reads:
  *
- *      MCP failed > MCP starting > agent working / directing / waiting
+ *      MCP failed > MCP starting > agent working / directing / waiting > MCP anomaly
  *      notification unread (independent surface)
  *
  *    DND dimming (.toolbar-badge[data-dnd-active]) is a cross-tier overlay
@@ -272,6 +361,25 @@
  *    shape tiers below (WCAG 1.4.1). The pip is always error-colored, so size
  *    reinforces a high-signal indicator instead of adding ring noise.
  */
+
+/* ── Shared pip geometry ──
+ * The semantic-status pips (AssistantButton MCP/agent pips, AgentButton and
+ * AgentTrayButton running-state pips) all float at the same corner offset with
+ * the same 6px circle and sidebar-colored ring cut-out. This class owns that
+ * geometry so render sites stop re-typing the literals; it carries no color and
+ * no visibility — color comes from a per-surface class, visibility/motion from
+ * .toolbar-badge. No forced-colors entry is needed here (no background-color of
+ * its own); the composed .toolbar-badge already covers that. The ring matches
+ * `ring-1 ring-daintree-sidebar`. */
+.toolbar-pip {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  height: 6px;
+  width: 6px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px var(--color-daintree-sidebar);
+}
 
 /* ── Badge entrance / exit ──
  * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
@@ -315,6 +423,40 @@
   display: block;
   opacity: 1;
   transition-duration: 200ms;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+/* ── Overflow `…` trigger entry / exit ──
+ * The trigger appears only while items are evicted into it. Without an
+ * animation it pops in/out instantly, unlike every other toolbar badge
+ * (issue #9821). Opacity-only (no scale) — the trigger is a full-size button,
+ * not a pip, so scaling would read as a glitch. @starting-style + allow-discrete
+ * drive entry/exit in pure CSS; the button stays mounted and toggles
+ * data-visible (going display:none when empty so it reclaims its layout slot
+ * and drops out of roving focus). color/background-color stay at 150ms so the
+ * hover tint still animates at its normal cadence.
+ */
+[data-toolbar-overflow-trigger] {
+  display: none;
+  opacity: 0;
+  transition:
+    display 120ms allow-discrete,
+    opacity 120ms ease,
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+[data-toolbar-overflow-trigger][data-visible="true"] {
+  display: inline-flex;
+  opacity: 1;
+  transition:
+    display 200ms allow-discrete,
+    opacity 200ms ease,
+    color 150ms ease,
+    background-color 150ms ease;
 
   @starting-style {
     opacity: 0;
@@ -411,6 +553,16 @@
       display 0s,
       opacity 200ms ease;
   }
+
+  /* Keep a timed (not `none`) display swap so the discrete show/hide still
+   * completes (lesson #6182); the fade collapses to opacity-only. */
+  [data-toolbar-overflow-trigger] {
+    transition:
+      display 0s,
+      opacity 200ms ease,
+      color 150ms ease,
+      background-color 150ms ease;
+  }
 }
 
 /* The armed/pressed control state relies on a background tint plus an inset
@@ -420,11 +572,14 @@
    opt-out) to keep the same scope. */
 @media (forced-colors: active) {
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
+  .toolbar-icon-button[aria-checked="true"],
   .toolbar-icon-button[aria-expanded="true"],
   .toolbar-icon-button[data-state="open"],
   .toolbar-agent-button[aria-pressed="true"],
   .toolbar-agent-button[aria-expanded="true"],
-  .toolbar-agent-button[data-state="open"] {
+  .toolbar-agent-button[data-state="open"],
+  .toolbar-project-pill[aria-expanded="true"],
+  .toolbar-project-pill[data-state="open"] {
     border: 2px solid ButtonText;
   }
 }

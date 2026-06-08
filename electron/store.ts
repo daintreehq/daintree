@@ -22,6 +22,7 @@ import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/plugin
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
+import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
@@ -378,6 +379,17 @@ export interface StoreSchema {
     auditLog?: ForgeAuditRecord[];
   };
   /**
+   * Durable run-history ring buffer for recipe and fleet automation outcomes
+   * (#9949). `records` is the persisted oldest-first ring, trimmed to
+   * {@link RUN_HISTORY_DEFAULT_MAX_RECORDS} by `RunHistoryLog`. Lives in the
+   * Main-process store (not renderer localStorage) so it survives reloads and
+   * the multi-window LRU eviction. Read defensively (`?? {}` applied by
+   * electron-store) — the on-disk shape is owned by `RunHistoryLog`.
+   */
+  runHistory: {
+    records?: RunHistoryRecord[];
+  };
+  /**
    * Inbound plugin-MCP `tools/call` audit ring buffer (#9234). Parallel to
    * `plugins.auditLog` but scoped to *inbound* MCP tool calls — i.e. calls a
    * plugin's stdio MCP server makes back into the host. Records never store
@@ -574,6 +586,9 @@ const storeOptions = {
     forgeAudit: {
       auditEnabled: true,
       auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
+    },
+    runHistory: {
+      records: [],
     },
     pluginMcpAudit: {
       auditEnabled: true,
@@ -823,6 +838,52 @@ function getOrLazyInitInstance(): Store<StoreSchema> {
   // mocking it: they get the in-memory fallback that the previous
   // module-load `export const store = initializeStore()` provided implicitly.
   return storeInstance ?? initializeStore();
+}
+
+/**
+ * Batched read-mutate-set helpers for `wslGitByWorktree` (#9926). Every
+ * `store.set("wslGitByWorktree", …)` re-serializes the whole electron-store
+ * file, and `set(undefined)` throws on electron-store v11 — so per-key writes
+ * or `delete` is not safe. The host drives both the per-removal and
+ * bulk-load self-heal paths, so the host emits `clear-wsl-git-opt-in` events
+ * and main invokes these helpers from `WorkspaceHostEventRouter`.
+ *
+ * Legacy persisted entries may have been written with mixed-case UNC paths
+ * (Windows is case-insensitive but the in-memory map is keyed by whatever
+ * the renderer sent). The lookup here is case-insensitive on win32 so a host
+ * emit with the canonical lowercase form still finds the legacy key.
+ */
+export function clearWslGitEntry(worktreeId: string): void {
+  if (typeof worktreeId !== "string" || !worktreeId) return;
+  const current = store.get("wslGitByWorktree");
+  if (!current || typeof current !== "object") return;
+  const map = current as Record<string, { enabled: boolean; dismissed: boolean }>;
+
+  // Prefer an exact match; fall back to case-insensitive on win32 for legacy
+  // mixed-case keys. POSIX stays case-sensitive — the in-memory host key is
+  // also case-sensitive there, so a mismatch would be a real bug, not a
+  // legacy artifact.
+  let matchedKey: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(map, worktreeId)) {
+    matchedKey = worktreeId;
+  } else if (process.platform === "win32") {
+    const target = worktreeId.toLowerCase();
+    matchedKey = Object.keys(map).find((k) => k.toLowerCase() === target);
+  }
+  if (!matchedKey) return;
+
+  const next = { ...map };
+  delete next[matchedKey];
+  // Always write the full (possibly empty) object — never `undefined` — so
+  // electron-store v11 doesn't throw and the on-disk shape stays consistent.
+  store.set("wslGitByWorktree", next);
+}
+
+export function writeWslGitMap(
+  map: Record<string, { enabled: boolean; dismissed: boolean }>
+): void {
+  const safe = map && typeof map === "object" ? map : {};
+  store.set("wslGitByWorktree", safe);
 }
 
 export const store = new Proxy({} as Store<StoreSchema>, {

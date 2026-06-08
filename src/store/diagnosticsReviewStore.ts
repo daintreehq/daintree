@@ -26,6 +26,13 @@ interface DiagnosticsReviewState {
   reviewPayload: DiagnosticsReviewPayload | null;
   scope: DiagnosticsReviewScope | null;
   downloadError: string | null;
+  /**
+   * Monotonic counter bumped each time the review opens. Used as the
+   * always-mounted host's ErrorBoundary `resetKeys` signal so a crashed host
+   * auto-recovers on the next open — including a re-open while `isOpen` is
+   * already true, which a `Number(isOpen)` key would miss (#9918).
+   */
+  requestSeq: number;
 
   openReview: (scope?: DiagnosticsReviewScope) => Promise<void>;
   closeReview: () => void;
@@ -65,6 +72,7 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
   reviewPayload: null,
   scope: null,
   downloadError: null,
+  requestSeq: 0,
 
   openReview: async (scope) => {
     // Block while a prior open is in flight OR while a save is still resolving
@@ -75,12 +83,13 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
     set({ isCollecting: true, downloadError: null });
     try {
       const payload = await systemClient.collectDiagnosticsForReview();
-      set({
+      set((state) => ({
         isOpen: true,
         reviewPayload: payload,
         scope: scope ?? null,
         isCollecting: false,
-      });
+        requestSeq: state.requestSeq + 1,
+      }));
     } catch (err) {
       set({
         isCollecting: false,
@@ -114,6 +123,7 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
           // The saved ZIP is already revealed in the OS file manager, so this
           // is a one-shot action prompt — no durable inbox row needed.
           transient: true,
+          priority: "high",
           context: { eventKind: "settings" },
           action: {
             label: "Continue to GitHub issue",

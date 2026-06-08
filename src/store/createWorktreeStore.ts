@@ -265,6 +265,15 @@ export interface WorktreeViewState {
    * updated by watcher degradation/recovery port events.
    */
   watcherDegraded: boolean;
+  /**
+   * True while this project's topology watcher is "dark" — its subscribe()
+   * failed at cold start or a safety valve expired without the matching event,
+   * so the worktree list may silently drift until a reconcile verifies it.
+   * Drives the same Tier-1 indicator as `watcherDegraded` (logical OR).
+   * Hydrated from the `get-all-states` handshake and updated by the
+   * `topology-watcher-dark` / `topology-watcher-recovered` port events (#9908).
+   */
+  topologyWatcherDark: boolean;
 }
 
 export interface WorktreeViewActions {
@@ -333,6 +342,7 @@ export interface WorktreeViewActions {
   setFatalError(message: string): void;
   setReconnecting(reconnecting: boolean): void;
   setWatcherDegraded(degraded: boolean): void;
+  setTopologyWatcherDark(dark: boolean): void;
 }
 
 export type WorktreeViewStore = WorktreeViewState & WorktreeViewActions;
@@ -356,6 +366,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     isReconnecting: false,
     reconnectingAt: null,
     watcherDegraded: false,
+    topologyWatcherDark: false,
 
     applySnapshot(
       states: WorktreeSnapshot[],
@@ -1007,6 +1018,12 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // concurrent update isn't dropped by a stale closure.
       set((prev) => (prev.watcherDegraded === degraded ? prev : { watcherDegraded: degraded }));
     },
+
+    setTopologyWatcherDark(dark: boolean) {
+      // Functional updater for the same reason as setWatcherDegraded: the
+      // dark/recovered events can race the get-all-states hydration.
+      set((prev) => (prev.topologyWatcherDark === dark ? prev : { topologyWatcherDark: dark }));
+    },
   }));
 }
 
@@ -1544,6 +1561,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.resourceConnectCommand === b.resourceConnectCommand &&
     a.isWslPath === b.isWslPath &&
     a.wslDistro === b.wslDistro &&
+    a.wslPosixPath === b.wslPosixPath &&
     a.wslGitEligible === b.wslGitEligible &&
     a.wslGitOptIn === b.wslGitOptIn &&
     a.wslGitDismissed === b.wslGitDismissed &&

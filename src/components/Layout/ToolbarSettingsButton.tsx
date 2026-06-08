@@ -12,6 +12,7 @@ import {
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 
@@ -66,7 +67,7 @@ export function ToolbarSettingsButton({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {createTooltipContent("Open Settings", settingsShortcut)}
+            {createTooltipContent("Open settings", settingsShortcut)}
           </TooltipContent>
         </Tooltip>
       </ContextMenuTrigger>
@@ -77,16 +78,17 @@ export function ToolbarSettingsButton({
           </ContextMenuActionItem>
         ))}
         <ContextMenuSeparator />
-        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
-          Customize Toolbar…
-        </ContextMenuActionItem>
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "troubleshooting" }}>
           Troubleshooting
         </ContextMenuActionItem>
         <ContextMenuSeparator />
+        <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+          Customize toolbar…
+        </ContextMenuActionItem>
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => toggleButtonVisibility("settings", "right")}>
           <Unplug className="mr-2 h-3.5 w-3.5" />
-          Unpin from Toolbar
+          {TOOLBAR_UNPIN_LABEL}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

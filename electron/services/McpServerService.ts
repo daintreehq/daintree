@@ -10,10 +10,12 @@ import type {
   ActiveBearerRecord,
   AssistantTurnRecord,
   DisconnectBearerResult,
+  HelpSessionBearerRecord,
   McpAuditRecord,
   McpAuditStats,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
+  McpLogRecord,
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
@@ -195,6 +197,7 @@ export class McpServerService {
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
       getCachedManifest: () => this.bridge.getCachedManifest(),
+      getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
@@ -203,6 +206,19 @@ export class McpServerService {
       emitStatusChange: () => this.emitStatusChange(),
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),
+    });
+
+    // Wire the live turn-outcome alert push now that both collaborators exist
+    // (#10018). The service classifies `agent-stuck` / `reasoning-loop` and
+    // hands the help-session id to httpLifecycle, which resolves the pinned
+    // WebContents and sends. Set after construction because the send path
+    // lives on httpLifecycle, built just above.
+    this.turnOutcomeService.setNotifyTurnOutcomeAlert((outcome, helpSessionId, turnId) => {
+      this.httpLifecycle.notifyTurnOutcomeAlert({
+        helpSessionId,
+        outcome,
+        ...(turnId !== undefined ? { turnId } : {}),
+      });
     });
   }
 
@@ -406,12 +422,24 @@ export class McpServerService {
     return this.auditService.getRecords();
   }
 
+  /**
+   * Newest-first view of the full union (dispatch + grant lifecycle
+   * records). Reserved for the audit-log viewer, NDJSON export, and any
+   * other surface that handles the discriminated union — dispatch-only
+   * consumers (latency table, recent-calls popover, activity strip) keep
+   * using {@link getAuditRecords} so their `result`/`durationMs` reads
+   * stay type-safe.
+   */
+  getLogRecords(): McpLogRecord[] {
+    return this.auditService.getLogRecords();
+  }
+
   getAuditConfig(): { enabled: boolean; maxRecords: number } {
     return this.auditService.getAuditConfig();
   }
 
-  getAuditStats(): McpAuditStats {
-    return this.auditService.getAuditStats();
+  getAuditStats(markSeen = true): McpAuditStats {
+    return this.auditService.getAuditStats(markSeen);
   }
 
   clearAuditLog(): void {
@@ -481,12 +509,50 @@ export class McpServerService {
   }
 
   /**
+   * Reset a session's denial counters without dropping its grants. Backs the
+   * tier-mismatch banner's Cancel path so a dismissed banner re-arms on the
+   * next out-of-tier call. Caller-pin checked.
+   */
+  resetDenialCounts(sessionId: string, callerWcId?: number): void {
+    this.httpLifecycle.resetDenialCounts(sessionId, callerWcId);
+  }
+
+  /**
+   * Live tier + per-tool grants for the help session a renderer owns, keyed
+   * by its public help-session id (the one in `helpPanelStore`). Caller-pinned
+   * against the WebContents the session was pinned to at handshake. Returns
+   * `null` when there is no live session for that renderer — the IPC handler
+   * maps that to a safe "not connected" snapshot. Delegates to
+   * {@link SessionStore.getLiveStatusForHelpSession} for the transport-id
+   * reverse-lookup the maps require.
+   */
+  getHelpSessionLiveStatus(
+    helpSessionId: string,
+    callerWcId: number
+  ): {
+    tier: McpTier;
+    activeGrants: Array<{ toolId: string; expiresAt: number; ttlMs: number }>;
+  } | null {
+    return this.sessionStore.getLiveStatusForHelpSession(helpSessionId, callerWcId);
+  }
+
+  /**
    * Snapshot of the bearers currently connected to the local MCP server for
    * the settings tab. Raw tokens are never returned — only the display suffix
    * and the hash used to target {@link disconnectBearer}.
    */
   listActiveBearers(): ActiveBearerRecord[] {
     return this.httpLifecycle.listActiveBearers();
+  }
+
+  /**
+   * Read-only inventory of the renderer-pinned help-session bearers (the
+   * Daintree Assistant's own internal MCP connections) for the separate
+   * "Daintree Assistant connections" settings row (#10036). Display fields
+   * only — no tokens or hashes cross IPC, and there is no disconnect action.
+   */
+  listHelpSessionBearers(): HelpSessionBearerRecord[] {
+    return this.httpLifecycle.listHelpSessionBearers();
   }
 
   /**

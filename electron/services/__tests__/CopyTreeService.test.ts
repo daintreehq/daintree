@@ -24,6 +24,7 @@ describe("CopyTreeService", () => {
     configCreateMock.mockResolvedValue(undefined);
     copyMock.mockResolvedValue({
       output: "<context />",
+      manifest: [],
       stats: {
         totalFiles: 1,
         totalSize: 10,
@@ -209,6 +210,79 @@ describe("CopyTreeService", () => {
     await expect(second).resolves.toEqual(
       expect.objectContaining({ error: "Context generation cancelled" })
     );
+  });
+
+  describe("testConfig", () => {
+    it("returns files populated from the SDK manifest", async () => {
+      const manifest = [
+        { path: "src/index.ts", size: 1024 },
+        { path: "src/utils.ts", size: 512 },
+        { path: "README.md", size: 256 },
+      ];
+      copyMock.mockResolvedValue({
+        output: "",
+        manifest,
+        stats: {
+          totalFiles: manifest.length,
+          totalSize: manifest.reduce((sum, entry) => sum + entry.size, 0),
+          duration: 5,
+          dryRun: true,
+        },
+      });
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toHaveLength(manifest.length);
+      for (const [index, entry] of manifest.entries()) {
+        expect(result.files?.[index]).toEqual({ path: entry.path, size: entry.size });
+      }
+    });
+
+    it("maps stats onto includedFiles and includedSize", async () => {
+      const stats = { totalFiles: 7, totalSize: 4096, duration: 5, dryRun: true };
+      copyMock.mockResolvedValue({ output: "", manifest: [], stats });
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.includedFiles).toBe(stats.totalFiles);
+      expect(result.includedSize).toBe(stats.totalSize);
+    });
+
+    it("returns an empty files array when the manifest is empty", async () => {
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toEqual([]);
+    });
+
+    it("returns an empty files array when the SDK omits the manifest", async () => {
+      copyMock.mockResolvedValue({
+        output: "",
+        stats: { totalFiles: 0, totalSize: 0, duration: 5, dryRun: true },
+      });
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toEqual([]);
+    });
+
+    it("runs the SDK in dry-run mode", async () => {
+      await copyTreeService.testConfig(tempDir);
+
+      expect(copyMock).toHaveBeenCalledTimes(1);
+      const sdkOptions = copyMock.mock.calls[0][1] as Record<string, unknown>;
+      expect(sdkOptions.dryRun).toBe(true);
+    });
+
+    it("rejects non-absolute root paths without files", async () => {
+      const result = await copyTreeService.testConfig("relative/path");
+
+      expect(result.error).toContain("absolute path");
+      expect(result.files).toBeUndefined();
+      expect(copyMock).not.toHaveBeenCalled();
+    });
   });
 
   it("omits config from sdkOptions when ConfigManager.create() fails", async () => {

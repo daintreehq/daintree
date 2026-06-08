@@ -3,8 +3,10 @@ import { cn } from "@/lib/utils";
 import { GitBranch, ChevronDown, Search } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 export interface ForgeProviderOption {
+  /** Canonical `{pluginId}.{contributionId}` forge provider id. */
   id: string;
   name: string;
   pluginId: string;
@@ -13,7 +15,7 @@ export interface ForgeProviderOption {
 type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
 
 function getProviderIcon(id: string): ProviderIcon {
-  return id === "github" ? GitHubIcon : GitBranch;
+  return id === BUILTIN_GITHUB_PROVIDER_ID ? GitHubIcon : GitBranch;
 }
 
 interface ForgeProviderSelectorDropdownProps {

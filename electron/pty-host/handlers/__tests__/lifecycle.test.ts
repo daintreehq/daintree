@@ -92,6 +92,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     tryReplayAndResume: vi.fn(),
     resumePausedTerminal: vi.fn(),
     createPortQueueManager: vi.fn(),
+    getPausedDurationsSnapshot: vi.fn(() => []),
     ...overrides,
   };
 }
@@ -206,10 +207,30 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
 
     await dispatch({ type: "graceful-kill-by-project", projectId: "proj-1", requestId: "r1" });
 
-    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith("proj-1");
+    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+      preserveSession: undefined,
+    });
     expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledTimes(2);
     expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(300);
     expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(400);
+  });
+
+  it("graceful-kill-by-project forwards preserveSession to the registry (#10054)", async () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    (ctx.ptyManager.gracefulKillByProject as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    await dispatch({
+      type: "graceful-kill-by-project",
+      projectId: "proj-1",
+      requestId: "r1",
+      preserveSession: true,
+    });
+
+    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
+      preserveSession: true,
+    });
   });
 
   it("graceful-kill-by-project handles empty project", async () => {

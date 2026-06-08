@@ -17,6 +17,7 @@ const mockState = vi.hoisted(() => ({
     focusMode: true,
     focusPanelState: { sidebarWidth: 260, diagnosticsOpen: true },
     activeWorktreeId: "wt-global",
+    mruList: ["terminal:global-terminal"] as string[],
   },
   terminalConfig: { scrollback: 5000 },
   agentSettings: { defaultAgent: "codex" },
@@ -27,6 +28,7 @@ const mockState = vi.hoisted(() => ({
         activeWorktreeId?: string;
         focusMode?: boolean;
         focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
+        mruList?: string[];
       }
     | undefined,
   projectStateQuarantinedPath: undefined as string | undefined,
@@ -119,6 +121,7 @@ describe("AppHydrationService adversarial", () => {
       focusMode: true,
       focusPanelState: { sidebarWidth: 260, diagnosticsOpen: true },
       activeWorktreeId: "wt-global",
+      mruList: ["terminal:global-terminal"],
     };
     mockState.terminalConfig = { scrollback: 5000 };
     mockState.agentSettings = { defaultAgent: "codex" };
@@ -157,6 +160,42 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.activeWorktreeId).toBe("wt-global");
     expect(result.appState.focusMode).toBe(true);
     expect(result.appState.focusPanelState).toEqual({ sidebarWidth: 260, diagnosticsOpen: true });
+  });
+
+  it("serves the per-project mruList on switch, not the global list (#9922)", async () => {
+    mockState.projectState = {
+      terminals: [],
+      mruList: ["terminal:project-terminal", "worktree:wt-local"],
+    };
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.appState.mruList).toEqual(["terminal:project-terminal", "worktree:wt-local"]);
+  });
+
+  it("falls back to the global mruList when the project has none (migration)", async () => {
+    mockState.projectState = {
+      terminals: [],
+      // mruList intentionally undefined — not migrated yet.
+    };
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.appState.mruList).toEqual(["terminal:global-terminal"]);
+  });
+
+  it("treats an explicitly empty per-project mruList as authoritative (no global fallback)", async () => {
+    mockState.projectState = {
+      terminals: [],
+      mruList: [],
+    };
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.appState.mruList).toEqual([]);
   });
 
   it("CORRUPT_TERMINALS_FILTERED_NOT_FATAL", async () => {

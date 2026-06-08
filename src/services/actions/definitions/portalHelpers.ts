@@ -4,6 +4,7 @@ import {
   usePortalPendingCloseStore,
   type PortalPendingCloseKind,
 } from "@/store/portalPendingCloseStore";
+import { useUIStore } from "@/store/uiStore";
 import { logError } from "@/utils/logger";
 
 /** True when dispatch args carry an explicit `confirmed: true` flag. */
@@ -21,6 +22,21 @@ export const clearPortalPendingIf = (kind: PortalPendingCloseKind): void => {
 };
 
 export const getPortalBounds = () => getPortalPlaceholderBounds();
+
+/**
+ * Show a portal tab only when no modal overlay owns the viewport. Reading
+ * `overlayStack` at call time (after any awaits) keeps the portal WebContentsView
+ * from covering an open modal. When suppressed, PortalVisibilityController's
+ * overlay-clear effect re-shows the active tab once the overlay closes — no
+ * pending-show bookkeeping needed here.
+ */
+export const showPortalTabIfNoOverlay = async (
+  tabId: string,
+  bounds: { x: number; y: number; width: number; height: number }
+): Promise<void> => {
+  if (useUIStore.getState().overlayStack.length > 0) return;
+  await window.electron.portal.show({ tabId, bounds });
+};
 
 export const getPortalBoundsWithRetry = async (
   maxAttempts: number = 20,
@@ -58,7 +74,7 @@ export const activatePortalTab = async (tabId: string): Promise<void> => {
       await window.electron.portal.create({ tabId, url: tab.url, partition: tab.partition });
       state.markTabCreated(tabId);
     }
-    await window.electron.portal.show({ tabId, bounds });
+    await showPortalTabIfNoOverlay(tabId, bounds);
   } catch (error) {
     logError("Failed to activate portal tab", error);
   }

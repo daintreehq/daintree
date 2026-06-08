@@ -16,6 +16,8 @@ import {
   MCP_AUDIT_MIN_RECORDS,
   MCP_AUDIT_SCHEMA_VERSION,
   computeMcpAuditSeverity,
+  isAuditRecord,
+  isGrantRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
 import type { McpTier } from "./shared.js";
 import {
@@ -46,17 +48,6 @@ function percentile(values: number[], p: number): number {
   const lower = sorted[k]!;
   const upper = sorted[k + 1] ?? lower;
   return lower + f * (upper - lower);
-}
-
-/**
- * Hydrate predicate: existing on-disk records predate the discriminated
- * union (#8442) and have no `type` field; new entries written by
- * `appendGrantRecord` carry one. The union narrows on the presence of
- * the field, never on a sentinel value, so legacy records remain plain
- * `McpAuditRecord` instances.
- */
-function isGrantRecord(record: McpLogRecord): record is McpGrantRecord {
-  return "type" in record && typeof (record as McpGrantRecord).type === "string";
 }
 
 export class AuditService {
@@ -95,8 +86,12 @@ export class AuditService {
     );
     const backfilled = safe.map((r: Record<string, unknown>) => {
       // Grant records (post-#8442) carry a `type` discriminator and never
-      // need audit-specific backfilling — pass them through unchanged.
-      if ("type" in r && typeof r.type === "string") {
+      // need audit-specific backfilling — pass them through unchanged,
+      // but only when the discriminator is a known `McpGrantRecordType`
+      // value. A stringly-typed `type: "dispatch"` (or any unknown
+      // discriminator) would otherwise be misclassified as a grant and
+      // misrendered in the viewer (#10027).
+      if (isGrantRecord(r as unknown as McpLogRecord)) {
         return r as unknown as McpLogRecord;
       }
       return {
@@ -153,6 +148,7 @@ export class AuditService {
     turnId?: string;
     helpSessionId?: string;
     resultSummary?: string;
+    resultMeta?: McpAuditRecord["resultMeta"];
   }): void {
     if (this.readConfig().auditEnabled === false) return;
     this.hydrate();
@@ -194,6 +190,9 @@ export class AuditService {
     }
     if (input.resultSummary !== undefined) {
       record.resultSummary = input.resultSummary;
+    }
+    if (input.resultMeta !== undefined) {
+      record.resultMeta = input.resultMeta;
     }
 
     this.enqueueAndTrim(record);
@@ -259,7 +258,7 @@ export class AuditService {
       const existing = this.records.find((r) => r.id === this.lastPreAuthRecordId);
       // Narrow to McpAuditRecord — grant records carry a `type` discriminator;
       // audit records do not. See `McpLogRecord` in shared/types/ipc/mcpServer.ts.
-      if (existing && !("type" in existing) && existing.errorCode === PRE_AUTH_FAILED_CODE) {
+      if (existing && isAuditRecord(existing) && existing.errorCode === PRE_AUTH_FAILED_CODE) {
         existing.timestamp = now;
         existing.repeatCount = (existing.repeatCount ?? 1) + 1;
         this.lastPreAuthRecordAt = now;
@@ -308,9 +307,17 @@ export class AuditService {
   }
   /**
    * Read the session-scoped audit health counters. Renderer-facing.
+   *
+   * `markSeen` controls whether `first-seen-combination` signals are
+   * acknowledged (added to `knownCombinations`) as a side effect — see
+   * {@link getSignals}. User-facing surfaces (the Settings audit log) keep the
+   * default `true` so a combo fires once and then stays quiet. Passive pollers
+   * that only need the ambient count (the toolbar/HelpPanel anomaly indicator,
+   * #10022) must pass `false`, or their background cadence would consume the
+   * transient first-seen signal before the user ever navigates to the log.
    */
-  getAuditStats(): McpAuditStats {
-    const signals = this.getSignals();
+  getAuditStats(markSeen = true): McpAuditStats {
+    const signals = this.getSignals(markSeen);
     return {
       auth401Count: this.auth401Count,
       anomalySignals: signals,
@@ -332,7 +339,21 @@ export class AuditService {
     return n;
   }
 
-  getSignals(): McpAnomalySignal[] {
+  /**
+   * Compute the current anomaly signals across the dispatch ring buffer.
+   *
+   * `markSeen` (default `true`) governs the one stateful signal kind,
+   * `first-seen-combination`: when `true`, each newly-observed `toolId+tier`
+   * combo is recorded in `knownCombinations` so it fires exactly once. A passive
+   * caller passes `false` to read the same signals without acknowledging them —
+   * so a background poll can surface the ambient indicator while leaving the
+   * "fire once" acknowledgment to the user-facing audit log (#10022). The
+   * initial baseline seeding always runs regardless of `markSeen`, otherwise
+   * every pre-existing combo would read as first-seen on the first call. The
+   * other three kinds (latency drift, failure clustering, p95 z-score) are
+   * stateless recomputations and are unaffected by `markSeen`.
+   */
+  getSignals(markSeen = true): McpAnomalySignal[] {
     this.hydrate();
     const records: McpAuditRecord[] = [];
     for (const r of this.records) {
@@ -351,11 +372,15 @@ export class AuditService {
       }
     }
 
-    // 1. First-seen combinations — only for combos not yet in the set.
+    // 1. First-seen combinations — only for combos not yet in the set. A local
+    // set dedupes within this call so a passive read (markSeen=false), which
+    // doesn't persist to knownCombinations, still emits each combo at most once.
+    const emittedThisCall = new Set<string>();
     for (const r of records) {
       const key = `${r.toolId} ${r.tier}`;
-      if (!this.knownCombinations.has(key)) {
-        this.knownCombinations.add(key);
+      if (!this.knownCombinations.has(key) && !emittedThisCall.has(key)) {
+        emittedThisCall.add(key);
+        if (markSeen) this.knownCombinations.add(key);
         signals.push({
           id: `first-seen:${r.toolId}:${r.tier}`,
           kind: "first-seen-combination",

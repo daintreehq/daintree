@@ -33,6 +33,10 @@ const HIBERNATE_BUSY_RECHECK_MS = 2 * 60 * 1000;
 
 const RESUME_BANNER_AUTO_DISMISS_MS = 4_000;
 const SNAPSHOT_BANNER_AUTO_DISMISS_MS = 12_000;
+// The "approval ended" notice (#10042) lingers a touch longer than the
+// snapshot banner — it tells the user their per-tool grant lapsed and the
+// next call will prompt again, which is worth a beat to read.
+const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
 
 // Minimum disabled period after a manual "Check again" click — keeps the
 // button from being hammered while a fresh (cache-bypassing) probe runs.
@@ -51,6 +55,21 @@ export interface VersionTooOld {
   agentName: string;
   installedVersion: string;
   requiredVersion: string;
+}
+
+/**
+ * Outcome of `_spawnResumed` — pairs the spawned panel id with which resume
+ * sub-kind actually ran. `"specific"` means we had a real session id and used
+ * `buildResumeCommand`; `"latest"` means the hibernation entry carried the
+ * empty-string sentinel and we fell through to the agent's `--continue`/
+ * `resume --last` heuristic, whose result the renderer cannot verify (#10057).
+ * The arm sites gate the "Resumed your previous session." banner on
+ * `resumeKind === "specific"` to avoid falsely claiming a specific-session
+ * restore when only the latest-conversation heuristic ran.
+ */
+export interface ResumeSpawnResult {
+  panelId: string;
+  resumeKind: "specific" | "latest";
 }
 
 export interface TierMismatchState {
@@ -83,6 +102,19 @@ export type LaunchErrorKind =
 export interface LaunchErrorState {
   agentId: string;
   kind: LaunchErrorKind;
+}
+
+/**
+ * A help-session the abuse policy revoked after the denial threshold was
+ * exceeded (#10017). Surfaced as an inline error banner so the user learns
+ * why the session stopped responding and can start a fresh one — without this
+ * the session dies silently. `denialKind` records what tripped the policy
+ * (`"auth401"`, `"tierMismatch"`, …) for diagnostics; the banner copy stays
+ * jargon-free.
+ */
+export interface SessionRevokedState {
+  sessionId: string;
+  denialKind: string;
 }
 
 /**
@@ -123,6 +155,36 @@ export interface McpToolActivityState {
   isError: boolean;
 }
 
+/**
+ * The live per-`(sessionId, toolId)` grant minted by "Approve once" (#10042).
+ * Drives the ambient countdown banner in the Help Panel. `expiresAt` is the
+ * absolute epoch-ms the grant would lapse without further use — the renderer
+ * counts down against it without polling (the `issueGrant` result and the
+ * `grant.issued` lifecycle event both carry it). Single-slot: the most
+ * recently issued grant is the one shown.
+ */
+export interface ActiveGrantState {
+  sessionId: string;
+  toolId: string;
+  expiresAt: number;
+  ttlMs: number;
+}
+
+/**
+ * How a watched grant ended, for the brief "approval ended" notice (#10042).
+ * Only the two reasons the user can act on are surfaced:
+ * - `expired`: the sliding TTL lapsed with no recent use.
+ * - `grant-ceiling`: the 30-minute hard ceiling tripped mid-use.
+ * A user-initiated revoke and session teardown/idle clear the banner silently
+ * — there's nothing for the user to do, and the session is already gone.
+ */
+export type GrantEndReason = "expired" | "grant-ceiling";
+
+export interface GrantEndedState {
+  toolId: string;
+  reason: GrantEndReason;
+}
+
 export interface HelpSessionSnapshot {
   phase: HelpSessionPhase;
   showResumeBanner: boolean;
@@ -139,6 +201,21 @@ export interface HelpSessionSnapshot {
   launchError: LaunchErrorState | null;
   /** Live MCP tool-call activity for the ambient strip (#9759); null when idle. */
   mcpActivity: McpToolActivityState | null;
+  /** Set when the abuse policy revoked the active session (#10017); null otherwise. */
+  sessionRevoked: SessionRevokedState | null;
+  /** The live "Approve once" grant being counted down (#10042); null when none. */
+  activeGrant: ActiveGrantState | null;
+  /** Brief notice that the watched grant lapsed (#10042); null when none. */
+  grantEnded: GrantEndedState | null;
+  /** True while a user-initiated grant revoke is in flight (#10042). */
+  isRevokingGrant: boolean;
+  /**
+   * Most recent alertable turn outcome (`agent-stuck` / `reasoning-loop`) for
+   * the bound help session (#10018); null when none is pending. Drives the
+   * footer's ambient outcome pip. Cleared on dismiss, on a fresh turn, or on
+   * session teardown/replacement.
+   */
+  outcomeAlert: import("@shared/types/ipc/mcpServer").TurnOutcomeAlertClass | null;
 }
 
 export interface HelpProjectRef {
@@ -409,6 +486,33 @@ function notifyAssistantServicesUnavailable(
   });
 }
 
+// Mirrors the `folder-unavailable` banner's primary recovery affordance on
+// the closed-panel toast. Single action keeps parity with the established
+// `notifyAssistantServicesUnavailable` shape; the secondary "Open logs" CTA
+// on the banner is reachable by reopening the panel.
+function notifyInstallCorrupted(agentId: string): void {
+  const cfg = getAgentConfig(agentId);
+  const name = cfg?.name ?? agentId;
+  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
+  notify({
+    type: "error",
+    title: "Assistant files missing",
+    message: `Couldn't start ${name}. Daintree's bundled assistant files are missing — reinstall or check the logs.`,
+    action: {
+      label: "Open installer page",
+      actionId: "system.openExternal",
+      actionArgs: { url: "https://daintree.org/download" },
+      onClick: () => {
+        void actionService.dispatch(
+          "system.openExternal",
+          { url: "https://daintree.org/download" },
+          { source: "user" }
+        );
+      },
+    },
+  });
+}
+
 const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   phase: "idle",
   showResumeBanner: false,
@@ -419,6 +523,11 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   isCheckingVersion: false,
   launchError: null,
   mcpActivity: null,
+  sessionRevoked: null,
+  activeGrant: null,
+  grantEnded: null,
+  isRevokingGrant: false,
+  outcomeAlert: null,
 });
 
 /**
@@ -475,7 +584,15 @@ export class HelpSessionController {
   private _hibernateTimer: ReturnType<typeof setTimeout> | null = null;
   private _resumeBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _snapshotBannerTimer: ReturnType<typeof setTimeout> | null = null;
+  private _grantEndedBannerTimer: ReturnType<typeof setTimeout> | null = null;
   private _disposers: Array<() => void> = [];
+  /**
+   * Turn id the pending outcome alert (#10018) was recorded for, or null when
+   * the alert carried none (`agent-stuck`, whose turn id is already cleared by
+   * the time the watchdog fires). Used to auto-clear the pip when a tool call
+   * from a different turn arrives — i.e. the agent has resumed work.
+   */
+  private _outcomeAlertTurnId: string | null = null;
   private _lastInputs: HelpSessionInputs | null = null;
   private _hibernateArmedFor: {
     terminalId: string;
@@ -504,6 +621,9 @@ export class HelpSessionController {
 
     const disposeTier = window.electron.mcpServer.onTierNotPermitted((payload) => {
       const projectId = useProjectStore.getState().currentProject?.id ?? null;
+      // A fresh denial supersedes any lingering "approval ended" notice — the
+      // banner the user is about to re-approve from carries the same signal.
+      this._clearGrantEndedTimer();
       this._patch({
         tierMismatch: {
           sessionId: payload.sessionId,
@@ -512,9 +632,30 @@ export class HelpSessionController {
           targetTier: payload.targetTier,
           projectId,
         },
+        grantEnded: null,
       });
     });
     this._disposers.push(disposeTier);
+
+    const disposeRevoked = window.electron.mcpServer.onSessionRevoked((payload) => {
+      // Only surface a revoke that matches the session this panel currently
+      // holds. A live session always has its id committed to the store before
+      // any tool call (and thus before any denial/revoke), so a null or
+      // mismatched `sessionId` here means the revoke is for a torn-down or
+      // mid-relaunch session — painting its banner would stomp the fresh
+      // launch the user just started to escape it (#10017).
+      const currentSessionId = useHelpPanelStore.getState().sessionId;
+      if (currentSessionId === null || payload.sessionId !== currentSessionId) return;
+      this._patch({
+        sessionRevoked: { sessionId: payload.sessionId, denialKind: payload.denialKind },
+      });
+    });
+    this._disposers.push(disposeRevoked);
+
+    const disposeGrant = window.electron.mcpServer.onGrantLifecycle((payload) => {
+      this._onGrantLifecycle(payload);
+    });
+    this._disposers.push(disposeGrant);
 
     const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
       this._onToolCallStarted(payload);
@@ -523,6 +664,25 @@ export class HelpSessionController {
       this._onToolCallSettled(payload);
     });
     this._disposers.push(disposeToolStarted, disposeToolSettled);
+
+    const disposeOutcomeAlert = window.electron.mcpServer.onTurnOutcomeAlert((payload) => {
+      this._onTurnOutcomeAlert(payload);
+    });
+    this._disposers.push(disposeOutcomeAlert);
+
+    const disposeDisplayImage = window.electron.mcpServer.onDisplayImage((payload) => {
+      // The main process already validated the URL and assigned the figure
+      // number (#9828); the renderer just records the figure for inline display.
+      useHelpPanelStore.getState().addFigure({
+        imageId: payload.imageId,
+        figureNumber: payload.figureNumber,
+        figureLabel: payload.figureLabel,
+        url: payload.url,
+        ...(payload.caption !== undefined ? { caption: payload.caption } : {}),
+        ...(payload.altText !== undefined ? { altText: payload.altText } : {}),
+      });
+    });
+    this._disposers.push(disposeDisplayImage);
 
     const offSuspend = window.electron.systemSleep.onSuspend(() => {
       this._isSystemSuspended = true;
@@ -547,6 +707,7 @@ export class HelpSessionController {
     this._clearHibernateTimer();
     this._clearResumeBannerTimer();
     this._clearSnapshotBannerTimer();
+    this._clearGrantEndedTimer();
     this._clearCheckAgainCooldownTimer();
     // Bumping the gen invalidates any in-flight launch so its post-await
     // checkpoints bail. Live store state is left intact so a StrictMode
@@ -615,8 +776,13 @@ export class HelpSessionController {
     this._hasAutoLaunched = false;
     store.clearTerminal();
     // The bound session is gone — drop any lingering activity row so the strip
-    // doesn't show stale tool calls for a dead session (#9759).
+    // doesn't show stale tool calls for a dead session (#9759), clear the
+    // grant countdown/notice so they don't outlive the session (#10042), and
+    // clear any pending outcome pip (#10018) so it can't bleed into the next
+    // session.
     this.clearMcpActivity();
+    this._clearGrantState();
+    this._clearOutcomeAlert();
   }
 
   /**
@@ -735,6 +901,10 @@ export class HelpSessionController {
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
 
+    // A launch supersedes any revoked-session banner — the user is starting a
+    // fresh session, so the prior session's revocation no longer applies (#10017).
+    if (this._snapshot.sessionRevoked) this._patch({ sessionRevoked: null });
+
     // Snapshot the focused worktree/terminal synchronously before any await
     // so the session is pinned to what the user had focused at launch — the
     // HelpPanel footer chip surfaces this binding (#8772), and pinned tool
@@ -757,8 +927,13 @@ export class HelpSessionController {
         revokeHelpSession(previousSessionId);
         if (reservedId) this._revokePendingSession();
         useHelpPanelStore.getState().clearTerminal();
-        // Replacing the session — clear the prior session's activity row (#9759).
+        // Replacing the session — clear the prior session's activity row (#9759)
+        // and its figures, since the new help session restarts the figure
+        // counter at 1 in the main process (#9828).
+        useHelpPanelStore.getState().clearFigures();
         this.clearMcpActivity();
+        this._clearGrantState();
+        this._clearOutcomeAlert();
       }
       // Discarding the current conversation invalidates any persisted
       // hibernate entry for this project — leaving it would resume the
@@ -800,11 +975,78 @@ export class HelpSessionController {
   }
 
   dismissTierMismatch(): void {
+    // Capture the session before clearing the banner — `_patch` runs
+    // synchronously, so reading after would see a null `tierMismatch`.
+    const sessionId = this._snapshot.tierMismatch?.sessionId ?? null;
     this._patch({ tierMismatch: null });
+    if (!sessionId) return;
+    // Dismissing the banner without approving must re-arm it: reset the
+    // denial counters so the next out-of-tier call shows the banner again
+    // instead of being silently suppressed once the abuse policy threshold is
+    // crossed (#10017). This clears the counters for ALL tools in the session,
+    // not just the dismissed one — Cancel means "show me again for anything in
+    // this session"; the threshold re-accrues from zero per tool. Grants
+    // (the per-tool approval lifecycle) are left untouched.
+    safeFireAndForget(window.electron.mcpServer.resetDenialCounts({ sessionId }), {
+      context: "Help: reset denial counts on tier-mismatch dismiss",
+    });
   }
 
   dismissLaunchError(): void {
     this._patch({ launchError: null });
+  }
+
+  dismissSessionRevoked(): void {
+    this._patch({ sessionRevoked: null });
+  }
+
+  dismissGrantEnded(): void {
+    this._clearGrantEndedTimer();
+    this._patch({ grantEnded: null });
+  }
+
+  /**
+   * End the live "Approve once" grant early (#10042). Revokes every grant on
+   * the session — the help session only ever holds one per-tool grant at a
+   * time, so this maps to the single banner the user sees. Normally the
+   * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
+   * the `.then` clears `activeGrant` as a renderer-authoritative fallback so a
+   * dropped event (WebContents torn down before it fired) can't leave a zombie
+   * countdown. The fallback runs only on success and is scoped to the exact
+   * `(session, toolId)` we revoked, so a failed revoke leaves the banner up as
+   * its own retry surface and a newer grant that arrived meanwhile survives.
+   * No `ConfirmDialog` — this is a D1 action whose inverse (re-approve) is one
+   * tool call away.
+   */
+  revokeGrant(): void {
+    const active = this._snapshot.activeGrant;
+    if (!active || this._snapshot.isRevokingGrant) return;
+    const { sessionId, toolId } = active;
+    this._patch({ isRevokingGrant: true });
+    safeFireAndForget(
+      window.electron.mcpServer
+        .revokeSessionGrants({ sessionId })
+        .then(() => {
+          // Renderer-authoritative clear on success: normally the
+          // `grant.revoked` (reason `user`) lifecycle event already cleared the
+          // banner; this covers a dropped event (WebContents torn down before
+          // it fired). Scoped to the exact `(session, toolId)` we revoked so a
+          // newer grant that arrived in the meantime survives.
+          const current = this._snapshot.activeGrant;
+          if (current?.sessionId === sessionId && current?.toolId === toolId) {
+            this._patch({ activeGrant: null });
+          }
+        })
+        .catch((err) => {
+          // The grant is still live and its countdown banner stays put, so the
+          // banner itself is the retry surface — diagnostic only, no toast.
+          logError("HelpPanel: revokeSessionGrants failed", err);
+        })
+        .finally(() => {
+          this._patch({ isRevokingGrant: false });
+        }),
+      { context: "HelpPanel:revokeGrant" }
+    );
   }
 
   approveTierOnce(): void {
@@ -999,7 +1241,7 @@ export class HelpSessionController {
     if (kind === "mcp-server-not-started" || kind === "mcp-probe-failed") {
       notifyAssistantServicesUnavailable(kind);
     } else if (kind === "folder-unavailable") {
-      notifyLaunchFailed(agentId, "Help folder is not available.");
+      notifyInstallCorrupted(agentId);
     } else {
       notifyLaunchFailed(agentId, "The agent didn't start. Try again.");
     }
@@ -1039,6 +1281,17 @@ export class HelpSessionController {
         isError: false,
       },
     });
+    // Auto-clear the outcome pip (#10018) once the agent resumes work in a
+    // fresh turn — a tool call whose turn differs from the alert's turn means
+    // the stuck/looping turn is behind us. `agent-stuck` alerts carry no turn
+    // id (`_outcomeAlertTurnId` is null), so any turn-stamped call clears them.
+    if (
+      this._snapshot.outcomeAlert !== null &&
+      payload.turnId !== undefined &&
+      payload.turnId !== this._outcomeAlertTurnId
+    ) {
+      this._patch({ outcomeAlert: null });
+    }
   }
 
   /**
@@ -1088,6 +1341,37 @@ export class HelpSessionController {
     });
   }
 
+  /**
+   * Handle a live turn-outcome alert push (#10018). Surfaces the `agent-stuck`
+   * / `reasoning-loop` outcome as the footer's ambient pip. The targeted send
+   * already routes only to this session's pinned WebContents, so no session
+   * filtering is needed here (matches `_onToolCallStarted`). The carried turn
+   * id (absent for `agent-stuck`) is retained so the pip auto-clears once the
+   * agent starts a fresh turn.
+   */
+  private _onTurnOutcomeAlert(
+    payload: import("@shared/types/ipc/mcpServer").McpTurnOutcomeAlertPayload
+  ): void {
+    this._outcomeAlertTurnId = payload.turnId ?? null;
+    this._patch({ outcomeAlert: payload.outcome });
+  }
+
+  /** Dismiss the ambient outcome pip (#10018). User-driven click-to-clear. */
+  dismissOutcomeAlert(): void {
+    this._clearOutcomeAlert();
+  }
+
+  /**
+   * Drop any pending outcome pip and its retained turn id (#10018). Shared by
+   * the user dismiss path and session teardown/replacement — a pip for a
+   * session that's gone must never linger into its successor.
+   */
+  private _clearOutcomeAlert(): void {
+    this._outcomeAlertTurnId = null;
+    if (this._snapshot.outcomeAlert === null) return;
+    this._patch({ outcomeAlert: null });
+  }
+
   /** Clear the live activity strip (e.g. on session teardown). */
   clearMcpActivity(): void {
     if (this._snapshot.mcpActivity === null) return;
@@ -1108,7 +1392,12 @@ export class HelpSessionController {
       next.isApprovingTier === this._snapshot.isApprovingTier &&
       next.isCheckingVersion === this._snapshot.isCheckingVersion &&
       next.launchError === this._snapshot.launchError &&
-      next.mcpActivity === this._snapshot.mcpActivity
+      next.mcpActivity === this._snapshot.mcpActivity &&
+      next.sessionRevoked === this._snapshot.sessionRevoked &&
+      next.activeGrant === this._snapshot.activeGrant &&
+      next.grantEnded === this._snapshot.grantEnded &&
+      next.isRevokingGrant === this._snapshot.isRevokingGrant &&
+      next.outcomeAlert === this._snapshot.outcomeAlert
     ) {
       return;
     }
@@ -1157,6 +1446,88 @@ export class HelpSessionController {
       this._snapshotBannerTimer = null;
       this._patch({ preflightSnapshot: null });
     }, SNAPSHOT_BANNER_AUTO_DISMISS_MS);
+  }
+
+  /**
+   * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
+   * countdown banner and dismisses the mismatch that prompted it;
+   * `grant.expired`/`grant.revoked` retire the banner and, for the two
+   * user-actionable reasons, surface a brief "approval ended" notice. The
+   * `expired`/`revoked` cases are scoped to the grant currently on screen so a
+   * stale lapse for a different tool can't wipe the active countdown.
+   * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
+   * grants — they leave the countdown untouched (the audit viewer records
+   * them).
+   */
+  private _onGrantLifecycle(
+    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
+  ): void {
+    if (payload.type === "grant.issued") {
+      // `expiresAt` is always set on `grant.issued`; bail defensively if a
+      // malformed payload omits it rather than seed a NaN countdown.
+      if (payload.expiresAt === undefined) return;
+      this._clearGrantEndedTimer();
+      this._patch({
+        activeGrant: {
+          sessionId: payload.sessionId,
+          toolId: payload.toolId,
+          expiresAt: payload.expiresAt,
+          ttlMs: payload.ttlMs,
+        },
+        grantEnded: null,
+      });
+      // The mint resolves the mismatch that triggered it. Idempotent with the
+      // fallback clear in `approveTierOnce`'s `.then` — whichever runs first.
+      this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
+      return;
+    }
+    if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
+      const active = this._snapshot.activeGrant;
+      if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
+        return;
+      }
+      const reason = this._grantEndReason(payload);
+      this._clearGrantEndedTimer();
+      this._patch({
+        activeGrant: null,
+        grantEnded: reason ? { toolId: payload.toolId, reason } : null,
+      });
+      if (reason) this._armGrantEndedAutoDismiss();
+    }
+  }
+
+  /**
+   * The user-actionable subset of how a grant ended. Passive expiry and the
+   * 30-minute ceiling are worth a notice; a user-initiated revoke and session
+   * teardown/idle are not (the user did it, or the session is already gone).
+   */
+  private _grantEndReason(
+    payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
+  ): GrantEndReason | null {
+    if (payload.type === "grant.expired") return "expired";
+    return payload.revokedReason === "grant-ceiling" ? "grant-ceiling" : null;
+  }
+
+  private _clearGrantState(): void {
+    this._clearGrantEndedTimer();
+    // Clear `isRevokingGrant` too: a teardown mid-revoke would otherwise leak
+    // a stuck-disabled "Revoke access" button into the next session's grant.
+    this._patch({ activeGrant: null, grantEnded: null, isRevokingGrant: false });
+  }
+
+  private _clearGrantEndedTimer(): void {
+    if (this._grantEndedBannerTimer) {
+      clearTimeout(this._grantEndedBannerTimer);
+      this._grantEndedBannerTimer = null;
+    }
+  }
+
+  private _armGrantEndedAutoDismiss(): void {
+    this._clearGrantEndedTimer();
+    this._grantEndedBannerTimer = setTimeout(() => {
+      this._grantEndedBannerTimer = null;
+      this._patch({ grantEnded: null });
+    }, GRANT_ENDED_BANNER_AUTO_DISMISS_MS);
   }
 
   private _revokePendingSession(): void {
@@ -1236,6 +1607,15 @@ export class HelpSessionController {
       const pending = await window.electron.help.takePendingHibernation(projectId);
       if (!pending) return;
       if (gen !== this._launchGen) return;
+      // `pending.agentSessionId` can be the empty-string sentinel when main's
+      // `revokeSession({ captureHibernation: true })` placeholder write raced
+      // the agent's real session-id echo (LRU eviction of the per-project
+      // WebContentsView, #10057). The empty sentinel flows through to
+      // `_spawnResumed`, which classifies the resume as `"latest"` and the
+      // arm sites skip the "Resumed your previous session." banner on that
+      // branch — see the comment in `_spawnResumed` and `ResumeSpawnResult`.
+      // The root-cause capture race is in main; the fix here is the
+      // renderer-side truth-in-trigger only.
       useHelpPanelStore.getState().setHibernateSession(projectId, {
         sessionId: pending.agentSessionId,
         cwd: pending.cwd,
@@ -1469,10 +1849,11 @@ export class HelpSessionController {
     hibernated: { sessionId: string; cwd: string },
     session: HelpSessionRef | null,
     folderPath: string
-  ): Promise<string | null> {
+  ): Promise<ResumeSpawnResult | null> {
     const customLaunchFlags = await loadCustomLaunchFlags();
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
-    const command = hibernated.sessionId
+    const hasSpecificSessionId = hibernated.sessionId.length > 0;
+    const command = hasSpecificSessionId
       ? (buildResumeCommand(launchAgentId, hibernated.sessionId, flags) ??
         buildResumeLatestCommand(launchAgentId, flags))
       : buildResumeLatestCommand(launchAgentId, flags);
@@ -1493,7 +1874,16 @@ export class HelpSessionController {
       ...(env && { env }),
       ...(customLaunchFlags.length > 0 && { agentLaunchFlags: customLaunchFlags }),
     });
-    return newId ?? null;
+    if (!newId) return null;
+    // The empty `sessionId` sentinel flows from main's `revokeSession({ captureHibernation: true })`
+    // race during LRU eviction (#10057) — we still attempt the spawn via the agent's
+    // `--continue`/`-r latest`/`resume --last` heuristic, but the renderer cannot
+    // verify whether that heuristic actually found a prior session, so the
+    // "Resumed your previous session." banner is suppressed on this branch.
+    const resumeKind: ResumeSpawnResult["resumeKind"] = hasSpecificSessionId
+      ? "specific"
+      : "latest";
+    return { panelId: newId, resumeKind };
   }
 
   private async _executeAutoLaunch(
@@ -1581,30 +1971,39 @@ export class HelpSessionController {
       }
       const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
       if (hibernated && hibernated.agentId === launchAgentId) {
-        const resumedId = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
+        const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
         if (gen !== this._launchGen) {
-          if (resumedId) usePanelStore.getState().removePanel(resumedId);
+          if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
           this._abandonInFlightLaunch(null, session, { resetAutoLaunch: true });
           return;
         }
-        if (resumedId) {
+        if (resumed) {
           // Stale-launch guard: handleClose may have revoked the pending
           // session while addPanel was in flight.
           const expectedSessionId = session.sessionId;
           if (this._pendingSessionId !== expectedSessionId) {
-            usePanelStore.getState().removePanel(resumedId);
+            usePanelStore.getState().removePanel(resumed.panelId);
             this._hasAutoLaunched = false;
             return;
           }
           useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
-          useHelpPanelStore.getState().setTerminal(resumedId, launchAgentId, session.sessionId);
+          useHelpPanelStore
+            .getState()
+            .setTerminal(resumed.panelId, launchAgentId, session.sessionId);
           this._pendingSessionId = null;
-          window.electron.help.markTerminal(resumedId).catch((err) => {
+          window.electron.help.markTerminal(resumed.panelId).catch((err) => {
             logError("Failed to mark help terminal", err);
           });
           reached = true;
-          this._patch({ phase: "live", showResumeBanner: true });
-          this._armResumeBannerAutoDismiss();
+          this._patch({ phase: "live" });
+          // Only claim a specific-session restore when we actually had a
+          // specific session id — the latest-conversation heuristic
+          // (`--continue` / `resume --last`) may or may not have found a
+          // prior session, and the renderer cannot tell from outside.
+          if (resumed.resumeKind === "specific") {
+            this._patch({ showResumeBanner: true });
+            this._armResumeBannerAutoDismiss();
+          }
           return;
         }
         // Resume failed — drop the stale entry so we don't loop, then fall
@@ -1808,32 +2207,36 @@ export class HelpSessionController {
         }
         const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
-          const resumedId = await this._spawnResumed(
-            launchAgentId,
-            hibernated,
-            session,
-            folderPath
-          );
+          const resumed = await this._spawnResumed(launchAgentId, hibernated, session, folderPath);
           if (gen !== this._launchGen) {
-            if (resumedId) usePanelStore.getState().removePanel(resumedId);
+            if (resumed) usePanelStore.getState().removePanel(resumed.panelId);
             this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
             return;
           }
-          if (resumedId) {
+          if (resumed) {
             const expectedSessionId = session.sessionId;
             if (this._pendingSessionId !== expectedSessionId) {
-              usePanelStore.getState().removePanel(resumedId);
+              usePanelStore.getState().removePanel(resumed.panelId);
               return;
             }
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
-            useHelpPanelStore.getState().setTerminal(resumedId, launchAgentId, session.sessionId);
+            useHelpPanelStore
+              .getState()
+              .setTerminal(resumed.panelId, launchAgentId, session.sessionId);
             this._pendingSessionId = null;
-            window.electron.help.markTerminal(resumedId).catch((err) => {
+            window.electron.help.markTerminal(resumed.panelId).catch((err) => {
               logError("Failed to mark help terminal", err);
             });
             reached = true;
-            this._patch({ phase: "live", showResumeBanner: true });
-            this._armResumeBannerAutoDismiss();
+            this._patch({ phase: "live" });
+            // Only claim a specific-session restore when we actually had a
+            // specific session id — the latest-conversation heuristic
+            // (`--continue` / `resume --last`) may or may not have found a
+            // prior session, and the renderer cannot tell from outside.
+            if (resumed.resumeKind === "specific") {
+              this._patch({ showResumeBanner: true });
+              this._armResumeBannerAutoDismiss();
+            }
             return;
           }
           useHelpPanelStore.getState().clearHibernateSession(launchProject.id);

@@ -28,14 +28,10 @@ import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
-import type { RateLimitInfo } from "../shared/types/forge.js";
-import type { GitHubRateLimitPayload } from "../shared/types/ipc/github.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
-import { gitHubRateLimitService } from "./services/github/GitHubRateLimitService.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "../shared/utils/forgeProviderIds.js";
 import { initForgeBridge } from "./workspace-host/forgeBridge.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -65,6 +61,13 @@ const worktreePorts: MessagePort[] = [];
 const DIRECT_RENDERER_EVENTS = new Set([
   "worktree-update",
   "worktree-removed",
+  // Host-originated active-worktree changes — fan out direct so the
+  // per-view `WorktreeStoreContext` listener (`worktree-activated`) fires in
+  // the same tick as any accompanying `worktree-removed` (the host-originated
+  // auto-switch in `runTopologyReconcile` and `deleteWorktree`). The legacy
+  // `CHANNELS.WORKTREE_ACTIVATED` echo path is still gated by PR #3603's
+  // `silent` flag and is unaffected by this allowlist.
+  "worktree-activated",
   "pr-detected",
   "pr-cleared",
   "pr-detection-state",
@@ -77,6 +80,13 @@ const DIRECT_RENDERER_EVENTS = new Set([
   "inotify-limit-reached",
   "emfile-limit-reached",
   "watcher-recovered",
+  // Topology-watcher dark/recovery (#9908) — same direct-delivery rationale as
+  // the watcher degradation events above: each per-view store drives the
+  // shared Tier-1 indicator and arms the 30s escalation timer from the live
+  // event. Without this a dark event fired after a view mounts never reaches
+  // the renderer (the get-all-states handshake only covers mount-time state).
+  "topology-watcher-dark",
+  "topology-watcher-recovered",
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {
@@ -100,6 +110,7 @@ async function handleWorktreePortRequest(
           epoch,
           seq,
           watcherDegraded: workspaceService.isWatcherDegraded(),
+          topologyWatcherDark: workspaceService.isTopologyWatcherDark(),
           lastAcknowledgedMutationIds: workspaceService.getAcknowledgedMutationIds(),
         };
         break;
@@ -114,8 +125,9 @@ async function handleWorktreePortRequest(
 
       case "refresh": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await workspaceService.refresh(requestId, msg.payload.worktreeId);
-        result = { ok: true };
+        // Forward the host's bounded outcome so a watchdog-tripped refresh
+        // reaches the renderer as ok:false instead of a silent success.
+        result = await workspaceService.refresh(requestId, msg.payload.worktreeId);
         break;
       }
 
@@ -161,6 +173,12 @@ async function handleWorktreePortRequest(
       case "refresh-prs": {
         const { pullRequestService } = await import("./services/PullRequestService.js");
         await pullRequestService.refresh();
+        result = { ok: true };
+        break;
+      }
+
+      case "reconcile-topology": {
+        workspaceService.scheduleTopologyReconcile(msg.payload.force ?? false);
         result = { ok: true };
         break;
       }
@@ -331,53 +349,6 @@ const workspaceService = new WorkspaceService(sendEvent);
 // `docs/architecture/forge-provider-abstraction.md` for the rationale.
 const forgeBridge = initForgeBridge(sendEvent);
 
-// Convert a GitHubRateLimitPayload (from gitHubRateLimitService.getState())
-// to the provider-agnostic RateLimitInfo shape so the forge-rate-limit-changed
-// event payload is provider-agnostic.
-function toRateLimitInfo(payload: GitHubRateLimitPayload): RateLimitInfo {
-  if (!payload.blocked) {
-    // Forward the observed GraphQL budget (if any) so the toolbar can show a
-    // remaining-quota indicator even while requests still flow.
-    return {
-      limit: payload.limit ?? null,
-      remaining: payload.remaining ?? null,
-      resetAt: null,
-      throttleMultiplier: payload.throttleMultiplier,
-    };
-  }
-  // When blocked, force `remaining: 0` — the renderer's GitHub-flavored
-  // projection treats `remaining === 0` as the "blocked" signal, so the exact
-  // (1–50) hard-stop-band count must not leak through as a non-zero value.
-  return {
-    limit: payload.limit ?? null,
-    remaining: 0,
-    resetAt: payload.resetAt ?? null,
-    ...(payload.kind === "secondary" ? { secondaryThrottled: true } : {}),
-    throttleMultiplier: payload.throttleMultiplier,
-  };
-}
-
-// Forward forge provider rate-limit state changes observed by
-// utility-process HTTP calls (e.g. PullRequestService polling) up to the
-// main process so they reach the toolbar countdown and block main-process
-// calls too. `broadcastToRenderer` is BrowserWindow-backed and therefore
-// main-only; this relay is how utility-side limits ever become visible
-// elsewhere. Register synchronously before `ready` is sent — otherwise the
-// first event emitted during startup racing polling would be silently
-// dropped.
-gitHubRateLimitService.onStateChange((state) => {
-  const rateLimitInfo = toRateLimitInfo(state);
-  sendEvent({
-    type: "forge-rate-limit-changed",
-    providerId: BUILTIN_GITHUB_PROVIDER_ID,
-    state: rateLimitInfo,
-  });
-  // Pace background fetch cadence against the observed GraphQL budget so
-  // multiple instances drawing on the same per-user token budget back off in
-  // step as it depletes — and snap back when it resets.
-  workspaceService.applyFetchThrottle(state.throttleMultiplier ?? 1);
-});
-
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
   const msg =
@@ -426,6 +397,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.setWslOptIn(request.worktreeId, request.enabled, request.dismissed);
         break;
 
+      case "reprobe-wsl":
+        void workspaceService.reprobeWslForWorktree(request.worktreeId);
+        break;
+
       case "sync":
         try {
           await workspaceService.syncMonitors(
@@ -458,7 +433,9 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "set-active":
-        workspaceService.setActiveWorktree(request.requestId, request.worktreeId);
+        workspaceService.setActiveWorktree(request.requestId, request.worktreeId, {
+          silent: request.silent,
+        });
         break;
 
       case "refresh":
@@ -540,8 +517,19 @@ port.on("message", async (rawMsg: any) => {
       case "set-pr-poll-cadence":
         {
           const { pullRequestService } = await import("./services/PullRequestService.js");
+          // Disable enrichment before slowing the cadence so there's no window
+          // where the expensive CI fetch still fires at the new blurred rate.
+          pullRequestService.setCIEnrichmentEnabled(request.focused);
           pullRequestService.setFocusCadence(request.focused);
         }
+        break;
+
+      // Pace background fetch cadence against the GraphQL budget observed in
+      // main (where all forge HTTP calls live post-#8870) so multiple
+      // instances drawing on the same per-user token budget back off in step
+      // as it depletes — and snap back when it resets.
+      case "apply-fetch-throttle":
+        workspaceService.applyFetchThrottle(request.multiplier);
         break;
 
       case "background":
@@ -666,6 +654,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.updateForgeCredentials(request.providerId, request.credentials);
         break;
 
+      case "forge:provider-registry-updated":
+        workspaceService.notifyForgeProviderRegistryUpdated();
+        break;
+
       case "retry-auth-fetch":
         workspaceService.retryAuthFetch();
         break;
@@ -763,12 +755,6 @@ port.on("message", async (rawMsg: any) => {
       // raw envelope across.
       case "forge:rpc-result":
         forgeBridge.handleResult(request);
-        break;
-
-      // Inbound poll-lease decision from main (#9055). Routes to the pending
-      // `acquirePollLease()` promise keyed by `requestId`.
-      case "forge:poll-lease-result":
-        forgeBridge.handleLeaseResult(request);
         break;
 
       default:

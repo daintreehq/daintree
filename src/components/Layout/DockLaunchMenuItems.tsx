@@ -5,6 +5,8 @@ import { BrandMark, Workflow } from "@/components/icons";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
+import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import type { ActionSource, AgentAvailabilityState } from "@shared/types";
 import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -194,9 +196,14 @@ export function DockLaunchMenuItems({
           <C.Item
             key={recipe.id}
             onSelect={() =>
+              // Fire-and-forget, but surface spawn failures — the menu closes
+              // on select, so a toast/inbox entry is the only signal the user
+              // gets when terminals are dropped (e.g. panel limit).
               void useRecipeStore
                 .getState()
-                .runRecipe(recipe.id, cwd, activeWorktreeId ?? undefined, recipeContext)
+                .runRecipeWithResults(recipe.id, cwd, activeWorktreeId ?? undefined, recipeContext)
+                .then((results) => notifyRecipeSpawnFailures(results, { recipeName: recipe.name }))
+                .catch((error) => logError("Recipe launch from dock failed", error))
             }
           >
             <Workflow className="w-3.5 h-3.5 mr-2" />

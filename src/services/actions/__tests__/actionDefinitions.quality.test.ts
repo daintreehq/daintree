@@ -331,6 +331,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "recipe.run",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
+  "artifact.applyPatch",
 ];
 
 /**
@@ -389,6 +390,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",
+  // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
+  // useArtifacts.ts (action ID not co-located with the dialog component).
+  "artifact.applyPatch",
 ];
 
 describe("destructive-action confirm wiring", () => {
@@ -455,6 +459,8 @@ describe("destructive-action danger metadata", () => {
       id: "id-placeholder",
       projectId: "project-placeholder",
       recipeId: "recipe-placeholder",
+      patchContent: "--- a\n+++ b",
+      cwd: "/placeholder",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -481,6 +487,7 @@ describe("destructive-action danger metadata", () => {
       isReconnecting: false,
       reconnectingAt: null,
       watcherDegraded: false,
+      topologyWatcherDark: false,
       applySnapshot: () => {},
       applyUpdate: () => {},
       applyRemove: () => {},
@@ -500,6 +507,7 @@ describe("destructive-action danger metadata", () => {
       setFatalError: () => {},
       setReconnecting: () => {},
       setWatcherDegraded: () => {},
+      setTopologyWatcherDark: () => {},
       applyIssueNotFound: () => {},
     }));
     setCurrentViewStore(viewStore);

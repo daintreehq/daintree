@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Lock, CheckCircle2, Moon } from "lucide-react";
-import type {
-  AgentState,
-  PanelKind,
-  AgentStateChangeTrigger,
-  PersistableFlowStatus,
-} from "@/types";
+import { Pause, Cpu, Hourglass, Lock, CheckCircle2, Moon } from "lucide-react";
+import type { AgentState, PanelKind, AgentStateChangeTrigger, TerminalFlowStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -25,6 +20,13 @@ import { useErrorStore } from "@/store/errorStore";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+
+// FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
+// `PersistableFlowStatus`) so the Suspended pill below remains type-safe
+// while `suspended` is a skeleton value with no production producer (#9900).
+// Callers in practice only pass `PersistableFlowStatus` values; the wider
+// type is purely so the future-sab branch is reachable. When the SAB
+// transport path is revived, restore the narrow prop type.
 
 function ElapsedTime({ startedAt, now }: { startedAt: number; now: number }) {
   return <> · {formatElapsedDuration(now - startedAt)}</>;
@@ -51,7 +53,7 @@ export interface TerminalHeaderContentProps {
   isExited?: boolean;
   exitCode?: number | null;
   queueCount?: number;
-  flowStatus?: PersistableFlowStatus;
+  flowStatus?: TerminalFlowStatus;
   /**
    * True when the agent transitioned to `completed` and the pre-agent snapshot
    * confirms no file changes were made. Drives the "Finished, no changes" pill
@@ -158,6 +160,7 @@ export function TerminalHeaderContent({
     stateChangeConfidence,
     sessionCost,
     sessionTokens,
+    heldDurationMs,
   } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
@@ -170,6 +173,7 @@ export function TerminalHeaderContent({
         stateChangeConfidence: pty?.stateChangeConfidence,
         sessionCost: pty?.sessionCost,
         sessionTokens: pty?.sessionTokens,
+        heldDurationMs: pty?.heldDurationMs,
       };
     })
   );
@@ -332,53 +336,29 @@ export function TerminalHeaderContent({
 
   return (
     <>
-      {/* Command Pill - shows currently running command (inline with title) */}
-      {showCommandPill && (
-        <Tooltip autoDismiss={false}>
-          <TooltipTrigger asChild>
-            <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
-              {lastCommand}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{lastCommand}</TooltipContent>
-        </Tooltip>
-      )}
+      {/* Agent state chip — the macro pane-state signal leads the row per the
+          runtime-signals tier table: macro state → pane-local error/flow →
+          diagnostic text → ambient state → telemetry last. */}
+      {renderAgentStateChip()}
 
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
           live regions across a multi-pane fleet (#9204). */}
       {isExited && (
-        <span className="text-xs font-mono text-status-error ml-1" role="status" aria-live="off">
+        <span className="text-xs font-mono text-status-error" role="status" aria-live="off">
           [exit {exitCode}]
         </span>
       )}
 
-      {/* Queue count badge */}
-      {queueCount > 0 && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-daintree-text px-1.5 py-0.5 rounded ml-1"
-              role="status"
-              aria-live="off"
-            >
-              <span className="font-mono tabular-nums">{queueCount}</span>
-              <span>queued</span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Paused badge */}
+      {/* Paused-backpressure badge — Tier-1 ambient (auto-recovering).
+          Demoted off `status-warning/15` per docs/architecture/resource-governance.md#173;
+          distinct from the other two flow pills by its `Pause` icon. */}
       {flowStatus === "paused-backpressure" && (
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
@@ -390,21 +370,27 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">Buffer overflow</span>
               <span>Output paused to prevent data loss.</span>
+              {heldDurationMs != null && heldDurationMs > 0 && (
+                <span className="text-daintree-text/60 tabular-nums">
+                  Paused for {formatElapsedDuration(heldDurationMs)}
+                </span>
+              )}
             </div>
           </TooltipContent>
         </Tooltip>
       )}
 
-      {/* Resource governor pause badge */}
+      {/* Resource-governor pause badge — Tier-1 ambient. Distinguished from
+          the other two flow pills by its `Cpu` icon (memory pressure). */}
       {flowStatus === "paused-resource-governor" && (
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
-              <Pause className="w-3 h-3" aria-hidden="true" />
+              <Cpu className="w-3 h-3" aria-hidden="true" />
               Paused (memory)
             </div>
           </TooltipTrigger>
@@ -412,21 +398,37 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">System memory pressure</span>
               <span>Paused to reduce memory pressure. Recovers automatically.</span>
+              {/* Held-duration gauge intentionally omitted: ResourceGovernor
+                  pauses via the coordinator but does not emit `pause-start`
+                  / `pause-end` reliability metrics, so the
+                  `pause-duration-gauge` funnel never tracks it. Showing
+                  a frozen "Paused for Xs" line would be a lie. */}
             </div>
           </TooltipContent>
         </Tooltip>
       )}
 
-      {/* Suspended badge */}
+      {/* FUTURE_SAB: Suspended badge — Tier-1 ambient. The `suspended` flowStatus
+          is only emitted by the SharedArrayBuffer transport path in the PTY host
+          (`BackpressureManager.suspendVisualStream`, see
+          `electron/pty-host/backpressure.ts:277`). That path is unreachable in
+          production — SharedArrayBuffer is not supported in Electron
+          UtilityProcess (PR #7724, issue #7653). The badge is kept as a
+          forward-looking skeleton for a potential Worker-thread migration
+          that could revive the SAB zero-copy data path. Mirror of the
+          // FUTURE_SAB: annotation in the producer. When the SAB transport
+          is revived, this branch is reachable again; until then it never
+          renders in production. See issue #9900. Distinguished by its
+          `Hourglass` icon (time-based wait, recovers on focus). */}
       {flowStatus === "suspended" && (
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="flex items-center gap-1 text-xs font-sans bg-status-warning/15 text-status-warning px-1.5 py-0.5 rounded ml-1"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
-              <Pause className="w-3 h-3" aria-hidden="true" />
+              <Hourglass className="w-3 h-3" aria-hidden="true" />
               Suspended
             </div>
           </TooltipTrigger>
@@ -434,20 +436,27 @@ export function TerminalHeaderContent({
             <div className="flex flex-col gap-0.5">
               <span className="font-medium">Output suspended</span>
               <span>Streaming stalled. Recovers automatically on focus.</span>
+              {heldDurationMs != null && heldDurationMs > 0 && (
+                <span className="text-daintree-text/60 tabular-nums">
+                  Paused for {formatElapsedDuration(heldDurationMs)}
+                </span>
+              )}
             </div>
           </TooltipContent>
         </Tooltip>
       )}
 
       {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
-          Uses the idle activity color, not accent. The PTY survives; focus wakes it.
-          Renders after Paused/Suspended so higher-urgency flow-control states lead
-          visually when both apply (a lingering flowStatus can outlive hibernation). */}
+          Rounded-full + dashed border separates its silhouette from the three
+          transient flow pills (which stay `rounded` + solid border) without
+          escalating weight. Renders after Paused/Suspended so higher-urgency
+          flow-control states lead visually when both apply. The PTY survives;
+          focus wakes it. */}
       {isHibernated && (
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded ml-1 border border-divider"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded-full border border-dashed border-divider"
               role="status"
               aria-live="off"
               data-testid="terminal-hibernated-badge"
@@ -465,25 +474,47 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Input locked indicator */}
-      {isInputLocked && (
-        <Tooltip>
+      {/* Command Pill - shows currently running command (inline with title).
+          Slimmed to px-2 py-0.5 to match the row's other small badges. */}
+      {showCommandPill && (
+        <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
-            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-            </div>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
+              {lastCommand}
+            </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
+          <TooltipContent side="bottom">{lastCommand}</TooltipContent>
         </Tooltip>
       )}
 
-      {/* Resource monitoring badge */}
+      {/* Queue count badge */}
+      {queueCount > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-daintree-text px-1.5 py-0.5 rounded"
+              role="status"
+              aria-live="off"
+            >
+              <span className="font-mono tabular-nums">{queueCount}</span>
+              <span>queued</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {/* Resource monitoring badge — ambient telemetry, last. The severity
+          hysteresis (escalation 3 polls / de-escalation 5 polls) encodes a
+          semantic timing and is intentionally NOT normalized to a motion tier. */}
       {showResource && (
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 ml-1 transition-colors duration-150",
+                "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 transition-colors duration-150",
                 {
                   "text-daintree-text/40": stickySeverity === "muted",
                   "text-status-warning": stickySeverity === "amber",
@@ -532,8 +563,17 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Agent state chip */}
-      {renderAgentStateChip()}
+      {/* Input locked indicator — bare ambient glyph. */}
+      {isInputLocked && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
+              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
+        </Tooltip>
+      )}
     </>
   );
 }

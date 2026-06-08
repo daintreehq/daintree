@@ -314,3 +314,10 @@ describe("EnvironmentVariablesEditor", () => {
     });
   });
 });
+
+describe("EnvironmentVariablesEditor — DOM anchors for settings deep-links", () => {
+  it("exposes the project-env-vars anchor for settings deep-links", () => {
+    const { container } = render(<EnvironmentVariablesEditor {...defaultProps} />);
+    expect(container.querySelector("#project-env-vars")).not.toBeNull();
+  });
+});

@@ -1,5 +1,162 @@
 # Changelog
 
+## [0.18.0] - 2026-06-08
+
+The Daintree Assistant learns to show its work, and GitHub stops being special. The Assistant gains a figure rail, lightbox, and inline doc images, and surfaces its MCP grant lifecycle and live session tier. Underneath, GitHub was rebuilt as one forge provider among many — issue creation, "assign to me", and worktree actions now route through a provider-neutral contract. The bulk of the release is terminal reliability: wake/hibernation correctness, memory-aware resource governing, and a deep round of flow-control and stall-recovery fixes that were previously dead in production.
+
+### Features
+
+**Daintree Assistant & help**
+
+- Figure rail and lightbox in the help panel (#9829); animated WebP demo loops in the figure rail (#10278)
+- Assistant displays doc-search images, with clickable `[image #N]` references in the terminal (#9831, #9830); `help.displayImage` MCP tool backs it (#9828)
+- MCP grant lifecycle surfaced in the Assistant panel (#10042); live help-session tier and grants shown in settings (#10032)
+- Agent-stuck and reasoning-loop outcomes surface as an ambient pip (#10018)
+
+**Forge provider**
+
+- `createIssue` added to the forge contract; `github:create-issue` routed through it (#9960)
+- Provider identity capability makes "assign to me" provider-neutral (#9963); `github:work-issue` and worktree workflow lookups routed through the provider (#9957, #9959)
+
+**Terminal reliability**
+
+- Batch-scoped scrollback restore surface with in-progress badge and failure banner (#9806); restore-aware settle/wait primitive with a batch variant (#9804)
+- Held-duration, queue-depth, and data-loss gauges on the reliability-metric event (#9807); tier-transition metric at the activity-tier chokepoint (#9797)
+- Cycles-based Tier-3 watchdog for stalled terminals (#9808) and a reconciliation watchdog for visible-terminal rendering (#9781)
+- Lost agent sessions now signal on silent respawn (#9802); five terminal recovery actions gained keybinding hints (#9803)
+- Structured flow-control snapshot in the diagnostics bundle (#10060); `agent:state-transition-dropped` diagnostic event (#9868)
+
+**Resource governing**
+
+- Memory-aware targeted trim with per-terminal memory attribution (#9904)
+- Non-empty `envHash` pool keys warmed on project restore (#9810)
+
+**Fleet & automation**
+
+- Saved fleets ranked by frecency (#9955); durable run history for recipe and fleet runs
+
+**Demo & video**
+
+- Video recording pipeline with a richer annotation system, plus a demo-video-creator skill
+- Demo mode can type and send keys into agent terminals (#10138); bell-shaped cursor moves with subtle overshoot (#10153)
+
+**MCP & diagnostics**
+
+- Internal help-session connections shown in MCP server settings (#10036); audit anomaly signals surfaced as a Tier-1 ambient indicator (#10022)
+
+**Toolbar & UI**
+
+- Settings editor mirrors the toolbar's two-sided layout (#9826); segmented controls grouped and framed in the browser toolbar (#9815)
+- Customize entry added to every toolbar right-click menu (#9825); project pill interaction states polished (#9824)
+- Pulse heatmap gains a legend and high-contrast support (#9819)
+- Dev preview warns when HMR live reload silently dies (#9975)
+
+### Bug Fixes
+
+**Terminal wake, hibernation & flow control**
+
+- Wake no longer reports success when snapshot replay failed (#9896); background-to-active wake no longer writes the same bytes twice (#9897)
+- Suspended terminals resync when the wake path declines the snapshot (#9894); late wake no longer leaves a hidden terminal streaming at full rate (#9906)
+- Held ingest bytes no longer leak port acks on hibernate or double-paint on wake (#9910); data-loss markers survive a hibernate/wake cycle (#9907)
+- IPC flow-control ledger no longer mixes UTF-8 bytes with UTF-16 ack units (#9893); drop pulse no longer erases pause tracking for a still-paused terminal (#9902)
+- Destroying a hibernated terminal no longer leaks its host element (#9909); spurious "Output dropped" marker on fresh agent-terminal start suppressed (#10309)
+- Stall escalation and held-duration UI now live in production (#9898); stall-recovery banner can actually appear (#9889)
+- Multi-window fan-out no longer drops terminal output for a saturated window (#9891)
+
+**Resource governor**
+
+- Governor heap signal now includes external memory where scrollback lives (#9905); utilization measured against its own cap (#9905)
+- Stale "Paused (memory)" pill cleared after the governor disengages and across exit/restart/host-crash (#9895, #9899)
+- Throughput gauge no longer underreports after idle gaps or misattributes pause deltas (#9903)
+
+**Forge & GitHub migration**
+
+- Per-project forge provider override now honored by every forge operation (#9984); `forge.validateToken` carries provider identity so the Test button can't hit the wrong forge (#9985)
+- Forge credential save now reaches the provider impl (#9983); forge IPC handlers regained the rate-limit guard (#9956)
+- Projects with no matching forge provider stop polling every 5s forever (#9997); non-elected sibling windows no longer pinned to a 5s poll cadence (#9978)
+- Transient forge errors no longer clear PR rows (#9994); worktree fetch backoff restored after the RPC-bridge migration (#9987)
+- PR detection no longer collapses "declined" to "closed" before linked state is composed (#9981); worktree open-issue/PR actions no longer report success when nothing opens (#9980)
+- Removed the `github.*` one-release action aliases, five releases overdue (#9989)
+
+**Crash recovery**
+
+- Crash cause is now surfaced, and marker-only crashes get a log file (#10063); marker-only entries no longer stamp relaunch time as the crash time (#10062)
+- GPU-crash fallback relaunch no longer recorded as a crash (#10065); failed crash-recovery restore no longer treated as success (#10064)
+- Renderer-crash recovery page now shows its panel count (#10066)
+
+**Context injection**
+
+- Test Configuration panel no longer always shows zero excluded files (#10000); preview populates the file list and respects cleared/unsaved settings (#10002, #10004)
+- Malformed `copyTreeSettings` no longer corrupts context generation (#10001); file tree no longer leaks gitignored entries in very large directories (#10003)
+- Context-injection progress and cancel UI are now wired up (#10034)
+
+**Artifacts & code blocks**
+
+- Code blocks larger than the 5KB analysis window are no longer silently dropped (#9999); patch extractor no longer misdetects Markdown rules and lists as diffs (#9998)
+- Apply-patch now shows a confirm and diff preview before mutating the worktree (#10020); renderer artifact store no longer leaks entries when terminals close (#10023)
+
+**Accessibility & color-vision**
+
+- Diff viewer respects color-vision-deficiency overrides (#10049, #10028); status-success vs status-danger gated under simulated CVD (#10052)
+- Agent state on panel and dock tabs exposed to screen readers (#10024); collapsed panels no longer keep focusable children in tab order (#10025)
+
+**Notifications**
+
+- Toasts fired into a blurred window no longer auto-dismiss unseen and marked read (#10056); grid-bar history no longer marked seen while notifications are disabled (#10058)
+- Advisory global banners no longer suppress actionable pane-local error banners (#10038); passive eventKind policies no longer silently demote or drop producer notifications (#10051)
+- Resume banner no longer claims a session was resumed when the renderer used `--continue` (#10057)
+
+**Browser & dev preview**
+
+- Browser panels no longer share one session partition across all projects (#9965); JS dialogs dismissed on guest navigation and renderer crash (#9966)
+- Dev-preview proxy no longer 502s against an HTTPS dev server (#9974); `ERR_FILE_NOT_FOUND` on main-frame load surfaced (#9966)
+
+**Agent detection**
+
+- Busy-agent teardown no longer publishes a spurious waiting transition and false notification (#9867); 1Hz status-line repaints can now recover a waiting agent back to working (#9874)
+- Parallel-output promotion no longer strands the agent FSM in working (#9875); simple-output mode now runs the full detection layer set (#9873)
+- Kimi boot and working patterns corrected (#9876)
+
+**Fleet**
+
+- Per-target overrides/skips reconciled when a pane leaves the armed set (#9973); broadcast-result IPC re-subscribes under HMR/test reset (#9967)
+- Recipe grid keyboard model runs the focused recipe on Enter (#9962)
+
+**Security & IPC**
+
+- IPC handlers no longer leak raw Zod error detail to the renderer (#9883); path scrubbers now cover WSL UNC and non-C-drive Windows user paths (#10046)
+- Preload-backdoor gate now scans main-process E2E backdoors too (#10026); WSL UNC validation centralized (#9901)
+
+**Plugins**
+
+- Plugin agent icon/name/color now update mid-session in the renderer (#9879); `createMockHost` realigned with the real `PluginHostApi` (#9878)
+
+**Lifecycle**
+
+- Deferred init queue halts at quit so tasks can't re-init torn-down services (#9881); deferred-init task failures now surface instead of being swallowed (#9885)
+- Always-mounted dialog hosts auto-recover from render errors (#10017); palettes and dialogs stay mounted through exit animation
+
+**Worktree sidebar**
+
+- Reduced-motion respected on card chevrons; double-click collapse scoped (#10319); reconnect announcements ordered and sidebar header shift stopped (#10318)
+- Reorder announced using the card headline, not the bare name (#10317); scroll-indicator count latched through its fade-out (#10316)
+- Empty-state title gated on the deferred query (#10314); restart-service button label sentence-cased (#10313)
+
+**CI & infrastructure**
+
+- Nightly failure reports keep Windows shards and survive re-runs (#10059); stale-quarantine scan made order-independent and closes resolved issues (#10040)
+- arm64 Windows build now smoke-tested before publish (#10030); nightly publish verifies CDN-edge metadata (#10031)
+- Perf baselines gained a freshness warning and coverage gate (#10007); CLAUDE.md/perf docs corrected to match real CI gating (#10069)
+
+### Performance
+
+- `app://` assets served from disk instead of `net.fetch`; first-render chunk closure preloaded in index.html
+- Plugin-MCP audit pre-warming deferred off the cold-boot path (#10073); copytree graph lazy-loaded off the readiness path (#10071)
+- Demo-mode tooling lazy-loaded out of the production first-paint chunk (#10074); first-paint work cut in the new-terminal cold path (#9809)
+- Warm project switch no longer delays terminal output behind worktree git load (#10075)
+- Issue/PR dropdown revalidation gated on open state (#10125); CI-status enrichment dropped on unattended instances (#10124); toolbar counts decoupled from the first-page query (#10122)
+- Action manifest cached per pinned WebContents (#9887)
+
 ## [0.17.0] - 2026-06-05
 
 Light mode looks designed. The light-theme token engine was rebuilt for perceptual contrast, Bondi Beach became the gold-standard template, and the six remaining light themes were redesigned on it. Alongside: a live MCP tool-call activity strip in the Daintree Assistant, context-aware keyterm biasing for voice dictation, and a deep round of terminal project-switch and GitHub-count fixes.

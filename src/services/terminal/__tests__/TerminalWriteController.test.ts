@@ -11,6 +11,7 @@ vi.mock("@shared/perf/marks", () => ({
   PERF_MARKS: {
     TERMINAL_DATA_PARSED: "terminal_data_parsed",
     TERMINAL_DATA_RENDERED: "terminal_data_rendered",
+    TERMINAL_FIRST_WRITE: "terminal_first_write",
   },
 }));
 
@@ -111,11 +112,14 @@ describe("TerminalWriteController.write", () => {
     controller.write("t1", "hello");
 
     expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5);
+    // Hibernated output is dropped, never replayed, so the IPC ledger must be
+    // drained here. ASCII "hello" is 5 UTF-8 bytes == 5 UTF-16 code units.
+    expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
     expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
   });
 
-  it("serialized-restore path: defers output and acks port data", () => {
+  it("serialized-restore path: defers output and acks port data, never the IPC ledger", () => {
     managed.isSerializedRestoreInProgress = true;
     controller.write("t1", "abc");
     controller.write("t1", new Uint8Array([0x61, 0x62]));
@@ -123,6 +127,10 @@ describe("TerminalWriteController.write", () => {
     expect(managed.deferredOutput).toEqual(["abc", new Uint8Array([0x61, 0x62])]);
     expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(1, "t1", 3);
     expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(2, "t1", 2);
+    // Deferred chunks are replayed through the normal path once restore
+    // finishes, which acks the IPC ledger then — acking here too would
+    // double-drain the host ledger.
+    expect(deps.acknowledgeData).not.toHaveBeenCalled();
     expect((managed.terminal as unknown as MockTerminal).write).not.toHaveBeenCalled();
   });
 
@@ -135,6 +143,67 @@ describe("TerminalWriteController.write", () => {
     expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
+  });
+
+  describe("IPC flow-control ledger byte accounting (#9893)", () => {
+    it("acks the IPC ledger in UTF-8 bytes for non-ASCII strings, not UTF-16 code units", () => {
+      // U+2502 (box-drawing │) is 3 UTF-8 bytes but 1 UTF-16 code unit. The
+      // host charged the ledger in UTF-8 bytes, so the ack must match (9), or
+      // the queue drifts toward its high watermark (#9893).
+      controller.write("t1", "│".repeat(3));
+
+      expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 9);
+      // The renderer-side ingest ledger (acknowledgePortData / notifyWriteComplete)
+      // stays in UTF-16 code units to match how inFlightBytes was incremented.
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
+    });
+
+    it("counts surrogate-pair emoji as 4 UTF-8 bytes for the IPC ack", () => {
+      // U+1F600 (😀) is 4 UTF-8 bytes and 2 UTF-16 code units.
+      controller.write("t1", "😀");
+
+      expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 4);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2);
+      expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 2);
+    });
+
+    it("does not send an IPC ack for port-delivered Uint8Array chunks", () => {
+      // Uint8Array chunks arrive via MessagePort, not IPC — sending an IPC ack
+      // would spuriously drain the host's IPC ledger.
+      controller.write("t1", new Uint8Array([0xe2, 0x94, 0x82]));
+
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.acknowledgeData).not.toHaveBeenCalled();
+      expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
+    });
+
+    it("hibernated path: acks the IPC ledger in UTF-8 bytes for non-ASCII strings", () => {
+      managed.isHibernated = true;
+      controller.write("t1", "│");
+
+      expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1);
+    });
+
+    it("hibernated path: does not send an IPC ack for port-delivered Uint8Array chunks", () => {
+      managed.isHibernated = true;
+      controller.write("t1", new Uint8Array([0xe2, 0x94, 0x82]));
+
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.acknowledgeData).not.toHaveBeenCalled();
+    });
+
+    it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
+      // The IPC ledger is drained when the deferred chunk replays through the
+      // normal path after restore. Acking here would double-drain it. The port
+      // ack stays in UTF-16 code units (1 for the single box-drawing char).
+      managed.isSerializedRestoreInProgress = true;
+      controller.write("t1", "│");
+
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1);
+      expect(deps.acknowledgeData).not.toHaveBeenCalled();
+    });
   });
 
   it("registers a new lastActivityMarker on each write in the normal buffer", () => {
@@ -219,7 +288,13 @@ describe("TerminalWriteController.write", () => {
     markMock.mockClear();
 
     for (let i = 0; i < 63; i++) controller.write("t1", "x");
-    expect(markMock).not.toHaveBeenCalled();
+    // Only the one-time first-write mark fires across the first 63 writes; the
+    // 1-in-64 sampling marks have not fired yet.
+    expect(markMock).toHaveBeenCalledTimes(1);
+    expect(markMock).toHaveBeenCalledWith(
+      "terminal_first_write",
+      expect.objectContaining({ terminalId: "t1" })
+    );
 
     controller.write("t1", "x");
     // 64th write fires three perf marks: parsed, write_duration_sample, rendered.
@@ -231,6 +306,24 @@ describe("TerminalWriteController.write", () => {
       "terminal_data_rendered",
       expect.objectContaining({ terminalId: "t1", bytes: 1 })
     );
+  });
+
+  it("emits the first-write mark once per terminal with the open→first-byte delta (#9809)", async () => {
+    const { markRendererPerformance } = await import("@/utils/performance");
+    const markMock = markRendererPerformance as unknown as ReturnType<typeof vi.fn>;
+    markMock.mockClear();
+
+    managed.terminalOpenStartedAt = 100;
+    controller.write("t1", "first");
+    controller.write("t1", "second");
+
+    const firstWriteCalls = markMock.mock.calls.filter(
+      (call: unknown[]) => call[0] === "terminal_first_write"
+    );
+    expect(firstWriteCalls).toHaveLength(1);
+    expect(firstWriteCalls[0]?.[1]).toMatchObject({ terminalId: "t1" });
+    expect(firstWriteCalls[0]?.[1].elapsedSinceOpenMs).toBeTypeOf("number");
+    expect(managed.hasEmittedFirstWriteMark).toBe(true);
   });
 
   it("decrements pendingWrites when the callback fires", () => {

@@ -40,6 +40,12 @@ interface PendingInjection {
   reject: (error: Error) => void;
 }
 
+// UUIDs the user explicitly cancelled — the injecting-phase catch consults this
+// to treat the resulting "Injection cancelled" rejection as a silent abort
+// instead of a real error. Kept off the snapshot: it is callback state, not
+// render state.
+const cancelledUuids = new Set<string>();
+
 const globalInjectionState = {
   isInjecting: false,
   isPendingInjection: false,
@@ -85,6 +91,38 @@ const globalInjectionState = {
     }
   },
 };
+
+/**
+ * Cancel the active context injection from outside a component (e.g. the
+ * `copyTree.cancel` action). Clears the renderer pending state, cancels the
+ * active backend operation by UUID, and resets the shared injection state.
+ */
+export function cancelContextInjection(): void {
+  // Cancel pending injection if waiting for the agent to become idle
+  globalInjectionState.clearPending();
+
+  // Cancel only the current active injection (not all CopyTree operations).
+  // Fire the IPC first to minimize chunks written during the race window.
+  const injectionUuid = globalInjectionState.activeInjectionUuid;
+  if (injectionUuid) {
+    cancelledUuids.add(injectionUuid);
+    try {
+      const cancelResult = copyTreeClient.cancel(injectionUuid);
+      void Promise.resolve(cancelResult).catch((err) =>
+        logError("[useContextInjection] Cancel failed", err)
+      );
+    } catch (error) {
+      logError("[useContextInjection] Cancel error", error);
+    }
+  }
+
+  globalInjectionState.isInjecting = false;
+  globalInjectionState.isPendingInjection = false;
+  globalInjectionState.activeTerminalId = null;
+  globalInjectionState.activeInjectionUuid = null;
+  globalInjectionState.lastProgress = null;
+  globalInjectionState.notify();
+}
 
 export function useContextInjection(targetTerminalId?: string): UseContextInjectionReturn {
   const [error, setError] = useState<string | null>(null);
@@ -325,6 +363,13 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           );
         }
 
+        // User may have cancelled while the availability check was in flight —
+        // abort before any context reaches the terminal.
+        if (cancelledUuids.has(injectionUuid)) {
+          logDebug("[useContextInjection] Injection cancelled before write", { injectionUuid });
+          return;
+        }
+
         const options = {
           format: DEFAULT_COPYTREE_FORMAT,
           ...(selectedPaths && selectedPaths.length > 0 ? { includePaths: selectedPaths } : {}),
@@ -365,6 +410,14 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
       } catch (e) {
         const message = formatErrorMessage(e, "Failed to inject context");
+
+        // User-initiated cancel is a silent abort, not an error — keep it out
+        // of the error store and the Problems dock.
+        if (cancelledUuids.has(injectionUuid) || message === "Injection cancelled") {
+          logDebug("[useContextInjection] Injection cancelled by user", { injectionUuid });
+          return;
+        }
+
         const details = e instanceof Error ? e.stack : undefined;
 
         setError(message);
@@ -393,6 +446,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
         logError("[useContextInjection] Context injection failed", undefined, { message });
       } finally {
+        cancelledUuids.delete(injectionUuid);
         // Only clear global state if we own this injection (prevent cross-run interference)
         if (globalInjectionState.injectionId === currentInjectionId) {
           globalInjectionState.isInjecting = false;
@@ -408,29 +462,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
   );
 
   const cancel = useCallback(() => {
-    // Cancel pending injection if waiting
-    globalInjectionState.clearPending();
-
-    // Cancel only the current active injection (not all CopyTree operations)
-    const injectionUuid = globalInjectionState.activeInjectionUuid;
-    if (injectionUuid) {
-      try {
-        const cancelResult = copyTreeClient.cancel(injectionUuid);
-        void Promise.resolve(cancelResult).catch((err) =>
-          logError("[useContextInjection] Cancel failed", err)
-        );
-      } catch (error) {
-        logError("[useContextInjection] Cancel error", error);
-      }
-    }
-
-    globalInjectionState.isInjecting = false;
-    globalInjectionState.isPendingInjection = false;
-    globalInjectionState.activeTerminalId = null;
-    globalInjectionState.activeInjectionUuid = null;
-    globalInjectionState.lastProgress = null;
     localProgressRef.current = null;
-    globalInjectionState.notify();
+    cancelContextInjection();
   }, []);
 
   const clearError = useCallback(() => {

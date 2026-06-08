@@ -187,6 +187,13 @@ export const createAddPanelActions = (
         pluginId,
         excludeFromPersistence: options.excludeFromPersistence,
         removeOnExit: options.removeOnExit,
+        // Preserve the saved `lastActiveAt` from the snapshot so the
+        // post-hydration focus picker in `useAppHydration` can pick
+        // the active worktree's most-recently-focused panel (#9933).
+        // Validated upstream in `statePatcher.ts:buildArgsFor*` via
+        // `sanitizeLastActiveAt`; conditional spread avoids stamping
+        // `undefined` on freshly-created panels.
+        ...(options.lastActiveAt !== undefined && { lastActiveAt: options.lastActiveAt }),
         ...kindFields,
       } as PanelInstance;
 
@@ -370,6 +377,7 @@ export const createAddPanelActions = (
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
+      sessionLostOnRestore: options.sessionLostOnRestore,
       extensionState: options.extensionState,
       pluginId: ptyPluginId,
       spawnedBy: options.spawnedBy,
@@ -378,6 +386,13 @@ export const createAddPanelActions = (
       removeOnExit: options.removeOnExit,
       startedAt: Date.now(),
       spawnStatus,
+      // Preserve the saved `lastActiveAt` from the snapshot so the
+      // post-hydration focus picker in `useAppHydration` can pick
+      // the active worktree's most-recently-focused panel (#9933).
+      // Validated upstream in `statePatcher.ts:buildArgsFor*` via
+      // `sanitizeLastActiveAt`; conditional spread avoids stamping
+      // `undefined` on freshly-created panels.
+      ...(options.lastActiveAt !== undefined && { lastActiveAt: options.lastActiveAt }),
     } as PanelInstance;
 
     // Commit the panel to `panelsById` BEFORE any async IPC (#5789 optimistic

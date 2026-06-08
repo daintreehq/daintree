@@ -63,11 +63,6 @@ export interface EventPolicy {
    * values — `"toast"`/`"inbox"`/`"frame"` are not standalone placements.
    */
   preferredSurface: "grid-bar" | "auto";
-  /**
-   * Declarative hint: this kind should re-surface as a toast when its severity
-   * escalates. Reserved for future escalation wiring — not behavioral yet.
-   */
-  reToastOnSeverityEscalation: boolean;
   /** Default auto-dismiss (ms) when the caller omits `duration`; falls through to `TOAST_DURATION[type]`. */
   defaultDurationMs?: number;
   /** Persisted user-facing toggle that silences this kind, when one exists. */
@@ -78,58 +73,48 @@ export const EVENT_POLICY: Record<NotificationEventKind, EventPolicy> = {
   completed: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "completedEnabled",
   },
   waiting: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "waitingEnabled",
   },
   workingPulse: {
     baseInterruption: "passive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "workingPulseEnabled",
   },
   uiFeedback: {
     baseInterruption: "passive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     userOverrideKey: "uiFeedbackSoundEnabled",
   },
   agent: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
   },
   git: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
     // Git operation confirmations are brief — shorter than the per-type default.
     defaultDurationMs: 6000,
   },
   host: {
     baseInterruption: "time-sensitive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: true,
   },
   recovery: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: true,
   },
   settings: {
     baseInterruption: "passive",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
   },
   connectivity: {
     baseInterruption: "active",
     preferredSurface: "auto",
-    reToastOnSeverityEscalation: false,
   },
 };
 
@@ -812,6 +797,9 @@ export function isScheduledQuietHours(now: Date = new Date()): boolean {
 export function notify(payload: NotifyPayload): string {
   // Resolve routing defaults from the EVENT_POLICY manifest before reading any
   // routing fields — explicit caller fields are preserved, only gaps are filled.
+  // Capture whether the caller supplied a priority first, so we can tell a
+  // caller-written "low" apart from one the passive-eventKind policy filled in.
+  const hadExplicitPriority = payload.priority !== undefined;
   payload = resolveEventPolicyDefaults(payload);
 
   const priority = payload.priority ?? "high";
@@ -823,9 +811,15 @@ export function notify(payload: NotifyPayload): string {
     // promotes the inbox entry on navigate-away) collapse to a silent drop.
     // Surface here so the contradictory shape is caught at write-time.
     if (priority === "low") {
-      console.warn(
-        "[notify] transient: true with priority: 'low' is a silent no-op — low priority skips the toast and transient skips the inbox."
-      );
+      if (hadExplicitPriority) {
+        console.warn(
+          "[notify] transient: true with priority: 'low' is a silent no-op — low priority skips the toast and transient skips the inbox."
+        );
+      } else {
+        console.warn(
+          "[notify] transient: true with a passive eventKind resolved to priority: 'low' — this is a silent no-op (low priority skips the toast, transient skips the inbox). Add an explicit priority: 'high' at the call site to override the policy default."
+        );
+      }
     }
     if (context) {
       console.warn(
@@ -899,7 +893,7 @@ export function notify(payload: NotifyPayload): string {
             title,
             message: historyMessage,
             correlationId,
-            seenAsToast: !isQuiet,
+            seenAsToast: !isQuiet && notificationsEnabled,
             countable: payload.countable,
             actions: historyActions.length > 0 ? historyActions : undefined,
             context,
@@ -929,9 +923,14 @@ export function notify(payload: NotifyPayload): string {
   // pre-commit thread state (before the `addEntry` write below), so
   // `getWorstSeverity` compares the incoming severity against the existing
   // entries rather than itself. `transient` payloads have no inbox thread, so
-  // there is nothing to re-promote against.
+  // there is nothing to re-promote against. Gated on `isFocused` like
+  // `shouldToast` (#10056): a re-promotion fired into a blurred window would
+  // render unseen, auto-dismiss, and write `seenAsToast: true` — hiding the
+  // escalation from the unread badge and re-entry summary. Blurred
+  // escalations stay inbox-only (`seenAsToast: false`) so they surface on
+  // refocus; `urgent` bypasses quiet hours and rate limiting, not focus.
   const shouldToastThread =
-    !shouldToast && correlationId && !payload.transient
+    !shouldToast && isFocused && correlationId && !payload.transient
       ? shouldReToast(type, getEntriesByCorrelationId(correlationId), payload.urgent)
       : false;
   const effectiveShouldToast = shouldToast || shouldToastThread;
@@ -1126,21 +1125,54 @@ function scheduleSuppressionGrace(
     });
   };
 
-  const timerId = setTimeout(() => {
-    cleanup();
-  }, SUPPRESS_GRACE_MS);
-
   // If no subscriber is registered (very early startup), the timer is the
-  // sole gate — falls back to "suppress for 500ms then drop".
-  const unsubContext = subscriber ? subscriber(promote) : () => {};
+  // sole gate — falls back to "suppress for 500ms then drop". A context
+  // change while the window is blurred (programmatic worktree/panel switch)
+  // must not toast into the invisible window — the dispatch required focus,
+  // so any blur has already armed the refocus listener below, which promotes
+  // when the user returns.
+  const unsubContext = subscriber
+    ? subscriber(() => {
+        if (typeof document !== "undefined" && !document.hasFocus()) return;
+        promote();
+      })
+    : () => {};
 
   // Window blur during grace means the user can no longer see the inline
   // affordance, but no worktree/panel state changes to fire `subscriber`.
-  // Treat it as navigate-away so the missed signal still surfaces when they
-  // come back instead of being silently swallowed with `seenAsToast: true`.
+  // Promoting immediately would fire the toast into a blurred window where it
+  // auto-dismisses unseen (#10056), so instead: pause the drop timer (the
+  // "visible for 500ms = seen" assumption breaks while blurred) and defer the
+  // decision to a one-shot refocus listener. On refocus, the origin surface
+  // being visible again resumes the grace countdown; otherwise the user came
+  // back somewhere else and the missed signal promotes to a toast they can
+  // actually see. `document.hasFocus()` is stale inside a blur handler in
+  // Chromium 148 — the event arrival itself is the signal; nothing here
+  // re-reads focus synchronously.
   let unsubBlur = (): void => {};
+  let unsubFocus = (): void => {};
   if (typeof window !== "undefined") {
-    const blurHandler = (): void => promote();
+    const focusHandler = (): void => {
+      window.removeEventListener("focus", focusHandler);
+      unsubFocus = (): void => {};
+      const entry = _pendingSuppressed.get(historyEntryId);
+      if (!entry) return;
+      if (isOriginSurfaceVisible(context)) {
+        // Inline affordance is visible again — restart the grace countdown.
+        entry.timerId = setTimeout(cleanup, SUPPRESS_GRACE_MS);
+        return;
+      }
+      promote();
+    };
+    const blurHandler = (): void => {
+      const entry = _pendingSuppressed.get(historyEntryId);
+      if (!entry) return;
+      clearTimeout(entry.timerId);
+      // One-shot, idempotent: repeated blur events must not stack listeners.
+      window.removeEventListener("focus", focusHandler);
+      window.addEventListener("focus", focusHandler);
+      unsubFocus = (): void => window.removeEventListener("focus", focusHandler);
+    };
     window.addEventListener("blur", blurHandler);
     unsubBlur = (): void => window.removeEventListener("blur", blurHandler);
   }
@@ -1148,7 +1180,12 @@ function scheduleSuppressionGrace(
   const unsub = (): void => {
     unsubContext();
     unsubBlur();
+    unsubFocus();
   };
+
+  const timerId = setTimeout(() => {
+    cleanup();
+  }, SUPPRESS_GRACE_MS);
 
   _pendingSuppressed.set(historyEntryId, { timerId, unsub });
 }
@@ -1164,6 +1201,9 @@ setPermanentFallbackHandler(() => {
     title: "Settings won't be saved",
     message:
       "Couldn't write to local storage, so changes made this session won't persist after restart.",
+    // settings is a passive eventKind (→ priority "low" / inbox-only); a
+    // storage-failure warning must surface as a toast, so pin it high.
+    priority: "high",
     context: { eventKind: "settings" },
   });
 });

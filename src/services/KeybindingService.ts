@@ -17,6 +17,7 @@ import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { evaluate } from "@shared/utils/whenClause/evaluator";
 import { parse } from "@shared/utils/whenClause/parser";
 import type { WhenClauseContext } from "@shared/utils/whenClause/types";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
@@ -69,21 +70,35 @@ class KeybindingService {
 
   async loadOverrides(): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      const overrides = await window.electron.keybinding.getOverrides();
-      this.overrides.clear();
-      if (overrides && typeof overrides === "object") {
-        for (const [actionId, combos] of Object.entries(overrides)) {
-          if (!Array.isArray(combos)) continue;
-          if (!builtInActionIdSet.has(actionId) && !this.bindings.has(actionId)) {
-            console.warn(
-              `[KeybindingService] Dropping override for unknown action "${actionId}" — not a built-in or registered binding.`
-            );
-            continue;
+      try {
+        const overrides = await window.electron.keybinding.getOverrides();
+        this.overrides.clear();
+        if (overrides && typeof overrides === "object") {
+          for (const [actionId, combos] of Object.entries(overrides)) {
+            if (!Array.isArray(combos)) continue;
+            if (!builtInActionIdSet.has(actionId) && !this.bindings.has(actionId)) {
+              console.warn(
+                `[KeybindingService] Dropping override for unknown action "${actionId}" — not a built-in or registered binding.`
+              );
+              continue;
+            }
+            this.overrides.set(actionId, combos as string[]);
           }
-          this.overrides.set(actionId, combos as string[]);
         }
+        this.notifyListeners();
+      } catch (error) {
+        // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
+        // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor).
+        // On a fresh service, `this.overrides` is empty, so the user gets stock
+        // shortcuts. On a service that has loaded overrides before, the prior
+        // overrides persist as last-known-good — a failed reload does not
+        // silently clobber the user's customizations. The caller (hydrate
+        // bootstrap, settings tabs, settings-changed IPC) keeps running
+        // instead of aborting the entire session restore.
+        console.warn(
+          `[KeybindingService] Failed to load keybinding overrides; keeping prior state: ${formatErrorMessage(error, "Unknown keybinding override load failure")}`
+        );
       }
-      this.notifyListeners();
     }
   }
 

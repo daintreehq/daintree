@@ -19,10 +19,12 @@ import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js"
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
+import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { forgetBlinkSample, forgetEluSample } from "../services/ProcessMemoryMonitor.js";
-import { getPtyManager } from "../services/PtyManager.js";
+import type { PtyClient } from "../services/PtyClient.js";
+import { events } from "../services/events.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -31,9 +33,12 @@ import {
   injectSkeletonProjectIdentity,
   resolveInitialColorSchemeId,
   resolveInitialCanvasBackgroundColor,
+  resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
   INITIAL_PROJECT_ID_ARG,
+  INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
+import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { CHANNELS } from "../ipc/channels.js";
 import {
@@ -46,7 +51,7 @@ import {
   throttleCpuWebContents,
   unthrottleCpuWebContents,
 } from "../utils/webContentsLifecycle.js";
-import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
+import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
   beginWindowRecreating,
@@ -149,6 +154,13 @@ interface ViewEntry {
   state: ViewState;
   crashTimestamps: number[];
   cleanupHandlers: () => void;
+  /**
+   * Cold-start preload (`preload.cts`) evaluation cost in ms, self-reported by
+   * the view's preload via PERF_FLUSH_RENDERER_MARKS (#9770). Set once per view
+   * (first-write); surfaced in the `projectview.revival` log so cache-pressure
+   * signals carry the preload cost that was paid when the view cold-started.
+   */
+  preloadEvalDurationMs?: number;
 }
 
 export interface ProjectViewManagerOptions {
@@ -233,6 +245,16 @@ export class ProjectViewManager {
   } | null = null;
   private disposed = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
+
+  // Agent-state cache for hasActiveAgent(). The main-process getPtyManager()
+  // singleton is never populated (#10054), so the real terminal registry lives
+  // in the pty-host and is read async via PtyClient. Eviction scoring is
+  // synchronous, so we maintain instance-level maps seeded from the host and
+  // kept fresh via the typed event bus. Instance-level (not module-level) so
+  // each window's manager scopes to its own terminals (lesson #8607).
+  private projectByTerminal = new Map<string, string>();
+  private agentStateByTerminal = new Map<string, AgentState>();
+  private agentCacheCleanup: Array<() => void> = [];
 
   constructor(win: BrowserWindow, opts: ProjectViewManagerOptions) {
     this.win = win;
@@ -440,6 +462,9 @@ export class ProjectViewManager {
           projectId,
           timeSinceEvictionMs: Date.now() - evictedAt,
           visibleMs,
+          ...(cached.preloadEvalDurationMs !== undefined
+            ? { preloadEvalDurationMs: cached.preloadEvalDurationMs }
+            : {}),
         });
         this.evictionTimestamps.delete(projectId);
       }
@@ -784,6 +809,23 @@ export class ProjectViewManager {
     return this.webContentsToProject.get(webContentsId) ?? null;
   }
 
+  /**
+   * Record the cold-start preload evaluation cost for a view, keyed by its
+   * webContents id (#9770). Called from the perf IPC handler when a view's
+   * preload flushes its `preload.eval` span. First-write semantics: the cost is
+   * paid once per cold-started view, so a duplicate flush (e.g. a retried IPC)
+   * must not clobber the original measurement. No-ops silently when the id is
+   * unknown (the flush can race ahead of view registration, or arrive for a
+   * non-project webContents).
+   */
+  recordPreloadDuration(webContentsId: number, durationMs: number): void {
+    const projectId = this.webContentsToProject.get(webContentsId);
+    if (projectId === undefined) return;
+    const entry = this.views.get(projectId);
+    if (!entry || entry.preloadEvalDurationMs !== undefined) return;
+    entry.preloadEvalDurationMs = durationMs;
+  }
+
   getAllViews(): ViewEntry[] {
     return Array.from(this.views.values());
   }
@@ -891,6 +933,11 @@ export class ProjectViewManager {
 
   dispose(): void {
     this.disposed = true;
+
+    for (const cleanup of this.agentCacheCleanup) cleanup();
+    this.agentCacheCleanup = [];
+    this.projectByTerminal.clear();
+    this.agentStateByTerminal.clear();
 
     if (this.cachedMemoryTimerCleanup) {
       this.cachedMemoryTimerCleanup();
@@ -1112,9 +1159,19 @@ export class ProjectViewManager {
         // threaded the same way instead of via a `?projectId=` query string so
         // the document URL stays static and the V8 bytecode cache is shared
         // across projects (#9162).
+        // The instance role rides along so LRU-evicted and project-switch
+        // views keep suppressing background GitHub polling in worker
+        // instances (#10123).
         additionalArguments: [
           `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
           `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
+          `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
+          // Demo mode is gated in the renderer on process.argv. Electron does
+          // not forward main-process CLI switches to renderer argv, so the
+          // `--demo-mode` flag must be threaded explicitly for the DemoCursor /
+          // DemoOverlay / DemoCaptureBridge components to mount and the
+          // window.electron.demo bridge to be exposed.
+          ...(isDemoMode ? ["--demo-mode"] : []),
         ],
       },
     });
@@ -1245,13 +1302,14 @@ export class ProjectViewManager {
       webPreferences: Electron.WebPreferences,
       params: Record<string, string>
     ) => {
-      const allowedPartitions = ["persist:browser", "persist:dev-preview"];
       // Dev-preview webviews load the stable proxy origin (dp-*.localhost), which
       // isLocalhostUrl rejects — accept it explicitly (#9100).
       const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+      const partition = params.partition ?? "";
       const isValidPartition =
-        allowedPartitions.includes(params.partition || "") ||
-        (params.partition?.startsWith("persist:dev-preview-") ?? false);
+        isBrowserPartition(partition) ||
+        partition === "persist:dev-preview" ||
+        partition.startsWith("persist:dev-preview-");
 
       if (!isAllowedLocalhostUrl || !isValidPartition) {
         console.warn(
@@ -1404,7 +1462,7 @@ export class ProjectViewManager {
           if (backupTimestamp !== null) {
             params.set("backupTimestamp", String(backupTimestamp));
           }
-          const panelCount = recoverySvc.getBackupPanelCount();
+          const panelCount = recoverySvc.getBackupPanelCount(true);
           if (panelCount !== null) {
             params.set("panelCount", String(panelCount));
           }
@@ -1536,12 +1594,64 @@ export class ProjectViewManager {
     this.views.delete(projectId);
   }
 
+  /**
+   * Seed and maintain the agent-state cache used by the synchronous
+   * `hasActiveAgent()` eviction guard. Fire-and-forget: until the first seed
+   * resolves the maps are empty and `hasActiveAgent()` returns false (the
+   * conservative pre-regression behavior — an in-flight view is never wrongly
+   * treated as protected). Idempotent listener wiring: cleanup callbacks are
+   * cleared first so re-invocation doesn't double-subscribe.
+   */
+  initAgentStateCache(ptyClient: PtyClient): Promise<void> {
+    for (const cleanup of this.agentCacheCleanup) cleanup();
+    this.agentCacheCleanup = [];
+
+    const seed = async () => {
+      try {
+        const terminals = await ptyClient.getAllTerminalsAsync();
+        if (this.disposed) return;
+        this.projectByTerminal.clear();
+        this.agentStateByTerminal.clear();
+        for (const t of terminals) {
+          if (t.projectId) this.projectByTerminal.set(t.id, t.projectId);
+          if (t.agentState) this.agentStateByTerminal.set(t.id, t.agentState);
+        }
+      } catch {
+        // Host unavailable — leave maps as-is; hasActiveAgent stays conservative.
+      }
+    };
+
+    const onStateChanged = (payload: { terminalId?: string; state: AgentState }) => {
+      // No projectId on this event — the seed map owns the terminal→project
+      // link. Skip terminals we haven't seeded yet (a spawn-result reseed will
+      // pick them up). On terminal exit the state machine emits exited/completed
+      // (neither in ACTIVE_AGENT_STATES), so a killed terminal self-heals to
+      // unprotected here; a missed final event is corrected by the next
+      // spawn-result/host-crash reseed.
+      if (!payload.terminalId) return;
+      this.agentStateByTerminal.set(payload.terminalId, payload.state);
+    };
+    const offStateChanged = events.on("agent:state-changed", onStateChanged);
+
+    const onSpawnResult = () => void seed();
+    const onHostCrash = () => void seed();
+    ptyClient.on("spawn-result", onSpawnResult);
+    ptyClient.on("host-crash", onHostCrash);
+
+    this.agentCacheCleanup.push(offStateChanged);
+    this.agentCacheCleanup.push(() => ptyClient.off("spawn-result", onSpawnResult));
+    this.agentCacheCleanup.push(() => ptyClient.off("host-crash", onHostCrash));
+
+    return seed();
+  }
+
   private hasActiveAgent(projectId: string): boolean {
-    const terminals = getPtyManager().getAll();
-    return terminals.some(
-      (t) =>
-        t.projectId === projectId && t.agentState != null && ACTIVE_AGENT_STATES.has(t.agentState)
-    );
+    for (const [terminalId, termProjectId] of this.projectByTerminal) {
+      if (termProjectId !== projectId) continue;
+      const state = this.agentStateByTerminal.get(terminalId);
+      if (state != null && ACTIVE_AGENT_STATES.has(state)) return true;
+    }
+    return false;
   }
 
   private evictStaleViews(reason: EvictionReason): void {

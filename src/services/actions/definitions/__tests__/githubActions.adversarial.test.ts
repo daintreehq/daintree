@@ -33,13 +33,8 @@ const forgeClientMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 
-const actionServiceMock = vi.hoisted(() => ({
-  dispatch: vi.fn(),
-}));
-
 vi.mock("@/clients", () => ({ githubClient: githubClientMock, forgeClient: forgeClientMock }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
-vi.mock("@/services/ActionService", () => ({ actionService: actionServiceMock }));
 
 import { registerGithubActions } from "../githubActions";
 
@@ -71,7 +66,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const fn of Object.values(githubClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(forgeClientMock)) fn.mockResolvedValue(undefined);
-  actionServiceMock.dispatch.mockResolvedValue({ ok: true, result: undefined });
 });
 
 describe("forge.* primaries adversarial", () => {
@@ -128,10 +122,13 @@ describe("forge.* primaries adversarial", () => {
     expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 7);
   });
 
-  it("validateToken forwards the token unchanged (including whitespace)", async () => {
+  it("validateToken forwards providerId + token positionally (including whitespace)", async () => {
     const def = setupActions()("forge.validateToken");
-    await def.run({ token: "  ghp_123  " }, {} as never);
-    expect(forgeClientMock.validateToken).toHaveBeenCalledWith("  ghp_123  ");
+    await def.run({ providerId: "daintree.github.github", token: "  ghp_123  " }, {} as never);
+    expect(forgeClientMock.validateToken).toHaveBeenCalledWith(
+      "daintree.github.github",
+      "  ghp_123  "
+    );
   });
 
   it("assignIssue forwards cwd, issueNumber, and username positionally", async () => {
@@ -157,7 +154,7 @@ describe("forge.* primaries adversarial", () => {
 
   it("forge.* primaries never call githubClient", async () => {
     // All six forge.* primaries must route through forgeClient, not githubClient.
-    // The github.* aliases are the only path to require githubClient at all.
+    // githubClient is reserved for the GitHub-specific github.* host actions below.
     setCurrentProject({ path: "/repo" });
     await runAction("forge.openIssues", {}, { activeWorktreePath: "/repo" });
     await runAction("forge.openPRs", {}, { activeWorktreePath: "/repo" });
@@ -168,7 +165,10 @@ describe("forge.* primaries adversarial", () => {
       { issueNumber: 1, username: "bob" },
       { activeWorktreePath: "/repo" }
     );
-    await runAction("forge.validateToken", { token: "ghp_test" });
+    await runAction("forge.validateToken", {
+      providerId: "daintree.github.github",
+      token: "ghp_test",
+    });
 
     expect(githubClientMock.openIssues).not.toHaveBeenCalled();
     expect(githubClientMock.openPRs).not.toHaveBeenCalled();
@@ -176,109 +176,6 @@ describe("forge.* primaries adversarial", () => {
     expect(githubClientMock.openIssue).not.toHaveBeenCalled();
     expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
     expect(githubClientMock.validateToken).not.toHaveBeenCalled();
-  });
-});
-
-describe("github.* one-release aliases", () => {
-  const aliasPairs = [
-    ["github.openIssues", "forge.openIssues"],
-    ["github.openPRs", "forge.openPRs"],
-    ["github.openCommits", "forge.openCommits"],
-    ["github.openIssue", "forge.openIssue"],
-    ["github.assignIssue", "forge.assignIssue"],
-    ["github.validateToken", "forge.validateToken"],
-  ] as const;
-
-  for (const [aliasId, targetId] of aliasPairs) {
-    it(`${aliasId} forwards args verbatim to ${targetId}`, async () => {
-      const def = setupActions()(aliasId);
-      const args = { foo: "bar", n: 42 };
-      await def.run(args, {} as never);
-      expect(actionServiceMock.dispatch).toHaveBeenCalledWith(targetId, args);
-      // The alias must NOT call the underlying clients — that is the target's job.
-      expect(githubClientMock.openIssues).not.toHaveBeenCalled();
-      expect(githubClientMock.openPRs).not.toHaveBeenCalled();
-      expect(githubClientMock.openCommits).not.toHaveBeenCalled();
-      expect(githubClientMock.openIssue).not.toHaveBeenCalled();
-      expect(githubClientMock.assignIssue).not.toHaveBeenCalled();
-      expect(githubClientMock.validateToken).not.toHaveBeenCalled();
-      expect(forgeClientMock.openIssues).not.toHaveBeenCalled();
-      expect(forgeClientMock.openPRs).not.toHaveBeenCalled();
-      expect(forgeClientMock.openCommits).not.toHaveBeenCalled();
-      expect(forgeClientMock.openIssue).not.toHaveBeenCalled();
-      expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
-      expect(forgeClientMock.validateToken).not.toHaveBeenCalled();
-    });
-
-    it(`${aliasId} surfaces ${targetId} failures with code preserved on the thrown error`, async () => {
-      actionServiceMock.dispatch.mockResolvedValueOnce({
-        ok: false,
-        error: { code: "VALIDATION_ERROR", message: "Invalid arguments" },
-      });
-      const def = setupActions()(aliasId);
-      const thrown = await def.run({}, {} as never).then(
-        () => null,
-        (e: Error & { code?: string }) => e
-      );
-      expect(thrown).toBeInstanceOf(Error);
-      expect(thrown?.message).toBe("Invalid arguments");
-      expect(thrown?.code).toBe("VALIDATION_ERROR");
-    });
-  }
-
-  it("every alias has its forge.* target factory registered", () => {
-    const actions: ActionRegistry = new Map();
-    registerGithubActions(actions, {} as unknown as ActionCallbacks);
-    for (const [aliasId, targetId] of aliasPairs) {
-      expect(actions.has(aliasId)).toBe(true);
-      expect(actions.has(targetId)).toBe(true);
-    }
-  });
-
-  it("github.validateToken returns the result from forge.validateToken", async () => {
-    const validation = { valid: true, scopes: ["repo"] };
-    actionServiceMock.dispatch.mockResolvedValueOnce({ ok: true, result: validation });
-    const def = setupActions()("github.validateToken");
-    const result = await def.run({ token: "ghp_xyz" }, {} as never);
-    expect(result).toEqual(validation);
-  });
-
-  it("aliases stay danger:safe (so dispatch is not gated on confirmation)", () => {
-    for (const [aliasId] of aliasPairs) {
-      const def = setupActions()(aliasId);
-      expect(def.danger).toBe("safe");
-    }
-  });
-
-  it("aliases set nonRepeatable so action.repeatLast captures the forge.* primary, not the deprecated github.* id", () => {
-    for (const [aliasId] of aliasPairs) {
-      const def = setupActions()(aliasId);
-      expect(def.nonRepeatable).toBe(true);
-    }
-  });
-});
-
-describe("github.* aliases must not be reachable from help assistant surfaces", () => {
-  const aliasIds = [
-    "github.openIssues",
-    "github.openPRs",
-    "github.openCommits",
-    "github.openIssue",
-    "github.assignIssue",
-    "github.validateToken",
-  ] as const;
-
-  it("none of the migrated github.* aliases appear in help assistant tier tools/addons", async () => {
-    const { WORKBENCH_TIER_TOOLS, ACTION_TIER_ADDONS, SYSTEM_TIER_ADDONS } =
-      await import("@shared/config/helpAssistantTierAllowlists");
-    const combined = new Set<string>([
-      ...WORKBENCH_TIER_TOOLS,
-      ...ACTION_TIER_ADDONS,
-      ...SYSTEM_TIER_ADDONS,
-    ]);
-    for (const aliasId of aliasIds) {
-      expect(combined.has(aliasId)).toBe(false);
-    }
   });
 });
 
@@ -404,14 +301,11 @@ describe("githubClient import boundary", () => {
 
   const allowlist = new Set([
     "src/services/actions/definitions/githubActions.ts",
-    "src/services/actions/definitions/workflowCreationActions.ts",
     "src/hooks/useRepositoryStats.ts",
     "src/hooks/useGitHubRateLimit.ts",
     "src/hooks/useGitHubTokenHealth.ts",
     "src/hooks/useProjectHealth.ts",
     "src/components/Layout/GitHubStatsToolbarButton.tsx",
-    "src/components/Worktree/IssuePickerDialog.tsx",
-    "src/components/Worktree/NewWorktreeDialog.tsx",
   ]);
 
   function collectSrcFiles(dir: string): string[] {
@@ -477,22 +371,5 @@ describe("githubClient import boundary", () => {
     }
 
     expect(stale).toEqual([]);
-  });
-
-  it("github.* one-release aliases excluded from MCP tiers", () => {
-    // Already tested above via dynamic import of helpAssistantTierAllowlists.
-    // This is a fast static cross-check that the adversarial test's own hardcoded
-    // alias list matches the one in the alias forwarding tests.
-    const aliasIds = [
-      "github.openIssues",
-      "github.openPRs",
-      "github.openCommits",
-      "github.openIssue",
-      "github.assignIssue",
-      "github.validateToken",
-    ];
-    // All 6 aliases are one-release and must NOT appear in MCP_TOOL_ALLOWLIST_ENTRIES.
-    // Verified by the MCP-tier exclusion test above (line ~268).
-    expect(aliasIds.length).toBe(6);
   });
 });

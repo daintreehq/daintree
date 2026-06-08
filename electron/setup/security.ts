@@ -351,8 +351,10 @@ export function setupPermissionLockdown(): void {
   // Lock down default session (trusted app renderer) with clipboard + media allowlist
   lockdownTrustedPermissions(session.defaultSession, "default", TRUSTED_SESSION_PERMISSIONS);
 
-  // Lock down browser session — fully untrusted
-  lockdownUntrustedPermissions(session.fromPartition("persist:browser"), "browser");
+  // Browser sessions (persist:browser-*) are now per-project and created lazily at
+  // will-attach-webview time, so they are locked down by the session-created handler
+  // below (which classifies them as "browser" and applies the untrusted lockdown)
+  // rather than eagerly here.
 
   // Portal needs clipboard access for AI chat copy buttons (navigator.clipboard.writeText)
   // but all other permissions (camera, mic, geolocation, etc.) remain denied
@@ -369,7 +371,7 @@ export function setupPermissionLockdown(): void {
     TRUSTED_SESSION_PERMISSIONS
   );
 
-  // Catch dynamically created sessions (e.g., persist:dev-preview-*)
+  // Catch dynamically created sessions (e.g., persist:browser-*, persist:dev-preview-*)
   // Guard against duplicate listeners when createWindow is called multiple times (macOS dock)
   if (!permissionLockdownInitialized) {
     permissionLockdownInitialized = true;

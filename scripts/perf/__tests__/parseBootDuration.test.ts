@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseBootDuration } from "../lib/packagedLaunch";
+import { countCompileCacheFiles, parseBootDuration } from "../lib/packagedLaunch";
 import { PERF_MARKS } from "../../../shared/perf/marks";
 
 interface MarkLine {
@@ -123,5 +123,61 @@ describe("parseBootDuration", () => {
     expect(result.metrics.serviceInitMs).toBe(300);
     expect(result.metrics.hydrateMs).toBe(400);
     expect(result.durationMs).toBe(1200);
+  });
+});
+
+describe("countCompileCacheFiles", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    }
+    tmpDirs.length = 0;
+  });
+
+  function makeUserDataDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-ccfiles-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it("returns 0 when the compile-cache dir does not exist", () => {
+    expect(countCompileCacheFiles(makeUserDataDir())).toBe(0);
+  });
+
+  it("returns 0 for an empty compile-cache dir (cache never written)", () => {
+    const userDataDir = makeUserDataDir();
+    fs.mkdirSync(path.join(userDataDir, "compile-cache"));
+    expect(countCompileCacheFiles(userDataDir)).toBe(0);
+  });
+
+  it("sums cache files inside the versioned subdir rather than counting the base dir", () => {
+    // Node nests cache files one level down: compile-cache/<version>/<hash files>.
+    // Counting the base dir would report 1 (the subdir); we want the file count.
+    const userDataDir = makeUserDataDir();
+    const versioned = path.join(userDataDir, "compile-cache", "v22.0.0-arm64-abcd1234");
+    fs.mkdirSync(versioned, { recursive: true });
+    for (let i = 0; i < 5; i += 1) {
+      fs.writeFileSync(path.join(versioned, `cache-${i}.bin`), "x");
+    }
+    expect(countCompileCacheFiles(userDataDir)).toBe(5);
+  });
+
+  it("sums across multiple versioned subdirs (e.g. after an app upgrade)", () => {
+    const userDataDir = makeUserDataDir();
+    const base = path.join(userDataDir, "compile-cache");
+    const v1 = path.join(base, "v22.0.0-arm64-aaaa");
+    const v2 = path.join(base, "v22.1.0-arm64-bbbb");
+    fs.mkdirSync(v1, { recursive: true });
+    fs.mkdirSync(v2, { recursive: true });
+    fs.writeFileSync(path.join(v1, "a.bin"), "x");
+    fs.writeFileSync(path.join(v1, "b.bin"), "x");
+    fs.writeFileSync(path.join(v2, "c.bin"), "x");
+    expect(countCompileCacheFiles(userDataDir)).toBe(3);
   });
 });

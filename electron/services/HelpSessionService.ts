@@ -1011,6 +1011,11 @@ export class HelpSessionService {
     if (!this.pendingHibernationStore) return null;
     const entry = this.pendingHibernationStore.get(projectId);
     if (!entry) return null;
+    // #10048: invalidate the in-flight capture owner before the await so the
+    // post-gracefulKill finalize block's ownership guard fails and the
+    // already-killed agent's (now-stale) resume ID cannot overwrite the
+    // placeholder the renderer just claimed. Mirrors displacePriorSessions.
+    this.pendingCapturesByProject.delete(projectId);
     await this.pendingHibernationStore.clear(projectId);
     return {
       agentId: entry.agentId,
@@ -1579,7 +1584,7 @@ export class HelpSessionService {
         deny: [
           "Write(**)",
           "Edit(**)",
-          "MultiEdit(**)",
+          "NotebookEdit(**)",
           "Bash(gh issue create*)",
           "Bash(gh pr create*)",
           "Bash(gh pr merge*)",

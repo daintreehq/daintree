@@ -18,9 +18,22 @@ export interface HibernationManagerDeps extends TerminalListenerInstallDeps {
   clearResizeJob: (managed: ManagedTerminal) => void;
   clearSettledTimer: (id: string) => void;
   applyDeferredResize: (id: string) => void;
-  openLink: (url: string, id: string, event?: MouseEvent) => void;
-  getCwdProvider: (id: string) => (() => string) | undefined;
+  /**
+   * Draws the "Output dropped" marker for a PTY data-loss signal. Required (not
+   * optional) so the wake path can never silently diverge from `getOrCreate()`
+   * and drop the OSC 57301 callback again (#9907) — the omission becomes a
+   * compile error instead.
+   */
+  drawDataLossMarker: (id: string, droppedBytes: number) => void;
   onHibernationChanged: (id: string) => void;
+  /**
+   * Builds the deferred Image/file-link/web-link addons on the fresh post-wake
+   * Terminal — routing cwd/link wiring through the service. The wake path
+   * re-creates these eagerly (a woken terminal is about to be shown), keeping
+   * behaviour identical to pre-#9809 when `setupTerminalAddons` built the full
+   * set. Idempotent.
+   */
+  ensureDeferredAddons: (id: string) => void;
   /**
    * Live lookup for "has the user explicitly backgrounded this panel?" —
    * reads the renderer-side `backgroundedTerminals` map. Evaluated at every
@@ -153,30 +166,35 @@ export class TerminalHibernationManager {
     const terminal = new Terminal(managed.terminal.options);
     managed.terminal = terminal;
 
-    // Create fresh addons
-    const openLink = (url: string, event?: MouseEvent) => {
-      this.deps.openLink(url, id, event);
-    };
-    const addons = setupTerminalAddons(
-      terminal,
-      () => (this.deps.getCwdProvider(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event)
-    );
+    // Create fresh eager-core addons, then rebuild the deferred Image/link set
+    // via the same path the cold-open uses — a woken terminal is about to be
+    // shown, so it needs the full addon set immediately (#9809).
+    const addons = setupTerminalAddons(terminal);
     managed.fitAddon = addons.fitAddon;
     managed.serializeAddon = addons.serializeAddon;
     managed.searchAddon = addons.searchAddon;
     managed.imageAddon = addons.imageAddon;
     managed.fileLinksDisposable = addons.fileLinksDisposable;
     managed.webLinksAddon = addons.webLinksAddon;
+    this.deps.ensureDeferredAddons(id);
 
     // Reuse existing hostElement — clear old xterm DOM nodes to prevent ghosting
     const hostElement = managed.hostElement;
     hostElement.replaceChildren();
 
-    // Re-create parser handler
-    managed.parserHandler = new TerminalParserHandler(managed, () => {
-      this.deps.applyDeferredResize(id);
-    });
+    // Re-create parser handler — mirror `getOrCreate()` exactly, including the
+    // data-loss callback, so woken terminals keep rendering the "Output
+    // dropped" marker (#9907). `id` is the live key, never a captured managed
+    // ref — `drawDataLossMarker` does its own `instances.get(id)` lookup.
+    managed.parserHandler = new TerminalParserHandler(
+      managed,
+      () => {
+        this.deps.applyDeferredResize(id);
+      },
+      (droppedBytes) => {
+        this.deps.drawDataLossMarker(id, droppedBytes);
+      }
+    );
 
     // Re-register terminal-bound listeners via the canonical installer so the
     // wake path stays in lockstep with `getOrCreate()`. IPC listeners
@@ -191,6 +209,10 @@ export class TerminalHibernationManager {
     // Clear the reflow throttle so post-wake writes trigger an immediate
     // IO re-evaluation.
     managed.lastReflowAt = 0;
+    // Clear any counter stranded by a mid-write dispose — the old terminal's
+    // write callbacks will never fire, and the fresh Terminal has no queued
+    // writes, so a non-zero value here would block hibernation forever (#9912).
+    managed.pendingWrites = 0;
 
     // Re-bind the fresh Terminal to its DOM host. Without this, the
     // terminal exists in memory with a working buffer but no rendered
@@ -202,6 +224,12 @@ export class TerminalHibernationManager {
       try {
         terminal.open(hostElement);
         managed.isOpened = true;
+        // Re-anchor the first-write perf delta to this wake's open() — a
+        // terminal hibernated before its first byte would otherwise measure
+        // TERMINAL_FIRST_WRITE from the stale pre-hibernation open (#9809).
+        managed.terminalOpenStartedAt =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        managed.hasEmittedFirstWriteMark = false;
       } catch (err) {
         logError(`[TIS.unhibernate] terminal.open failed for ${id}`, err);
       }
@@ -223,16 +251,20 @@ export class TerminalHibernationManager {
    * eligibility predicate composes this with a BACKGROUND tier check.
    *
    * Rules:
-   * - Non-agent terminals: always safe.
+   * - In-flight writes: never safe, for ANY terminal. Disposing xterm while
+   *   its WriteBuffer holds queued chunks drops the write callbacks, which
+   *   strands `pendingWrites` above zero forever (#9912). This guard is
+   *   checked first so no other rule can bypass it.
+   * - Non-agent terminals: otherwise always safe.
    * - Agents in resting states (`idle`/`completed`/`exited`, or undefined
    *   state for legacy paths that never assigned canonicalAgentState):
-   *   always safe. `idle` is not in ACTIVE_AGENT_STATES — it represents
-   *   the agent itself reporting it has nothing to do.
+   *   otherwise always safe. `idle` is not in ACTIVE_AGENT_STATES — it
+   *   represents the agent itself reporting it has nothing to do.
    * - Agents in active states (`working`/`waiting`/`directing`): safe
-   *   only if no writes are in flight AND the last rendered output is
-   *   either non-existent or at least AGENT_IDLE_SILENCE_MS old. The
-   *   "never wrote" case is treated as safe because silence is by
-   *   definition infinite if no write has ever been recorded.
+   *   only if the last rendered output is either non-existent or at least
+   *   AGENT_IDLE_SILENCE_MS old. The "never wrote" case is treated as safe
+   *   because silence is by definition infinite if no write has ever been
+   *   recorded.
    * - User-backgrounded panels: the silence window is bypassed — the user
    *   explicitly hid the panel, so an active agent is no objection to
    *   reclaiming its memory under pressure. The `pendingWrites === 0` burst
@@ -245,10 +277,10 @@ export class TerminalHibernationManager {
     id: string,
     now: number = Date.now()
   ): boolean {
+    if ((managed.pendingWrites ?? 0) > 0) return false;
     if (!managed.runtimeAgentId) return true;
     const state = managed.canonicalAgentState;
     if (state === undefined || !ACTIVE_AGENT_STATES.has(state)) return true;
-    if ((managed.pendingWrites ?? 0) > 0) return false;
     if (this.deps.getIsBackgrounded(id)) return true;
     if (managed.lastWriteAt === undefined) return true;
     return now - managed.lastWriteAt >= AGENT_IDLE_SILENCE_MS;

@@ -362,6 +362,21 @@ describe("FleetArmingRibbon", () => {
     expect(useFleetPendingActionStore.getState().pending).toBeNull();
   });
 
+  it("renders 'Trash N terminals?' for the trash pending kind", () => {
+    // Regression guard for issue #9947: the trash confirmation must use
+    // 'terminal(s)' (matching the sibling kill case), not 'worktree(s)' —
+    // the action moves armed terminal panels to trash, not worktrees.
+    useFleetArmingStore.getState().armIds(["a", "b", "c", "d", "e"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "trash", targetCount: 5, sessionLossCount: 0 },
+    });
+    render(<FleetArmingRibbon />);
+    const ribbon = screen.getByTestId("fleet-arming-ribbon");
+    expect(ribbon.getAttribute("data-pending-action")).toBe("trash");
+    expect(screen.getByText(/Trash 5 terminals\?/)).toBeTruthy();
+    expect(ribbon.textContent).not.toMatch(/worktree/i);
+  });
+
   it("keeps the confirmation view visible when armed count drops to 1", () => {
     // Ribbon hides the normal view at armedCount < 2, but confirmation must
     // stay reachable: fleet.restart / fleet.kill always require confirmation

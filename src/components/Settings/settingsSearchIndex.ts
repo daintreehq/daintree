@@ -12,6 +12,15 @@ export interface SettingsSearchEntry {
   tab: SettingsTab;
   tabLabel: string;
   scope: SettingsScope;
+  /**
+   * Classifies the entry for the post-scoring pass. `tab-nav` is the
+   * synthetic row generated for each tab's nav target (id `tab-nav-${tab}`);
+   * `section` is a content section surfaced inside a tab. Required so the
+   * ranker can distinguish tab-navigation rows from real content sections
+   * without depending on id-prefix conventions — historical content ids
+   * like `tab-nav-project:environments` would otherwise be misclassified.
+   */
+  kind: "tab-nav" | "section";
   /** Optional subtab id to activate when navigating to this result. */
   subtab?: string;
   /** Human-readable subtab label used in search breadcrumbs and haystack. */
@@ -40,6 +49,7 @@ function sectionToEntry(
     tab,
     tabLabel,
     scope,
+    kind: "section",
     section: section.section,
     title: section.title,
     description: section.description,
@@ -70,6 +80,7 @@ function buildEntriesForTab(
     tab,
     tabLabel,
     scope,
+    kind: "tab-nav",
     section: "Settings Navigation",
     title: tabLabel,
     description: navDescription,

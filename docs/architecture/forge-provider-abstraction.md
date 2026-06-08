@@ -316,7 +316,7 @@ Host-owned actions become `forge.*` (the host dispatches to the active provider)
 - `forge.openIssues`, `forge.openPRs`, `forge.openCommits`, `forge.openIssue`, `forge.assignIssue`
 - `forge.validateToken` (per active provider)
 
-The GitHub built-in plugin contributes `github.*` aliases that forward to the corresponding `forge.*` action for one release cycle so existing user-defined keybindings, recipes, and `actions.repeatLast` MRU entries keep working. The aliases are removed in the release after, with a CHANGELOG callout.
+During the migration these were temporarily mirrored by `github.*` aliases that forwarded to the corresponding `forge.*` action so existing user-defined keybindings, recipes, and `actions.repeatLast` MRU entries kept working across the transition. Those aliases have since been removed; stale keybinding overrides referencing them are dropped non-fatally at load time.
 
 Even with only GitHub shipping, we land `forge.*` now so the action shape doesn't break a second time when the next provider arrives.
 
@@ -356,7 +356,7 @@ The refactor lands across multiple PRs in this order:
 4. **Built-in plugin loader.** `PluginService` scans `plugins/builtin/` before user plugins. Built-ins skip the install-time capability dialog.
 5. **GitHub built-in plugin: services.** Rehome `electron/services/github/*` into `plugins/builtin/github/main/`. Register via the new contribution point.
 6. **GitHub built-in plugin: components.** Move `src/components/GitHub/*` and the three Zustand stores into the plugin's renderer entry.
-7. **GitHub built-in plugin: actions.** Migrate `github.*` actions to host-owned `forge.*` with `github.*` aliases for one release.
+7. **GitHub built-in plugin: actions.** Migrate `github.*` actions to host-owned `forge.*` with `github.*` aliases for one release (aliases since removed).
 8. **`PRIntegrationService` rewrite.** Replace direct GitHub calls with `ForgeProviderRegistry.getActiveProvider(...).findPRByBranch(...)`. Snapshot consumers updated to read `linked.*`.
 9. **Settings UI.** Provider section in Preferences → Forge Integrations, rendering the GitHub plugin's auth UI.
 

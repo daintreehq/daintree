@@ -13,10 +13,12 @@ import {
   HIBERNATION_DELAY_PRESSURE_TIER1_MS,
   HIBERNATION_DELAY_PRESSURE_TIER2_MS,
 } from "./types";
+import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
   setupTerminalAddons,
   createImageAddon,
   createFileLinksAddon,
+  createImageLinksAddon,
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -32,17 +34,23 @@ import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import { TerminalHibernationManager } from "./TerminalHibernationManager";
 import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
+import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
+import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
   installTerminalBoundListeners,
   type TerminalListenerInstallDeps,
 } from "./TerminalListenerInstaller";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
+import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { yieldToScheduler } from "@/lib/schedulerYield";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { markRendererPerformance } from "@/utils/performance";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
@@ -66,6 +74,17 @@ const WEBGL_HIDE_DWELL_MS = 500;
 // resizes within this gap collapses into one pass — long enough to coalesce a
 // rapid close stream, short enough that survivors settle promptly after it.
 const GRID_RESIZE_COALESCE_MS = 120;
+
+// Default timeout for the restore-aware settle waits (`waitForFullySettled`,
+// `waitForAllFullySettled`). Aligned to the 30s Tier 1→3 promotion rule
+// (CLAUDE.md "Runtime Signals"): a settle that hasn't completed within 30s has
+// stalled past the point where an ambient indicator is appropriate, so the
+// gate gives up and surfaces the still-pending set rather than blocking
+// indefinitely. The wait is notification-driven (scheduler fires on each
+// restore state transition); the timer is only the safety fallback, so
+// Chromium 148 background-timer throttling in a hidden view at most delays the
+// fallback, never the correct completion path.
+const TERMINAL_BATCH_SETTLE_TIMEOUT_MS = 30000;
 
 // Terminals resized per task inside `runResizePass`, yielding to the scheduler
 // between chunks. xterm.js 6.0 reflows the whole scrollback on a
@@ -91,14 +110,20 @@ class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer = new TerminalOutputIngestService(
     (id, data) => this.writeToTerminal(id, data),
-    (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED
+    (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED,
+    // Ack chunks dropped by the background queue cap so the host's port
+    // flow-control ledger doesn't leak (#9906). The byte arg is ignored —
+    // acknowledgePortData shifts the original UTF-8 count the host queued.
+    (id) => terminalClient.acknowledgePortData(id, 0)
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
   private hibernationListeners = new Map<string, Set<() => void>>();
+  private scrollbackRestoreListeners = new Set<() => void>();
   private cwdProviders = new Map<string, () => string>();
   private readinessWaiters = new Map<string, Waiter[]>();
   private attachSettledWaiters = new Map<string, Waiter[]>();
+  private fullySettledWaiters = new Map<string, Waiter[]>();
   private offscreenManager = new TerminalOffscreenManager();
   private linkHandler = new TerminalLinkHandler();
   private cachedSelections = new Map<string, string>();
@@ -110,7 +135,9 @@ class TerminalInstanceService {
   private restoreController: TerminalRestoreController;
   private hibernationManager: TerminalHibernationManager;
   private reflowController: TerminalReflowController;
+  private reconciliationWatchdog: TerminalReconciliationWatchdog;
   private writeController: TerminalWriteController;
+  private unsubTierChanged: (() => void) | null = null;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -144,13 +171,23 @@ class TerminalInstanceService {
     this.hibernationManager = new TerminalHibernationManager({
       getInstance: (id) => this.instances.get(id),
       destroyRestoreState: (id) => this.restoreController.destroy(id),
-      resetBufferedOutput: (id) => this.dataBuffer.resetForTerminal(id),
+      resetBufferedOutput: (id) => {
+        // Ack bytes held in the ingest queue before wiping it: the pty-host's
+        // queuedBytes ledger counts them, and a silent discard leaves a
+        // permanent deficit that degrades backpressure to the 10s safety
+        // timeout (#9910).
+        terminalClient.discardPortAcks(id);
+        this.dataBuffer.resetForTerminal(id);
+      },
       releaseWebGL: (id) => this.webGLManager.onTerminalDestroyed(id),
       clearResizeJob: (managed) => this.resizeController.clearResizeJob(managed),
       clearSettledTimer: (id) => this.resizeController.clearSettledTimer(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
-      openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
-      getCwdProvider: (id) => this.cwdProviders.get(id),
+      drawDataLossMarker: (id, droppedBytes) => this.drawDataLossMarker(id, droppedBytes),
+      ensureDeferredAddons: (id) => {
+        const managed = this.instances.get(id);
+        if (managed) this.ensureDeferredAddons(id, managed);
+      },
       onHibernationChanged: (id) => this.notifyHibernationListeners(id),
       getIsBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       ...this.makeListenerInstallDeps(),
@@ -166,6 +203,8 @@ class TerminalInstanceService {
       restoreFromSerialized: (id, state) => this.restoreController.restoreFromSerialized(id, state),
       restoreFromSerializedIncremental: (id, state) =>
         this.restoreController.restoreFromSerializedIncremental(id, state),
+      isBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
+      onDeclined: (id) => this.injectDataLossMarker(id, 0),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -177,7 +216,9 @@ class TerminalInstanceService {
       },
       onPostWake: (id) => this.handlePostWake(id),
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
+      onDiscardHeld: (id) => this.discardHeldOutput(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      onBackgrounded: (id) => this.wakeManager.cancelPendingWake(id),
       onTierApplied: (id, tier, managed) => {
         // Enter scheduleHibernation whenever the terminal is BACKGROUND and
         // offscreen, even if it's not eligible right now. scheduleHibernation
@@ -223,6 +264,14 @@ class TerminalInstanceService {
             }
             managed.fileLinksDisposable = null;
           }
+          if (managed.imageLinksDisposable) {
+            try {
+              managed.imageLinksDisposable.dispose();
+            } catch {
+              /* ignore */
+            }
+            managed.imageLinksDisposable = null;
+          }
           if (managed.webLinksAddon) {
             try {
               managed.webLinksAddon.dispose();
@@ -239,50 +288,7 @@ class TerminalInstanceService {
           managed.lastScrollbackReduceAt = undefined;
           restoreScrollback(managed);
 
-          if (!managed.imageAddon) {
-            try {
-              managed.imageAddon = createImageAddon(managed.terminal);
-            } catch (err) {
-              logWarn("Failed to recreate ImageAddon", { id, error: err });
-            }
-          }
-          if (!managed.fileLinksDisposable) {
-            try {
-              managed.fileLinksDisposable = createFileLinksAddon(
-                managed.terminal,
-                () => (this.cwdProviders.get(id) ?? (() => ""))(),
-                (link) => {
-                  const current = this.instances.get(id);
-                  if (!current) return;
-                  current.hoveredLink = link;
-                }
-              );
-            } catch (err) {
-              logWarn("Failed to recreate FileLinksAddon", { id, error: err });
-            }
-          }
-          if (!managed.webLinksAddon) {
-            try {
-              managed.webLinksAddon = createWebLinksAddon(
-                managed.terminal,
-                (event, uri) => this.linkHandler.openLink(uri, id, event),
-                {
-                  hover: (_event, text) => {
-                    const current = this.instances.get(id);
-                    if (!current) return;
-                    current.hoveredLink = this.makeSyntheticLink(text, null, id);
-                  },
-                  leave: () => {
-                    const current = this.instances.get(id);
-                    if (!current) return;
-                    current.hoveredLink = null;
-                  },
-                }
-              );
-            } catch (err) {
-              logWarn("Failed to recreate WebLinksAddon", { id, error: err });
-            }
-          }
+          this.ensureDeferredAddons(id, managed);
         }
 
         if (managed.runtimeAgentId) {
@@ -309,6 +315,50 @@ class TerminalInstanceService {
         // reach the same answer.
         this.applyCursorBlinkPolicy(managed);
       },
+    });
+
+    // Constructed last — its deps reach every other controller. The watchdog
+    // self-starts (interval + visibilitychange + pointerdown diagnostic) and
+    // is torn down in dispose().
+    this.reconciliationWatchdog = new TerminalReconciliationWatchdog({
+      getInstances: () => this.instances.entries(),
+      setVisible: (id) => this.setVisible(id, true),
+      applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
+      reassertActiveBackendTier: (id) => this.rendererPolicy.reassertActiveTier(id),
+      getBackendTier: (id) => this.rendererPolicy.getLastBackendTier(id),
+      getStalledBytes: (id) => this.dataBuffer.getStalledBytes(id),
+      getQueuedBytes: (id) => this.dataBuffer.getQueuedBytes(id),
+      resumeFlush: (id) => this.dataBuffer.resumeFlush(id),
+      hasInFlightWake: (id) => this.wakeManager.hasInFlightWake(id),
+      hasPendingWake: (id) => this.wakeManager.hasPendingWake(id),
+      isWebGLActive: (id) => this.webGLManager.isActive(id),
+      shouldHaveWebGL: (managed) => this.shouldRestoreWebGL(managed),
+      ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
+      unhibernate: (id) => this.unhibernate(id),
+      forceReflow: (element) => forceXtermReflow(element),
+      isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
+    });
+
+    // If JetBrains Mono loads after the startup timeout already opened terminals
+    // against the fallback stack, repair every live grid once it arrives (#9776).
+    // The service is a page-lifetime singleton, so the unsubscribe is intentionally
+    // discarded — the subscription is one-shot and never needs teardown.
+    onTerminalFontArrivedLate(() => this.repairFontGrid());
+  }
+
+  // Reconcile our renderer-side dedupe baseline when the PTY host rewrites a
+  // terminal's tier on its own (window connect/disconnect/project switch).
+  // initializeBackendTier updates lastBackendTier without echoing back to the
+  // host, so a later applyRendererPolicy correctly re-sends "active" instead of
+  // dedupe-dropping it and leaving the pane frozen (issue #9778, the same-tier
+  // no-op re-arm trap from #8998). Installed lazily on first terminal creation
+  // — the same point onData/onExit are wired — so merely constructing the
+  // singleton never reaches into terminalClient (keeps it out of the hot import
+  // graph for unrelated component tests).
+  private ensureHostTierSubscription(): void {
+    if (this.unsubTierChanged) return;
+    this.unsubTierChanged = terminalClient.onTierChanged((id, tier) => {
+      this.rendererPolicy.initializeBackendTier(id, tier);
     });
   }
 
@@ -386,16 +436,22 @@ class TerminalInstanceService {
    * method. File links route through the actionService (file.view); URL and
    * OSC 8 links route through TerminalLinkHandler (localhost → browser panel
    * when modifier pressed, external open otherwise).
+   *
+   * Async defensively: today's `FileLink.activate` returns void and owns
+   * its own `.then/.catch` (so the leaf-level notify() fires there), but
+   * a future `ILink` implementation may return a Promise — a sync
+   * try/catch would silently drop that rejection, so we wrap with await
+   * to keep the contract future-proof (#9925).
    */
-  openHoveredLink(id: string, event?: MouseEvent): void {
+  async openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     const managed = this.instances.get(id);
     const link = managed?.hoveredLink;
     if (!link) return;
     const mouseEvent = event ?? new MouseEvent("click");
     try {
-      link.activate(mouseEvent, link.text);
+      await Promise.resolve(link.activate(mouseEvent, link.text));
     } catch (error) {
-      logWarn("Failed to activate hovered link", { id, error });
+      reportFileLinkFailure("Failed to activate hovered link", error, link.text);
     }
   }
 
@@ -840,20 +896,20 @@ class TerminalInstanceService {
     if (!current) return;
     if (!current.isOpened) return;
 
-    // Attach is in progress — running the wake now would race the attach's own
-    // post-rAF reconciliation. That reconciliation path does NOT run the full
-    // visibility-restore sequence, so we can't simply defer to it: mark the
-    // terminal so notifyAttachSettledWaiters re-runs this wake once attach
-    // settles (#9702).
-    if (current.isAttaching) {
-      current.pendingVisibilityWake = true;
-      return;
-    }
+    // Set the deferred-wake flag before the geometry sync so an unexpected
+    // throw from applyDeferredResize (e.g. a terminal disposed between the
+    // unhibernate re-fetch above and here) can't strand it: while attaching the
+    // async wake must re-run once attach settles, so the flag has to survive a
+    // throw. On the proceed path we clear it again below.
+    current.pendingVisibilityWake = current.isAttaching === true;
 
-    // We're proceeding with the full wake now, so clear any stale deferred-wake
-    // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
-    current.pendingVisibilityWake = false;
-
+    // Geometry sync runs synchronously even while attaching (#10070).
+    // applyDeferredResize only calls terminal.resize() — no buffer reset, no
+    // async — so it is safe mid-attach and corrects the grid before the warm
+    // paint gate releases the bridge view. Without this, an attaching terminal
+    // stays at the default 80x24 until the deferred wake re-runs after the
+    // bridge has already dropped, producing the visible render-small-then-snap.
+    //
     // Unlock symmetrically with the relock in the finally below: bypass the
     // lock whenever resize is suppressed, even if the suppression end time was
     // already cleared (the timer can fire between switch-back and this deferred
@@ -875,6 +931,20 @@ class TerminalInstanceService {
       }
     }
 
+    // Attach is in progress — running the async wake now would race the
+    // attach's own post-rAF reconciliation, which calls terminal.reset()
+    // during buffer restore. The geometry sync above is safe to keep, but the
+    // async wake must defer: pendingVisibilityWake was already set true above
+    // so notifyAttachSettledWaiters re-runs this wake once attach settles
+    // (#9702).
+    if (current.isAttaching) {
+      return;
+    }
+
+    // We're proceeding with the full wake now, so clear any stale deferred-wake
+    // flag (e.g. a prior skip whose deferred re-run we are now satisfying).
+    current.pendingVisibilityWake = false;
+
     const termEl = current.terminal.element;
     if (termEl) {
       try {
@@ -891,7 +961,7 @@ class TerminalInstanceService {
     // clears it in place. No-op for DOM-renderer terminals.
     this.webGLManager.repairAtlasForReactivation(id);
 
-    const ok = await this.wakeManager.wakeAndRestore(id);
+    const { ok, replayedMainBuffer } = await this.wakeManager.wakeAndRestore(id);
 
     // Re-check after async: terminal may have been destroyed, hibernated, or
     // replaced while wakeAndRestore was in flight.
@@ -904,7 +974,24 @@ class TerminalInstanceService {
     if (ok) {
       this.handlePostWake(id);
     }
-    this.dataBuffer.resumeFlush(id);
+    if (replayedMainBuffer) {
+      // The replayed snapshot already contains the held bytes — flushing
+      // would double-paint them (#9910).
+      this.discardHeldOutput(id);
+    } else {
+      this.dataBuffer.resumeFlush(id);
+    }
+  }
+
+  /**
+   * Drop bytes held in the ingest queue while backgrounded and ack them to
+   * the pty-host. Used after a successful main-buffer replay: the snapshot
+   * already contains those bytes, so flushing them would double-paint the
+   * tail, but the host's queuedBytes ledger still needs the acks (#9910).
+   */
+  private discardHeldOutput(id: string): void {
+    terminalClient.discardPortAcks(id);
+    this.dataBuffer.resetForTerminal(id);
   }
 
   /**
@@ -993,16 +1080,10 @@ class TerminalInstanceService {
 
     const terminal = new Terminal(terminalOptions);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
-    const addons = setupTerminalAddons(
-      terminal,
-      () => (this.cwdProviders.get(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event),
-      (link) => setHoveredLink(link),
-      {
-        hover: (_event, text) => setHoveredLink(this.makeSyntheticLink(text, null, id)),
-        leave: () => setHoveredLink(null),
-      }
-    );
+    // Only the eager core addons are built here. Image/file-link/web-link addons
+    // are deferred to ensureDeferredAddons(), called once the terminal is opened
+    // in attach() — keeping their construction off the bulk-create cold path.
+    const addons = setupTerminalAddons(terminal);
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -1013,6 +1094,9 @@ class TerminalInstanceService {
     const listeners: Array<() => void> = [];
     const exitSubscribers = new Set<(exitCode: number) => void>();
     const agentStateSubscribers = new Set<AgentStateCallback>();
+
+    // Wire the host→renderer tier reconciliation on first terminal creation.
+    this.ensureHostTierSubscription();
 
     const unsubData = terminalClient.onData(id, (data: string | Uint8Array) => {
       if (this.dataBuffer.isPolling()) return;
@@ -1114,6 +1198,12 @@ class TerminalInstanceService {
         /* ignore */
       }
       managed.fileLinksDisposable = null;
+      try {
+        managed.imageLinksDisposable?.dispose();
+      } catch {
+        /* ignore */
+      }
+      managed.imageLinksDisposable = null;
       try {
         managed.webLinksAddon?.dispose();
       } catch {
@@ -1248,6 +1338,11 @@ class TerminalInstanceService {
       this.attachSettledWaiters.delete(id);
     }
 
+    // Visual attach is one half of "fully settled". If restore already
+    // finished while this terminal was mid-attach, attach completing now is
+    // the moment it becomes fully settled — drain those waiters too.
+    this.notifyFullySettledWaitersIfReady(id);
+
     if (deferredWake) {
       void this.fullWakeForVisibilityRestore(id).catch((error) => {
         logWarn(`deferred fullWakeForVisibilityRestore failed for ${id}`, {
@@ -1271,6 +1366,174 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Resolves once a terminal is *fully* settled — both visually attached
+   * ({@link isAttachSettled}) and past its scrollback-restore lifecycle. Unlike
+   * {@link waitForAttachSettled}, which only gates on visual attach, this waits
+   * for the restore state machine to leave its in-flux states.
+   *
+   * A restore failure still settles the wait (the terminal is usable, just
+   * without restored scrollback); callers that care about success vs. silent
+   * failure inspect `lastScrollbackRestoreError` after the wait resolves.
+   *
+   * Precondition: call this only after restore has had a chance to be
+   * scheduled (state moved to `"pending"`). A brand-new terminal whose restore
+   * has not yet been queued reads as settled because its state is still
+   * `"none"` — there is nothing to wait for from this method's view.
+   */
+  waitForFullySettled(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
+    if (this.isFullySettled(id)) {
+      return Promise.resolve();
+    }
+
+    const timeoutMs = options.timeoutMs ?? TERMINAL_BATCH_SETTLE_TIMEOUT_MS;
+
+    return new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        this.removeFullySettledWaiter(id, resolve);
+        const state = this.instances.get(id)?.scrollbackRestoreState ?? "missing";
+        reject(
+          new Error(`Terminal ${id} fully-settle timeout after ${timeoutMs}ms (restore: ${state})`)
+        );
+      }, timeoutMs);
+
+      const waiters = this.fullySettledWaiters.get(id) || [];
+      waiters.push({ resolve, reject, timeout });
+      this.fullySettledWaiters.set(id, waiters);
+    });
+  }
+
+  /**
+   * Batch variant of {@link waitForFullySettled}: resolves once every panel in
+   * `ids` is fully settled, governed by a single shared timeout. On timeout the
+   * rejection names the still-pending panels. If a panel is destroyed mid-wait
+   * its per-panel waiter rejects, which fails the whole batch — this is a
+   * startup correctness gate, so a missing panel is a hard failure, not a
+   * silent partial success (hence `Promise.all`, not `allSettled`).
+   */
+  waitForAllFullySettled(ids: string[], options: { timeoutMs?: number } = {}): Promise<void> {
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length === 0) {
+      return Promise.resolve();
+    }
+
+    const timeoutMs = options.timeoutMs ?? TERMINAL_BATCH_SETTLE_TIMEOUT_MS;
+
+    return new Promise<void>((resolveBatch, rejectBatch) => {
+      let settled = false;
+      // Per-panel resolve handles we registered in `fullySettledWaiters`, so
+      // the shared timeout can detach them in one pass rather than leaving
+      // ghost waiters that fire after the batch has already rejected.
+      const registered: Array<{ id: string; resolve: () => void }> = [];
+
+      const detachAll = () => {
+        for (const entry of registered) {
+          this.removeFullySettledWaiter(entry.id, entry.resolve);
+        }
+      };
+
+      const timeout = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        detachAll();
+        const pending = uniqueIds.filter((id) => !this.isFullySettled(id));
+        rejectBatch(
+          new Error(`Terminals not fully settled after ${timeoutMs}ms: ${pending.join(", ")}`)
+        );
+      }, timeoutMs);
+
+      const perPanel = uniqueIds.map(
+        (id) =>
+          new Promise<void>((resolve, reject) => {
+            if (this.isFullySettled(id)) {
+              resolve();
+              return;
+            }
+            registered.push({ id, resolve });
+            const waiters = this.fullySettledWaiters.get(id) || [];
+            // No per-panel timer — the shared batch timeout above governs the
+            // whole set. `timeout: 0` is never a live handle, so the
+            // `clearTimeout` calls in the notify/destroy drain paths are no-ops.
+            waiters.push({ resolve, reject, timeout: 0 });
+            this.fullySettledWaiters.set(id, waiters);
+          })
+      );
+
+      void Promise.all(perPanel).then(
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolveBatch();
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          detachAll();
+          rejectBatch(error instanceof Error ? error : new Error(String(error)));
+        }
+      );
+    });
+  }
+
+  private isFullySettled(id: string): boolean {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return false;
+    if (!this.isAttachSettled(id)) return false;
+    // Restore is "settled" once it is no longer in flux — not queued
+    // ("pending") and not running ("in-progress"). "done" is a clean restore;
+    // "none" is terminal from a waiter's view in every case it occurs:
+    // restore was never scheduled (fresh terminal, no scrollback), aborted
+    // before starting (project switch — outcome no longer relevant), or failed
+    // and reset (lastScrollbackRestoreError set). The failure case still
+    // settles: a cosmetic scrollback failure must not strand the wait, and
+    // callers distinguish it via lastScrollbackRestoreError.
+    return managed.scrollbackRestoreState === "done" || managed.scrollbackRestoreState === "none";
+  }
+
+  /**
+   * Drains the fully-settled waiters for a terminal if it has reached the
+   * settled predicate. Reads the instance fresh (never closes over a captured
+   * `managed`) so a stale/replaced instance can't be acted on (#4850).
+   */
+  private notifyFullySettledWaitersIfReady(id: string): void {
+    if (!this.isFullySettled(id)) return;
+
+    const waiters = this.fullySettledWaiters.get(id);
+    if (!waiters) return;
+
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.resolve();
+    }
+    this.fullySettledWaiters.delete(id);
+  }
+
+  /**
+   * Scheduler-facing hook: the scrollback restore scheduler calls this after
+   * each terminal restore state transition (success, failure, or bail) so
+   * fully-settled waiters can re-check the predicate. Public because the
+   * scheduler lives in a sibling module and already calls into this singleton.
+   */
+  notifyRestoreSettledWaiters(id: string): void {
+    this.notifyFullySettledWaitersIfReady(id);
+  }
+
+  private removeFullySettledWaiter(id: string, resolve: () => void): void {
+    const waiters = this.fullySettledWaiters.get(id);
+    if (!waiters) return;
+
+    const index = waiters.findIndex((w) => w.resolve === resolve);
+    if (index >= 0) {
+      waiters.splice(index, 1);
+    }
+
+    if (waiters.length === 0) {
+      this.fullySettledWaiters.delete(id);
+    }
+  }
+
   private cancelAttachReveal(managed: ManagedTerminal): void {
     managed.attachRevealToken++;
     if (managed.attachRevealTimer !== undefined) {
@@ -1288,6 +1551,81 @@ class TerminalInstanceService {
     if (managed.webGLHideTimer !== undefined) {
       clearTimeout(managed.webGLHideTimer);
       managed.webGLHideTimer = undefined;
+    }
+  }
+
+  /**
+   * Builds the tier-managed, non-critical addons (Image DCS handlers, file-link
+   * and web-link providers) that `setupTerminalAddons` deliberately skips on the
+   * bulk-create cold path. Idempotent — each addon is only created when its slot
+   * is null, so this is safe to call from both the cold-open path in `attach()`
+   * and the BACKGROUND→active tier-upgrade path. Never call it for a BACKGROUND
+   * terminal; the tier machinery disposes these addons there on purpose (#9809).
+   */
+  private ensureDeferredAddons(id: string, managed: ManagedTerminal): void {
+    if (!managed.imageAddon) {
+      try {
+        managed.imageAddon = createImageAddon(managed.terminal);
+      } catch (err) {
+        logWarn("Failed to create ImageAddon", { id, error: err });
+      }
+    }
+    if (!managed.fileLinksDisposable) {
+      try {
+        managed.fileLinksDisposable = createFileLinksAddon(
+          managed.terminal,
+          () => (this.cwdProviders.get(id) ?? (() => ""))(),
+          (link) => {
+            const current = this.instances.get(id);
+            if (!current) return;
+            current.hoveredLink = link;
+          }
+        );
+      } catch (err) {
+        logWarn("Failed to create FileLinksAddon", { id, error: err });
+      }
+    }
+    // `[image #N]` references are clickable only in the assistant terminal,
+    // where the help session owns the figure state (#9830). Gating on the
+    // bound help terminal keeps grid terminals that happen to print the token
+    // inert, and the provider rebuilds with the rest on tier promotion.
+    if (!managed.imageLinksDisposable && useHelpPanelStore.getState().terminalId === id) {
+      try {
+        managed.imageLinksDisposable = createImageLinksAddon(
+          managed.terminal,
+          () => useHelpPanelStore.getState().figures.map((f) => f.figureNumber),
+          (figureNumber, openLightbox) => {
+            useHelpPanelStore.getState().setActiveFigureNumber(figureNumber);
+            // Lightbox open on modified-click lands with the figure rail
+            // (#9829); the highlight is the interim affordance until then.
+            void openLightbox;
+          }
+        );
+      } catch (err) {
+        logWarn("Failed to create ImageLinksAddon", { id, error: err });
+      }
+    }
+    if (!managed.webLinksAddon) {
+      try {
+        managed.webLinksAddon = createWebLinksAddon(
+          managed.terminal,
+          (event, uri) => this.linkHandler.openLink(uri, id, event),
+          {
+            hover: (_event, text) => {
+              const current = this.instances.get(id);
+              if (!current) return;
+              current.hoveredLink = this.makeSyntheticLink(text, null, id);
+            },
+            leave: () => {
+              const current = this.instances.get(id);
+              if (!current) return;
+              current.hoveredLink = null;
+            },
+          }
+        );
+      } catch (err) {
+        logWarn("Failed to create WebLinksAddon", { id, error: err });
+      }
     }
   }
 
@@ -1327,9 +1665,26 @@ class TerminalInstanceService {
       if (managed.targetCols && managed.targetRows) {
         managed.terminal.resize(managed.targetCols, managed.targetRows);
       }
-      managed.terminal.open(managed.hostElement);
+      // Bracket the synchronous open() — the first-paint step that builds
+      // xterm's DOM, forces a reflow to measure the cell grid, and inits the
+      // renderer. terminalOpenStartedAt anchors the first-write delta (#9809).
+      managed.terminalOpenStartedAt =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+      managed.hasEmittedFirstWriteMark = false;
+      markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
+      try {
+        managed.terminal.open(managed.hostElement);
+      } finally {
+        markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
+      }
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
+      // Build the deferred Image/link addons now that the terminal is live.
+      // Skip BACKGROUND terminals — the tier machinery disposes these addons
+      // there on purpose; they're rebuilt on the next promotion.
+      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
+        this.ensureDeferredAddons(id, managed);
+      }
       if (managed.runtimeAgentId && isWebGLEligibleTier(managed.lastAppliedTier)) {
         this.webGLManager.ensureContext(id, managed);
       }
@@ -1550,6 +1905,19 @@ class TerminalInstanceService {
 
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearSettledTimer(id);
+
+    // Seed the warm-attach target dims from the last measured geometry (#10070).
+    // Background-tier resizes only update latestCols/latestRows, never
+    // targetCols/targetRows, so a terminal that was only ever resized while
+    // backgrounded reattaches with no saved targets — the synchronous
+    // warm-attach resize (and the cold-seed before open()) is skipped and the
+    // grid flashes 80x24. Backfill here, at the lifecycle boundary where we
+    // know the terminal is about to be reattached warm, only when targets are
+    // unset and the measured size is real.
+    if (!managed.targetCols && managed.latestCols > 0) {
+      managed.targetCols = managed.latestCols;
+      managed.targetRows = managed.latestRows;
+    }
 
     if (managed.hostElement.parentElement) {
       const hiddenContainer = this.offscreenManager.ensureHiddenContainer();
@@ -1820,6 +2188,55 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Subscribe to batch scrollback-restore state changes. The scheduler
+   * (`scrollbackRestoreScheduler`) drives every `scrollbackRestoreState`
+   * transition and calls `notifyScrollbackRestoreListeners` after each, so
+   * the grid-level `BatchScrollbackRestoreBar` can reflect progress without
+   * polling. Listeners are batch-scoped (no per-id keying) — the aggregate
+   * counts span every managed terminal. Returns an unsubscribe cleanup.
+   */
+  subscribeScrollbackRestoreState(listener: () => void): () => void {
+    this.scrollbackRestoreListeners.add(listener);
+    return () => {
+      this.scrollbackRestoreListeners.delete(listener);
+    };
+  }
+
+  notifyScrollbackRestoreListeners(): void {
+    for (const listener of this.scrollbackRestoreListeners) {
+      try {
+        listener();
+      } catch (error) {
+        logWarn("Scrollback restore listener error", { error });
+      }
+    }
+  }
+
+  // Three primitive accessors rather than one object snapshot: useSyncExternalStore
+  // re-renders whenever getSnapshot returns a new reference, so each subscriber
+  // reads a stable `number`. The instance map is small, so re-tallying per
+  // accessor is cheap and avoids snapshot-caching invalidation bugs.
+  getScrollbackRestorePendingCount(): number {
+    return this.tallyScrollbackRestore().pendingCount;
+  }
+
+  getScrollbackRestoreInProgressCount(): number {
+    return this.tallyScrollbackRestore().inProgressCount;
+  }
+
+  getScrollbackRestoreTotalCount(): number {
+    return this.tallyScrollbackRestore().totalCount;
+  }
+
+  private tallyScrollbackRestore() {
+    const states: ManagedTerminal["scrollbackRestoreState"][] = [];
+    for (const managed of this.instances.values()) {
+      states.push(managed.scrollbackRestoreState);
+    }
+    return tallyScrollbackRestoreStates(states);
+  }
+
   getUnseenOutputSnapshot(id: string): UnseenOutputSnapshot {
     return this.unseenTracker.getSnapshot(id);
   }
@@ -1858,10 +2275,11 @@ class TerminalInstanceService {
       if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
         this.resizeController.sendPtyResize(id, cols, rows);
       }
-      // Clear throttle so any subsequent write triggers an immediate reflow;
-      // settled-strategy agents are WebGL so maybeReflowTerminal itself is a
-      // no-op, but the clear is cheap and keeps the post-wake contract
-      // uniform across paths.
+      // Clear throttle so the next write — or the 3s heartbeat — triggers an
+      // immediate reflow. We don't call maybeReflowTerminal() inline here
+      // because the deferred PTY resize above hasn't landed yet; reflowing
+      // mid-resize would jitter against the pending dimension change. The
+      // heartbeat and focus paths cover any IO unpause within 3s.
       managed.lastReflowAt = 0;
       return;
     }
@@ -2217,6 +2635,39 @@ class TerminalInstanceService {
     });
   }
 
+  /**
+   * Re-measure character cell metrics for every live terminal and refit.
+   *
+   * Called when JetBrains Mono finishes loading *after* the startup font timeout
+   * already unblocked `terminal.open()` (#9776). Those terminals measured their
+   * cell size against the fallback monospace stack, so the grid is sized wrong
+   * for the rest of the session. xterm's CharSizeService only re-measures on a
+   * genuine `fontFamily`/`fontSize` change — `OptionsService` dedups same-value
+   * sets — so we briefly poke `fontFamily` to a distinct (but visually
+   * identical, trailing-space) string and restore it, firing the re-measure,
+   * then refit so cols/rows recompute against the corrected cell metrics.
+   */
+  repairFontGrid(): void {
+    this.instances.forEach((managed, id) => {
+      if (managed.isHibernated) return;
+      try {
+        const current = managed.terminal.options.fontFamily ?? DEFAULT_TERMINAL_FONT_FAMILY;
+        // A trailing space parses identically in CSS (no visible flicker) but is
+        // a distinct string, so it defeats OptionsService's same-value dedup and
+        // fires onMultipleOptionChange -> CharSizeService.measure() twice.
+        managed.terminal.options.fontFamily = `${current} `;
+        managed.terminal.options.fontFamily = current;
+        // fit() doesn't read these, but the ResizeObserver-driven resize() path
+        // dedups by pixel size — reset so the next observation isn't suppressed.
+        managed.lastWidth = 0;
+        managed.lastHeight = 0;
+        this.resizeController.fit(id);
+      } catch (error) {
+        logError("Failed to repair terminal font grid", error, { id });
+      }
+    });
+  }
+
   applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
     this.rendererPolicy.applyRendererPolicy(id, tier);
   }
@@ -2408,17 +2859,25 @@ class TerminalInstanceService {
       this.attachSettledWaiters.delete(id);
     }
 
+    const fullySettledWaiters = this.fullySettledWaiters.get(id);
+    if (fullySettledWaiters) {
+      for (const waiter of fullySettledWaiters) {
+        clearTimeout(waiter.timeout);
+        waiter.reject(new Error(`Terminal ${id} destroyed before fully settled`));
+      }
+      this.fullySettledWaiters.delete(id);
+    }
+
     this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
 
-    if (managed.scrollbackRestoreDisposable) {
-      managed.scrollbackRestoreDisposable.dispose();
-      managed.scrollbackRestoreDisposable = undefined;
-    }
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    // Keep the batch aggregate honest when a terminal is torn down mid-restore
+    // (e.g. the user closes a pane while it is still pending/in-progress).
+    this.notifyScrollbackRestoreListeners();
 
     for (const unsub of managed.listeners) {
       try {
@@ -2432,6 +2891,11 @@ class TerminalInstanceService {
     this.resizeController.clearResizeJob(managed);
     this.resizeController.clearResizeLock(id);
     this.resizeController.clearSettledTimer(id);
+    // Renderer-side destroy without a prior kill (project close, LRU
+    // eviction of an exited terminal) must still drain the port-ack FIFO
+    // before the held queue is wiped (#9910). kill/gracefulKill/trash clear
+    // the FIFO themselves, so this is a no-op on those paths.
+    terminalClient.discardPortAcks(id);
     this.dataBuffer.resetForTerminal(id);
     this.unseenTracker.destroy(id);
     this.hibernationListeners.delete(id);
@@ -2497,6 +2961,11 @@ class TerminalInstanceService {
         logWarn("Error disposing file links", { error });
       }
       try {
+        managed.imageLinksDisposable?.dispose();
+      } catch (error) {
+        logWarn("Error disposing image links", { error });
+      }
+      try {
         managed.webLinksAddon?.dispose();
       } catch (error) {
         logWarn("Error disposing web links addon", { error });
@@ -2509,10 +2978,14 @@ class TerminalInstanceService {
 
       this.webGLManager.onTerminalDestroyed(id);
       managed.terminal.dispose();
+    }
 
-      if (managed.hostElement.parentElement) {
-        managed.hostElement.parentElement.removeChild(managed.hostElement);
-      }
+    // Detach the host element regardless of hibernation state: a hibernated
+    // terminal's host may have been parked in the shared offscreen container
+    // by detach()/detachForProjectSwitch() (raw child, not a registered slot),
+    // and the gated branch above doesn't reach it (#9909).
+    if (managed.hostElement.parentElement) {
+      managed.hostElement.parentElement.removeChild(managed.hostElement);
     }
 
     this.offscreenManager.removeOffscreenSlot(id);
@@ -2525,11 +2998,14 @@ class TerminalInstanceService {
 
   dispose(): void {
     this.stopPolling();
+    this.unsubTierChanged?.();
+    this.unsubTierChanged = null;
     // Abort any in-flight chunked resize pass so its yielded continuation
     // doesn't resume against a torn-down service.
     this.resizePassAbort?.abort();
     this.resizePassAbort = undefined;
     this.reflowController.dispose();
+    this.reconciliationWatchdog.dispose();
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();
     this.wakeManager.dispose();
@@ -2568,10 +3044,13 @@ class TerminalInstanceService {
 
 export const terminalInstanceService = new TerminalInstanceService();
 
-// Expose terminal buffer reader for E2E tests (WebGL renderer has no DOM text).
-// Registered unconditionally but gated at call time — the function is harmless
-// in production and avoids import-time env var timing issues.
-if (typeof window !== "undefined") {
+// Expose terminal introspection/control bridges for E2E tests (the WebGL
+// renderer has no DOM text, so specs read the buffer through these). Gated on
+// the preload-injected __DAINTREE_E2E_MODE__ flag (set only under
+// DAINTREE_E2E_MODE=1 on non-packaged builds), so none of these globals attach
+// in production sessions. The flag is injected via contextBridge before this
+// module evaluates, so the gate is reliable at import time.
+if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
   (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer = (
     panelId: string
   ): string => {

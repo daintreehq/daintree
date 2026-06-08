@@ -16,6 +16,10 @@ interface RecipeRunnerItemProps {
   mode: "grid" | "list";
   disabled?: boolean;
   id: string;
+  tabIndex?: number;
+  buttonRef?: React.Ref<HTMLButtonElement>;
+  onFocus?: () => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLButtonElement>) => void;
   onRun: (id: string) => void;
   onEdit: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -30,6 +34,10 @@ export function RecipeRunnerItem({
   mode,
   disabled,
   id,
+  tabIndex,
+  buttonRef,
+  onFocus,
+  onKeyDown,
   onRun,
   onEdit,
   onDuplicate,
@@ -46,11 +54,15 @@ export function RecipeRunnerItem({
         <ContextMenuTrigger asChild>
           <button
             id={id}
+            ref={buttonRef}
             role="option"
             aria-selected={isFocused}
             type="button"
             onClick={() => onRun(recipe.id)}
+            onFocus={onFocus}
+            onKeyDown={onKeyDown}
             disabled={disabled}
+            tabIndex={disabled ? -1 : (tabIndex ?? 0)}
             className={cn(
               "group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle aria-selected:ring-2 aria-selected:ring-daintree-accent/60",
               recipe.shadowedBy && "opacity-60"
@@ -98,11 +110,15 @@ export function RecipeRunnerItem({
       <ContextMenuTrigger asChild>
         <button
           id={id}
+          ref={buttonRef}
           role="option"
           aria-selected={isFocused}
           type="button"
           onClick={() => onRun(recipe.id)}
+          onFocus={onFocus}
+          onKeyDown={onKeyDown}
           disabled={disabled}
+          tabIndex={disabled ? -1 : (tabIndex ?? 0)}
           className={cn(
             "group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle aria-selected:ring-2 aria-selected:ring-daintree-accent/60",
             recipe.shadowedBy && "opacity-60"

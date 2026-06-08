@@ -29,6 +29,8 @@ import type {
   DemoAnnotateResult,
   DemoDismissAnnotationPayload,
   DemoWaitForIdlePayload,
+  DemoTypeInTerminalPayload,
+  DemoSendKeyToTerminalPayload,
 } from "../../../shared/types/ipc/demo.js";
 
 const CAPTURE_MIME_TYPE = "video/webm;codecs=vp9";
@@ -43,13 +45,36 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     return deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
   }
 
-  function sendCommandAndAwait(execChannel: string, payload?: unknown): Promise<void> {
+  // Watchdog budget for a command whose own expected runtime is known: 20% slack
+  // for variance plus a flat 5s for IPC serialization, renderer event-loop lag,
+  // and timer coarseness. Without this, the default 30s ceiling silently caps any
+  // beat that legitimately runs longer (#10142).
+  function demoTimeoutBuffer(expectedMs: number): number {
+    return Math.ceil(expectedMs * 1.2 + 5_000);
+  }
+
+  // Typing duration is nondeterministic — getTypingDelay (renderer) humanizes each
+  // keystroke around `1000 / cps` with post-punctuation pauses and rare ~2400ms
+  // outliers. An 8x multiplier over the nominal time covers that worst case. The
+  // renderer also floors every keystroke at 20ms, so for very high cps the nominal
+  // time underestimates real time — take the larger of the two budgets.
+  function typingTimeoutMs(text: string, cps?: number): number {
+    const nominalMs = (text.length / Math.max(1, cps ?? 12)) * 1000 * 8;
+    const keystrokeFloorMs = text.length * 20;
+    return Math.ceil(Math.max(nominalMs, keystrokeFloorMs) + 5_000);
+  }
+
+  function sendCommandAndAwait(
+    execChannel: string,
+    payload?: unknown,
+    timeoutMs = 30_000
+  ): Promise<void> {
     const requestId = randomBytes(8).toString("hex");
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         ipcMain.removeListener(CHANNELS.DEMO_COMMAND_DONE, listener);
         reject(new Error(`Demo command timed out: ${execChannel}`));
-      }, 30_000);
+      }, timeoutMs);
 
       const listener = (
         _event: Electron.IpcMainEvent,
@@ -82,7 +107,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     captureId: string;
     outputPath: string;
     writeStream: fs.WriteStream;
-    frameCount: number;
+    chunkCount: number;
     stopping: boolean;
     finalized: boolean;
     finalizePromise: Promise<DemoStopCaptureResult>;
@@ -109,12 +134,13 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     if (!active || active.captureId !== payload.captureId || active.finalized) return;
     const buf = Buffer.from(payload.data.buffer, payload.data.byteOffset, payload.data.byteLength);
     active.writeStream.write(buf);
+    active.chunkCount += 1;
   };
 
   const onCaptureStop = (_event: Electron.IpcMainEvent, payload: DemoCaptureStopPayload) => {
     const active = captureSession;
     if (!active || active.captureId !== payload.captureId || active.finalized) return;
-    active.frameCount = payload.frameCount;
+    active.chunkCount = payload.chunkCount;
     active.finalized = true;
     const rendererError = payload.error;
     active.writeStream.end(() => {
@@ -124,7 +150,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       } else {
         active.resolveFinalizeWith({
           outputPath: active.outputPath,
-          frameCount: active.frameCount,
+          chunkCount: active.chunkCount,
         });
       }
     });
@@ -137,19 +163,31 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     name: "demo",
     ops: {
       moveTo: op(DEMO_METHOD_CHANNELS.moveTo, async (payload: DemoMoveToPayload): Promise<void> => {
-        await sendCommandAndAwait(CHANNELS.DEMO_EXEC_MOVE_TO, payload);
+        await sendCommandAndAwait(
+          CHANNELS.DEMO_EXEC_MOVE_TO,
+          payload,
+          demoTimeoutBuffer(payload.durationMs ?? 3_000)
+        );
       }),
       moveToSelector: op(
         DEMO_METHOD_CHANNELS.moveToSelector,
         async (payload: DemoMoveToSelectorPayload): Promise<void> => {
-          await sendCommandAndAwait(CHANNELS.DEMO_EXEC_MOVE_TO_SELECTOR, payload);
+          await sendCommandAndAwait(
+            CHANNELS.DEMO_EXEC_MOVE_TO_SELECTOR,
+            payload,
+            demoTimeoutBuffer(payload.durationMs ?? 3_000)
+          );
         }
       ),
       click: op(DEMO_METHOD_CHANNELS.click, async (): Promise<void> => {
         await sendCommandAndAwait(CHANNELS.DEMO_EXEC_CLICK);
       }),
       type: op(DEMO_METHOD_CHANNELS.type, async (payload: DemoTypePayload): Promise<void> => {
-        await sendCommandAndAwait(CHANNELS.DEMO_EXEC_TYPE, payload);
+        await sendCommandAndAwait(
+          CHANNELS.DEMO_EXEC_TYPE,
+          payload,
+          typingTimeoutMs(payload.text, payload.cps)
+        );
       }),
       screenshot: op(DEMO_METHOD_CHANNELS.screenshot, async (): Promise<DemoScreenshotResult> => {
         const win = getMainWindow();
@@ -168,7 +206,11 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       waitForSelector: op(
         DEMO_METHOD_CHANNELS.waitForSelector,
         async (payload: DemoWaitForSelectorPayload): Promise<void> => {
-          await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_SELECTOR, payload);
+          await sendCommandAndAwait(
+            CHANNELS.DEMO_EXEC_WAIT_FOR_SELECTOR,
+            payload,
+            demoTimeoutBuffer(payload.timeoutMs ?? 10_000)
+          );
         }
       ),
       pause: op(DEMO_METHOD_CHANNELS.pause, async (): Promise<void> => {
@@ -178,18 +220,42 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
         await sendCommandAndAwait(CHANNELS.DEMO_EXEC_RESUME);
       }),
       sleep: op(DEMO_METHOD_CHANNELS.sleep, async (payload: DemoSleepPayload): Promise<void> => {
-        await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SLEEP, payload);
+        await sendCommandAndAwait(
+          CHANNELS.DEMO_EXEC_SLEEP,
+          payload,
+          demoTimeoutBuffer(payload.durationMs)
+        );
       }),
       scroll: op(DEMO_METHOD_CHANNELS.scroll, async (payload: DemoScrollPayload): Promise<void> => {
         await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SCROLL, payload);
       }),
       drag: op(DEMO_METHOD_CHANNELS.drag, async (payload: DemoDragPayload): Promise<void> => {
-        await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DRAG, payload);
+        await sendCommandAndAwait(
+          CHANNELS.DEMO_EXEC_DRAG,
+          payload,
+          demoTimeoutBuffer(payload.durationMs ?? 3_000)
+        );
       }),
       pressKey: op(
         DEMO_METHOD_CHANNELS.pressKey,
         async (payload: DemoPressKeyPayload): Promise<void> => {
           await sendCommandAndAwait(CHANNELS.DEMO_EXEC_PRESS_KEY, payload);
+        }
+      ),
+      typeInTerminal: op(
+        DEMO_METHOD_CHANNELS.typeInTerminal,
+        async (payload: DemoTypeInTerminalPayload): Promise<void> => {
+          await sendCommandAndAwait(
+            CHANNELS.DEMO_EXEC_TYPE_IN_TERMINAL,
+            payload,
+            typingTimeoutMs(payload.text, payload.cps)
+          );
+        }
+      ),
+      sendKeyToTerminal: op(
+        DEMO_METHOD_CHANNELS.sendKeyToTerminal,
+        async (payload: DemoSendKeyToTerminalPayload): Promise<void> => {
+          await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SEND_KEY_TO_TERMINAL, payload);
         }
       ),
       spotlight: op(
@@ -218,7 +284,11 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       waitForIdle: op(
         DEMO_METHOD_CHANNELS.waitForIdle,
         async (payload: DemoWaitForIdlePayload): Promise<void> => {
-          await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE, payload);
+          await sendCommandAndAwait(
+            CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE,
+            payload,
+            demoTimeoutBuffer(payload.timeoutMs ?? 5_000)
+          );
         }
       ),
       startCapture: op(
@@ -229,7 +299,12 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
           }
 
           const fps = payload.fps ?? 30;
-          const { outputPath } = payload;
+          const { outputPath, width, height } = payload;
+          // Default to a very-high-quality bitrate so demo recordings are
+          // embeddable masters out of the box (~40 Mbps comfortably covers up
+          // to 4K). Callers can override down for smaller files. MediaRecorder's
+          // own default is far lower (~2.5 Mbps), which looks blocky at high res.
+          const videoBitsPerSecond = payload.videoBitsPerSecond ?? 40_000_000;
 
           fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
@@ -250,7 +325,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
             captureId,
             outputPath,
             writeStream,
-            frameCount: 0,
+            chunkCount: 0,
             stopping: false,
             finalized: false,
             finalizePromise,
@@ -273,6 +348,9 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
               captureId,
               fps,
               mimeType: CAPTURE_MIME_TYPE,
+              videoBitsPerSecond,
+              width,
+              height,
             });
           } catch (err) {
             captureSession = null;
@@ -314,7 +392,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
         async (): Promise<DemoCaptureStatus> => {
           return {
             active: captureSession !== null && !captureSession.finalized,
-            frameCount: captureSession?.frameCount ?? 0,
+            chunkCount: captureSession?.chunkCount ?? 0,
             outputPath: captureSession?.outputPath ?? null,
           };
         }

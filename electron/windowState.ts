@@ -104,12 +104,21 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
 } {
   const display = screen.getDisplayMatching(bounds as Electron.Rectangle);
   if (!display) return bounds;
-  const wa = display.workArea;
-  const clampedWidth = Math.round(Math.min(bounds.width, wa.width));
-  const clampedHeight = Math.round(Math.min(bounds.height, wa.height));
+  // Some Wayland/GNOME compositors report a zero-dimension workArea; fall back to
+  // the display's full bounds so the clamp math never produces a 0x0 window.
+  const safeWorkArea =
+    display.workArea.width > 0 && display.workArea.height > 0 ? display.workArea : display.bounds;
+  const clampedWidth = Math.round(Math.min(bounds.width, safeWorkArea.width));
+  const clampedHeight = Math.round(Math.min(bounds.height, safeWorkArea.height));
   return {
-    x: Math.max(wa.x, Math.min(bounds.x, wa.x + wa.width - clampedWidth)),
-    y: Math.max(wa.y, Math.min(bounds.y, wa.y + wa.height - clampedHeight)),
+    x: Math.max(
+      safeWorkArea.x,
+      Math.min(bounds.x, safeWorkArea.x + safeWorkArea.width - clampedWidth)
+    ),
+    y: Math.max(
+      safeWorkArea.y,
+      Math.min(bounds.y, safeWorkArea.y + safeWorkArea.height - clampedHeight)
+    ),
     width: clampedWidth,
     height: clampedHeight,
   };
@@ -177,36 +186,50 @@ export function createWindowWithState(
     height: windowState.height,
   });
 
-  const bounds = win.getBounds();
-  const display = screen.getDisplayMatching(bounds);
+  let bounds = win.getBounds();
+  const hasSavedPosition = windowState.x !== undefined && windowState.y !== undefined;
+  // When the saved state has no x/y (cold-start / first-run / defaults), getBounds() on a
+  // show:false window returns placeholder coordinates, so getDisplayMatching would route to
+  // the primary display anyway — call it directly to make the intent explicit (#10076).
+  const display = hasSavedPosition ? screen.getDisplayMatching(bounds) : screen.getPrimaryDisplay();
 
   if (
     !display ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
     bounds.width <= 0 ||
-    bounds.height <= 0 ||
-    windowState.x === undefined ||
-    windowState.y === undefined
+    bounds.height <= 0
   ) {
     win.center();
   } else {
     const workArea = display.workArea;
-    const visibleWidth =
-      Math.min(bounds.x + bounds.width, workArea.x + workArea.width) -
-      Math.max(bounds.x, workArea.x);
-    const visibleHeight =
-      Math.min(bounds.y + bounds.height, workArea.y + workArea.height) -
-      Math.max(bounds.y, workArea.y);
-    const visibleArea = Math.max(0, visibleWidth) * Math.max(0, visibleHeight);
-    const totalArea = bounds.width * bounds.height;
+    // Some Wayland/GNOME compositors report a zero-dimension workArea; fall back to the
+    // display's full bounds so the clamp math below never produces a 0x0 window.
+    const safeWorkArea = workArea.width > 0 && workArea.height > 0 ? workArea : display.bounds;
 
-    if (
-      visibleArea < totalArea * 0.5 ||
-      bounds.width > workArea.width ||
-      bounds.height > workArea.height
-    ) {
-      const clampedWidth = Math.round(Math.min(bounds.width, workArea.width));
-      const clampedHeight = Math.round(Math.min(bounds.height, workArea.height));
+    const clampedWidth = Math.round(Math.min(bounds.width, safeWorkArea.width));
+    const clampedHeight = Math.round(Math.min(bounds.height, safeWorkArea.height));
+
+    // Always run the size clamp — the bug (#10076) was that the coordinate-less path
+    // short-circuited to win.center() and skipped this entirely, leaving an oversized
+    // default window off-screen on small displays (1366x768 taskbar, 1280x720, RDP, VMs).
+    if (clampedWidth !== bounds.width || clampedHeight !== bounds.height) {
       win.setSize(clampedWidth, clampedHeight);
+      bounds = win.getBounds();
+    }
+
+    if (hasSavedPosition) {
+      // Route through clampToDisplay so windows that are partially off-screen (e.g.
+      // x=-300 on a 1920px display) get pulled back to keep the title bar reachable,
+      // not just the >50% off-screen case the old inline math caught.
+      const clamped = clampToDisplay({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      });
+      win.setBounds(clamped);
+    } else {
       win.center();
     }
   }

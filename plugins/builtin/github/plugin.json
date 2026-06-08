@@ -21,7 +21,9 @@
           "required-checks",
           "draft-prs",
           "assignees",
-          "releases"
+          "releases",
+          "batch-branch-prs",
+          "identity"
         ]
       }
     ],

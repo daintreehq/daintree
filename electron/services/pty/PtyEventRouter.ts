@@ -229,6 +229,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.info);
       return true;
 
+    case "flow-control-snapshot":
+      broker.resolve(event.requestId, event.snapshot);
+      return true;
+
     case "terminal-pid":
       state.terminalPids.set(event.id, event.pid);
       if (callbacks.onTerminalPid) {
@@ -262,6 +266,8 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       emitter.emit("host-memory-warning", {
         isWarning: event.isWarning,
         utilizationPercent: event.utilizationPercent,
+        heapMb: event.heapMb,
+        externalMb: event.externalMb,
         timestamp: event.timestamp,
       });
       return true;

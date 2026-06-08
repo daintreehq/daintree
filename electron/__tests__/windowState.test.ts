@@ -12,6 +12,11 @@ vi.mock("../store.js", () => ({
 const screenMock = vi.hoisted(() => ({
   getDisplayMatching: vi.fn(() => ({
     workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+  })),
+  getPrimaryDisplay: vi.fn(() => ({
+    workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
   })),
 }));
 
@@ -28,6 +33,7 @@ const winInstance = {
   setFullScreen: vi.fn(),
   center: vi.fn(),
   setSize: vi.fn(),
+  setBounds: vi.fn(),
   on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
     eventHandlers.set(event, handler);
   }),
@@ -273,7 +279,7 @@ describe("createWindowWithState", () => {
   });
 
   describe("recovery", () => {
-    it("clamps oversized window at origin and calls setSize before center (#4710)", () => {
+    it("clamps oversized window at origin and calls setSize before setBounds (#4710)", () => {
       const oversizedBounds = { x: 0, y: 0, width: 2560, height: 1440, isMaximized: false };
       windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": oversizedBounds });
 
@@ -282,14 +288,19 @@ describe("createWindowWithState", () => {
       createWindowWithState({ show: false }, "/home/user/project");
 
       expect(winInstance.setSize).toHaveBeenCalledWith(1920, 1080);
-      expect(winInstance.center).toHaveBeenCalled();
+      expect(winInstance.setBounds).toHaveBeenCalledWith({
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+      });
 
       const setSizeOrder = winInstance.setSize.mock.invocationCallOrder[0];
-      const centerOrder = winInstance.center.mock.invocationCallOrder[0];
-      expect(setSizeOrder).toBeLessThan(centerOrder);
+      const setBoundsOrder = winInstance.setBounds.mock.invocationCallOrder[0];
+      expect(setSizeOrder).toBeLessThan(setBoundsOrder);
     });
 
-    it("clamps oversized window and centers when mostly off-screen", () => {
+    it("clamps oversized window and repositions when mostly off-screen", () => {
       const oversizedBounds = { x: 1800, y: 900, width: 2560, height: 1440, isMaximized: false };
       windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": oversizedBounds });
 
@@ -298,7 +309,13 @@ describe("createWindowWithState", () => {
       createWindowWithState({ show: false }, "/home/user/project");
 
       expect(winInstance.setSize).toHaveBeenCalledWith(1920, 1080);
-      expect(winInstance.center).toHaveBeenCalled();
+      // clampToDisplay pulls a mostly-off-screen window back to the top-left of the work area
+      expect(winInstance.setBounds).toHaveBeenCalledWith({
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+      });
     });
 
     it("does not call setSize when window is fully visible on current display", () => {
@@ -379,8 +396,144 @@ describe("createWindowWithState", () => {
       createWindowWithState({ show: false }, "/home/user/project");
 
       expect(winInstance.setSize).toHaveBeenCalledWith(1920, 1080);
-      expect(winInstance.center).toHaveBeenCalled();
+      expect(winInstance.setBounds).toHaveBeenCalled();
       expect(winInstance.maximize).toHaveBeenCalled();
+    });
+
+    it("clamps oversized default window with no saved x/y on small display (#10076)", () => {
+      // Default cold-start state: no x/y, default 1200x800, on a 1280x720 work area
+      // (1366x768 laptop with taskbar, 1280x720 display, RDP, VM, scaled DPI).
+      const defaultBounds = {
+        width: 1200,
+        height: 800,
+        isMaximized: false,
+        isFullScreen: false,
+      };
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": defaultBounds });
+
+      winInstance.getBounds.mockReturnValue({ x: 0, y: 0, width: 1200, height: 800 });
+
+      screenMock.getPrimaryDisplay.mockReturnValueOnce({
+        workArea: { x: 0, y: 0, width: 1280, height: 720 },
+        bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      });
+
+      createWindowWithState({ show: false }, "/home/user/project");
+
+      // Constructor received no x/y (the bug's short-circuit path)
+      const opts = constructorCalls[0] as Record<string, unknown>;
+      expect(opts).not.toHaveProperty("x");
+      expect(opts).not.toHaveProperty("y");
+      // Size was clamped to fit the 720px-tall work area
+      expect(winInstance.setSize).toHaveBeenCalledWith(1200, 720);
+      // And the window was centered on the primary display
+      expect(winInstance.center).toHaveBeenCalled();
+
+      const setSizeOrder = winInstance.setSize.mock.invocationCallOrder[0];
+      const centerOrder = winInstance.center.mock.invocationCallOrder[0];
+      expect(setSizeOrder).toBeLessThan(centerOrder);
+    });
+
+    it("pulls a partially off-left window back to keep the title bar reachable", () => {
+      // 75% visible: x=-300, w=1200 on a 1920px work area. The old 50%-visible math
+      // left this as-is (traffic-light controls unreachable on macOS). clampToDisplay
+      // pins x to wa.x (=0) and shrinks width if needed.
+      const offLeftBounds = {
+        x: -300,
+        y: 100,
+        width: 1200,
+        height: 800,
+        isMaximized: false,
+      };
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": offLeftBounds });
+
+      winInstance.getBounds.mockReturnValue({ x: -300, y: 100, width: 1200, height: 800 });
+
+      createWindowWithState({ show: false }, "/home/user/project");
+
+      expect(winInstance.setSize).not.toHaveBeenCalled();
+      expect(winInstance.setBounds).toHaveBeenCalledWith({
+        x: 0,
+        y: 100,
+        width: 1200,
+        height: 800,
+      });
+    });
+
+    it("falls back to display.bounds when workArea is zero (Wayland/GNOME robustness)", () => {
+      const oversizedBounds = { x: 0, y: 0, width: 2560, height: 1440, isMaximized: false };
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": oversizedBounds });
+
+      winInstance.getBounds.mockReturnValue({ x: 0, y: 0, width: 2560, height: 1440 });
+
+      // Use mockReturnValue (not Once) because clampToDisplay re-fetches the display
+      // after the size-clamp in createWindowWithState — both calls must see the
+      // zero-workArea display or the fallback is silently bypassed.
+      screenMock.getDisplayMatching.mockReturnValue({
+        workArea: { x: 0, y: 0, width: 0, height: 0 },
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      });
+
+      createWindowWithState({ show: false }, "/home/user/project");
+
+      // Must NOT produce setSize(0, 0) — the zero workArea falls back to display.bounds (1920x1080)
+      expect(winInstance.setSize).toHaveBeenCalledWith(1920, 1080);
+      // And the position-clamp must also use the fallback, not the broken workArea
+      expect(winInstance.setBounds).toHaveBeenCalledWith({
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+      });
+    });
+
+    it("clamps both axes of an oversized default window on a small display", () => {
+      // Default 2560x1440 (unrealistic, but exercises both the width and height
+      // clamp branches) on a 1280x720 work area.
+      const defaultBounds = {
+        width: 2560,
+        height: 1440,
+        isMaximized: false,
+        isFullScreen: false,
+      };
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": defaultBounds });
+
+      winInstance.getBounds.mockReturnValue({ x: 0, y: 0, width: 2560, height: 1440 });
+
+      screenMock.getPrimaryDisplay.mockReturnValueOnce({
+        workArea: { x: 0, y: 0, width: 1280, height: 720 },
+        bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      });
+
+      createWindowWithState({ show: false }, "/home/user/project");
+
+      expect(winInstance.setSize).toHaveBeenCalledWith(1280, 720);
+      expect(winInstance.center).toHaveBeenCalled();
+    });
+
+    it("clamps a window entirely off the right/bottom edge back into the work area", () => {
+      // Saved bounds past the right/bottom of a 1920x1080 work area. clampToDisplay
+      // should pin x to wa.x + wa.width - width = 720 and y to wa.y + wa.height - height = 280.
+      const offRightBounds = {
+        x: 2000,
+        y: 1200,
+        width: 1200,
+        height: 800,
+        isMaximized: false,
+      };
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project": offRightBounds });
+
+      winInstance.getBounds.mockReturnValue({ x: 2000, y: 1200, width: 1200, height: 800 });
+
+      createWindowWithState({ show: false }, "/home/user/project");
+
+      expect(winInstance.setSize).not.toHaveBeenCalled();
+      expect(winInstance.setBounds).toHaveBeenCalledWith({
+        x: 720,
+        y: 280,
+        width: 1200,
+        height: 800,
+      });
     });
   });
 

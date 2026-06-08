@@ -1,7 +1,7 @@
 // eager-import-allow: reads forge settings via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
-import { typedHandle } from "../utils.js";
+import { checkRateLimit, typedHandle } from "../utils.js";
 import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
@@ -160,6 +160,9 @@ export function registerForgeSettingsHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_SET_CREDENTIAL,
       async (providerId: unknown, credentials: unknown): Promise<AuthValidation> => {
+        // Same budget as github:set-token — each call hits the provider's
+        // token-validation API (#9956).
+        checkRateLimit(CHANNELS.FORGE_SET_CREDENTIAL, 5, 10_000);
         if (typeof providerId !== "string" || providerId.length === 0) {
           return { valid: false, error: "Provider id is required" };
         }
@@ -197,6 +200,14 @@ export function registerForgeSettingsHandlers(): () => void {
         const existing = store.get("forgeCredentials") ?? {};
         store.set("forgeCredentials", { ...existing, [providerId]: JSON.stringify(record) });
 
+        // Deliver the credential to the live impl so forge API calls run
+        // authenticated. Without this the token only ever reached the store —
+        // the impl stayed unauthenticated despite the UI showing "connected"
+        // (#9983). `setCredentials` is optional; a synchronous throw here is a
+        // plugin bug that should surface, so it is intentionally uncaught,
+        // mirroring `validateToken` above.
+        impl.setCredentials?.({ kind: "bearer", value: primaryValue });
+
         await syncWorkspaceCredential(providerId, primaryValue);
 
         return validation;
@@ -225,6 +236,12 @@ export function registerForgeSettingsHandlers(): () => void {
         delete next[providerId];
         store.set("forgeCredentials", next);
       }
+      // Clear in-memory auth state on the live impl for symmetry with SET
+      // (#9983). The impl may be unbound here — a user can clear a credential
+      // without the provider plugin being active — so guard the lookup.
+      const impl = getForgeProviderImpl(providerId);
+      if (impl) impl.setCredentials?.(null);
+
       await syncWorkspaceCredential(providerId, null);
     })
   );

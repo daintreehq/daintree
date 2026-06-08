@@ -37,10 +37,12 @@ export const config: AgentConfig = {
   },
   // Detection patterns require live observation of `agy` v1.0.1 — the TUI
   // glyphs (working / waiting), boot ready marker, prompt shape, and
-  // completion strings can't be inferred from code. Shipping empty
-  // primaryPatterns is safer than copying Gemini's: the state machine
-  // simply doesn't mis-classify rather than firing on the wrong glyphs.
-  // Track follow-up via a dedicated detection-tuning issue.
+  // completion strings can't be inferred from code. Note: empty arrays are
+  // fallthrough, not opt-out — empty primaryPatterns makes buildPatternConfig
+  // return undefined so the universal pattern set applies, and empty
+  // bootCompletePatterns falls back to BootDetector's built-in banners.
+  // Opt-out semantics are #9873's scope. Track pattern follow-up via a
+  // dedicated detection-tuning issue.
   detection: {
     primaryPatterns: [],
     fallbackPatterns: [],

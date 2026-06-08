@@ -111,6 +111,7 @@ export function SystemRequirementsSection({
 
       <m.div
         id="system-requirements-panel"
+        inert={!isExpanded || undefined}
         animate={{ height: isExpanded ? "auto" : 0 }}
         initial={false}
         transition={

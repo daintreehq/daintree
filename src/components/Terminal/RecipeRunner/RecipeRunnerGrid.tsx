@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { useRef, useCallback } from "react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import type { TerminalRecipe } from "@/types";
 
@@ -13,7 +14,24 @@ interface RecipeRunnerGridProps {
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
   onCreate: () => void;
-  onKeyDown: (e: React.KeyboardEvent) => void;
+  setFocusedIndex: (i: number) => void;
+}
+
+function moveFocus(current: number, total: number, key: string): number {
+  switch (key) {
+    case "ArrowDown":
+    case "ArrowRight":
+      return (current + 1) % total;
+    case "ArrowUp":
+    case "ArrowLeft":
+      return (current - 1 + total) % total;
+    case "Home":
+      return 0;
+    case "End":
+      return total - 1;
+    default:
+      return current;
+  }
 }
 
 export function RecipeRunnerGrid({
@@ -27,51 +45,76 @@ export function RecipeRunnerGrid({
   onUnpin,
   onDelete,
   onCreate,
-  onKeyDown,
+  setFocusedIndex,
 }: RecipeRunnerGridProps) {
   const gridCols = recipes.length <= 2 ? "grid-cols-2" : "grid-cols-3";
+  const createIndex = recipes.length;
+  const focusableCount = recipes.length + 1;
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const setButtonRef = useCallback(
+    (index: number) => (el: HTMLButtonElement | null) => {
+      buttonRefs.current[index] = el;
+    },
+    []
+  );
+
+  const handleOptionKeyDown = (index: number) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const next = moveFocus(index, focusableCount, e.key);
+    if (next === index) return;
+    e.preventDefault();
+    setFocusedIndex(next);
+    buttonRefs.current[next]?.focus();
+  };
 
   return (
-    <div onKeyDown={onKeyDown}>
-      <div
-        role="listbox"
-        id="recipe-listbox"
-        aria-label="Recipes"
-        className={`grid ${gridCols} gap-2`}
+    <div
+      role="listbox"
+      id="recipe-listbox"
+      aria-label="Recipes"
+      className={`grid ${gridCols} gap-2`}
+    >
+      {recipes.map((recipe, i) => (
+        <RecipeRunnerItem
+          key={recipe.id}
+          recipe={recipe}
+          isFocused={focusedIndex === i}
+          mode="grid"
+          disabled={disabled}
+          id={`recipe-option-${recipe.id}`}
+          tabIndex={focusedIndex === i ? 0 : -1}
+          buttonRef={setButtonRef(i)}
+          onFocus={() => setFocusedIndex(i)}
+          onKeyDown={handleOptionKeyDown(i)}
+          onRun={onRun}
+          onEdit={onEdit}
+          onDuplicate={onDuplicate}
+          onPin={onPin}
+          onUnpin={onUnpin}
+          onDelete={onDelete}
+        />
+      ))}
+      <button
+        id="recipe-option-create"
+        ref={setButtonRef(createIndex)}
+        role="option"
+        aria-selected={focusedIndex === createIndex}
+        type="button"
+        onClick={onCreate}
+        onFocus={() => setFocusedIndex(createIndex)}
+        onKeyDown={handleOptionKeyDown(createIndex)}
+        tabIndex={disabled || focusedIndex === createIndex ? 0 : -1}
+        className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
       >
-        {recipes.map((recipe, i) => (
-          <RecipeRunnerItem
-            key={recipe.id}
-            recipe={recipe}
-            isFocused={focusedIndex === i}
-            mode="grid"
-            disabled={disabled}
-            id={`recipe-option-${recipe.id}`}
-            onRun={onRun}
-            onEdit={onEdit}
-            onDuplicate={onDuplicate}
-            onPin={onPin}
-            onUnpin={onUnpin}
-            onDelete={onDelete}
-          />
-        ))}
-        <button
-          id="recipe-option-create"
-          role="option"
-          aria-selected={focusedIndex === recipes.length}
-          type="button"
-          onClick={onCreate}
-          className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent aria-selected:ring-2 aria-selected:ring-daintree-accent/60"
-        >
-          <Plus
-            className="h-3.5 w-3.5 text-text-muted group-hover:text-daintree-text transition-colors shrink-0"
-            aria-hidden
-          />
-          <span className="text-sm text-text-muted group-hover:text-daintree-text transition-colors">
-            Create new recipe…
-          </span>
-        </button>
-      </div>
+        <Plus
+          className="h-3.5 w-3.5 text-text-muted group-hover:text-daintree-text transition-colors shrink-0"
+          aria-hidden
+        />
+        <span className="text-sm text-text-muted group-hover:text-daintree-text transition-colors">
+          Create new recipe…
+        </span>
+      </button>
     </div>
   );
 }
