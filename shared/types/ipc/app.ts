@@ -178,4 +178,12 @@ export interface HydrateResult {
    * corruption with no safe-mode trip is log-only.
    */
   crashLoopStateRecovery?: CrashLoopStateRecovery | null;
+  /**
+   * System temp directory (`os.tmpdir()`), folded into the batched boot payload
+   * so the renderer can derive the clipboard directory without a standalone
+   * `system:get-tmp-dir` IPC round-trip on the panel-restore critical path.
+   * Optional for backward compatibility: when absent (older main process, or the
+   * React 19 `use()` safe-boot fallback), the renderer falls back to the IPC call.
+   */
+  systemTmpDir?: string;
 }

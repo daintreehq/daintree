@@ -67,8 +67,9 @@ export function collectClosure(
 //     facadeModuleId, imports[], dynamicImports[] }). Non-"chunk" outputs
 //     (CSS/assets) are ignored, so no asset is ever preloaded as a module.
 //   • `seedSourcePaths` — Set of repo-relative POSIX source paths from the panel
-//     registry (getFirstRenderSeeds). A chunk is a seed when its facadeModuleId,
-//     normalized via `toRelativePosix`, is in this set.
+//     registry (getFirstRenderPreloadSeeds — the app root plus the first-render
+//     panel chunks). A chunk is a seed when its facadeModuleId, normalized via
+//     `toRelativePosix`, is in this set.
 //   • `toRelativePosix` — maps an absolute facadeModuleId to the repo-relative
 //     POSIX form for comparison against the seeds (kept as a callback so this
 //     module stays free of node:path and cwd).

@@ -72,8 +72,8 @@
     "vendor-xterm",
     "vendor-zod"
   ],
-  "eagerRaw": 2795866,
-  "eagerGzip": 836731,
+  "eagerRaw": 2844444,
+  "eagerGzip": 850171,
   "chunkGzip": {
     "vendor-radix-utils": 3261,
     "vendor-react": 56453,

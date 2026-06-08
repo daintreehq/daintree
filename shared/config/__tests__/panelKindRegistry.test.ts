@@ -14,6 +14,8 @@ import {
   clearPanelKindRegistry,
   getBuiltInPanelKinds,
   getFirstRenderSeeds,
+  getFirstRenderPreloadSeeds,
+  FIRST_RENDER_ROOT_SEED,
   type PanelKindConfig,
 } from "../panelKindRegistry.js";
 
@@ -500,5 +502,29 @@ describe("getFirstRenderSeeds", () => {
     } finally {
       registerPanelKind(original);
     }
+  });
+});
+
+describe("getFirstRenderPreloadSeeds", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("is the panel seeds plus the app root, without dropping or duplicating any seed", () => {
+    const panelSeeds = getFirstRenderSeeds();
+    const preloadSeeds = getFirstRenderPreloadSeeds();
+    // Superset relationship: every panel seed survives, and exactly one extra
+    // entry (the app root) is added — so the preload/budget closure can't silently
+    // drop a panel chunk or balloon beyond the root.
+    expect(preloadSeeds).toEqual(expect.arrayContaining(panelSeeds));
+    expect(preloadSeeds).toContain(FIRST_RENDER_ROOT_SEED);
+    expect(preloadSeeds).toHaveLength(panelSeeds.length + 1);
+    expect(new Set(preloadSeeds).size).toBe(preloadSeeds.length);
+  });
+
+  it("does not leak the app root back into the registry's own seed contract", () => {
+    // getFirstRenderSeeds stays panel-only; the app root lives solely in the
+    // combined accessor so the registry contract test above keeps its exact shape.
+    expect(getFirstRenderSeeds()).not.toContain(FIRST_RENDER_ROOT_SEED);
   });
 });

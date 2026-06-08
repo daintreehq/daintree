@@ -1,4 +1,5 @@
 // eager-import-allow: reads persisted app state via store.get synchronously in the IPC handler
+import os from "os";
 import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
@@ -395,6 +396,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         inSafeMode && guard.getQuarantinedStatePath()
           ? { quarantinedPath: guard.getQuarantinedStatePath()! }
           : null,
+      // Folded into the payload so the renderer skips a standalone
+      // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
+      systemTmpDir: os.tmpdir(),
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));

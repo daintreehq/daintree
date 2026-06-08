@@ -6,7 +6,6 @@ import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 const { projectState, useProjectStoreMock } = vi.hoisted(() => {
   const projectState = {
     currentProject: { id: "project-1" } as { id: string } | null,
-    lastSwitchId: null as string | null,
   };
 
   const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
@@ -60,7 +59,6 @@ describe("useDevServer adversarial races", () => {
     vi.clearAllMocks();
     _resetPersistedEnsureCacheForTests();
     projectState.currentProject = { id: "project-1" };
-    projectState.lastSwitchId = null;
 
     ensureMock = vi.fn(async (request: { projectId: string }) =>
       buildState({
@@ -1624,71 +1622,11 @@ describe("useDevServer adversarial races", () => {
     });
   });
 
-  describe("restored-stopped (#9094)", () => {
-    it("does not auto-ensure when the panel is restored-stopped on launch", async () => {
-      getStateMock.mockImplementation(async (request: { projectId: string }) =>
-        buildState({
-          panelId: "panel-1",
-          projectId: request.projectId,
-          status: "restored-stopped",
-        })
-      );
-
-      const { result } = renderHook(() =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand: "npm run dev",
-          cwd: "/repo",
-        })
-      );
-
-      await waitFor(() => {
-        expect(result.current.status).toBe("restored-stopped");
-      });
-
-      // The whole point of #9094: the prior dev server must NOT relaunch itself.
-      expect(ensureMock).not.toHaveBeenCalled();
-    });
-
-    it("ensures when the user explicitly starts a restored-stopped panel", async () => {
-      getStateMock.mockImplementation(async (request: { projectId: string }) =>
-        buildState({
-          panelId: "panel-1",
-          projectId: request.projectId,
-          status: "restored-stopped",
-        })
-      );
-
-      const { result } = renderHook(() =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand: "npm run dev",
-          cwd: "/repo",
-        })
-      );
-
-      await waitFor(() => {
-        expect(result.current.status).toBe("restored-stopped");
-      });
-      expect(ensureMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        await result.current.start();
-      });
-
-      expect(ensureMock).toHaveBeenCalledTimes(1);
-      expect(ensureMock).toHaveBeenCalledWith(
-        expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
-      );
-    });
-
-    it("auto-ensures a restored-stopped panel on the first mid-session switch (#9859)", async () => {
-      // A non-null lastSwitchId means the current project was reached via an
-      // explicit in-session switch, not cold launch — so the dev server the user
-      // had running should come back automatically instead of stalling on the
-      // restart CTA. The #9094 contract (no respawn on relaunch) is preserved by
-      // the cold-launch test above, where lastSwitchId stays null.
-      projectState.lastSwitchId = "switch-abc123";
+  describe("restored-stopped auto-start on relaunch", () => {
+    it("auto-ensures (restarts the dev server) when the panel is restored-stopped on launch", async () => {
+      // A dev server that was running when Daintree closed comes back when the
+      // project reopens — cold launch or live switch alike — instead of stalling
+      // on the restart CTA.
       getStateMock.mockImplementation(async (request: { projectId: string }) =>
         buildState({
           panelId: "panel-1",
@@ -1713,12 +1651,46 @@ describe("useDevServer adversarial races", () => {
       );
     });
 
-    it("auto-ensures when lastSwitchId flips null→string after mount (#9859 race)", async () => {
-      // The actual production sequence on a cold-started switched-to view: the
-      // panel hydrates restored-stopped (no ensure yet, lastSwitchId still null),
-      // THEN the PROJECT_ON_SWITCH event arrives and flips lastSwitchId to a
-      // string. The auto-ensure effect must re-run on that change and start the
-      // server — proving the bail at null isn't sticky.
+    it("waits for getState() to resolve before auto-ensuring a restored-stopped panel", async () => {
+      // The initial-state gate still holds: ensure() must wait for the first
+      // getState() so it reconciles to the real status before spawning, never
+      // firing on the synchronous mount with the stale "stopped" default.
+      const pendingState = createDeferred<DevPreviewSessionState>();
+      getStateMock.mockImplementation(() => pendingState.promise);
+
+      renderHook(() =>
+        useDevServer({
+          panelId: "panel-1",
+          devCommand: "npm run dev",
+          cwd: "/repo",
+        })
+      );
+
+      // getState() still pending → nothing has spawned yet.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(ensureMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        pendingState.resolve(
+          buildState({
+            panelId: "panel-1",
+            projectId: "project-1",
+            status: "restored-stopped",
+          })
+        );
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(ensureMock).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("does not auto-ensure a restored-stopped panel with no dev command", async () => {
+      // Auto-start still requires a runnable command: a restored-stopped panel
+      // whose command was cleared must not spawn, it gets stopped instead.
       getStateMock.mockImplementation(async (request: { projectId: string }) =>
         buildState({
           panelId: "panel-1",
@@ -1727,32 +1699,18 @@ describe("useDevServer adversarial races", () => {
         })
       );
 
-      const { result, rerender } = renderHook(() =>
+      renderHook(() =>
         useDevServer({
           panelId: "panel-1",
-          devCommand: "npm run dev",
+          devCommand: "   ",
           cwd: "/repo",
         })
       );
 
-      // Cold launch: restored-stopped surfaces, nothing auto-starts.
       await waitFor(() => {
-        expect(result.current.status).toBe("restored-stopped");
+        expect(stopMock).toHaveBeenCalledTimes(1);
       });
       expect(ensureMock).not.toHaveBeenCalled();
-
-      // The switch event lands → provenance flips non-null → effect re-runs.
-      act(() => {
-        projectState.lastSwitchId = "switch-late";
-      });
-      rerender();
-
-      await waitFor(() => {
-        expect(ensureMock).toHaveBeenCalledTimes(1);
-      });
-      expect(ensureMock).toHaveBeenCalledWith(
-        expect.objectContaining({ projectId: "project-1", devCommand: "npm run dev" })
-      );
     });
   });
 });

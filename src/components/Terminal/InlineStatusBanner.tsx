@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useWindowControlsInset } from "@/components/ui/WindowControlsInset";
 
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
 
@@ -156,6 +157,11 @@ export function InlineStatusBanner({
   const isNeutral = severity === "neutral";
   const colorVar = isNeutral ? undefined : SEVERITY_VAR[severity];
 
+  // When hosted at the top of the window (global banner host), reserve space so
+  // the title/icon and action buttons never sit under the OS window controls.
+  // Empty for the common inline usage — see WindowControlsInset.
+  const windowControlsInset = useWindowControlsInset();
+
   const onCloseRef = useRef(onClose);
 
   useEffect(() => {
@@ -215,14 +221,15 @@ export function InlineStatusBanner({
         isNeutral && "bg-overlay-subtle",
         className
       )}
-      style={
-        isNeutral
+      style={{
+        ...(isNeutral
           ? undefined
           : {
               backgroundColor: `color-mix(in oklab, var(${colorVar}) 10%, transparent)`,
               borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) 20%, transparent)`,
-            }
-      }
+            }),
+        ...windowControlsInset,
+      }}
       role={role}
       aria-live={ariaLive}
       aria-atomic={ariaLive && ariaLive !== "off" ? "true" : undefined}

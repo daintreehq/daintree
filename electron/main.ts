@@ -76,7 +76,6 @@ import { getProjectStatsService } from "./ipc/handlers/projectCrud/index.js";
 import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotificationService.js";
 import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
-import { activateOpenFileInstaller } from "./setup/openFileInstall.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
@@ -157,7 +156,13 @@ app.commandLine.appendSwitch(
 // setBackgroundThrottling is unsuitable since Electron 28 — #8599).
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // BackForwardCache wastes memory in an Electron app (no browser navigation history).
-const disabledFeatures = ["BackForwardCache"];
+// Translate: Chrome's page-translate feature has no surface in Electron and we never
+// invoke it — disabling skips its startup wiring. The feature is "Translate" (the
+// old "TranslateUI" name was renamed in Chromium ~M86 and is a no-op now).
+// (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
+// lever, not a boot win, and disabling it fights the per-view CDP throttling
+// ProjectViewManager already does.)
+const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
 const __filename = fileURLToPath(import.meta.url);
@@ -510,13 +515,16 @@ if (!gotTheLock) {
       registerDeepLinkProtocolClient();
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
-      const { pluginService } = await import("./services/PluginService.js");
-      registerPluginProtocol((pluginId) => pluginService.getPluginDir(pluginId));
-      // macOS: drain any `.dntr` paths queued during cold launch (Finder
-      // double-click / "Open With") and take over live open-file events now
-      // that PluginService can install them. Fire-and-forget — install runs
-      // concurrently with the rest of startup. #9293
-      void activateOpenFileInstaller(pluginService);
+      // Register `plugin://` with a placeholder resolver that 404s every
+      // request, keeping the heavy ~2900-line PluginService module off the
+      // first-paint critical path (#10322). The handler must exist before
+      // `createWindow()` so `registerProtocolsForSession` wires per-session
+      // handlers; the deferred `plugin-service` task later calls
+      // `setPluginDirResolver()` to point it at the real `getPluginDir` and
+      // drains queued `.dntr` paths via `activateOpenFileInstaller`. plugin://
+      // requests only arrive after the renderer mounts and plugins activate —
+      // well after first paint — so the placeholder window is never observed.
+      registerPluginProtocol(() => undefined);
       // Wire the `daintree://` deep-link path (#9559): take over live macOS
       // `open-url` events and drain any cold-launch URL (queued `open-url` on
       // macOS, `process.argv` on Windows/Linux). Routed to the primary window

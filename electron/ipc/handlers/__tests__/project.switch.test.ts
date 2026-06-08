@@ -700,7 +700,7 @@ describe("project:switch worktree-load-status (#8400)", () => {
   });
 });
 
-describe("project:switch provenance (#9859)", () => {
+describe("project:switch PROJECT_ON_SWITCH notification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -749,8 +749,8 @@ describe("project:switch provenance (#9859)", () => {
     expect(call).toBeDefined();
     const payload = call![1] as { project: { id: string }; switchId: string };
     expect(payload.project).toEqual(expect.objectContaining({ id: "proj-new" }));
-    // Behavior, not a fixed literal: provenance must be a non-empty string so the
-    // renderer's cold-launch guard flips (a missing id would leave it null).
+    // Behavior, not a fixed literal: switchId must be a non-empty string so
+    // repeat activations are distinguishable (asserted below).
     expect(typeof payload.switchId).toBe("string");
     expect(payload.switchId.length).toBeGreaterThan(0);
   });

@@ -1,3 +1,4 @@
+import os from "os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HydrateResult } from "../../../shared/types/ipc/app.js";
 
@@ -290,6 +291,16 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.focusMode).toBe(true);
     expect(result.settingsRecovery).toBeNull();
     expect(result.projectStateRecovery).toBeNull();
+  });
+
+  it("folds the system temp dir into the payload so the renderer can skip the IPC call", async () => {
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    // The field must be present and wired to the live temp dir (not undefined),
+    // so the renderer can derive the clipboard directory without a round-trip.
+    expect(result.systemTmpDir).toBe(os.tmpdir());
+    expect(result.systemTmpDir!.length).toBeGreaterThan(0);
   });
 
   it("CONCURRENT_CALLS_READ_ONLY", async () => {

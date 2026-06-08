@@ -173,12 +173,13 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     // Use the pre-fetched hydration payload when available, eliminating a
     // ~50-150ms IPC round-trip. Fall back to the IPC pull model otherwise.
-    const [hydrateResult, tmpDir] = await Promise.all([
-      prefetchedHydrateResult
-        ? Promise.resolve(prefetchedHydrateResult)
-        : withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate()),
-      systemClient.getTmpDir().catch(() => ""),
-    ]);
+    const hydrateResult = prefetchedHydrateResult
+      ? prefetchedHydrateResult
+      : await withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate());
+    // The system temp dir now rides along in the batched hydrate payload, so the
+    // standalone `system:get-tmp-dir` call only fires as a fallback when the
+    // field is absent (older main process, or the safe-boot {ok:false} payload).
+    const tmpDir = hydrateResult.systemTmpDir ?? (await systemClient.getTmpDir().catch(() => ""));
     const {
       appState,
       terminalConfig,
