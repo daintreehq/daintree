@@ -52,6 +52,8 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { getProjectStatsService } from "../ipc/handlers/projectCrud/index.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
+import { setPluginDirResolver } from "../setup/protocols.js";
+import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { store } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -344,6 +346,16 @@ export async function initGlobalServices(
       } catch (err) {
         console.error("[MAIN] PluginService initialization failed:", err);
       }
+      // Point the already-registered `plugin://` handler at the live resolver
+      // (#10322). main.ts registers the handler before first paint with a
+      // placeholder that 404s; now that the singleton is initialized, swap in
+      // the real `getPluginDir` so plugin asset requests resolve.
+      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
+      // macOS: drain any `.dntr` paths queued during cold launch (Finder
+      // double-click / "Open With") and take over live open-file events now
+      // that PluginService can install them. Fire-and-forget — install runs
+      // concurrently with the remaining deferred tasks. #9293
+      void activateOpenFileInstaller(pluginService);
       // Fire-and-forget — activations fan out in parallel and report errors
       // via the per-plugin `loadError` provenance record. Awaiting here would
       // delay subsequent deferred tasks behind the slowest plugin's activate().

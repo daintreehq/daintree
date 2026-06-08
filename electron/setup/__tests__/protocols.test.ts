@@ -138,6 +138,7 @@ import {
   registerDaintreeFileProtocol,
   registerPluginProtocol,
   registerProtocolsForSession,
+  setPluginDirResolver,
   setupWebviewCSP,
 } from "../protocols.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
@@ -1257,6 +1258,43 @@ describe("protocol registration", () => {
     registerPluginProtocol(() => undefined);
 
     expect(protocol.handle).toHaveBeenCalledWith("plugin", expect.any(Function));
+  });
+
+  it("setPluginDirResolver swaps the live resolver for an already-registered handler (#10322)", async () => {
+    const { protocol } = await import("electron");
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.open).mockResolvedValue({
+      readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<typeof fs.open>>);
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
+
+    const PLUGIN_ROOT = path.resolve("/plugins/installed/live-plugin");
+
+    // main.ts registers the handler before first paint with the placeholder
+    // resolver — every request 404s while the heavy PluginService import is
+    // still deferred.
+    registerPluginProtocol(() => undefined);
+    const call = vi.mocked(protocol.handle).mock.calls.find((c) => c[0] === "plugin");
+    expect(call).toBeDefined();
+    const handler = call![1] as (req: GlobalRequest) => Promise<Response>;
+
+    const before = await handler(
+      new Request("plugin://live-plugin/dist/index.js") as GlobalRequest
+    );
+    expect(before.status).toBe(404);
+
+    // The deferred plugin-service task settles and swaps in the real resolver.
+    setPluginDirResolver((id) => (id === "live-plugin" ? PLUGIN_ROOT : undefined));
+
+    // The SAME handler instance now resolves — proving the swap reaches handlers
+    // registered before init, not just ones created afterward. This guards the
+    // frozen-capture regression: a handler that closed over the placeholder
+    // directly would still 404 here.
+    const after = await handler(new Request("plugin://live-plugin/dist/index.js") as GlobalRequest);
+    expect(after.status).toBe(200);
   });
 });
 
