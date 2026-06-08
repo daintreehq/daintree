@@ -373,5 +373,39 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
       );
       expect(clearWorktreeIds).toContain(staleProjectKey);
     });
+
+    it("handles Windows-style stale keys without relying on the host OS separator", () => {
+      const liveKey = "C:\\test\\root";
+      const staleProjectKey = "C:\\test\\root\\.worktrees\\old-feature";
+      const foreignProjectKey = "D:\\other-projects\\repo\\wt";
+      service["projectRootPath"] = liveKey;
+      service["wslGitByWorktree"] = {
+        [liveKey]: { enabled: true, dismissed: false },
+        [staleProjectKey]: { enabled: true, dismissed: false },
+        [foreignProjectKey]: { enabled: true, dismissed: false },
+      };
+
+      const liveWorktree = createTestWorktree({ id: liveKey });
+      service["pruneStaleWslGitEntries"]([liveWorktree]);
+
+      expect(service["wslGitByWorktree"][staleProjectKey]).toBeUndefined();
+      expect(service["wslGitByWorktree"][liveKey]).toEqual({
+        enabled: true,
+        dismissed: false,
+      });
+      expect(service["wslGitByWorktree"][foreignProjectKey]).toEqual({
+        enabled: true,
+        dismissed: false,
+      });
+
+      const clearCalls = mockSendEvent.mock.calls.filter(
+        ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
+      );
+      const clearWorktreeIds = clearCalls.map(
+        ([arg]) => (arg as { worktreeId: string }).worktreeId
+      );
+      expect(clearWorktreeIds).toContain(staleProjectKey);
+      expect(clearWorktreeIds).not.toContain(foreignProjectKey);
+    });
   });
 });

@@ -155,8 +155,9 @@ jobs:
           # has context-menu/custom-preset shards that also exceed the release
           # window at 8 slices, so it uses the same 16-slice Windows split.
           # full-panels is lighter but still needs more than the default 4.
-          # full-resilience's crash/error-recovery specs also need extra Windows
-          # slices after shard 2/4 exceeded the release gate in run 26672763326.
+          # full-resilience's crash/error-recovery specs need the same Windows
+          # split as other restart-heavy buckets; shard 2/8 can exceed the
+          # 45-minute e2e job timeout when its crash-recovery files pack together.
           case "$SUITE" in
             full-platform|full-terminal)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
@@ -172,7 +173,14 @@ jobs:
                 SHARD_TOTAL=4
               fi
               ;;
-            full-resilience|full-panels)
+            full-resilience)
+              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
+                SHARD_TOTAL=16
+              else
+                SHARD_TOTAL=4
+              fi
+              ;;
+            full-panels)
               if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ]; then
                 SHARD_TOTAL=8
               else

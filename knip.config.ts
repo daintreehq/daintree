@@ -129,11 +129,6 @@ const config: KnipConfig = {
   // explicit-declare fix should happen in a follow-up:
   //   - conf: imported in electron/__tests__/storeBackupRestore.test.ts;
   //     transitive via electron-store.
-  //   - glob: imported in scripts/find-critical-compiler-errors.mjs;
-  //     transitive via the React Compiler toolchain.
-  //   - @types/trusted-types: provides the ambient `TrustedHTML` /
-  //     `TrustedTypePolicyFactory` globals used in src/lib/trustedTypesPolicy.ts.
-  //     Knip walks `import` edges and never sees ambient type references.
   ignoreDependencies: [
     "tailwindcss",
     "@tailwindcss/typography",
@@ -141,8 +136,6 @@ const config: KnipConfig = {
     "wait-on",
     "fast-check",
     "conf",
-    "glob",
-    "@types/trusted-types",
     // Invoked by scripts/postinstall.cjs through node_modules/patch-package/index.js
     // so Knip does not see a package import or binary invocation.
     "patch-package",

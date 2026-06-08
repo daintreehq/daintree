@@ -29,6 +29,16 @@ const toolbarShortcuts: Record<string, string> = {
   "Copy context": `${mod}+Shift+c`,
 };
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function toolbarOverflowMenuItem(page: Page, menuLabel: string): Locator {
+  return page.getByRole("menuitem", {
+    name: new RegExp(`^${escapeRegExp(menuLabel)}(?:\\s|$)`),
+  });
+}
+
 function extractToolbarLabel(selector: string): string | null {
   return selector.match(/aria-label(?:\^)?="([^"]+)"/)?.[1] ?? null;
 }
@@ -195,7 +205,7 @@ async function clickToolbarOverflowItem(
 
     try {
       await trigger.click({ timeout: 1000 });
-      const menuItem = page.getByRole("menuitem", { name: menuLabel, exact: true });
+      const menuItem = toolbarOverflowMenuItem(page, menuLabel);
       if (await menuItem.isVisible({ timeout: 500 }).catch(() => false)) {
         const isActionable = await menuItem
           .click({ timeout: 1000, trial: true })
@@ -240,7 +250,7 @@ async function hasToolbarOverflowItem(
 
     try {
       await trigger.click({ timeout: 1000 });
-      const menuItem = page.getByRole("menuitem", { name: menuLabel, exact: true });
+      const menuItem = toolbarOverflowMenuItem(page, menuLabel);
       const visible = await menuItem.isVisible({ timeout: 500 }).catch(() => false);
       await page.keyboard.press("Escape").catch(() => undefined);
       if (visible) {

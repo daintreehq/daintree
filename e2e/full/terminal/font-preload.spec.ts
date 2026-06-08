@@ -55,7 +55,7 @@ test.describe.serial("Core: Font Preload Dedupe (#10072)", () => {
               const src = rule.style.getPropertyValue("src");
               const m = src.match(/url\((['"]?)([^'")]+)\1\)/);
               if (m && m[2].includes("jetbrains-mono-latin-400")) {
-                cssUrl = new URL(m[2], document.baseURI).href;
+                cssUrl = new URL(m[2], sheet.href ?? document.baseURI).href;
                 break;
               }
             }

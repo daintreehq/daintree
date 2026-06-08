@@ -452,6 +452,7 @@ export async function getActiveAppWindow(
   let fallbackSeenAt = 0;
   while (Date.now() < deadline) {
     fallback = null;
+    const fallbackCandidates: Page[] = [];
     const activeProjectId = (await getAttachedProjectInfo(app)).projectId;
     let projectFallback: Page | null = null;
     let projectPageCount = 0;
@@ -473,6 +474,7 @@ export async function getActiveAppWindow(
         if (projectFallback === null) projectFallback = w;
       } else {
         fallback = w;
+        fallbackCandidates.push(w);
       }
     }
 
@@ -483,6 +485,9 @@ export async function getActiveAppWindow(
     if (fallback) {
       if (requireProject) {
         if (activeProjectId) {
+          for (const candidate of fallbackCandidates) {
+            if (await pageLooksLikeProjectView(candidate)) return candidate;
+          }
           await wait(200);
           continue;
         }
@@ -491,11 +496,13 @@ export async function getActiveAppWindow(
         // Treat it as a project page only after the renderer reports a project.
         // For scoped static-URL views, project:get-current can briefly return
         // null while the visible toolbar already reflects the hydrated project.
-        const projectName = await getCurrentProjectName(fallback);
-        if (projectName) return fallback;
-        const projectLabel = await getProjectSwitcherLabel(fallback);
-        if (projectLabel) return fallback;
+        for (const candidate of fallbackCandidates) {
+          if (await pageLooksLikeProjectView(candidate)) return candidate;
+        }
       } else {
+        for (const candidate of fallbackCandidates) {
+          if (await pageLooksLikeProjectView(candidate)) return candidate;
+        }
         if (fallbackSeenAt === 0) fallbackSeenAt = Date.now();
         if (Date.now() - fallbackSeenAt >= fallbackGraceMs) return fallback;
       }
@@ -510,6 +517,20 @@ export async function getActiveAppWindow(
 }
 
 const registeredPages = new WeakSet<Page>();
+
+async function pageLooksLikeProjectView(page: Page): Promise<boolean> {
+  const projectName = await getCurrentProjectName(page);
+  if (projectName) return true;
+  const projectLabel = await getProjectSwitcherLabel(page);
+  if (projectLabel) return true;
+  return await page
+    .locator(
+      '[aria-label="Toggle Sidebar"], [data-worktree-branch], [data-worktree-is-main="true"], [aria-label="Worktrees"]'
+    )
+    .first()
+    .isVisible({ timeout: 1_000 })
+    .catch(() => false);
+}
 
 async function getCurrentProjectName(page: Page): Promise<string | null> {
   return await page

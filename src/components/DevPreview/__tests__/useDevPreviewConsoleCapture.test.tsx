@@ -148,6 +148,35 @@ describe("useDevPreviewConsoleCapture", () => {
     await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
   });
 
+  it("does not let a stale ready-transition cleanup stop the replacement capture", async () => {
+    let resolveFirstStart: (() => void) | undefined;
+    startConsoleCapture
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirstStart = resolve;
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const webview = makeWebviewElement();
+    const { rerender, unmount } = renderHook(
+      ({ ready }: { ready: boolean }) =>
+        useDevPreviewConsoleCapture(PANE_ID, webview, ready, false),
+      { initialProps: { ready: false } }
+    );
+
+    rerender({ ready: true });
+    await waitFor(() => expect(startConsoleCapture).toHaveBeenCalledTimes(2));
+
+    resolveFirstStart?.();
+    await Promise.resolve();
+    expect(stopConsoleCapture).not.toHaveBeenCalled();
+
+    unmount();
+    await waitFor(() => expect(stopConsoleCapture).toHaveBeenCalledWith(WC_ID, PANE_ID));
+  });
+
   it("routes only matching-pane console messages into the store", () => {
     const webview = makeWebviewElement();
     renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));

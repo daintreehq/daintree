@@ -16,6 +16,7 @@ import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
 
 const MAX_DIAGNOSTIC_LINES = 1_500;
 const AGENT_IDLE_STICKINESS_MS = 45_000;
+const TYPED_AGENT_IDLE_STICKINESS_MS = 10_000;
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 // Windows GitHub runners are markedly slower at first-run agent CLI startup
 // (Node spawn + auth check + render). 3x covers the worst-case cold start
@@ -168,9 +169,10 @@ async function expectAgentChromeSurvivesIdle(
   page: Page,
   panel: Locator,
   terminalId: string,
-  agentId: string
+  agentId: string,
+  idleMs = AGENT_IDLE_STICKINESS_MS * SLOW_HOST_MULTIPLIER
 ): Promise<void> {
-  await page.waitForTimeout(AGENT_IDLE_STICKINESS_MS * SLOW_HOST_MULTIPLIER);
+  await page.waitForTimeout(idleMs);
   await expect
     .poll(() => panel.getAttribute("data-chrome-agent-id"), {
       timeout: 25_000 * SLOW_HOST_MULTIPLIER,
@@ -660,7 +662,22 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     await test.step("typed Claude remains agent-branded after idle wait", async () => {
       const { window } = ctx;
       const panel = window.locator(`[data-panel-id="${plainPanelId}"]`);
-      await expectAgentChromeSurvivesIdle(window, panel, plainPanelId, "claude");
+      await waitForClaudeInteractivePrompt(
+        window,
+        panel,
+        plainPanelId,
+        60_000 * SLOW_HOST_MULTIPLIER
+      );
+      // The cold-launch flow above owns the long idle stickiness assertion.
+      // The typed flow only needs a short stable window before the explicit
+      // /quit path proves the same terminal can leave agent affinity.
+      await expectAgentChromeSurvivesIdle(
+        window,
+        panel,
+        plainPanelId,
+        "claude",
+        TYPED_AGENT_IDLE_STICKINESS_MS * SLOW_HOST_MULTIPLIER
+      );
       await diagnostics?.captureSnapshot("typed Claude survived idle wait", window);
     });
 
@@ -673,12 +690,6 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     await test.step("quit Claude from the promoted plain terminal", async () => {
       const { window } = ctx;
       const panel = window.locator(`[data-panel-id="${plainPanelId}"]`);
-      await waitForClaudeInteractivePrompt(
-        window,
-        panel,
-        plainPanelId,
-        60_000 * SLOW_HOST_MULTIPLIER
-      );
       await quitClaudeAgentSession(window, plainPanelId);
       await diagnostics?.captureSnapshot("quit promoted plain terminal", window);
     });

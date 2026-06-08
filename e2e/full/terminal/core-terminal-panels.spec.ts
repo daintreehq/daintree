@@ -159,8 +159,10 @@ test.describe.serial("Core: Terminal & Panels", () => {
         };
       });
 
+      const normalizeZeroLetterSpacing = (value: string) => (value === "normal" ? "0px" : value);
+
       // Broken emoji spans get clamped to the container baseline (0).
-      expect(computed.negativeInside).toBe("0px");
+      expect(normalizeZeroLetterSpacing(computed.negativeInside)).toBe("0px");
       // Legitimate positive corrections (e.g. wide CJK) are untouched.
       expect(computed.positiveInside).toBe("0.5px");
       // The override is scoped to .xterm-rows and leaves the rest of the app alone.

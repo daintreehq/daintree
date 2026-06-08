@@ -10,6 +10,7 @@
     "./electron/setup/deepLinkUrlQueue.ts",
     "./src/main.tsx",
     "./src/lib/trustedTypesPolicy.ts",
+    "./src/lib/e2eNotificationBackdoor.ts",
     "./src/config/terminalFont.ts",
     "./src/components/Fleet/fleetRawInputBroadcast.ts",
     "./src/clients/terminalClient.ts",

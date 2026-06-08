@@ -189,6 +189,17 @@ describe("decode", () => {
     expect(result.settings.resourceEnvironments).toBeUndefined();
   });
 
+  it("preserves empty resourceEnvironments as named modes", () => {
+    const result = decode({
+      runCommands: [],
+      resourceEnvironments: { "e2e-docker": {} },
+      activeResourceEnvironment: "e2e-docker",
+    });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.settings.resourceEnvironments).toEqual({ "e2e-docker": {} });
+    expect(result.settings.activeResourceEnvironment).toBe("e2e-docker");
+  });
+
   it("preserves valid resourceEnvironments siblings when one entry is invalid", () => {
     const result = decode({
       runCommands: [],

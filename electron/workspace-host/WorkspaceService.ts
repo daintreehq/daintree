@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
 import { stat, readFile, access, mkdir } from "fs/promises";
-import { resolve as pathResolve, isAbsolute, dirname, basename, sep as pathSep } from "path";
+import { resolve as pathResolve, isAbsolute, dirname, basename } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { generateProjectId, settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
@@ -54,6 +54,33 @@ import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import parcelWatcher from "@parcel/watcher";
 import { MutableDisposable } from "../utils/lifecycle.js";
+
+function normalizePathKeyForPrefix(value: string): string {
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized === "" && value.startsWith("/") ? "/" : normalized;
+}
+
+function pathParentForPrefix(value: string): string {
+  const normalized = normalizePathKeyForPrefix(value);
+  if (normalized === "/") return "/";
+  const slashIndex = normalized.lastIndexOf("/");
+  if (slashIndex <= 0) return slashIndex === 0 ? "/" : normalized;
+  return normalized.slice(0, slashIndex);
+}
+
+function isPathKeyAtOrUnder(candidate: string, parent: string): boolean {
+  const normalizedCandidate = normalizePathKeyForPrefix(candidate);
+  const normalizedParent = normalizePathKeyForPrefix(parent);
+  const comparableCandidate =
+    process.platform === "win32" ? normalizedCandidate.toLowerCase() : normalizedCandidate;
+  const comparableParent =
+    process.platform === "win32" ? normalizedParent.toLowerCase() : normalizedParent;
+
+  return (
+    comparableCandidate === comparableParent ||
+    comparableCandidate.startsWith(comparableParent === "/" ? "/" : `${comparableParent}/`)
+  );
+}
 
 // Re-export so existing test imports (`probeGitLfsAvailable` from
 // `../WorkspaceService.js`) continue to work without modification.
@@ -977,14 +1004,17 @@ export class WorkspaceService {
    * the foreign keys up and prunes them on that cycle.
    */
   private pruneStaleWslGitEntries(worktrees: Worktree[]): void {
-    const projectParent = this.projectRootPath ? pathResolve(this.projectRootPath, "..") : null;
+    const projectParent = this.projectRootPath ? pathParentForPrefix(this.projectRootPath) : null;
+    const projectRoot = this.projectRootPath
+      ? normalizePathKeyForPrefix(this.projectRootPath)
+      : null;
     const liveIds = new Set(worktrees.map((wt) => wt.id));
     for (const key of Object.keys(this.wslGitByWorktree)) {
       if (liveIds.has(key)) continue;
       if (
         projectParent &&
-        key !== this.projectRootPath &&
-        !key.startsWith(projectParent + pathSep)
+        normalizePathKeyForPrefix(key) !== projectRoot &&
+        !isPathKeyAtOrUnder(key, projectParent)
       ) {
         continue;
       }

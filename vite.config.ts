@@ -625,6 +625,42 @@ function firstRenderModulePreloadPlugin(): Plugin {
   };
 }
 
+function latin400FontPreloadPlugin(): Plugin {
+  return {
+    name: "latin-400-font-preload",
+    apply: "build",
+    transformIndexHtml(_html, ctx) {
+      if (!ctx.bundle) return;
+
+      for (const output of Object.values(ctx.bundle)) {
+        if (
+          output.type === "asset" &&
+          typeof output.fileName === "string" &&
+          /jetbrains-mono-latin-400-normal.*\.woff2$/.test(output.fileName)
+        ) {
+          return [
+            {
+              tag: "link",
+              attrs: {
+                rel: "preload",
+                as: "font",
+                type: "font/woff2",
+                crossorigin: "anonymous",
+                href: `./${output.fileName}`,
+              },
+              injectTo: "head-prepend",
+            },
+          ];
+        }
+      }
+
+      console.warn(
+        "[latin-400-font-preload] jetbrains-mono-latin-400-normal woff2 asset not found"
+      );
+    },
+  };
+}
+
 export default defineConfig(({ command, mode }) => {
   const { logger: compilerLogger, plugin: compilerReportPlugin } =
     reactCompilerReportPlugin(command);
@@ -663,6 +699,7 @@ export default defineConfig(({ command, mode }) => {
       compilerReportPlugin,
       rendererBundleSizePlugin(),
       firstRenderSeedsPlugin(),
+      latin400FontPreloadPlugin(),
       firstRenderModulePreloadPlugin(),
       chunkModulesPlugin(),
       xtermMinifyIdentifiersGuardPlugin(),

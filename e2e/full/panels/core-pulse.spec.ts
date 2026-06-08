@@ -42,7 +42,7 @@ test.describe.serial("Core: Project Pulse", () => {
     expect(describedBy).toBeTruthy();
     const description = window.locator(`#${describedBy}`);
     await expect(description).toHaveCount(1);
-    await expect(description).toHaveText(/Heat intensity from few to many commits/);
+    await expect(description).toHaveText(/Heat intensity from no commits to many commits/);
   });
 
   test("card header shows project name and default range", async () => {

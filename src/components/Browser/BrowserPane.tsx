@@ -21,7 +21,12 @@ import {
   clampZoom,
   type LoadError,
 } from "./browserUtils";
-import { initializeBrowserHistory } from "./historyUtils";
+import {
+  goBackBrowserHistory,
+  goForwardBrowserHistory,
+  initializeBrowserHistory,
+  pushBrowserHistory,
+} from "./historyUtils";
 import { actionService } from "@/services/ActionService";
 import { WebviewDialog } from "./WebviewDialog";
 import { FindBar } from "./FindBar";
@@ -218,8 +223,8 @@ export function BrowserPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
-  const canGoBack = navSnapshot?.canGoBack ?? history.past.length > 0;
-  const canGoForward = navSnapshot?.canGoForward ?? history.future.length > 0;
+  const canGoBack = Boolean(navSnapshot?.canGoBack) || history.past.length > 0;
+  const canGoForward = Boolean(navSnapshot?.canGoForward) || history.future.length > 0;
   const backEntry = navSnapshot
     ? (navSnapshot.entries
         .filter((e) => e.index < navSnapshot.activeIndex)
@@ -348,7 +353,7 @@ export function BrowserPane({
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setPendingApproval(null);
-      setHistory((prev) => ({ ...prev, present: url }));
+      setHistory((prev) => pushBrowserHistory(prev, url));
       setIsLoading(true);
       setLoadError(null);
       lastSetUrlRef.current = url;
@@ -430,28 +435,56 @@ export function BrowserPane({
     // Only mutate state once we know navigation will actually fire — otherwise no
     // load event ever clears isLoading (stuck spinner) and a no-op Back would
     // wrongly flip the initial-restored-load heuristic / dismiss banners.
-    if (webview && isWebviewReady && webview.canGoBack()) {
+    if (!webview || !isWebviewReady) return;
+
+    if (webview.canGoBack()) {
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setIsLoading(true);
       setLoadError(null);
       webview.goBack();
+      return;
     }
-  }, [isWebviewReady]);
+
+    if (history.past.length > 0) {
+      const nextHistory = goBackBrowserHistory(history);
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
+      setHistory(nextHistory);
+      lastSetUrlRef.current = nextHistory.present;
+      loadWebviewUrl(webview, nextHistory.present);
+    }
+  }, [history, isWebviewReady]);
 
   const handleForward = useCallback(() => {
     const webview = webviewRef.current;
     // Only mutate state once we know navigation will actually fire — otherwise no
     // load event ever clears isLoading (stuck spinner) and a no-op Forward would
     // wrongly flip the initial-restored-load heuristic / dismiss banners.
-    if (webview && isWebviewReady && webview.canGoForward()) {
+    if (!webview || !isWebviewReady) return;
+
+    if (webview.canGoForward()) {
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
       setIsLoading(true);
       setLoadError(null);
       webview.goForward();
+      return;
     }
-  }, [isWebviewReady]);
+
+    if (history.future.length > 0) {
+      const nextHistory = goForwardBrowserHistory(history);
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
+      setIsLoading(true);
+      setLoadError(null);
+      setHistory(nextHistory);
+      lastSetUrlRef.current = nextHistory.present;
+      loadWebviewUrl(webview, nextHistory.present);
+    }
+  }, [history, isWebviewReady]);
 
   const handleReload = useCallback(() => {
     setBlockedNav(null);

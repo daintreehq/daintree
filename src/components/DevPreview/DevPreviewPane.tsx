@@ -424,7 +424,7 @@ export function DevPreviewPane({
   // Seed value for the webview `src` attribute, captured once at mount. Never
   // re-bound to navigation state — Electron's SrcAttribute observer would turn
   // each guest navigation into a redundant full reload (#9940).
-  const initialUrlRef = useRef<string>(history.present);
+  const [webviewSeedUrl, setWebviewSeedUrl] = useState(history.present);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   // Generation token to invalidate in-flight async scroll captures when the
   // user clears scroll state via hard restart. A pending executeJavaScript
@@ -462,6 +462,7 @@ export function DevPreviewPane({
   const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
+  const effectiveWebviewSeedUrl = webviewSeedUrl || currentUrl;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const isUnconfigured =
@@ -477,6 +478,12 @@ export function DevPreviewPane({
     status === "running" &&
     (proxyOrigin === undefined ||
       (typeof proxyOrigin === "string" && !!currentUrl && !currentUrl.startsWith(proxyOrigin)));
+
+  useEffect(() => {
+    if (!webviewSeedUrl && currentUrl) {
+      setWebviewSeedUrl(currentUrl);
+    }
+  }, [currentUrl, webviewSeedUrl]);
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
@@ -618,6 +625,7 @@ export function DevPreviewPane({
     if (!isUnconfigured) return;
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
+    setWebviewSeedUrl("");
     lastSetUrlRef.current = "";
     setWebviewLoadError(null);
     clearRetryState();
@@ -662,12 +670,12 @@ export function DevPreviewPane({
         // Match the `src` seed so the isWebviewReady navigation effect does not
         // re-load the same URL on first ready (#9940). The isUnconfigured effect
         // resets this to "" afterward when there is no dev command.
-        lastSetUrlRef.current = initialUrlRef.current;
+        lastSetUrlRef.current = effectiveWebviewSeedUrl;
         clearRetryState();
       }
       setWebviewElement(node);
     },
-    [id, setDevPreviewScrollPosition, clearRetryState]
+    [id, setDevPreviewScrollPosition, clearRetryState, effectiveWebviewSeedUrl]
   );
 
   useEffect(() => {
@@ -935,6 +943,7 @@ export function DevPreviewPane({
     clearLoadTimers();
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
+    setWebviewSeedUrl("");
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsSlowLoad(false);
@@ -2027,7 +2036,7 @@ export function DevPreviewPane({
                     <webview
                       ref={setWebviewNode}
                       // Seed-only: never re-bind to navigation state (#9940).
-                      src={initialUrlRef.current}
+                      src={effectiveWebviewSeedUrl}
                       partition={webviewPartition}
                       // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                       allowpopups=""

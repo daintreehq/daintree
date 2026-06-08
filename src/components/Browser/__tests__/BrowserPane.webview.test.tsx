@@ -600,6 +600,35 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(getLoadingOverlay(container)).not.toBeNull();
     });
 
+    it("falls back to app history when native back history is unavailable after address navigation", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settleLoaded(webview);
+      webview.canGoBack.mockReturnValue(false);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-navigate", {
+            detail: { id: "browser-panel-1", url: "http://localhost:5173/page-a" },
+          })
+        );
+      });
+
+      let toolbarProps = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(toolbarProps.canGoBack).toBe(true);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-back", { detail: { id: "browser-panel-1" } })
+        );
+      });
+
+      expect(webview.goBack).not.toHaveBeenCalled();
+      expect(webview.loadURL).toHaveBeenLastCalledWith("http://localhost:5173/");
+      toolbarProps = browserToolbarPropsSpy.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(toolbarProps.canGoForward).toBe(true);
+    });
+
     it("navigates and shows the loading overlay when forward is possible", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);

@@ -342,7 +342,7 @@ import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
 import type { BuiltInPanelKind } from "./types";
-import { actionService } from "./services/ActionService";
+import { actionService, installE2EActionDispatchBridge } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
@@ -354,6 +354,10 @@ function AppInner() {
   useErrors();
   useUnloadCleanup();
   useResourceProfile();
+
+  useEffect(() => {
+    installE2EActionDispatchBridge();
+  }, []);
 
   useEffect(() => {
     // All E2E renderer backdoors are gated on the preload-injected

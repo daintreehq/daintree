@@ -62,6 +62,7 @@ export function useDevPreviewConsoleCapture(
   // `setHmrDead(true)` on the current generation keeps those stale, lower-
   // generation failures from resurrecting the banner over a healthy reload.
   const currentGenerationRef = useRef(0);
+  const activeCaptureTokenRef = useRef<symbol | null>(null);
 
   useEffect(() => {
     if (!webviewElement || isEvicted) return;
@@ -80,6 +81,8 @@ export function useDevPreviewConsoleCapture(
     // Chain stop after start settles so a fast ready→evict cycle can't let a
     // slow startConsoleCapture resolve after cleanup already fired, which
     // would leave a CDP session attached with nothing to detach it.
+    const captureToken = Symbol("dev-preview-console-capture");
+    activeCaptureTokenRef.current = captureToken;
     const started = window.electron.webview
       .registerPanel(webContentsId, paneId)
       .then(() => window.electron.webview.startConsoleCapture(webContentsId, paneId));
@@ -121,7 +124,11 @@ export function useDevPreviewConsoleCapture(
           // Start failure is already reported above; swallow it here so the
           // sequencing chain still reaches the stop call.
         })
-        .then(() => window.electron.webview.stopConsoleCapture(webContentsId, paneId));
+        .then(() => {
+          if (activeCaptureTokenRef.current !== captureToken) return;
+          activeCaptureTokenRef.current = null;
+          return window.electron.webview.stopConsoleCapture(webContentsId, paneId);
+        });
       safeFireAndForget(stopped, { context: "Stopping dev-preview console capture" });
     };
   }, [paneId, webviewElement, isWebviewReady, isEvicted]);

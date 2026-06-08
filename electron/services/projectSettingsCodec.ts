@@ -226,27 +226,47 @@ function decodeResourceEnvironment(raw: unknown): ResourceEnvironment | undefine
   const obj = raw as Record<string, unknown>;
   const result: ResourceEnvironment = {};
 
-  if (Array.isArray(obj.provision)) {
-    const filtered = obj.provision.filter((s): s is string => typeof s === "string");
-    if (filtered.length > 0) result.provision = filtered;
-  }
-  if (Array.isArray(obj.teardown)) {
-    const filtered = obj.teardown.filter((s): s is string => typeof s === "string");
-    if (filtered.length > 0) result.teardown = filtered;
-  }
-  if (Array.isArray(obj.resume)) {
-    const filtered = obj.resume.filter((s): s is string => typeof s === "string");
-    if (filtered.length > 0) result.resume = filtered;
-  }
-  if (Array.isArray(obj.pause)) {
-    const filtered = obj.pause.filter((s): s is string => typeof s === "string");
-    if (filtered.length > 0) result.pause = filtered;
-  }
-  if (typeof obj.status === "string") result.status = obj.status;
-  if (typeof obj.connect === "string") result.connect = obj.connect;
-  if (typeof obj.icon === "string") result.icon = obj.icon;
+  const decodeCommandArray = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const filtered = value.filter((s): s is string => typeof s === "string");
+    return filtered.length > 0 ? filtered : undefined;
+  };
 
-  return Object.keys(result).length > 0 ? result : undefined;
+  if (obj.provision !== undefined) {
+    const provision = decodeCommandArray(obj.provision);
+    if (provision) result.provision = provision;
+    else if (!Array.isArray(obj.provision)) return undefined;
+  }
+  if (obj.teardown !== undefined) {
+    const teardown = decodeCommandArray(obj.teardown);
+    if (teardown) result.teardown = teardown;
+    else if (!Array.isArray(obj.teardown)) return undefined;
+  }
+  if (obj.resume !== undefined) {
+    const resume = decodeCommandArray(obj.resume);
+    if (resume) result.resume = resume;
+    else if (!Array.isArray(obj.resume)) return undefined;
+  }
+  if (obj.pause !== undefined) {
+    const pause = decodeCommandArray(obj.pause);
+    if (pause) result.pause = pause;
+    else if (!Array.isArray(obj.pause)) return undefined;
+  }
+  if (obj.status !== undefined) {
+    if (typeof obj.status !== "string") return undefined;
+    result.status = obj.status;
+  }
+  if (obj.connect !== undefined) {
+    if (typeof obj.connect !== "string") return undefined;
+    result.connect = obj.connect;
+  }
+  if (obj.icon !== undefined) {
+    if (typeof obj.icon !== "string") return undefined;
+    result.icon = obj.icon;
+  }
+
+  if (Object.keys(result).length > 0) return result;
+  return Object.keys(obj).length === 0 ? {} : undefined;
 }
 
 function decodeResourceEnvironments(raw: unknown): Record<string, ResourceEnvironment> | undefined {

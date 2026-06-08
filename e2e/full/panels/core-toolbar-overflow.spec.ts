@@ -27,7 +27,9 @@ async function expectToolbarActionReachable(page: AppContext["window"], name: st
     .getByRole("button", { name: new RegExp(`^${escapeRegExp(name)}\\b`, "i") })
     .first();
   const overflowLabel = overflowMenuLabels[name] ?? name;
-  const menuItem = page.getByRole("menuitem", { name: overflowLabel, exact: true });
+  const menuItem = page.getByRole("menuitem", {
+    name: new RegExp(`^${escapeRegExp(overflowLabel)}(?:\\s|$)`, "i"),
+  });
 
   for (let attempt = 0; attempt < 8; attempt++) {
     if (await directButton.isVisible({ timeout: 500 }).catch(() => false)) {
