@@ -3081,6 +3081,21 @@ describe("hydrateAppState", () => {
       expect(getTmpDirMock).not.toHaveBeenCalled();
     });
 
+    it("uses systemTmpDir from the appClient.hydrate() payload and skips the getTmpDir IPC call", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [] },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        systemTmpDir: "/hydrate-tmp",
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(getTmpDirMock).not.toHaveBeenCalled();
+    });
+
     it("falls back to the getTmpDir IPC call when systemTmpDir is absent", async () => {
       appClientMock.hydrate.mockResolvedValue({
         appState: { terminals: [] },
