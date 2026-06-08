@@ -104,6 +104,10 @@ function clearPendingIf(kind: FleetPendingActionKind): void {
 export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.accept", () => ({
     id: "fleet.accept",
+    // Armed-fleet hotkey actions operate on the live armed/waiting snapshot and
+    // no-op when nothing is armed (fleet.reject even reopens the palette on its
+    // shared Cmd+N). They're keybinding/Fleet-UI driven, not palette commands.
+    palette: { mode: "hidden" },
     title: "Fleet: Accept",
     description:
       "Send 'y' + Enter to every armed agent that is waiting for input (accepts [y/N] prompts)",
@@ -131,6 +135,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.reject", () => ({
     id: "fleet.reject",
+    palette: { mode: "hidden" },
     title: "Fleet: Reject",
     description:
       "Send 'n' + Enter to every armed agent that is waiting for input (rejects [y/N] prompts; confirms when 5+ targets)",
@@ -175,6 +180,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.interrupt", () => ({
     id: "fleet.interrupt",
+    palette: { mode: "hidden" },
     title: "Fleet: Interrupt",
     description:
       "Send double-Escape to armed working/waiting full agent terminals. Confirms when 3+ targets.",
@@ -205,6 +211,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.restart", () => ({
     id: "fleet.restart",
+    palette: { mode: "hidden" },
     title: "Fleet: Restart",
     description: "Restart every armed agent terminal (always requires confirmation)",
     category: "terminal",
@@ -231,6 +238,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.kill", () => ({
     id: "fleet.kill",
+    palette: { mode: "hidden" },
     title: "Fleet: Kill",
     description:
       "Remove every armed terminal panel (matches terminal.killAll semantics — not a raw SIGKILL; always requires confirmation)",
@@ -259,6 +267,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.trash", () => ({
     id: "fleet.trash",
+    palette: { mode: "hidden" },
     title: "Fleet: Trash",
     description: "Move every armed terminal to trash (confirms when 5+ targets)",
     category: "terminal",
@@ -286,6 +295,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.scope.enter", () => ({
     id: "fleet.scope.enter",
+    palette: { mode: "hidden" },
     title: "Fleet: Enter Scope Mode",
     description:
       "Activate Fleet scope mode (primitive — gated by fleetScopeMode flag; no-op in legacy mode)",
@@ -302,6 +312,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.scope.exit", () => ({
     id: "fleet.scope.exit",
+    palette: { mode: "hidden" },
     title: "Fleet: Exit Scope Mode",
     description:
       "Exit Fleet scope mode, restoring the pre-scope active worktree (no-op in legacy mode)",
@@ -324,6 +335,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.retryFailures", () => ({
     id: "fleet.retryFailures",
+    palette: { mode: "hidden" },
     title: "Fleet: Retry failed broadcast",
     description:
       "Re-fire the most recent broadcast against any panes that rejected it. No-op when no failures are recorded.",
@@ -398,6 +410,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.armFocused", () => ({
     id: "fleet.armFocused",
+    palette: { mode: "hidden" },
     title: "Fleet: Toggle Arm Focused Pane",
     description:
       "Toggle fleet membership on the focused terminal — keyboard equivalent of ⌘/⇧-clicking pane chrome",

@@ -332,6 +332,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
+  "agentSettings.reset",
 ];
 
 /**
@@ -390,6 +391,11 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",
+  // Agent/MCP-only — palette-hidden and unbound, configured from Settings via the
+  // client (not ActionService). danger:"confirm" gates agent dispatch (resetting
+  // all agents at once is destructive-local with no undo); there is no UI
+  // ConfirmDialog because there is no user-facing dispatch path.
+  "agentSettings.reset",
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",

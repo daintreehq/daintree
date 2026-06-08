@@ -307,6 +307,91 @@ describe("useActionPalette", () => {
     expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
   });
 
+  it("excludes paletteHidden commands from the palette", async () => {
+    listMock.mockReturnValue([
+      makeEntry("visible.action", "Visible thing"),
+      { ...makeEntry("hidden.action", "Hidden thing"), paletteHidden: true },
+    ]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("thing"));
+
+    await waitFor(() => {
+      expect(result.current.results.length).toBe(1);
+    });
+    expect(result.current.results.map((r) => r.id)).toEqual(["visible.action"]);
+  });
+
+  it("shows a redirect command and dispatches its target instead of itself", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    listMock.mockReturnValue([
+      {
+        // requiresArgs is true, but a redirect must still surface — it runs its
+        // sibling, not itself, so its own args are irrelevant.
+        ...makeEntry("worktree.createWithRecipe", "Create Worktree with Recipe"),
+        requiresArgs: true,
+        paletteRedirectTo: "worktree.createDialog.open",
+      },
+    ]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("recipe"));
+
+    await waitFor(
+      () => {
+        expect(result.current.results.length).toBe(1);
+      },
+      { timeout: 2000 }
+    );
+
+    act(() => {
+      result.current.executeAction(result.current.results[0]!);
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", {}, { source: "user" });
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "worktree.createWithRecipe",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("renders a requireContext (paletteDisabled) row as disabled-with-reason and no-ops on Enter", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    listMock.mockReturnValue([
+      {
+        ...makeEntry("copyTree.generateAndCopyFile", "Generate And Copy Context"),
+        paletteDisabled: true,
+        paletteDisabledReason: "Open a worktree to generate its context",
+      },
+    ]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("context"));
+
+    await waitFor(
+      () => {
+        expect(result.current.results.length).toBe(1);
+      },
+      { timeout: 2000 }
+    );
+
+    const row = result.current.results[0]!;
+    expect(row.enabled).toBe(false);
+    expect(row.disabledReason).toBe("Open a worktree to generate its context");
+
+    act(() => {
+      result.current.executeAction(row);
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("excludes confirm-danger ids persisted in MRU from the Recently used rail", async () => {
     // Pre-fix sessions could have written confirm-danger ids into MRU. After
     // the fix they must not surface on the empty-query rail even though the
