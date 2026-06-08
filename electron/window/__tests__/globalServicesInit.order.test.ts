@@ -27,6 +27,19 @@ const {
     getPluginMcpConsentStore: vi.fn(),
   };
 });
+const {
+  pluginInitialize,
+  pluginGetPluginDir,
+  pluginActivateStartup,
+  setPluginDirResolver,
+  activateOpenFileInstaller,
+} = vi.hoisted(() => ({
+  pluginInitialize: vi.fn(async () => {}),
+  pluginGetPluginDir: vi.fn((id: string) => `/plugins/${id}`),
+  pluginActivateStartup: vi.fn(),
+  setPluginDirResolver: vi.fn(),
+  activateOpenFileInstaller: vi.fn(async (_svc?: unknown) => {}),
+}));
 
 vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
@@ -118,6 +131,22 @@ vi.mock("../../services/plugin-mcp/instances.js", () => ({
   getPluginMcpAuditService,
   getPluginMcpConsentService,
   getPluginMcpConsentStore,
+}));
+
+vi.mock("../../services/PluginService.js", () => ({
+  pluginService: {
+    initialize: pluginInitialize,
+    getPluginDir: pluginGetPluginDir,
+    activateStartupFinishedPlugins: pluginActivateStartup,
+  },
+}));
+
+vi.mock("../../setup/protocols.js", () => ({
+  setPluginDirResolver,
+}));
+
+vi.mock("../../setup/openFileInstall.js", () => ({
+  activateOpenFileInstaller,
 }));
 
 vi.mock("../../services/HibernationService.js", () => ({
@@ -260,6 +289,11 @@ describe("initGlobalServices task ordering", () => {
     getPluginMcpAuditService.mockClear();
     getPluginMcpConsentService.mockClear();
     getPluginMcpConsentStore.mockClear();
+    pluginInitialize.mockClear();
+    pluginGetPluginDir.mockClear();
+    pluginActivateStartup.mockClear();
+    setPluginDirResolver.mockClear();
+    activateOpenFileInstaller.mockClear();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
@@ -372,6 +406,58 @@ describe("initGlobalServices task ordering", () => {
 
     expect(registeredTaskNames).toContain("ccr-config");
     expect(registeredTaskNames).toContain("plugin-service");
+  });
+
+  it("plugin-service task swaps in the live plugin:// resolver after initialize() (#10322)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("plugin-service");
+    expect(run).toBeDefined();
+    expect(setPluginDirResolver).not.toHaveBeenCalled();
+
+    await run!();
+
+    expect(pluginInitialize).toHaveBeenCalled();
+    expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
+    // The resolver handed to protocols.ts must delegate to the live singleton —
+    // calling it routes through pluginService.getPluginDir, not a frozen value.
+    const resolver = setPluginDirResolver.mock.calls[0]![0] as (id: string) => string | undefined;
+    expect(resolver("acme.tool")).toBe("/plugins/acme.tool");
+    expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
+  });
+
+  it("plugin-service task drains queued open-file installs after initialize() (#10322)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("plugin-service");
+    expect(run).toBeDefined();
+    expect(activateOpenFileInstaller).not.toHaveBeenCalled();
+
+    await run!();
+
+    expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+    // Installer receives the initialized singleton (its PluginInstaller surface).
+    expect(activateOpenFileInstaller.mock.calls[0]![0]).toBeDefined();
+  });
+
+  it("plugin-service task still wires resolver + installer when initialize() rejects (#10322)", async () => {
+    // initialize() failure is non-fatal: the resolver must still go live so any
+    // plugins that did load serve assets, and the installer must still drain
+    // queued .dntr paths. This locks the intentional partial-failure posture.
+    pluginInitialize.mockRejectedValueOnce(new Error("init boom"));
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("plugin-service");
+    expect(run).toBeDefined();
+
+    await run!();
+
+    expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
+    expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
   });
 
   it("does not touch plugin-MCP audit/consent services eagerly during initGlobalServices() (#10073)", async () => {

@@ -526,7 +526,7 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
   if (cachedGetPluginDir) {
-    ses.protocol.handle("plugin", createPluginProtocolHandler(cachedGetPluginDir));
+    ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
   }
 }
 
@@ -567,9 +567,34 @@ export function registerDaintreeFileProtocol(): void {
   protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
 }
 
+// Stable indirection so the live `plugin://` resolver can be swapped after the
+// deferred PluginService import settles (#10322) without re-registering the
+// handler. Both the default-session handler and per-session handlers are wired
+// to this function once; it reads `cachedGetPluginDir` at request time, so a
+// later `setPluginDirResolver` is picked up live — no `protocol.unhandle`/
+// re-`handle` (which would open a micro-tick `ERR_UNKNOWN_URL_SCHEME` gap).
+function resolvePluginDir(pluginId: string): string | undefined {
+  return cachedGetPluginDir ? cachedGetPluginDir(pluginId) : undefined;
+}
+
 export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
   cachedGetPluginDir = getPluginDir;
-  protocol.handle("plugin", createPluginProtocolHandler(getPluginDir));
+  protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
+}
+
+/**
+ * Swap the live `plugin://` directory resolver after the deferred PluginService
+ * import settles (#10322). `registerPluginProtocol` runs before `createWindow`
+ * with a placeholder resolver that returns `undefined` (every request 404s),
+ * keeping the heavy ~2900-line PluginService module off the first-paint path.
+ * Once the deferred `plugin-service` task initializes the singleton, it calls
+ * this to point the already-registered handler at the real `getPluginDir`. The
+ * handler delegates through `resolvePluginDir`, which reads `cachedGetPluginDir`
+ * live, so the swap reaches every handler already registered (default session
+ * plus any per-session handlers wired during `createWindow`).
+ */
+export function setPluginDirResolver(getPluginDir: GetPluginDir): void {
+  cachedGetPluginDir = getPluginDir;
 }
 
 /**
