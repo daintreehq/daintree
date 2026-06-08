@@ -390,7 +390,7 @@ describe("AppLayout sidebar clip-margin state machine — issue #9864", () => {
     // else the 6px strip persists for reduced-motion users until re-show.
     expect(source).toMatch(/window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
     expect(source).toMatch(
-      /reduceAnimations \|\|\s*isSidebarResizing \|\|\s*prefersReducedMotion \|\|\s*layout\.performanceMode[\s\S]{0,80}setSidebarFullyHidden\(true\)/
+      /reduceAnimations \|\|\s*isSidebarResizing \|\|\s*isSidebarWidthHydrating \|\|\s*prefersReducedMotion \|\|\s*layout\.performanceMode[\s\S]{0,80}setSidebarFullyHidden\(true\)/
     );
   });
 
@@ -400,7 +400,54 @@ describe("AppLayout sidebar clip-margin state machine — issue #9864", () => {
     // 6px strip persists in performance mode — the original #9864 regression.
     expect(source).toMatch(/\|\|\s*layout\.performanceMode/);
     expect(source).toMatch(
-      /\[showSidebar, reduceAnimations, isSidebarResizing, layout\.performanceMode\]/
+      /\[\s*showSidebar,\s*reduceAnimations,\s*isSidebarResizing,\s*isSidebarWidthHydrating,\s*layout\.performanceMode,?\s*\]/
     );
+  });
+});
+
+describe("AppLayout sidebar-width hydration transition gating — issue #10321", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
+  });
+
+  it("tracks an initially-suppressed hydration flag so the boot width-restore doesn't animate", () => {
+    // sidebarWidth boots at DEFAULT_SIDEBAR_WIDTH and is replaced once the async
+    // appClient.getState() restore resolves ~50-100ms later. Starting the flag
+    // at true keeps the width transition off until that restore lands, so the
+    // late setSidebarWidth doesn't animate 350px -> persisted on project switch.
+    expect(source).toContain(
+      "const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true)"
+    );
+  });
+
+  it("gates the sidebar width transition on the hydration flag alongside the resize guard", () => {
+    // The new flag must join the existing gate, not replace it — drag-resize
+    // suppression (#7627) and reduced-motion must still hold.
+    expect(source).toMatch(
+      /!reduceAnimations\s*&&\s*!isSidebarResizing\s*&&\s*!isSidebarWidthHydrating\s*&&/
+    );
+  });
+
+  it("clears the hydration flag in both the restore success and failure paths", () => {
+    // Unconditional clear in the try block (after the getState restore) so a
+    // session without a persisted width still re-enables the transition, and a
+    // clear in catch so a failed IPC doesn't permanently suppress every later
+    // user resize/collapse.
+    // One clear inside the try (before the catch) and one inside the catch.
+    expect(source).toMatch(
+      /setIsSidebarWidthHydrating\(false\);[\s\S]*?\} catch \(error\) \{[\s\S]*?setIsSidebarWidthHydrating\(false\)/
+    );
+    // Both clears must live within the restoreState effect's try/catch, not the
+    // initial useState — so there are exactly two setter calls total.
+    expect(source.match(/setIsSidebarWidthHydrating\(false\)/g)?.length).toBe(2);
+  });
+
+  it("does not need flushSync to clear the flag — the post-await batch is enough", () => {
+    // Unlike drag-resize start (which races the first mousemove), the clear runs
+    // in the same synchronous continuation as setSidebarWidth after the await,
+    // so React batches both into one paint. A flushSync here would be wrong.
+    expect(source).not.toMatch(/flushSync\([^)]*setIsSidebarWidthHydrating/);
   });
 });
