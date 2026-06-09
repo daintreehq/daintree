@@ -240,7 +240,9 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   const { errorCount, warnCount } = counts;
 
   const handleScrollToBottom = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({ index: "LAST" });
+    // align "end" lands on the true bottom even when the last row is tall
+    // (e.g. an expanded object or long stack trace).
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
     setIsAtBottom(true);
   }, []);
 
