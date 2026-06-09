@@ -2402,13 +2402,24 @@ class TerminalInstanceService {
     const buf = managed.terminal.buffer.active;
     if (buf.length === 0) return "";
 
-    const lines: string[] = [];
-    for (let i = 0; i < buf.length; i++) {
+    // Scan from the tail upward, collecting lines until the raw accumulated
+    // length exceeds maxChars * 2 (2× margin so stripping escape codes doesn't
+    // leave us short). Then join in forward order, strip, and slice to exact length.
+    const tail: string[] = [];
+    let rawLen = 0;
+    const limit = maxChars * 2;
+    for (let i = buf.length - 1; i >= 0; i--) {
       const line = buf.getLine(i);
-      if (line) lines.push(line.translateToString(true));
+      if (line) {
+        const s = line.translateToString(true);
+        tail.push(s);
+        rawLen += s.length + 1; // +1 for the "\n" separator
+        if (rawLen >= limit) break;
+      }
     }
 
-    let text = stripAnsiAndOscCodes(lines.join("\n"));
+    tail.reverse();
+    let text = stripAnsiAndOscCodes(tail.join("\n"));
 
     if (text.length > maxChars) {
       text = text.slice(-maxChars);
