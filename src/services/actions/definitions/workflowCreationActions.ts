@@ -27,6 +27,12 @@ export function registerWorkflowCreationActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // Headless/MCP tool: every field is optional but run() requires either a
+      // branchName or a pullRequestNumber, so dispatching it from the palette
+      // with {} throws. Redirect palette picks to the New Worktree dialog (which
+      // collects the branch/recipe/PR interactively); the headless action stays
+      // a full MCP tool and keybinding target.
+      palette: { mode: "redirect", to: "worktree.createDialog.open" },
       argsSchema: z
         .object({
           branchName: z

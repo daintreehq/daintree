@@ -25,6 +25,9 @@ vi.mock("../../../KeybindingService", () => ({
   },
 }));
 
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 import { actionService } from "../../../ActionService";
 import { registerActionActions } from "../actionActions";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
@@ -78,15 +81,18 @@ describe("action.repeatLast", () => {
     expect(run.mock.calls[1]![0]).toEqual({ foo: 1 });
   });
 
-  it("returns an error when no action has been dispatched yet", async () => {
+  it("succeeds with a quiet notice when no action has been dispatched yet", async () => {
+    // Empty-state was changed from a throw (which surfaced a "Couldn't run"
+    // error toast when picked from the palette) to a graceful info notice.
+    notifyMock.mockClear();
     const result = await actionService.dispatch("action.repeatLast" as ActionId, undefined, {
       source: "keybinding",
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.message).toContain("No action to repeat");
-    }
+    expect(result.ok).toBe(true);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "info", title: "Nothing to repeat" })
+    );
   });
 
   it("does not overwrite lastAction when action.repeatLast itself is dispatched", async () => {

@@ -68,9 +68,16 @@ export function registerAppConfigActions(
     description: "Reset settings for one agent or all agents",
     category: "settings",
     kind: "command",
-    danger: "safe",
+    // Omitting agentId resets EVERY agent's model/flags with no undo — a
+    // destructive-local (D1) mutation, so it requires confirmation and is
+    // excluded from the MRU/repeat rails. Configured from Settings (which calls
+    // the client directly), not the palette.
+    danger: "confirm",
+    dangerRationale:
+      "Resets agent model and flag overrides to defaults. Omitting an agent id resets every agent at once, with no undo.",
     scope: "renderer",
     keywords: ["defaults", "restore", "clear", "agents"],
+    palette: { mode: "hidden" },
     argsSchema: z
       .object({
         agentId: z.string().optional(),
@@ -114,6 +121,9 @@ export function registerAppConfigActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
+    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
+    palette: { mode: "hidden" },
     argsSchema: z.object({
       enabled: z.boolean().optional(),
       inactiveThresholdHours: z.number().int().positive().optional(),
@@ -149,6 +159,9 @@ export function registerAppConfigActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
+    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
+    palette: { mode: "hidden" },
     argsSchema: z.object({
       enabled: z.boolean().optional(),
       thresholdMinutes: z.number().int().positive().optional(),

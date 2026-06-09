@@ -15,6 +15,22 @@ const argsSchema = z
   })
   .optional();
 
+/**
+ * Palette gate for the dev-preview actions: their `run()` resolves the target
+ * from `usePanelStore.getState().focusedId` and throws when nothing suitable is
+ * focused. Used as the `requireContext.isReady` predicate so the palette dims
+ * the row with a reason instead of dispatching `{}` into a throw. Reads the
+ * panel store directly (the action context doesn't carry the focused panel
+ * kind); dispatch never evaluates this, so context-menu/MCP calls with an
+ * explicit `panelId` are unaffected.
+ */
+function isDevPreviewFocused(): boolean {
+  const { focusedId, getTerminal } = usePanelStore.getState();
+  if (!focusedId) return false;
+  const panel = getTerminal(focusedId);
+  return Boolean(panel && isDevPreviewPanel(panel));
+}
+
 function resolveTarget(args: unknown, ctx: ActionContext): { panelId: string; projectId: string } {
   const parsed = argsSchema.parse(args);
   const { panelId, projectId } = parsed ?? {};
@@ -41,6 +57,11 @@ export function registerDevPreviewActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    palette: {
+      mode: "requireContext",
+      isReady: () => isDevPreviewFocused(),
+      reason: "Focus a dev preview to reload it",
+    },
     argsSchema,
     run: async (args: unknown) => {
       const parsed = argsSchema.parse(args);
@@ -62,6 +83,13 @@ export function registerDevPreviewActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    palette: {
+      mode: "requireContext",
+      // resolveTarget() needs both a focused dev preview AND ctx.projectId, and
+      // throws without either — gate on both so the row matches run()'s success.
+      isReady: (ctx) => Boolean(ctx.projectId) && isDevPreviewFocused(),
+      reason: "Focus a dev preview to restart it",
+    },
     argsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const target = resolveTarget(args, ctx);
@@ -79,6 +107,12 @@ export function registerDevPreviewActions(
     scope: "renderer",
     dangerRationale:
       "Wipes framework build caches (.next, .vite, .turbo) and respawns the dev server. Caches regenerate on next build.",
+    // danger:"confirm" with the confirm wired at the DevPreviewPane call site
+    // (DevPreviewDestructiveConfirmDialog), NOT in run(). The palette dispatches
+    // with source:"user", which ActionService does not gate, so a palette pick
+    // would wipe caches with no confirmation — a D1 bypass. Keep it out of the
+    // palette; it stays reachable from the dev-preview panel menu (with confirm).
+    palette: { mode: "hidden" },
     argsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const target = resolveTarget(args, ctx);
@@ -96,6 +130,10 @@ export function registerDevPreviewActions(
     scope: "renderer",
     dangerRationale:
       "Removes node_modules, reinstalls dependencies, and respawns the dev server. Recovery requires a full reinstall, network and lockfile dependent.",
+    // danger:"confirm" with the confirm wired at the DevPreviewPane call site,
+    // not in run() — see devPreview.restartAndClearCache above. Hidden from the
+    // palette so a source:"user" pick can't bypass the D1 confirm.
+    palette: { mode: "hidden" },
     argsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const target = resolveTarget(args, ctx);
@@ -113,6 +151,12 @@ export function registerDevPreviewActions(
     danger: "safe",
     scope: "renderer",
     keywords: ["portal", "promote", "browser", "preview", "session"],
+    palette: {
+      mode: "requireContext",
+      // resolveTarget() needs a focused dev preview AND ctx.projectId.
+      isReady: (ctx) => Boolean(ctx.projectId) && isDevPreviewFocused(),
+      reason: "Focus a dev preview to open it in a Portal",
+    },
     argsSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const { panelId, projectId } = resolveTarget(args, ctx);

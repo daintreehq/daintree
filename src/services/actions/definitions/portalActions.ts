@@ -323,6 +323,9 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.duplicateTab", () => ({
     id: "portal.duplicateTab",
+    // Per-tab op: duplicates the active portal tab, no-op without one.
+    // Portal-toolbar/context-menu affordance, not a global palette command.
+    palette: { mode: "hidden" },
     title: "Duplicate Portal Tab",
     description: "Duplicate a portal tab",
     category: "portal",

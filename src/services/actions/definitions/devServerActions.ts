@@ -5,6 +5,21 @@ import { projectClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { isDevPreviewPanel } from "@shared/types/panel";
+
+/**
+ * Palette gate for `devPreview.stop`: its `run()` needs an open project and a
+ * focused dev-preview panel and throws otherwise. Reads the panel store rather
+ * than the action context (which doesn't carry the focused panel kind);
+ * dispatch never evaluates this, so explicit-arg callers are unaffected.
+ */
+function isDevPreviewStoppable(ctx: { projectId?: string }): boolean {
+  if (!ctx.projectId) return false;
+  const { focusedId, getTerminal } = usePanelStore.getState();
+  if (!focusedId) return false;
+  const panel = getTerminal(focusedId);
+  return Boolean(panel && isDevPreviewPanel(panel));
+}
 
 function readActiveWorktreePath(activeWorktreeId: string | undefined): string | undefined {
   if (!activeWorktreeId) return undefined;
@@ -73,6 +88,11 @@ export function registerDevServerActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    palette: {
+      mode: "requireContext",
+      isReady: (ctx) => isDevPreviewStoppable(ctx),
+      reason: "Focus a dev preview to stop it",
+    },
     run: async (_args: unknown, ctx: ActionContext) => {
       if (!ctx.projectId) {
         throw new Error("No project is currently open");

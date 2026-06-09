@@ -417,6 +417,9 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("eventInspector.subscribe", () => ({
     id: "eventInspector.subscribe",
+    // Diagnostics/MCP plumbing: starts event capture with no visible effect.
+    // Driven by the event-inspector UI and MCP, not a user palette command.
+    palette: { mode: "hidden" },
     title: "Subscribe to Events",
     description:
       "Start capturing events into the event inspector. Must be called before getEvents or getFiltered will return results.",
@@ -458,6 +461,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("telemetry.togglePreview", () => ({
     id: "telemetry.togglePreview",
+    palette: { mode: "hidden" },
     title: "Preview Outbound Telemetry",
     description:
       "Toggle a session-only preview that mirrors every sanitised telemetry payload before it is sent.",

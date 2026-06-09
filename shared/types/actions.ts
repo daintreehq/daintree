@@ -19,6 +19,42 @@ export type McpVisibility = "core" | "discoverable" | "hidden";
 export type ActionScope = "renderer";
 
 /**
+ * Declares how an action behaves when surfaced in the command/action palette,
+ * independent of its headless/MCP schema. The palette dispatches the chosen
+ * action with empty args `{}`, so an action whose real requirements live in
+ * `run()` (rather than its `argsSchema`) leaks into the palette and fails when
+ * picked. `requiresArgs` only answers "does the schema reject zero args" — this
+ * field answers "what should happen when a user picks this from the palette."
+ *
+ * Palette-only: `ActionService.list()` projects this onto the manifest, but
+ * `dispatch()`/`get()` ignore it, so keybindings, context menus, and the MCP
+ * tool surface are unaffected. Unset behaves as `"run"` (today's behavior:
+ * dispatch the action with `{}`).
+ *
+ * - `hidden` — never list the action in the palette. Still dispatchable via
+ *   keybinding / direct id and still visible to MCP (use `isVisible` instead to
+ *   also drop it from the MCP manifest and context menus). For commands that
+ *   are keybinding/context-menu/MCP-only or are no-ops without live UI state.
+ * - `redirect` — list the action (with its own title/keywords for searchability)
+ *   but dispatch `to` instead when picked. The companion UI action — typically a
+ *   dialog-opener — is what actually runs. For headless arg-taking actions that
+ *   have an interactive sibling (e.g. `worktree.createWithRecipe` →
+ *   `worktree.createDialog.open`).
+ * - `requireContext` — list the action, but render it disabled-with-reason in
+ *   the palette when `isReady(ctx)` is false (the palette no-ops a disabled row
+ *   and shows `reason` inline). When ready, dispatch normally with `{}`. For
+ *   actions whose `run()` resolves a focus/selection target from current UI
+ *   state and throws when none is present (e.g. `devPreview.restart`,
+ *   `copyTree.generateAndCopyFile`). `isReady` is evaluated only by the palette
+ *   layer — never by `dispatch()` — so context-menu/MCP calls that pass an
+ *   explicit target are not gated.
+ */
+export type PaletteBehavior =
+  | { mode: "hidden" }
+  | { mode: "redirect"; to: ActionId }
+  | { mode: "requireContext"; isReady: (ctx: ActionContext) => boolean; reason: string };
+
+/**
  * Explicit MCP tool annotation overrides. The spec defaults to a conservative
  * posture (destructive, open-world) — override only when the action's true
  * semantics differ from that default. `title` is always sourced from the action
@@ -101,6 +137,14 @@ export interface ActionDefinition<
    * lookups and keybindings continue to work.
    */
   isVisible?: (ctx: ActionContext) => boolean;
+  /**
+   * Command/action-palette behavior. See {@link PaletteBehavior}. Unset behaves
+   * as `"run"` — the palette dispatches the action with empty args, gated only
+   * by `requiresArgs`. Set this when the action needs an interactive sibling
+   * (`redirect`), a focus/selection precondition (`requireContext`), or simply
+   * doesn't belong in the palette (`hidden`).
+   */
+  palette?: PaletteBehavior;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
   /**
    * Opt-in allowlist of top-level arg keys that are safe to include in Sentry
@@ -194,6 +238,19 @@ export interface ActionManifestEntry {
   band?: RiskBand;
   /** MCP progressive-disclosure visibility classification. */
   mcpVisibility?: McpVisibility;
+  /**
+   * Projected from {@link ActionDefinition.palette}. Palette-only — these are
+   * read by the action-palette layer and ignored by `dispatch()`/MCP. See
+   * {@link PaletteBehavior}.
+   */
+  /** `palette.mode === "hidden"` — exclude from the palette listing. */
+  paletteHidden?: boolean;
+  /** `palette.mode === "redirect"` — dispatch this id instead when picked. */
+  paletteRedirectTo?: ActionId;
+  /** `palette.mode === "requireContext"` and `isReady(ctx)` was false at list() time. */
+  paletteDisabled?: boolean;
+  /** Reason shown on a `requireContext`-disabled palette row. */
+  paletteDisabledReason?: string;
 }
 
 export interface ActionDispatchSuccess<Result = unknown> {

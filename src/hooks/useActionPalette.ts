@@ -20,6 +20,12 @@ export interface ActionPaletteItem {
   danger: ActionDanger;
   dangerRationale?: string;
   disabledReason?: string;
+  /**
+   * When set, picking this row dispatches this action id instead of `id` — the
+   * row's headless action declared `palette: { mode: "redirect" }` and points
+   * at an interactive sibling (e.g. a dialog-opener). See `PaletteBehavior`.
+   */
+  redirectTo?: string;
   keybinding?: string;
   kind: string;
   titleLower: string;
@@ -63,8 +69,19 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
   const description = typeof entry.description === "string" ? entry.description : "";
   const category = typeof entry.category === "string" ? entry.category : "General";
+  // A `requireContext` palette action surfaces as disabled-with-reason: fold
+  // its palette-only flags into the row's enabled/disabledReason so the
+  // existing disabled-row UX (grayed, inline reason, Enter no-ops) applies
+  // without touching the manifest's dispatch-facing `enabled`.
+  const enabled = entry.enabled && entry.paletteDisabled !== true;
   const disabledReason =
-    typeof entry.disabledReason === "string" ? entry.disabledReason : undefined;
+    typeof entry.paletteDisabledReason === "string"
+      ? entry.paletteDisabledReason
+      : typeof entry.disabledReason === "string"
+        ? entry.disabledReason
+        : undefined;
+  const redirectTo =
+    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
   const dangerRationale =
     typeof entry.dangerRationale === "string" && entry.dangerRationale.trim().length > 0
       ? entry.dangerRationale.trim()
@@ -80,10 +97,11 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     title,
     description,
     category,
-    enabled: entry.enabled,
+    enabled,
     danger: entry.danger,
     dangerRationale,
     disabledReason,
+    redirectTo,
     keybinding: keybindingService.getDisplayCombo(entry.id),
     kind: entry.kind,
     titleLower: title.toLowerCase(),
@@ -103,7 +121,19 @@ export function useActionPalette(): UseActionPaletteReturn {
   const allActions = useMemo<ActionPaletteItem[]>(() => {
     if (!isActionOpen) return [];
     const entries = actionService.list();
-    return entries.filter((e) => e.kind === "command" && !e.requiresArgs).map(toActionPaletteItem);
+    return entries
+      .filter((e) => {
+        if (e.kind !== "command") return false;
+        // Explicit palette opt-out (PaletteBehavior "hidden") wins regardless
+        // of schema shape.
+        if (e.paletteHidden) return false;
+        // A redirect entry runs its interactive sibling, not itself, so its own
+        // args are irrelevant — show it even when its schema would require args.
+        if (e.paletteRedirectTo) return true;
+        // Default: gate on the schema heuristic, as before.
+        return !e.requiresArgs;
+      })
+      .map(toActionPaletteItem);
   }, [isActionOpen]);
 
   const filterFn = useCallback(
@@ -190,9 +220,13 @@ export function useActionPalette(): UseActionPaletteReturn {
         useActionMruStore.getState().recordActionMru(item.id);
       }
       close();
+      // A redirect row runs its interactive sibling (e.g. a dialog-opener)
+      // instead of the headless action the user searched for. MRU above still
+      // records the picked id so the familiar entry reappears.
+      const dispatchId = item.redirectTo ?? item.id;
       void actionService
         .dispatch(
-          item.id as Parameters<typeof actionService.dispatch>[0],
+          dispatchId as Parameters<typeof actionService.dispatch>[0],
           {},
           {
             source: "user",

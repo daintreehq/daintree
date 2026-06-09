@@ -505,6 +505,39 @@ export class ActionService {
       this.requiresArgsCache.set(definition.id, requiresArgs);
     }
 
+    // Project the palette behavior onto the manifest. Palette-only — these
+    // fields are read by useActionPalette and ignored by dispatch()/MCP, so
+    // keybindings, context menus, and the MCP tool surface are unaffected. The
+    // `requireContext` predicate fails CLOSED (disabled-with-reason) since
+    // that's purely a palette-row state, not a dispatch gate.
+    let paletteHidden: true | undefined;
+    let paletteRedirectTo: ActionId | undefined;
+    let paletteDisabled: true | undefined;
+    let paletteDisabledReason: string | undefined;
+    const palette = definition.palette;
+    if (palette) {
+      if (palette.mode === "hidden") {
+        paletteHidden = true;
+      } else if (palette.mode === "redirect") {
+        paletteRedirectTo = palette.to;
+      } else if (palette.mode === "requireContext") {
+        let ready = false;
+        try {
+          ready = palette.isReady(context);
+        } catch (err) {
+          logWarn("Action palette.requireContext predicate threw", {
+            actionId: definition.id,
+            error: err,
+          });
+          ready = false;
+        }
+        if (!ready) {
+          paletteDisabled = true;
+          paletteDisabledReason = palette.reason;
+        }
+      }
+    }
+
     // JSON schemas are deferred from register-time to first-use (issue #8614).
     // Use .has() rather than truthy-check so an action whose schemas are both
     // intentionally undefined isn't recomputed on every call.
@@ -545,6 +578,10 @@ export class ActionService {
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
       ...(definition.examples ? { examples: structuredClone(definition.examples) } : {}),
       ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
+      ...(paletteHidden ? { paletteHidden } : {}),
+      ...(paletteRedirectTo ? { paletteRedirectTo } : {}),
+      ...(paletteDisabled ? { paletteDisabled } : {}),
+      ...(paletteDisabledReason ? { paletteDisabledReason } : {}),
     };
   }
 

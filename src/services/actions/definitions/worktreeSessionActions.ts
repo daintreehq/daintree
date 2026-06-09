@@ -197,6 +197,12 @@ export function registerWorktreeSessionActions(
     category: "worktree",
     kind: "command",
     danger: "confirm",
+    // danger:"confirm" with the confirm wired at the WorktreeCard call site
+    // (useWorktreeActions), NOT in run() — run() ends every session immediately.
+    // ActionService doesn't gate user-source dispatch, so a palette pick would
+    // bypass the D1 confirm. Hide from the palette; it stays reachable from the
+    // worktree card menu (with confirm).
+    palette: { mode: "hidden" },
     scope: "renderer",
     dangerRationale: "Permanently ends all sessions for a worktree. All scrollback is lost.",
     argsSchema: z.object({ worktreeId: z.string().optional() }),

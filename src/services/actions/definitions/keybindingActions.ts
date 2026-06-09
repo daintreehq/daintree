@@ -62,6 +62,11 @@ export function registerKeybindingActions(
     kind: "command",
     danger: "confirm",
     scope: "renderer",
+    // danger:"confirm" with the confirm wired at the KeyboardShortcutsTab call
+    // site, NOT in run() — ActionService doesn't gate user-source dispatch, so a
+    // palette pick would wipe every custom shortcut with no confirmation. Hide
+    // from the palette; it stays reachable from Settings (with confirm).
+    palette: { mode: "hidden" },
     dangerRationale:
       "Resets all keybinding overrides to defaults. All custom shortcuts are permanently lost.",
     keywords: ["shortcuts", "hotkeys", "defaults", "restore"],
