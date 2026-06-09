@@ -43,6 +43,12 @@ export interface PluginDevWorkerMainBridgeDeps {
   /** Clear activate-time registrations (actions + IPC handlers) before a reload
    * re-registers them, so a handler the new code drops doesn't linger. */
   clearPriorRegistrations: () => void;
+  /**
+   * Fires on EVERY activation outcome — the initial activation and each reload.
+   * Lets the owner keep the provenance `loadError` in sync across reloads (the
+   * first-activation promise settles once and can't observe later outcomes).
+   */
+  onActivationResult?: (result: { ok: true } | { ok: false; error: string }) => void;
 }
 
 interface PendingInvoke {
@@ -56,6 +62,9 @@ export class PluginDevWorkerMainBridge {
   private readonly workerHost: PluginDevWorkerHost;
   private readonly getCapabilities: () => readonly string[];
   private readonly clearPriorRegistrations: () => void;
+  private readonly onActivationResult?: (
+    result: { ok: true } | { ok: false; error: string }
+  ) => void;
 
   private disposed = false;
   private invokeSeq = 1;
@@ -75,6 +84,7 @@ export class PluginDevWorkerMainBridge {
     this.workerHost = deps.workerHost;
     this.getCapabilities = deps.getCapabilities;
     this.clearPriorRegistrations = deps.clearPriorRegistrations;
+    this.onActivationResult = deps.onActivationResult;
 
     this.activationPromise = new Promise<void>((resolve, reject) => {
       this.activationResolve = resolve;
@@ -142,16 +152,21 @@ export class PluginDevWorkerMainBridge {
     if (this.disposed) return;
     switch (msg.type) {
       case "activated":
+        // Fires on initial activation and every reload — keep the owner's
+        // provenance in sync on each, not just the first.
+        this.onActivationResult?.({ ok: true });
         this.resolveActivation();
         return;
       case "activate-error":
         logger.error(`[${this.pluginId}] activate() failed: ${msg.error}`, {
           stack: msg.stack,
         });
+        this.onActivationResult?.({ ok: false, error: msg.error });
         this.rejectActivation(new Error(msg.error));
         return;
       case "error":
         logger.error(`[${this.pluginId}] worker error: ${msg.error}`);
+        this.onActivationResult?.({ ok: false, error: msg.error });
         this.rejectActivation(new Error(msg.error));
         return;
       case "host-call":

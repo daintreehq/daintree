@@ -1432,10 +1432,28 @@ export class PluginService {
       clearPriorRegistrations: () => {
         // Drop the prior generation's activate-time registrations before the
         // reloaded worker re-registers, so a handler the new code stopped
-        // registering doesn't linger. Manifest-level contributions are unchanged
-        // by a code rebuild and stay registered.
+        // registering doesn't linger. Manifest-declared commands are registered
+        // once at load time and NOT replayed on reload, so only imperative
+        // (`host.registerAction`) actions are cleared — clearing all of them
+        // would erase the plugin's palette commands after the first reload.
         this.removeHandlers(pluginId);
-        this.unregisterPluginActions(pluginId);
+        this.unregisterImperativePluginActions(pluginId);
+      },
+      // Fires on every activation outcome (initial + each reload). Keeps the
+      // provenance `loadError` in sync so a fix-and-save clears a stale error
+      // and a freshly-introduced one is recorded — the first-activation promise
+      // alone can't see post-reload outcomes.
+      onActivationResult: (result) => {
+        if (plugin.isBuiltin) return;
+        if (result.ok) {
+          if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
+            this.records.upsertInstalledRecord(pluginId, { loadError: null });
+          }
+        } else {
+          this.records.upsertInstalledRecord(pluginId, {
+            loadError: { message: result.error, at: Date.now() },
+          });
+        }
       },
     });
 
@@ -1473,19 +1491,32 @@ export class PluginService {
       return;
     }
 
+    // Bound the first activation so a plugin with a hanging `activate()` (or a
+    // never-resolving top-level await in the worker) can't stall the
+    // `Promise.allSettled` startup gate forever. On timeout the worker stays
+    // alive and watching — `onActivationResult` will clear/record the error if
+    // activation eventually settles or a reload follows. Mirrors the in-process
+    // ACTIVATE_TIMEOUT_MS contract. The provenance `loadError` is owned by
+    // `onActivationResult`; this catch only logs and unblocks startup.
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await bridge.waitForActivation();
-      if (!plugin.isBuiltin && !this.pluginsWithLoadTimeErrors.has(pluginId)) {
-        this.records.upsertInstalledRecord(pluginId, { loadError: null });
-      }
+      await Promise.race([
+        bridge.waitForActivation(),
+        new Promise<void>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(
+                `Dev plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
+              )
+            );
+          }, ACTIVATE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
     } catch (err) {
-      // activate() threw inside the worker. Surface it, but keep the worker
-      // watching so an edit + save reloads it — do NOT rethrow or unload.
-      const loadError = toPluginLoadError(err);
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError });
-      }
-      console.error(`[PluginService] Dev plugin "${pluginId}" activate() failed:`, err);
+      console.error(`[PluginService] Dev plugin "${pluginId}" activation:`, err);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -2967,6 +2998,32 @@ export class PluginService {
     this.pluginActionOwners.delete(pluginId);
 
     this.broadcaster.broadcastPluginActions();
+  }
+
+  /**
+   * Unregister only the IMPERATIVE actions a plugin registered via
+   * `host.registerAction` during `activate()`, leaving manifest-declared
+   * commands intact. Used by the dev hot-reload path (#9304): a reload re-runs
+   * only `activate()`, not the manifest registration, so wiping every action
+   * (as {@link unregisterPluginActions} does) would erase the plugin's palette
+   * commands after the first reload.
+   */
+  unregisterImperativePluginActions(pluginId: string): void {
+    const owners = this.pluginActionOwners.get(pluginId);
+    if (!owners || owners.size === 0) return;
+
+    let changed = false;
+    for (const id of [...owners]) {
+      if (this.manifestCommandIds.has(id)) continue; // keep manifest commands
+      this.pluginActions.delete(id);
+      this.actionValidators.delete(id);
+      this.pluginActionHandlers.delete(id);
+      this.commandModulePaths.delete(id);
+      owners.delete(id);
+      changed = true;
+    }
+    if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
+    if (changed) this.broadcaster.broadcastPluginActions();
   }
 
   /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */

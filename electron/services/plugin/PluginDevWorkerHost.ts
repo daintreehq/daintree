@@ -1,7 +1,7 @@
 import { utilityProcess, UtilityProcess, app } from "electron";
 import { EventEmitter } from "events";
 import { createHash } from "crypto";
-import fs from "fs";
+import fs, { existsSync } from "fs";
 import path from "path";
 import os from "os";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -280,24 +280,59 @@ export class PluginDevWorkerHost extends EventEmitter {
 
   private startWatching(): void {
     if (this.watcher || this.isDisposed) return;
-    // `fs.watch` on a not-yet-existing file throws ENOENT — watch the parent
-    // `dist/` dir and filter for the bundle filename instead. This also
-    // survives editors/Vite that replace the file via rename (the inode the
-    // file watch held would otherwise go stale).
     const dir = path.dirname(this.bundlePath);
     const base = path.basename(this.bundlePath);
+
+    // `fs.watch` on the `dist/` dir is preferred — watching the file directly
+    // would go stale when Vite replaces it via rename, and filtering by
+    // filename coalesces rename+write. But `dist/` may not exist yet when
+    // Daintree loads the plugin (Vite hasn't produced the first build). In that
+    // case watch the plugin root for `dist/` appearing, then re-arm the real
+    // watcher. A single-dir watch is one fd — no recursive-watch fd leak.
+    if (existsSync(dir)) {
+      try {
+        this.watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
+          if (filename && filename !== base) return;
+          this.scheduleReload();
+        });
+        this.watcher.on("error", (error) => {
+          logger.warn(`[${this.serviceName}] Bundle watcher error`, {
+            error: formatErrorMessage(error, "watch failed"),
+          });
+        });
+      } catch (error) {
+        logger.warn(`[${this.serviceName}] Failed to watch bundle dir ${dir}`, {
+          error: formatErrorMessage(error, "watch failed"),
+        });
+      }
+      return;
+    }
+
+    const distName = path.basename(dir);
     try {
-      this.watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
-        if (filename && filename !== base) return;
+      this.watcher = fs.watch(this.pluginDir, { persistent: false }, (_event, filename) => {
+        if (filename && filename !== distName) return;
+        if (!existsSync(dir)) return;
+        // `dist/` now exists — swap to watching it for real, then reload to pick
+        // up the freshly-built bundle.
+        if (this.watcher) {
+          try {
+            this.watcher.close();
+          } catch {
+            // ignore
+          }
+          this.watcher = null;
+        }
+        this.startWatching();
         this.scheduleReload();
       });
       this.watcher.on("error", (error) => {
-        logger.warn(`[${this.serviceName}] Bundle watcher error`, {
+        logger.warn(`[${this.serviceName}] Plugin-dir watcher error`, {
           error: formatErrorMessage(error, "watch failed"),
         });
       });
     } catch (error) {
-      logger.warn(`[${this.serviceName}] Failed to watch bundle dir ${dir}`, {
+      logger.warn(`[${this.serviceName}] Failed to watch plugin dir ${this.pluginDir}`, {
         error: formatErrorMessage(error, "watch failed"),
       });
     }

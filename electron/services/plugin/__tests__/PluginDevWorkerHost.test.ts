@@ -41,7 +41,16 @@ vi.mock("electron", () => ({
 
 vi.mock("fs", async (importOriginal) => {
   const actual = (await importOriginal()) as any;
-  return { ...actual, default: { ...actual.default, watch: watchMock }, watch: watchMock };
+  // existsSync → true so the watcher targets the dist dir directly (the fake
+  // test paths don't exist on the real fs, which would otherwise route through
+  // the "dist not created yet" plugin-root fallback).
+  const existsSync = () => true;
+  return {
+    ...actual,
+    default: { ...actual.default, watch: watchMock, existsSync },
+    watch: watchMock,
+    existsSync,
+  };
 });
 
 vi.mock("../../../utils/logger.js", () => ({

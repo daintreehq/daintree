@@ -7458,4 +7458,48 @@ describe("dev-mode hot reload (#9304)", () => {
     expect(bridge.dispose).toHaveBeenCalled();
     expect(worker.dispose).toHaveBeenCalled();
   });
+
+  it("keeps manifest commands registered across a reload (clearPriorRegistrations)", async () => {
+    const dir = path.join(tmpDir, "dev-cmd");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.dev",
+        version: "1.0.0",
+        main: "dist/index.js",
+        contributes: {
+          commands: [
+            {
+              id: "do-thing",
+              title: "Do Thing",
+              description: "Run the thing",
+              category: "Dev",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+    await fs.writeFile(path.join(dir, ".dev-marker"), "");
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.dev");
+
+    // Manifest command is registered at load time.
+    expect(service.listPluginActions().some((a) => a.id === "acme.dev.do-thing")).toBe(true);
+
+    // Simulate a hot reload: the bridge calls clearPriorRegistrations before the
+    // worker re-registers. Manifest commands must survive — only imperative
+    // (host.registerAction) actions are dropped.
+    const clearPriorRegistrations = (
+      devWorkerMock.bridges[0].deps as { clearPriorRegistrations: () => void }
+    ).clearPriorRegistrations;
+    clearPriorRegistrations();
+
+    expect(service.listPluginActions().some((a) => a.id === "acme.dev.do-thing")).toBe(true);
+  });
 });

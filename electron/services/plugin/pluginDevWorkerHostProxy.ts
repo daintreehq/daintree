@@ -397,13 +397,18 @@ export class PluginDevWorkerHostProxy {
 /** Structural guard mirroring `isChannelSchema` from PluginChannelRegistry,
  * duplicated worker-side to avoid pulling main-process deps into the worker. */
 function isChannelSchema(value: unknown): value is PluginChannelSchema<unknown, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as { args?: { safeParse?: unknown }; result?: { safeParse?: unknown } };
+  // Require `safeParse` on both sides so a plain `{ args: {}, result: {} }`
+  // object is rejected at registration with a clear error instead of throwing an
+  // opaque "safeParse is not a function" TypeError at the first dispatch.
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "args" in value &&
-    "result" in value &&
-    typeof (value as { args?: unknown }).args === "object" &&
-    typeof (value as { result?: unknown }).result === "object"
+    typeof v.args === "object" &&
+    v.args !== null &&
+    typeof v.args.safeParse === "function" &&
+    typeof v.result === "object" &&
+    v.result !== null &&
+    typeof v.result.safeParse === "function"
   );
 }
 

@@ -43,18 +43,26 @@ function makeHost() {
   };
 }
 
-function makeBridge(overrides?: Partial<{ capabilities: string[]; clear: () => void }>) {
+function makeBridge(
+  overrides?: Partial<{
+    capabilities: string[];
+    clear: () => void;
+    onActivationResult: (r: { ok: true } | { ok: false; error: string }) => void;
+  }>
+) {
   const host = makeHost();
   const workerHost = new FakeWorkerHost();
   const clear = overrides?.clear ?? vi.fn();
+  const onActivationResult = overrides?.onActivationResult ?? vi.fn();
   const bridge = new PluginDevWorkerMainBridge({
     pluginId: "acme.demo",
     host: host as any,
     workerHost: workerHost as any,
     getCapabilities: () => overrides?.capabilities ?? [],
     clearPriorRegistrations: clear,
+    onActivationResult,
   });
-  return { host, workerHost, bridge, clear };
+  return { host, workerHost, bridge, clear, onActivationResult };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -190,6 +198,21 @@ describe("PluginDevWorkerMainBridge", () => {
     const badPromise = bad.bridge.waitForActivation();
     bad.workerHost.emit("worker-message", { type: "activate-error", error: "nope" });
     await expect(badPromise).rejects.toThrow("nope");
+  });
+
+  it("reports every activation outcome, including post-reload, via onActivationResult", async () => {
+    const onActivationResult = vi.fn();
+    const { workerHost, bridge } = makeBridge({ onActivationResult });
+    bridge.waitForActivation().catch(() => {});
+
+    // Initial activation succeeds.
+    workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+    // Reload, then the reloaded generation fails to activate.
+    workerHost.emit("reloading");
+    workerHost.emit("worker-message", { type: "activate-error", error: "broke on reload" });
+
+    expect(onActivationResult).toHaveBeenNthCalledWith(1, { ok: true });
+    expect(onActivationResult).toHaveBeenNthCalledWith(2, { ok: false, error: "broke on reload" });
   });
 
   it("clears prior registrations and fails pending invokes on reload", async () => {
