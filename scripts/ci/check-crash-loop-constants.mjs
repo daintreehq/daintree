@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Asserts the crash-loop constants stay equal across the three guards:
+// Asserts the crash-loop constants stay equal across the four guards:
 // `electron/services/pty/PtyHostLifecycle.ts`,
-// `electron/services/WorkspaceHostProcess.ts`, and
-// `electron/services/CrashLoopGuardService.ts`.
+// `electron/services/WorkspaceHostProcess.ts`,
+// `electron/services/CrashLoopGuardService.ts`, and
+// `electron/services/plugin/PluginDevWorkerHost.ts`.
 //
 // The constants are deliberately duplicated, not imported — the guards
 // operate at independent layers (disk-persisted app-level vs. in-memory
@@ -23,6 +24,7 @@ const FILES = [
   path.join(root, "electron/services/pty/PtyHostLifecycle.ts"),
   path.join(root, "electron/services/WorkspaceHostProcess.ts"),
   path.join(root, "electron/services/CrashLoopGuardService.ts"),
+  path.join(root, "electron/services/plugin/PluginDevWorkerHost.ts"),
 ];
 
 const CONSTANTS = ["CRASH_THRESHOLD", "CRASH_WINDOW_MS"];

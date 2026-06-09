@@ -191,6 +191,10 @@ async function run() {
       "electron/workspace-host-bootstrap.ts",
       "electron/watchdog-host.ts",
       "electron/watchdog-host-bootstrap.ts",
+      // Plugin dev-mode hot-reload worker (#9304): runs a dev-symlinked plugin's
+      // code in a utilityProcess.fork child and respawns on each Vite rebuild.
+      "electron/plugin-dev-worker.ts",
+      "electron/plugin-dev-worker-bootstrap.ts",
       // VAD side-chain worker for OpenAI transcription (#9177). Loaded via
       // `new Worker()` from OpenAITranscriptionProvider; needs its own entry so
       // esbuild emits a standalone bundle at the resolved worker path.

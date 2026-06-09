@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-// The three crash-loop guards intentionally duplicate their decay-window
+// The four crash-loop guards intentionally duplicate their decay-window
 // constant rather than sharing a module — they operate at independent layers
 // (disk-persisted app-level vs. in-memory utility-process) and must remain
 // decoupled. This alignment test is the failure mechanism the source comments
-// promise: any future tuning of one constant fails this test until the other
-// two are updated to match. If the desired policy genuinely diverges, this
+// promise: any future tuning of one constant fails this test until the others
+// are updated to match. If the desired policy genuinely diverges, this
 // test should be deleted in the same PR that introduces the divergence.
 
 vi.mock("electron", () => ({
@@ -29,15 +29,17 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 describe("crash-loop guard alignment", () => {
-  it("the three guards share a single CRASH_WINDOW_MS value", async () => {
-    const [guard, ptyLifecycle, workspaceHost] = await Promise.all([
+  it("the four guards share a single CRASH_WINDOW_MS value", async () => {
+    const [guard, ptyLifecycle, workspaceHost, pluginDevWorker] = await Promise.all([
       import("../CrashLoopGuardService.js"),
       import("../pty/PtyHostLifecycle.js"),
       import("../WorkspaceHostProcess.js"),
+      import("../plugin/PluginDevWorkerHost.js"),
     ]);
 
     expect(guard.CRASH_WINDOW_MS).toBe(ptyLifecycle.CRASH_WINDOW_MS);
     expect(ptyLifecycle.CRASH_WINDOW_MS).toBe(workspaceHost.CRASH_WINDOW_MS);
+    expect(workspaceHost.CRASH_WINDOW_MS).toBe(pluginDevWorker.CRASH_WINDOW_MS);
     // Sanity check the policy itself — three rapid crashes (~few seconds
     // apart) still trip the cap, and a 6-minute-cadence slow flap (the #8683
     // blind spot) does too. Bumping below 18 minutes would let chronic
