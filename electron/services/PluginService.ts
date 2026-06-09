@@ -2635,6 +2635,15 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
       unregisterForgeProviderImpls(pluginId)
     );
+    // Mirror the load-path notify (loadPlugin, ~line 1152): a runtime disable
+    // removes forge descriptors/impls from the registry, so workspace hosts
+    // whose PR polling resolved (or no-matched) against this provider must
+    // re-evaluate. A spurious notify for a plugin that contributed no forge
+    // provider is harmless — PullRequestService only invalidates a cached
+    // no-match. Without this, live-disable left stale provider resolution.
+    runUnloadStep(pluginId, "notifyForgeProviderRegistryUpdated", () =>
+      this.workspaceClient?.notifyForgeProviderRegistryUpdated()
+    );
     runUnloadStep(pluginId, "unregisterFileDecorationProviders", () =>
       unregisterFileDecorationProviders(pluginId)
     );

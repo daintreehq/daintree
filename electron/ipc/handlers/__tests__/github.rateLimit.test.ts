@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -154,6 +154,11 @@ vi.mock("../../../utils/git.js", () => ({
 
 import { CHANNELS } from "../../channels.js";
 import { registerGithubHandlers } from "../github.js";
+import {
+  registerForgeProviderImpl,
+  unregisterForgeProviderImpls,
+} from "../../../services/forgeProviderRegistry.js";
+import type { ForgeProviderImpl } from "../../../../shared/types/forge.js";
 
 function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(
@@ -176,7 +181,16 @@ describe("github handlers — rate limiting", () => {
       username: "user",
       avatarUrl: null,
     });
+    // Data/network handlers gate on the GitHub forge provider being active;
+    // this suite exercises rate limiting, so bind a stub impl in the real
+    // registry to satisfy the gate (gating itself is covered in
+    // github.providerGate.test.ts).
+    registerForgeProviderImpl("daintree.github", "github", {} as ForgeProviderImpl);
     registerGithubHandlers({} as never);
+  });
+
+  afterEach(() => {
+    unregisterForgeProviderImpls("daintree.github");
   });
 
   describe("rate-limit state relay to workspace hosts", () => {

@@ -2014,6 +2014,31 @@ describe("PluginService built-in plugin loading", () => {
       );
     });
 
+    it("built-in disable notifies workspace hosts that the forge registry changed", async () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      await writeBuiltinPlugin("daintree.forgey", {
+        name: "daintree.forgey",
+        version: "1.0.0",
+        contributes: {
+          forgeProviders: [{ id: "forgey", name: "Forgey", matches: ["forgey.example.com"] }],
+        },
+      });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      const notifyForgeProviderRegistryUpdated = vi.fn();
+      service.setWorkspaceClient({
+        notifyForgeProviderRegistryUpdated,
+      } as never);
+
+      await service.setEnabled("daintree.forgey", false);
+
+      // The unload removed the forge descriptor from the registry, so PR
+      // polling in every workspace host must re-resolve — without this notify,
+      // a live disable left hosts polling against a provider that no longer
+      // exists (the load path has always notified; see loadPlugin).
+      expect(notifyForgeProviderRegistryUpdated).toHaveBeenCalled();
+    });
+
     it("built-in survives a rapid disable→enable→disable without a stuck state", async () => {
       storeMock._state.set("plugins", { disabled: [] });
       await writeBuiltinPlugin("daintree.flap", { name: "daintree.flap", version: "1.0.0" });

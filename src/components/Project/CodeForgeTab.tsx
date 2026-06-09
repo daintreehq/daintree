@@ -56,26 +56,37 @@ export function CodeForgeTab({
 
   useEffect(() => {
     let cancelled = false;
-    setProvidersLoading(true);
-    setProvidersError(null);
 
-    window.electron.plugin
-      .getForgeProviders()
-      .then((result) => {
-        if (!cancelled) {
-          setProviders(result);
-          setProvidersLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setProvidersError(formatErrorMessage(err, "Failed to load forge providers"));
-          setProvidersLoading(false);
-        }
-      });
+    const loadProviders = () => {
+      setProvidersLoading(true);
+      setProvidersError(null);
+
+      window.electron.plugin
+        .getForgeProviders()
+        .then((result) => {
+          if (!cancelled) {
+            setProviders(result);
+            setProvidersLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setProvidersError(formatErrorMessage(err, "Failed to load forge providers"));
+            setProvidersLoading(false);
+          }
+        });
+    };
+
+    loadProviders();
+    // Refetch when a plugin is enabled/disabled at runtime so the provider
+    // list reflects live forge-provider registry changes (e.g. toggling the
+    // built-in GitHub plugin) without a remount. `provenance-changed` is the
+    // same broadcast PluginsTab/usePluginManager listen to.
+    const unsubscribe = window.electron.plugin.onProvenanceChanged(loadProviders);
 
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 
