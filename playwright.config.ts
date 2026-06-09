@@ -145,5 +145,25 @@ export default defineConfig({
       timeout: 1_800_000,
       retries: 0,
     },
+    {
+      // Demo-engine pipeline — exercises the in-app demo automation API
+      // (window.electron.demo) to record screencasts and drive scripted
+      // terminal input. Runs nightly and on demand via the `demo` suite in
+      // .github/workflows/e2e.yml; not a release gate.
+      //
+      // workers:1 is mandatory and baked into the project (not a CLI flag):
+      // these specs cold-launch Electron and record at 4K, so parallel
+      // workers contend on the crashpad Mach port and the shared demo repo
+      // fixtures. Keeping it here guarantees serialization even for a bare
+      // local `npx playwright test --project=demo`.
+      //
+      // 1800s (30 min) — demo recording choreography plus Electron cold
+      // launch on Windows justifies the same budget as `screenshots`.
+      name: "demo",
+      testDir: "./e2e/demo",
+      timeout: 1_800_000,
+      workers: 1,
+      retries: 0,
+    },
   ],
 });

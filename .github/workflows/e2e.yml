@@ -52,6 +52,7 @@ on:
           - full-plugins
           - online
           - nightly
+          - demo
       shard:
         description: "Optional single shard index to run, e.g. 2. Must be paired with shard_total."
         type: string
@@ -242,7 +243,9 @@ jobs:
     # nightly is unsharded and its serialized leak suite legitimately runs
     # long, so it keeps the generous ceiling; `full` (meta — all seven buckets on
     # one runner) gets a wider window than a single full-* shard.
-    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'full' && 120) || ((inputs.suite == 'full-terminal' || inputs.suite == 'full-worktree') && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
+    # demo is unsharded, workers=1, and each spec records a 4K screencast with a
+    # 30min per-test ceiling, so it gets a wide window like nightly/full.
+    timeout-minutes: ${{ (inputs.suite == 'nightly' && 180) || (inputs.suite == 'demo' && 120) || (inputs.suite == 'full' && 120) || ((inputs.suite == 'full-terminal' || inputs.suite == 'full-worktree') && matrix.name == 'Windows' && 90) || (startsWith(inputs.suite, 'full-') && 45) || 90 }}
 
     steps:
       - name: Harden Windows for Electron E2E
@@ -398,9 +401,10 @@ jobs:
             PROJECT_ARGS="--project=$SUITE"
           fi
           # The `nightly` suite's leak heuristic depends on serialized
-          # launches; --workers=1 is mandatory.
+          # launches; --workers=1 is mandatory. The `demo` project already bakes
+          # workers:1 into its config, but we pass the flag too as a guard.
           EXTRA=""
-          if [ "$SUITE" = "nightly" ]; then
+          if [ "$SUITE" = "nightly" ] || [ "$SUITE" = "demo" ]; then
             EXTRA="--workers=1"
           fi
           # Keep the command-level watchdog a few minutes under the job timeout
@@ -408,6 +412,8 @@ jobs:
           WATCHDOG_TIMEOUT_MINUTES=80
           if [ "$SUITE" = "nightly" ]; then
             WATCHDOG_TIMEOUT_MINUTES=170
+          elif [ "$SUITE" = "demo" ]; then
+            WATCHDOG_TIMEOUT_MINUTES=110
           elif [ "$SUITE" = "full" ]; then
             WATCHDOG_TIMEOUT_MINUTES=110
           elif [ "${{ matrix.name }}" = "Windows" ] && { [ "$SUITE" = "full-terminal" ] || [ "$SUITE" = "full-worktree" ]; }; then
