@@ -322,6 +322,14 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // run() resolves the target from ctx.activeWorktreeId and throws when none
+      // is active. Disable-with-reason in the palette rather than letting the
+      // pick produce a "No active worktree" error toast.
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx) => Boolean(ctx.activeWorktreeId),
+        reason: "Open a worktree to generate its context",
+      },
       argsSchema: z
         .object({
           worktreeId: z

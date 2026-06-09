@@ -104,6 +104,9 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.contextMenu", () => ({
     id: "terminal.contextMenu",
+    // Opens the focused panel's context menu — a keyboard affordance for the
+    // right-click menu, meaningless to pick from the palette itself.
+    palette: { mode: "hidden" },
     title: "Open Context Menu",
     description: "Open the context menu for the focused panel",
     category: "terminal",

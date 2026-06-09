@@ -10,7 +10,7 @@
  *
  * Run locally:
  *   npm run build:e2e
- *   npx playwright test e2e/screenshots/demo-terminal-input.spec.ts --project=screenshots
+ *   npx playwright test e2e/demo/demo-terminal-input.spec.ts --project=demo
  */
 
 import { test, expect } from "@playwright/test";

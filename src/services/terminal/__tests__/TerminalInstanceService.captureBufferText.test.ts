@@ -142,6 +142,47 @@ describe("captureBufferText", () => {
     });
   });
 
+  it("preserves head lines when the whole buffer fits within maxChars", () => {
+    const managed = createManagedTerminal("test-head");
+    managed.terminal.write("FIRST line marker\r\n");
+    managed.terminal.write("middle line\r\n");
+    managed.terminal.write("LAST line marker\r\n");
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const result = terminalInstanceService.captureBufferText("test-head", 20000);
+        // Tail-scan must still walk all the way up when the buffer is small —
+        // the head must not be dropped, and order must be top-to-bottom.
+        expect(result).toContain("FIRST line marker");
+        expect(result).toContain("LAST line marker");
+        expect(result.indexOf("FIRST line marker")).toBeLessThan(
+          result.indexOf("LAST line marker")
+        );
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("fills maxChars from the tail when visible content exceeds it", () => {
+    const managed = createManagedTerminal("test-fill");
+    // ~50 lines of plain text — well over a small maxChars budget.
+    for (let i = 0; i < 50; i++) {
+      managed.terminal.write(`row ${i.toString().padStart(3, "0")} payload\r\n`);
+    }
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const result = terminalInstanceService.captureBufferText("test-fill", 100);
+        // The window must widen until the stripped tail fills the budget — never
+        // stop short — and keep the most recent line.
+        expect(result.length).toBe(100);
+        expect(result).toContain("row 049");
+        expect(result).not.toContain("row 000");
+        resolve();
+      }, 50);
+    });
+  });
+
   it("returns empty string for hibernated terminal", () => {
     createManagedTerminal("test-5");
     terminalInstanceService.hibernate("test-5");

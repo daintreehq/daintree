@@ -2402,19 +2402,31 @@ class TerminalInstanceService {
     const buf = managed.terminal.buffer.active;
     if (buf.length === 0) return "";
 
-    const lines: string[] = [];
-    for (let i = 0; i < buf.length; i++) {
-      const line = buf.getLine(i);
-      if (line) lines.push(line.translateToString(true));
+    // Tail-scan: collect lines from the bottom up, widening the window in
+    // doubling rounds until the *stripped* (visible) length reaches maxChars or
+    // the buffer is exhausted. Keying the stop condition on stripped length —
+    // not raw length — keeps the result identical to the old full-buffer scan
+    // even on escape-dense agent output, where stripping can shrink the text
+    // well below a fixed raw margin. Typical output settles in one round; the
+    // worst case (all escape codes) is bounded by the old full-scan cost.
+    const tail: string[] = []; // bottom-up; reversed to forward order before join
+    let rawLen = 0;
+    let i = buf.length - 1;
+    let budget = maxChars * 2;
+    for (;;) {
+      while (i >= 0 && rawLen < budget) {
+        const line = buf.getLine(i);
+        i--;
+        if (!line) continue;
+        const s = line.translateToString(true);
+        tail.push(s);
+        rawLen += s.length + 1; // +1 for the "\n" separator
+      }
+      const text = stripAnsiAndOscCodes([...tail].reverse().join("\n"));
+      if (text.length >= maxChars) return text.slice(-maxChars);
+      if (i < 0) return text; // whole buffer consumed, still under budget
+      budget *= 2;
     }
-
-    let text = stripAnsiAndOscCodes(lines.join("\n"));
-
-    if (text.length > maxChars) {
-      text = text.slice(-maxChars);
-    }
-
-    return text;
   }
 
   registerPostCompleteHook(id: string, callback: PostCompleteHook): () => void {

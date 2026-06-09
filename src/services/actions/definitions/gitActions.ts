@@ -234,6 +234,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["commit", "stage", "review", "changes"],
+    // Headless/MCP tool: run() requires an authored commit `message` and throws
+    // without one. Per the #7880 no-silent-fallback rule, a palette "Commit"
+    // must never derive a message — redirect to the Review Hub, which shows the
+    // staged files and requires the user to type the message before committing.
+    palette: { mode: "redirect", to: "worktree.openReviewHub" },
     argsSchema: z
       .object({ cwd: z.string().optional(), message: z.string().min(1).optional() })
       .optional(),

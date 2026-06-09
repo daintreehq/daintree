@@ -1,5 +1,6 @@
 import type { ActionRegistry } from "../actionTypes";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 
 export function registerActionActions(actions: ActionRegistry): void {
   actions.set("action.repeatLast", () => ({
@@ -16,7 +17,16 @@ export function registerActionActions(actions: ActionRegistry): void {
     run: async () => {
       const last = actionService.getLastAction();
       if (!last) {
-        throw new Error("No action to repeat");
+        // No history yet (e.g. picked from the palette on a fresh session).
+        // Throwing here surfaced a "Couldn't run" error toast for an empty
+        // state; a quiet notice is the honest signal instead.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "info",
+          title: "Nothing to repeat",
+          message: "Run an action first — there's no recent action to repeat yet.",
+        });
+        return;
       }
       const result = await actionService.dispatch(last.actionId, last.args, {
         source: "keybinding",

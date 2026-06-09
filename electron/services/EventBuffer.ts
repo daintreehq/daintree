@@ -31,7 +31,6 @@ export class EventBuffer {
   private maxSize: number;
   private unsubscribe?: () => void;
   private onRecordCallbacks: Array<(record: EventRecord) => void> = [];
-  private searchIndex = new Map<string, string>();
 
   constructor(maxSize: number = 1000) {
     this.maxSize = maxSize;
@@ -52,10 +51,6 @@ export class EventBuffer {
       ...record,
       payload: structuredClone(record.payload),
     };
-  }
-
-  private createSearchText(record: EventRecord): string {
-    return `${record.type} ${String(safeStringify(record.payload))}`.toLowerCase();
   }
 
   private sanitizePayload(eventType: keyof DaintreeEventMap, payload: any): any {
@@ -152,24 +147,22 @@ export class EventBuffer {
 
   private push(event: EventRecord): void {
     const storedEvent = this.cloneRecord(event);
-    const searchText = this.createSearchText(storedEvent);
 
     this.buffer.push(storedEvent);
-    this.searchIndex.set(storedEvent.id, searchText);
 
+    // Pass the stored copy directly: the inspector consumer immediately
+    // serializes it over IPC (webContents.send structurally clones at the
+    // boundary) and does not mutate it, so a second clone is wasted work.
     for (const callback of [...this.onRecordCallbacks]) {
       try {
-        callback(this.cloneRecord(storedEvent));
+        callback(storedEvent);
       } catch (error) {
         console.error("[EventBuffer] Error in onRecord callback:", error);
       }
     }
 
     if (this.buffer.length > this.maxSize) {
-      const evicted = this.buffer.shift();
-      if (evicted) {
-        this.searchIndex.delete(evicted.id);
-      }
+      this.buffer.shift();
     }
   }
 
@@ -252,9 +245,12 @@ export class EventBuffer {
 
     if (options.search) {
       const searchLower = options.search.toLowerCase();
-      filtered = filtered.filter((event) => {
-        return this.searchIndex.get(event.id)?.includes(searchLower) ?? false;
-      });
+      // Search is interactive and rare, and the candidate set is already
+      // narrowed by the filters above, so build the search text lazily here
+      // rather than on every push.
+      filtered = filtered.filter((event) =>
+        `${event.type} ${String(safeStringify(event.payload))}`.toLowerCase().includes(searchLower)
+      );
     }
 
     return filtered.map((event) => this.cloneRecord(event));
@@ -262,7 +258,6 @@ export class EventBuffer {
 
   clear(): void {
     this.buffer = [];
-    this.searchIndex.clear();
   }
 
   onProjectSwitch(): void {

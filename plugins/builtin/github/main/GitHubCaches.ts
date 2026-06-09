@@ -19,12 +19,16 @@ import type {
 } from "./types.js";
 import type { Issue, PR, Page } from "../../../../shared/types/forge.js";
 
-export const repoContextCache = new Cache<string, RepoContext>({ defaultTTL: 300000 });
-export const repoStatsCache = new Cache<string, RepoStats>({ defaultTTL: 60000 });
+export const repoContextCache = new Cache<string, RepoContext>({ maxSize: 20, defaultTTL: 300000 });
+export const repoStatsCache = new Cache<string, RepoStats>({ maxSize: 20, defaultTTL: 60000 });
 export const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>({
+  maxSize: 50,
   defaultTTL: 60000,
 });
-export const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL: 60000 });
+export const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({
+  maxSize: 50,
+  defaultTTL: 60000,
+});
 
 /**
  * Forge-shaped list caches. The forge provider returns `Page<Issue>` /
@@ -34,12 +38,16 @@ export const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ def
  * alongside the legacy list caches in {@link clearGitHubCaches} /
  * {@link clearPRCaches}.
  */
-export const forgeIssueListCache = new Cache<string, Page<Issue>>({ defaultTTL: 60000 });
-export const forgePRListCache = new Cache<string, Page<PR>>({ defaultTTL: 60000 });
+export const forgeIssueListCache = new Cache<string, Page<Issue>>({
+  maxSize: 50,
+  defaultTTL: 60000,
+});
+export const forgePRListCache = new Cache<string, Page<PR>>({ maxSize: 50, defaultTTL: 60000 });
 
-export const projectHealthCache = new Cache<string, unknown>({ defaultTTL: 60000 });
+export const projectHealthCache = new Cache<string, unknown>({ maxSize: 20, defaultTTL: 60000 });
 export const issueTooltipWrittenAt = new Map<string, number>();
 export const issueTooltipCache = new Cache<string, IssueTooltipData>({
+  maxSize: 200,
   defaultTTL: 300000,
   onEvict: (key) => {
     issueTooltipWrittenAt.delete(key as string);
@@ -56,6 +64,7 @@ const TEN_MINUTES_MS = 10 * 60 * 1000;
  * boundaries. See `buildVelocityCacheKey` in `GitHubHealth.ts`.
  */
 export const velocityCache = new Cache<string, Record<60 | 120 | 180, number>>({
+  maxSize: 20,
   defaultTTL: FOUR_HOURS_MS,
 });
 
@@ -65,11 +74,13 @@ export const velocityCache = new Cache<string, Record<60 | 120 | 180, number>>({
  * staleness if the probe ever fails to detect a change.
  */
 export const repoStatsAndPageSnapshotCache = new Cache<string, RepoStatsAndPageSnapshot>({
+  maxSize: 50,
   defaultTTL: TEN_MINUTES_MS,
 });
 
 export const prTooltipWrittenAt = new Map<string, number>();
 export const prTooltipCache = new Cache<string, PRTooltipData>({
+  maxSize: 200,
   defaultTTL: 300000,
   onEvict: (key) => {
     prTooltipWrittenAt.delete(key as string);
@@ -181,10 +192,12 @@ export const MAX_REVIEW_THREAD_PAGES = 5;
 export const REVIEW_THREADS_PER_PAGE = 100;
 
 export const reviewThreadsCache = new Cache<string, Record<string, number>>({
+  maxSize: 200,
   defaultTTL: 300000,
 });
 
 export const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({
+  maxSize: 200,
   defaultTTL: 60000,
 });
 
@@ -196,6 +209,7 @@ export const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({
  * atomically with the other caches on a token or settings change.
  */
 export const forgeQueryCache = new Cache<string, GraphQlQueryResponseData>({
+  maxSize: 200,
   defaultTTL: 60000,
 });
 
@@ -225,6 +239,38 @@ export function writePRTooltip(
   if (existing === undefined || requestedAt >= existing) {
     prTooltipCache.set(cacheKey, tooltipData);
     prTooltipWrittenAt.set(cacheKey, requestedAt);
+  }
+}
+
+const CACHE_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * The data caches evict expired entries lazily (on `get()`) and by LRU at
+ * `maxSize`, so a cache that stops being read can pin expired entries
+ * indefinitely. This sweep proactively drops them. Owned by the plugin's
+ * `activate()` lifecycle: started on activation, cleared by `stopCacheSweep`
+ * in the returned disposer. `.unref()` so it never keeps the process alive.
+ */
+let cacheSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startCacheSweep(): void {
+  if (cacheSweepTimer !== null) return;
+  cacheSweepTimer = setInterval(() => {
+    forgeIssueListCache.cleanup();
+    forgePRListCache.cleanup();
+    repoStatsAndPageSnapshotCache.cleanup();
+    issueTooltipCache.cleanup();
+    prTooltipCache.cleanup();
+    forgeQueryCache.cleanup();
+    prRequiredStatusCache.cleanup();
+  }, CACHE_SWEEP_INTERVAL_MS);
+  cacheSweepTimer.unref?.();
+}
+
+export function stopCacheSweep(): void {
+  if (cacheSweepTimer !== null) {
+    clearInterval(cacheSweepTimer);
+    cacheSweepTimer = null;
   }
 }
 

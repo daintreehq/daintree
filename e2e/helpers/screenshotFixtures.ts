@@ -219,9 +219,9 @@ export interface Charge {
 }
 
 /** Scene 2 — 🎨 brush-cms — content management with mixed-state worktrees. */
-export function createBrushCmsRepo(): DemoRepo {
+export function createBrushCmsRepo(suffix = ""): DemoRepo {
   return createDemoRepo({
-    slug: "brush-cms",
+    slug: suffix ? `brush-cms-${suffix}` : "brush-cms",
     files: {
       "README.md": `# 🎨 brush-cms
 

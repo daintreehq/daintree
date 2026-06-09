@@ -1,7 +1,7 @@
 {
   "name": "daintree",
   "productName": "Daintree",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "Daintree IDE - An Electron-based development environment",
   "license": "Apache-2.0",
   "sideEffects": [
@@ -114,6 +114,7 @@
     "test:e2e:online": "npx playwright test --project=online",
     "test:e2e:nightly": "npx playwright test --project=nightly --workers=1",
     "test:e2e:screenshots": "npx playwright test --project=screenshots",
+    "test:e2e:demo": "npx playwright test --project=demo --workers=1",
     "screenshots:dev": "cross-env DAINTREE_SCREENSHOT_SCALE=2 npx playwright test --project=screenshots",
     "perf:smoke": "tsx scripts/perf/run.ts --mode smoke",
     "perf:ci": "tsx scripts/perf/run.ts --mode ci",

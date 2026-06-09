@@ -91,6 +91,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify Electron install
+        # Eagerly install/repair the Electron binary single-threaded before
+        # Playwright launches parallel workers. Without this, the first
+        # spec triggers a lazy download per worker, and concurrent extraction
+        # into the shared node_modules/electron races on the framework symlink
+        # (EEXIST → "Electron failed to install correctly"). Mirrors e2e.yml.
+        run: node scripts/ci/verify-electron-install.mjs
+
       - name: Build app
         run: npm run build
 
@@ -136,13 +144,21 @@ jobs:
           heartbeat_pid=$!
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
+          # Scope to the marketing-asset specs by exact path. The demo-engine
+          # specs (demo-reel.spec.ts, demo-terminal-input.spec.ts) used to share
+          # this project's testDir but were moved to ./e2e/demo with their own
+          # workers=1 project (#10333) — they are NOT marketing producers and
+          # were flaky under workers=2 here (crashpad Mach-port contention +
+          # shared /tmp/daintree-demos/brush-cms fixture race). The explicit path
+          # below keeps this workflow scoped to the PNG deliverable regardless.
+          #
           # Theme-review mode: capture one theme's chrome shots instead of the
           # marketing reel (theme-review.spec.ts self-skips unless
           # DAINTREE_SHOT_THEME is set, so the reel path is unchanged).
           if [ -n "$DAINTREE_SHOT_THEME" ]; then
-            npx playwright test --project=screenshots theme-review
+            npx playwright test --project=screenshots e2e/screenshots/theme-review.spec.ts
           else
-            npx playwright test --project=screenshots
+            npx playwright test --project=screenshots e2e/screenshots/store-reel.spec.ts
           fi
 
       - name: List captured screenshots

@@ -132,6 +132,16 @@ export class ProjectStore {
     return `${projectPath}|${recipeId}`;
   }
 
+  // Drop every cached recipe hash for a project path. Called on remove/relocate
+  // so stale `${projectPath}|...` entries don't accumulate after the path is
+  // gone. Mirrors the prefix-scan in readInRepoRecipes.
+  private pruneInRepoRecipeHashes(projectPath: string): void {
+    const prefix = `${projectPath}|`;
+    for (const key of this.inRepoRecipeHashes.keys()) {
+      if (key.startsWith(prefix)) this.inRepoRecipeHashes.delete(key);
+    }
+  }
+
   /**
    * Unchecked write. Reserved for reconciliation paths that are authoritative
    * by design (recipe promotion from ProjectFileStore, write-through on sync)
@@ -345,8 +355,16 @@ export class ProjectStore {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
 
+    // Capture the path before the DB delete so the recipe-hash cache can be
+    // pruned by `${path}|` prefix afterward.
+    const project = this.getProjectById(projectId);
+
     const db = getSharedDb();
     db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+
+    if (project) {
+      this.pruneInRepoRecipeHashes(project.path);
+    }
 
     try {
       this.settingsManager.deleteAllEnvForProject(projectId);
@@ -603,6 +621,9 @@ export class ProjectStore {
       }
       throw error;
     }
+
+    // The old path is gone — drop its cached recipe hashes so they don't linger.
+    this.pruneInRepoRecipeHashes(oldProject.path);
 
     if (oldStateDir && existsSync(oldStateDir)) {
       await fs.rm(oldStateDir, { recursive: true, force: true }).catch((err) => {

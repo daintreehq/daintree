@@ -51,6 +51,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
+  "agentSettings.reset",
 ]);
 
 // Actions with a ConfirmDialog-family component co-located in the same source file
@@ -89,6 +90,7 @@ const BYPASS_WIRED = new Set([
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
+  "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
 ]);
 
 // Text tokens identifying a ConfirmDialog-family component in a source file.

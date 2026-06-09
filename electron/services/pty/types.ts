@@ -108,7 +108,6 @@ export interface TerminalRuntime {
   processDetector?: ProcessDetector;
   outputBuffer: string;
   semanticBuffer: string[];
-  rawOutputBuffer?: string;
 }
 
 /**
@@ -132,8 +131,6 @@ export interface TerminalInfo extends TerminalPublicState {
   outputBuffer: string;
   /** @deprecated Use TerminalProcess.getSemanticBuffer() */
   semanticBuffer: string[];
-  /** @deprecated Use serialization methods */
-  rawOutputBuffer?: string;
   /**
    * Runtime-only hysteresis bookkeeping. Timestamp (`performance.now()`) until which
    * opposite-direction low-confidence transitions are suppressed after a
@@ -229,9 +226,6 @@ export const WRITE_INTERVAL_MS = 5;
 // output is needed for state detection; the renderer-visible scrollback is
 // larger so long agent runs don't truncate.
 export const DEFAULT_SCROLLBACK = 10000;
-
-// Raw output buffer for non-headless terminals (100KB max)
-export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;
 
 export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 

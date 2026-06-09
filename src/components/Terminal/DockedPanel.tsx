@@ -8,9 +8,10 @@ import {
   subscribeToPanelKindDefinitions,
   type PanelComponentProps,
 } from "@/registry";
-import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/components/Panel";
+import { ContentPanel, PluginMissingPanel } from "@/components/Panel";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
+import { withViewTransition } from "@/lib/viewTransition";
 
 export interface DockedPanelProps {
   terminal: PanelInstance;
@@ -36,34 +37,13 @@ export function DockedPanel({
   });
 
   const handleRestore = useCallback(() => {
-    const moveSucceeded = moveTerminalToGrid(terminal.id);
-    if (!moveSucceeded) return;
-
-    const dockElement = document.querySelector("[data-dock-density]");
-    if (dockElement) {
-      const dockRect = dockElement.getBoundingClientRect();
-      const sourceRect = {
-        x: dockRect.x + dockRect.width / 2 - 50,
-        y: dockRect.y + dockRect.height / 2 - 16,
-        width: 100,
-        height: 32,
-      };
-
-      const gridElement = document.querySelector('[data-grid-container="true"]');
-      if (gridElement) {
-        const gridRect = gridElement.getBoundingClientRect();
-        const targetRect = {
-          x: gridRect.x + gridRect.width * 0.1,
-          y: gridRect.y + gridRect.height * 0.1,
-          width: gridRect.width * 0.8,
-          height: gridRect.height * 0.8,
-        };
-
-        triggerPanelTransition(terminal.id, "restore", sourceRect, targetRect);
-      }
-    }
-
-    onPopoverClose?.();
+    const gridElement = document.querySelector('[data-grid-container="true"]');
+    // Move and close inside the transition callback so both land in the
+    // after-snapshot, and only close when the move actually succeeded (it can
+    // no-op for an already-gridded/missing panel) — matching the prior guard.
+    withViewTransition(() => {
+      if (moveTerminalToGrid(terminal.id)) onPopoverClose?.();
+    }, gridElement);
   }, [moveTerminalToGrid, terminal.id, onPopoverClose]);
 
   const handleMinimize = useCallback(() => {

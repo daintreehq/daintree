@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.18.2] - 2026-06-09
+
+A responsiveness and memory pass on top of 0.18.1. Structural UI changes now animate through View Transitions, several mutations apply optimistically instead of waiting on the round-trip, and a per-subsystem audit trims steady-state memory — rounded out with command-palette and console-scroll fixes.
+
+### Features
+
+- Structural UI changes animate via View Transitions instead of snapping (#10339)
+- Optimistic UI for staging, fleet delete, and project rename — actions apply immediately and reconcile on confirm (#10339)
+
+### Bug Fixes
+
+- Console scroll-to-bottom now aligns to the true bottom when the last row is taller than the viewport step
+- Runtime-gated actions no longer leak into the command-palette MRU or repeat-last when picked from the palette (#10336)
+
+### Performance
+
+- Steady-state memory reductions across subsystems from a per-subsystem audit (#10338)
+- Cut main-thread stalls in terminal buffer capture, filtering, and broadcast (#10339)
+
 ## [0.18.1] - 2026-06-08
 
 A same-day follow-up to 0.18.0 focused on cold-boot and first-paint speed, with a few UX-polish fixes. Most of the work trims the startup critical path — deferring non-essential imports, batching boot reads, and unblocking the deferred-init drain — alongside hover and dismiss refinements in notifications and global banners.

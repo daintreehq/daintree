@@ -12,9 +12,26 @@ function readBrowserUrl(id: string | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * Palette gate for `browser.openExternal` / `browser.copyUrl`: both resolve the
+ * URL from the focused browser/dev-preview panel and throw when there's none.
+ * Used as `requireContext.isReady` so the palette dims the row instead of
+ * dispatching `{}` into a throw. Dispatch never evaluates this, so the
+ * context-menu/toolbar callers that pass an explicit `terminalId` are
+ * unaffected.
+ */
+function hasFocusedBrowserUrl(): boolean {
+  return Boolean(readBrowserUrl(usePanelStore.getState().focusedId ?? undefined));
+}
+
 export function registerBrowserActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("browser.reload", () => ({
     id: "browser.reload",
+    // Browser-toolbar/keybinding affordances that act on the focused browser
+    // panel and no-op without one. The two that THROW (openExternal/copyUrl)
+    // are requireContext above; these silent navigation ops are hidden — they
+    // live on the browser toolbar, not the global palette.
+    palette: { mode: "hidden" },
     title: "Reload Browser",
     description: "Reload the browser panel",
     category: "browser",
@@ -54,6 +71,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.back", () => ({
     id: "browser.back",
+    palette: { mode: "hidden" },
     title: "Browser Back",
     description: "Go back in browser history",
     category: "browser",
@@ -71,6 +89,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.forward", () => ({
     id: "browser.forward",
+    palette: { mode: "hidden" },
     title: "Browser Forward",
     description: "Go forward in browser history",
     category: "browser",
@@ -96,6 +115,11 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    palette: {
+      mode: "requireContext",
+      isReady: () => hasFocusedBrowserUrl(),
+      reason: "Focus a browser to open its URL externally",
+    },
     argsSchema: z
       .object({ terminalId: z.string().optional(), url: z.string().optional() })
       .optional(),
@@ -120,6 +144,11 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    palette: {
+      mode: "requireContext",
+      isReady: () => hasFocusedBrowserUrl(),
+      reason: "Focus a browser to copy its URL",
+    },
     argsSchema: z
       .object({ terminalId: z.string().optional(), url: z.string().optional() })
       .optional(),
@@ -138,6 +167,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.setZoomLevel", () => ({
     id: "browser.setZoomLevel",
+    palette: { mode: "hidden" },
     title: "Set Browser Zoom Level",
     description: "Set the zoom level for a browser panel",
     category: "browser",
@@ -160,6 +190,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.captureScreenshot", () => ({
     id: "browser.captureScreenshot",
+    palette: { mode: "hidden" },
     title: "Capture Browser Screenshot",
     description: "Capture a screenshot of the browser viewport and copy to clipboard",
     category: "browser",
@@ -179,6 +210,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.toggleConsole", () => ({
     id: "browser.toggleConsole",
+    palette: { mode: "hidden" },
     title: "Toggle Browser Console",
     description: "Show or hide the browser console panel",
     category: "browser",
@@ -198,6 +230,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.clearConsole", () => ({
     id: "browser.clearConsole",
+    palette: { mode: "hidden" },
     title: "Clear Browser Console",
     description: "Clear all captured console messages for the browser panel",
     category: "browser",
@@ -217,6 +250,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.toggleDevTools", () => ({
     id: "browser.toggleDevTools",
+    palette: { mode: "hidden" },
     title: "Toggle Browser DevTools",
     description: "Open or close the browser panel's DevTools",
     category: "browser",
@@ -236,6 +270,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.hardReload", () => ({
     id: "browser.hardReload",
+    palette: { mode: "hidden" },
     title: "Hard Reload Browser",
     description: "Reload the browser panel bypassing HTTP cache",
     category: "browser",
