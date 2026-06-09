@@ -25,7 +25,7 @@ PWDEBUG=1 npx playwright test --project=core                         # Debug mod
 
 ## Test Suites
 
-Tests are split into eleven Playwright projects:
+Tests are split into twelve Playwright projects:
 
 - **core** — Lightweight deterministic release-gate smoke (5 specs). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — PTY mechanics, scrollback, search, layout, recipes, output flood, context injection, fleet broadcast.
