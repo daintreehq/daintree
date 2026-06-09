@@ -15,7 +15,7 @@ vi.mock("../GitHubPRs.js", () => ({
   getPRReviewThreads: (...args: unknown[]) => mockGetPRReviewThreads(...args),
 }));
 
-import { REVIEW_THREADS_TTL_MS } from "../GitHubCaches.js";
+import { clearPRCaches, REVIEW_THREADS_TTL_MS } from "../GitHubCaches.js";
 import {
   createReviewDecorationProvider,
   registerReviewDecorationProvider,
@@ -368,6 +368,19 @@ describe("registerReviewDecorationProvider", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("invalidates an unchanged linkage within the TTL after a manual cache clear", () => {
+    const { host, emit } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+
+    emit([makeWorktree("/linked", 42)]);
+    emit([makeWorktree("/linked", 42)]);
+    expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(1);
+
+    clearPRCaches();
+    emit([makeWorktree("/linked", 42)]);
+    expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(2);
   });
 
   it("serves linkage from the event-fed cache without a snapshot round-trip", async () => {

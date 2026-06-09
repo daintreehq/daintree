@@ -214,6 +214,25 @@ describe("InputTracker", () => {
       expect(results).toHaveLength(1);
       expect(results[0]!.isClear).toBe(true);
     });
+
+    it("does not report a false clear when backspacing leaves overflowed chars on the real line", () => {
+      // "clear" + MAX x's: buffer holds "clear" + (MAX-5) x's, 5 chars overflow.
+      tracker.process("clear" + "x".repeat(MAX_TRACKED_INPUT_LENGTH));
+      // MAX-5 backspaces: real line is "clear" + 5 x's; pre-overflow-tracking
+      // the buffer would have been sliced to exactly "clear" (false positive).
+      const results = tracker.process("\x7f".repeat(MAX_TRACKED_INPUT_LENGTH - 5) + "\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(false);
+      expect(results[0]!.command).toBe("clearxxxxx");
+    });
+
+    it("detects clear when an overflowed line is backspaced down to a genuine clear command", () => {
+      tracker.process("clear" + "x".repeat(MAX_TRACKED_INPUT_LENGTH));
+      const results = tracker.process("\x7f".repeat(MAX_TRACKED_INPUT_LENGTH) + "\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(true);
+      expect(results[0]!.command).toBe("clear");
+    });
   });
 
   describe("CLEAR_COMMANDS set", () => {

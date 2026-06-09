@@ -4,7 +4,7 @@ import type {
   ForgeProviderImpl,
 } from "../../../../shared/types/forge.js";
 import type { PluginHostApi, PluginWorktreeLinked } from "../../../../shared/types/plugin.js";
-import { REVIEW_THREADS_TTL_MS } from "./GitHubCaches.js";
+import { getETagCacheVersion, REVIEW_THREADS_TTL_MS } from "./GitHubCaches.js";
 import { getPRReviewThreads } from "./GitHubPRs.js";
 
 const SCOPE_PREFIX = "worktree-diff:";
@@ -105,6 +105,10 @@ export function registerReviewDecorationProvider(
   // worktree, and blanket invalidation re-pulled identical cached counts.
   let linkedByPath: Map<string, PluginWorktreeLinked | null> | null = null;
   const lastInvalidatedAt = new Map<string, number>();
+  // A manual refresh (`clearPRCaches`) drops `reviewThreadsCache` and bumps
+  // the ETag cache version — the unchanged+fresh suppression must not survive
+  // that bump or an open Review Hub keeps stale badges until the TTL elapses.
+  let lastSeenCacheVersion = getETagCacheVersion();
 
   const prKey = (linked: PluginWorktreeLinked | null | undefined): string | undefined => {
     const ref = linked?.pr?.ref;
@@ -128,11 +132,14 @@ export function registerReviewDecorationProvider(
     linkedByPath = next;
 
     const now = Date.now();
+    const cacheVersion = getETagCacheVersion();
+    const cachesCleared = cacheVersion !== lastSeenCacheVersion;
+    lastSeenCacheVersion = cacheVersion;
     for (const wt of snapshots) {
       if (!wt.linked?.pr) continue;
       const unchanged = previous !== null && prKey(wt.linked) === prKey(previous.get(wt.path));
       const fresh = now - (lastInvalidatedAt.get(wt.path) ?? 0) < REVIEW_THREADS_TTL_MS;
-      if (unchanged && fresh) continue;
+      if (unchanged && fresh && !cachesCleared) continue;
       lastInvalidatedAt.set(wt.path, now);
       host.invalidateFileDecorations(`${SCOPE_PREFIX}${wt.path}`);
     }
