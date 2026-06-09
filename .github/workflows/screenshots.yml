@@ -144,13 +144,24 @@ jobs:
           heartbeat_pid=$!
           trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
 
+          # Scope to the marketing-asset specs by exact path. The screenshots
+          # project's testDir (./e2e/screenshots) also holds the demo-engine
+          # specs (demo-reel.spec.ts, demo-terminal-input.spec.ts), which are
+          # NOT marketing producers — demo-reel records a 4K .webm to
+          # artifacts/demo/ (never uploaded here) and asserts a 2160-tall frame
+          # that the hosted macos-14 runner's 885-logical-tall display cannot
+          # capture; both are flaky under workers=2 (crashpad Mach-port
+          # contention + shared /tmp/daintree-demos/brush-cms fixture race).
+          # Running them here turned the publish status red without affecting
+          # the PNG deliverable. They get a dedicated workers=1 project — see #10333.
+          #
           # Theme-review mode: capture one theme's chrome shots instead of the
           # marketing reel (theme-review.spec.ts self-skips unless
           # DAINTREE_SHOT_THEME is set, so the reel path is unchanged).
           if [ -n "$DAINTREE_SHOT_THEME" ]; then
-            npx playwright test --project=screenshots theme-review
+            npx playwright test --project=screenshots e2e/screenshots/theme-review.spec.ts
           else
-            npx playwright test --project=screenshots
+            npx playwright test --project=screenshots e2e/screenshots/store-reel.spec.ts
           fi
 
       - name: List captured screenshots
