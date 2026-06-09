@@ -1,3 +1,4 @@
+import { yieldToScheduler } from "@/lib/schedulerYield";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
@@ -129,13 +130,6 @@ function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
   return false;
 }
 
-function yieldToEventLoop(): Promise<void> {
-  // setTimeout(0) yields to the browser/renderer event loop so the main
-  // thread can render and drain IPC between batches. setImmediate is not
-  // reliably exposed in Electron's sandboxed renderer.
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
-}
-
 /**
  * Execute a fleet broadcast to the given target IDs with per-target payload
  * overrides. Returns structured results including which targets failed for
@@ -253,7 +247,7 @@ export async function executeFleetBroadcast(
         useFleetBroadcastProgressStore.getState().advance(batch.length, batchFailures);
 
         if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
-          await yieldToEventLoop();
+          await yieldToScheduler();
         }
       }
     } else {

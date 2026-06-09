@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -47,6 +47,8 @@ export interface UseProjectSwitcherPaletteReturn {
   mode: ProjectSwitcherMode;
   query: string;
   results: SearchableProject[];
+  /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
+  isFiltering: boolean;
   /**
    * The currently active project as a `SearchableProject`, with stats and
    * pin/missing flags enriched. Decoupled from `results` so callers (e.g. the
@@ -144,6 +146,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [mode, setMode] = useState<ProjectSwitcherMode>("modal");
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const isFiltering = query !== deferredQuery;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
@@ -239,12 +243,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [searchableProjects]);
 
   const results = useMemo<SearchableProject[]>(() => {
-    if (!query.trim()) {
+    if (!deferredQuery.trim()) {
       return sortedProjects.slice(0, MAX_RESULTS);
     }
 
-    return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
-  }, [query, sortedProjects]);
+    return rankProjectMatches(deferredQuery, sortedProjects).slice(0, MAX_RESULTS);
+  }, [deferredQuery, sortedProjects]);
 
   // Decoupled from `results` so the toolbar pill keeps the active project's
   // pin/process state even when search filters exclude it or it sits outside
@@ -721,6 +725,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     mode,
     query,
     results,
+    isFiltering,
     activeProject,
     selectedIndex,
     open,
