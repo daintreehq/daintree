@@ -216,6 +216,16 @@ class GitHubTokenHealthServiceImpl {
           signal: AbortSignal.timeout(HEALTH_CHECK_FETCH_TIMEOUT_MS),
         });
 
+        // Probe completed after stop() (plugin disabled mid-flight): discard
+        // so a late result can't re-publish healthy/unhealthy state over the
+        // disabled reset and resurrect a banner for an off integration.
+        if (!this.started) {
+          logDebug("GitHub token health: probe result discarded after stop", {
+            reason: context.reason,
+          });
+          return;
+        }
+
         // Late-arriving probe from a previous token: discard so it can't
         // clobber state — including `lastAuthMetadata` — set by the
         // currently-configured token. Must be checked *before* passive

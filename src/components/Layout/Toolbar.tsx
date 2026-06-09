@@ -88,6 +88,7 @@ import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPale
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
 import { GitHubStatsToolbarButton, type GitHubStatsHandle } from "./GitHubStatsToolbarButton";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -245,6 +246,9 @@ function OverflowMenu({
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
+  // The hard-coded GitHub group below has no data source while the GitHub
+  // plugin is disabled — skip it entirely instead of showing dead items.
+  const githubEnabled = useGitHubPluginEnabled();
   // Snapshot of the GitHub stats taken when the menu opens. The stats live in
   // GitHubStatsToolbarButton's hook and are exposed through its imperative
   // handle, so they can't be read during render (refs aren't reactive — the
@@ -338,6 +342,7 @@ function OverflowMenu({
       >
         {overflowIds.flatMap((id, idx) => {
           if (id === "github-stats") {
+            if (!githubEnabled) return [];
             const isLast = idx === overflowIds.length - 1;
             return [
               <DropdownMenuGroup key="gh-group">
@@ -469,6 +474,7 @@ export function Toolbar({
   const currentProject = useProjectStore((state) => state.currentProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
+  const githubEnabled = useGitHubPluginEnabled();
   const projectSwitcher = projectSwitcherPalette;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -930,8 +936,12 @@ export function Toolbar({
         isAvailable: true,
       },
       "github-stats": {
+        // Placeholder (not removal) when the GitHub plugin is disabled: the
+        // slot's no-drag rectangle must exist on first paint regardless
+        // (PROJECT_SCOPED_TOOLBAR_IDS), and the placeholder keeps the
+        // footprint stable across a live enable.
         render: () =>
-          currentProject ? (
+          currentProject && githubEnabled ? (
             <GitHubStatsToolbarButton
               key="github-stats"
               ref={githubStatsRef}
@@ -1079,6 +1089,7 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
+      githubEnabled,
       pluginButtonIds,
       pluginConfigs,
       devServerShortcut,

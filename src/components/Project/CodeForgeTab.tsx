@@ -56,21 +56,26 @@ export function CodeForgeTab({
 
   useEffect(() => {
     let cancelled = false;
+    // Sequence overlapping fetches: rapid enable/disable toggles can leave an
+    // older getForgeProviders() response resolving after a newer one, and the
+    // stale list must not win.
+    let requestSeq = 0;
 
     const loadProviders = () => {
+      const seq = ++requestSeq;
       setProvidersLoading(true);
       setProvidersError(null);
 
       window.electron.plugin
         .getForgeProviders()
         .then((result) => {
-          if (!cancelled) {
+          if (!cancelled && seq === requestSeq) {
             setProviders(result);
             setProvidersLoading(false);
           }
         })
         .catch((err) => {
-          if (!cancelled) {
+          if (!cancelled && seq === requestSeq) {
             setProvidersError(formatErrorMessage(err, "Failed to load forge providers"));
             setProvidersLoading(false);
           }

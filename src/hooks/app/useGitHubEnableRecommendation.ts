@@ -20,17 +20,41 @@ import { logError } from "@/utils/logger";
  */
 const handledProjectPaths = new Set<string>();
 
+/**
+ * Extract the host from an HTTPS or scp-like SSH remote URL. Substring
+ * matching is not enough — `git@notgithub.com:x/y.git` and path segments
+ * containing `github.com/` must not count as GitHub remotes.
+ */
+function remoteHost(fetchUrl: string): string | null {
+  const url = fetchUrl.trim();
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+      return new URL(url).hostname.toLowerCase();
+    }
+  } catch {
+    return null;
+  }
+  // scp-like SSH form: [user@]host:path
+  const scpMatch = /^(?:[^@/\s]+@)?([^:/\s]+):/.exec(url);
+  return scpMatch?.[1]?.toLowerCase() ?? null;
+}
+
 function hasGitHubRemote(remotes: Array<{ fetchUrl: string }>): boolean {
   return remotes.some((remote) => {
-    const url = remote.fetchUrl.toLowerCase();
-    return url.includes("github.com:") || url.includes("github.com/") || url.endsWith("github.com");
+    const host = remoteHost(remote.fetchUrl);
+    return host === "github.com" || host?.endsWith(".github.com") === true;
   });
 }
 
 export function useGitHubEnableRecommendation(isStateLoaded: boolean): void {
   const currentProjectPath = useProjectStore((s) => s.currentProject?.path ?? null);
   const removeNotification = useNotificationStore((s) => s.removeNotification);
-  const notificationIdRef = useRef<string | null>(null);
+  // All notification ids created by this hook instance. Project switches can
+  // leave an earlier project's recommendation visible while a new one fires —
+  // each action closure must remove ITS notification (not a shared "latest"
+  // ref, which would let project A's "Not now" dismiss project B's nudge),
+  // and unmount cleanup sweeps whatever remains.
+  const notificationIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded || !currentProjectPath) return;
@@ -59,7 +83,15 @@ export function useGitHubEnableRecommendation(isStateLoaded: boolean): void {
 
       handledProjectPaths.add(projectPath);
 
-      const id = notify({
+      const dismissSelf = (id: string | undefined) => {
+        if (!id) return;
+        removeNotification(id);
+        notificationIdsRef.current.delete(id);
+      };
+
+      // Action closures reference `notificationId` after notify() returns —
+      // safe because actions only fire on user click, never synchronously.
+      const notificationId: string | undefined = notify({
         type: "info",
         placement: "grid-bar",
         title: "GitHub integration is off",
@@ -77,25 +109,17 @@ export function useGitHubEnableRecommendation(isStateLoaded: boolean): void {
               safeFireAndForget(window.electron.plugin.setEnabled(GITHUB_PLUGIN_ID, true), {
                 context: "Enabling GitHub plugin from recommendation",
               });
-              if (notificationIdRef.current) {
-                removeNotification(notificationIdRef.current);
-                notificationIdRef.current = null;
-              }
+              dismissSelf(notificationId);
             },
           },
           {
             label: "Not now",
             variant: "secondary",
-            onClick: () => {
-              if (notificationIdRef.current) {
-                removeNotification(notificationIdRef.current);
-                notificationIdRef.current = null;
-              }
-            },
+            onClick: () => dismissSelf(notificationId),
           },
         ],
       });
-      notificationIdRef.current = id || null;
+      if (notificationId) notificationIdsRef.current.add(notificationId);
     }
 
     evaluate(currentProjectPath).catch((err) => {
@@ -108,10 +132,12 @@ export function useGitHubEnableRecommendation(isStateLoaded: boolean): void {
   }, [isStateLoaded, currentProjectPath, removeNotification]);
 
   useEffect(() => {
+    const ids = notificationIdsRef.current;
     return () => {
-      if (notificationIdRef.current) {
-        removeNotification(notificationIdRef.current);
+      for (const id of ids) {
+        removeNotification(id);
       }
+      ids.clear();
     };
   }, [removeNotification]);
 }

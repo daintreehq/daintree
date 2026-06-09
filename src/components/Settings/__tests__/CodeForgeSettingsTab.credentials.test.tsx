@@ -327,6 +327,27 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     expect(onSubtabChange).not.toHaveBeenCalled();
   });
 
+  it("deep-link to the GitHub subtab falls back to General when GitHub is unregistered", async () => {
+    // The realistic disabled-plugin dead-end: a stale deep-link (token
+    // banner, UpstreamSyncBadge) targets daintree.github.github after the
+    // plugin was disabled. The provider list omits GitHub, so the subtab
+    // must fall back to General rather than rendering an empty shell.
+    installForgeMocks({
+      providers: [
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    render(<CodeForgeSettingsTab activeSubtab="daintree.github.github" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+  });
+
   it("falls back to General when GitHub is not registered (plugin disabled)", async () => {
     installForgeMocks({
       providers: [

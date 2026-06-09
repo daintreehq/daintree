@@ -27,7 +27,10 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import { toRateLimitInfo } from "../../../shared/utils/rateLimitUtils.js";
-import { assertGitHubProviderActive } from "../../services/github/availability.js";
+import {
+  assertGitHubProviderActive,
+  isGitHubProviderActive,
+} from "../../services/github/availability.js";
 
 // Relay the fetch-throttle multiplier into every workspace host so worktree
 // monitor polling backs off as the shared GraphQL budget depletes. The hosts
@@ -360,7 +363,15 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
   const handleGitHubGetConfig = async (): Promise<GitHubTokenConfig> => {
     checkRateLimit(CHANNELS.GITHUB_GET_CONFIG, 10, 10_000);
-    const { getGitHubConfigAsync } = await import("../../services/github/index.js");
+    const { getGitHubConfig, getGitHubConfigAsync } =
+      await import("../../services/github/index.js");
+    // getConfigAsync lazily validates against /user when a token exists but
+    // user info isn't cached — that's GitHub network. While the plugin is
+    // disabled, answer from local token state only (the channel stays
+    // ungated so Settings can still show token presence).
+    if (!isGitHubProviderActive()) {
+      return getGitHubConfig();
+    }
     return getGitHubConfigAsync();
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_CONFIG, handleGitHubGetConfig));

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { BUILTIN_GITHUB_PROVIDER_ID, normalizeProviderId } from "@shared/utils/forgeProviderIds";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 
 /**
  * Resolve a commit author's forge avatar URL for the committer chip (#8514).
@@ -23,6 +24,7 @@ export function useForgeAuthorAvatar({
   linkedProviderId: string | undefined;
 }): string | undefined {
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
+  const githubEnabled = useGitHubPluginEnabled();
 
   useEffect(() => {
     setAvatarUrl(undefined);
@@ -32,7 +34,10 @@ export function useForgeAuthorAvatar({
 
     // Only GitHub has a provider today. A worktree linked to a different
     // forge falls straight through to Gravatar until that provider ships —
-    // adding one is a new registry entry, no change here.
+    // adding one is a new registry entry, no change here. Same Gravatar
+    // fall-through while the GitHub plugin is disabled — the gated IPC
+    // would only reject.
+    if (!githubEnabled) return;
     if (normalizeProviderId(linkedProviderId) !== BUILTIN_GITHUB_PROVIDER_ID) return;
 
     let cancelled = false;
@@ -48,7 +53,7 @@ export function useForgeAuthorAvatar({
     return () => {
       cancelled = true;
     };
-  }, [email, linkedProviderId]);
+  }, [email, linkedProviderId, githubEnabled]);
 
   return avatarUrl;
 }

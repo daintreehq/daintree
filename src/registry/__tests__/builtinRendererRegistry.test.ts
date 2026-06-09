@@ -1,9 +1,11 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetBuiltinRendererRegistryForTests,
   getBuiltinView,
   registerBuiltinView,
   unregisterBuiltinView,
+  useBuiltinView,
 } from "../builtinRendererRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
@@ -78,6 +80,30 @@ describe("builtinRendererRegistry", () => {
 
       expect(getBuiltinView("github.issueSelector")).toBe(StubComponent);
       expect(getBuiltinView("other.view")).toBeNull();
+    });
+
+    it("useBuiltinView re-resolves reactively when the owner's enable state flips", async () => {
+      const { renderHook, waitFor, act } = await import("@testing-library/react");
+      registerBuiltinView("github.issueSelector", StubComponent, {
+        pluginId: "daintree.github",
+      });
+
+      const { result } = renderHook(() => useBuiltinView("github.issueSelector"));
+      expect(result.current).toBe(StubComponent);
+
+      act(() => {
+        usePluginRuntimeStore.setState({ disabledPluginIds: new Set(["daintree.github"]) });
+      });
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+
+      act(() => {
+        usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });
+      });
+      await waitFor(() => {
+        expect(result.current).toBe(StubComponent);
+      });
     });
   });
 });

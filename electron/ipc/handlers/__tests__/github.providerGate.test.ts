@@ -20,6 +20,7 @@ const gitHubServiceMock = vi.hoisted(() => ({
     .fn()
     .mockResolvedValue({ valid: true, scopes: [], username: "user", avatarUrl: null }),
   clearTokenAndSync: vi.fn().mockResolvedValue(undefined),
+  getGitHubConfig: vi.fn().mockReturnValue({ hasToken: true }),
   getGitHubConfigAsync: vi.fn().mockResolvedValue({ hasToken: true }),
   hasGitHubToken: vi.fn().mockReturnValue(true),
   listGitHubRemotes: vi.fn().mockResolvedValue([]),
@@ -60,6 +61,7 @@ vi.mock("../../../services/github/index.js", () => ({
   listPullRequests: gitHubServiceMock.listPullRequests,
   unassignIssue: gitHubServiceMock.unassignIssue,
   getRepoStatsComplete: gitHubServiceMock.getRepoStatsComplete,
+  getGitHubConfig: gitHubServiceMock.getGitHubConfig,
   getGitHubConfigAsync: gitHubServiceMock.getGitHubConfigAsync,
   hasGitHubToken: gitHubServiceMock.hasGitHubToken,
   listGitHubRemotes: gitHubServiceMock.listGitHubRemotes,
@@ -147,7 +149,10 @@ describe("github handlers — provider gate (plugin authoritative)", () => {
 
     it("keeps token-state reads live: github:get-config and github:clear-token", async () => {
       await getInvokeHandler(CHANNELS.GITHUB_GET_CONFIG)({} as never);
-      expect(gitHubServiceMock.getGitHubConfigAsync).toHaveBeenCalled();
+      // While disabled, config answers from local token state — the async
+      // variant lazily validates against /user, which is GitHub network.
+      expect(gitHubServiceMock.getGitHubConfig).toHaveBeenCalled();
+      expect(gitHubServiceMock.getGitHubConfigAsync).not.toHaveBeenCalled();
 
       await getInvokeHandler(CHANNELS.GITHUB_CLEAR_TOKEN)({} as never);
       expect(gitHubServiceMock.clearTokenAndSync).toHaveBeenCalled();

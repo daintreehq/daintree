@@ -187,7 +187,17 @@ export async function initGlobalServices(
   });
   console.log("[MAIN] GitHubAuth initialized with storage");
 
-  if (GitHubAuth.hasToken()) {
+  // Skip startup token validation when the GitHub plugin is disabled — the
+  // /user fetch is GitHub network work the user opted out of. Read the
+  // persisted disabled list directly: this task is registered before the
+  // plugin-service deferred task runs, so the forge registry can't be
+  // consulted yet. (Re-enable validates on next launch or via set-token.)
+  const persistedPlugins = store.get("plugins") as { disabled?: unknown } | undefined;
+  const githubPluginDisabled =
+    Array.isArray(persistedPlugins?.disabled) &&
+    persistedPlugins.disabled.includes("daintree.github");
+
+  if (GitHubAuth.hasToken() && !githubPluginDisabled) {
     const token = GitHubAuth.getToken();
     if (token) {
       const versionAtStart = GitHubAuth.getTokenVersion();

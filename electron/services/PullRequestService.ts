@@ -461,13 +461,15 @@ class PullRequestService {
 
   /**
    * Main pushed `forge:provider-registry-updated` — a forge provider
-   * descriptor was registered (startup scan or runtime plugin
-   * install/enable). A cached "no-match"/"not-ready" miss may now resolve, so
-   * drop it and re-check. A resolved provider is left alone: provider-affecting
-   * settings changes arrive via `setForgeSettings()`, which always invalidates.
+   * descriptor was registered OR removed (startup scan, runtime plugin
+   * install/enable, or live disable). A cached "no-match"/"not-ready" miss
+   * may now resolve, and a resolved provider may no longer exist (the
+   * registry-updated signal covers removals since live built-in disable,
+   * #9304 follow-up), so always drop the cached resolution and re-check —
+   * re-resolving to the same provider is cheap, but keeping a resolution for
+   * an unregistered provider strands polling on RPC failures.
    */
   public notifyForgeProviderRegistryUpdated(): void {
-    if (this.providerResolutionStatus === "resolved") return;
     this.invalidateProvider();
     if (!this.isPolling || this.startupDelayTimer !== null) return;
     // Re-enter the poll loop: "no-match" pauses without an armed timer, so a

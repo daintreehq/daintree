@@ -48,11 +48,15 @@ interface CodeForgeSettingsTabProps {
 
 export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForgeSettingsTabProps) {
   const [providers, setProviders] = useState<ForgeProviderEntry[]>([]);
+  // Sequence overlapping fetches (initial load + provenance refetches) so a
+  // slow older response can't overwrite a newer provider list.
+  const providersSeqRef = useRef(0);
 
   const loadProviders = useCallback(async () => {
+    const seq = ++providersSeqRef.current;
     try {
       const loaded = await window.electron.forge.getProviders();
-      setProviders(loaded);
+      if (seq === providersSeqRef.current) setProviders(loaded);
     } catch (err) {
       logError("Failed to load forge providers for CodeForgeSettingsTab", err);
       throw err;

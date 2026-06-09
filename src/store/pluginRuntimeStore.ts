@@ -22,10 +22,15 @@ interface PluginRuntimeState {
 
 let initialized = false;
 let unsubscribe: (() => void) | null = null;
+// Monotonic pull sequence: rapid provenance events can interleave list()
+// round-trips, and a slow older response must not overwrite a newer set.
+let pullSeq = 0;
 
 async function pullDisabledSet(set: (state: Partial<PluginRuntimeState>) => void): Promise<void> {
+  const seq = ++pullSeq;
   try {
     const list = await window.electron.plugin.list();
+    if (seq !== pullSeq) return;
     set({
       disabledPluginIds: new Set(list.filter((p) => p.disabled).map((p) => p.manifest.name)),
     });
@@ -78,5 +83,6 @@ export function _resetPluginRuntimeStoreForTest(): void {
   unsubscribe?.();
   unsubscribe = null;
   initialized = false;
+  pullSeq = 0;
   usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });
 }

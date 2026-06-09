@@ -325,5 +325,26 @@ describe("GitHubTokenHealthService", () => {
       // healthy transition — a disable/enable cycle must not orphan it.
       expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: "healthy" }));
     });
+
+    it("discards a probe that completes after stop() — no late state publish", async () => {
+      let resolveProbe: (r: Response) => void = () => {};
+      fetchMock.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveProbe = resolve;
+          })
+      );
+
+      const inFlight = gitHubTokenHealthService.refresh({ force: true });
+      // Plugin disabled while the probe is on the wire.
+      gitHubTokenHealthService.stop();
+      resolveProbe(buildResponse(401));
+      await inFlight;
+
+      // A late 401 must not resurrect an unhealthy banner for an integration
+      // the user just turned off.
+      expect(gitHubTokenHealthService.getState().status).toBe("unknown");
+      expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({ status: "unhealthy" }));
+    });
   });
 });
