@@ -537,6 +537,14 @@ export class PluginService {
     string,
     { manifest: PluginManifest; dir: string; isBuiltin: boolean }
   >();
+  /**
+   * Per-plugin transition chain for live built-in enable/disable (#9304). A
+   * rapid disable→enable→disable on the same id must not interleave the
+   * unload/load mutations to `plugins`/`disabledPlugins`/`reservedNames`, so
+   * each `setEnabled` for a built-in chains onto the prior transition for that
+   * id. Keyed by `manifest.name`; the entry is dropped once its chain settles.
+   */
+  private readonly enableTransitions = new Map<string, Promise<void>>();
   private records = new PluginInstalledRecordsStore();
   /**
    * Live dev-mode hot-reload workers, keyed by pluginId (#9304). Each holds the
@@ -2732,11 +2740,14 @@ export class PluginService {
   }
 
   listPlugins(): LoadedPluginInfo[] {
-    // Desired state is the live persisted list; the running state is fixed for
-    // the session (`this.plugins` = loaded at launch, `this.disabledPlugins` =
-    // skipped at launch — disabling never unloads at runtime). Reporting both
-    // lets the renderer show the correct switch position and a "restart
-    // required" cue that survives a tab remount (#9284).
+    // Desired state is the live persisted list; the running state is
+    // `this.plugins` (loaded) vs `this.disabledPlugins` (skipped). For user
+    // plugins these are fixed for the session, so a toggle diverges them and
+    // raises a "restart required" cue (#9284). Built-ins transition live
+    // (#9304): `setEnabled` moves the entry between the two maps immediately, so
+    // the running state already matches the desired state and pendingRestart is
+    // false. Reporting both keeps the switch position and the cue correct across
+    // a tab remount.
     const desiredDisabled = this.records.getDisabledIds();
     const installed = this.records.getInstalledRecords();
 
@@ -2810,14 +2821,90 @@ export class PluginService {
 
   /**
    * Toggle a plugin's disabled state in Preferences (#9284). Persists to
-   * `plugins.disabled` in electron-store; the change takes effect on next
-   * launch (no synchronous unload — the renderer surfaces a restart-required
-   * cue). Idempotent: enabling an already-enabled plugin or disabling an
-   * already-disabled one is a no-op write. Permissive by design — the store is
-   * a declared-intent list, not a live registry, so no existence check.
+   * `plugins.disabled` in electron-store, then — for built-in plugins only —
+   * applies the change live (#9304): disabling unloads the running plugin,
+   * enabling re-registers and re-activates it, so the toggle takes effect
+   * without an app restart. User plugins stay persist-only and surface the
+   * restart-required cue, because their on-disk code can change between toggles
+   * and Node's ESM module cache has no eviction API (the dev-worker fork path
+   * exists precisely to sidestep that for recompiling dev plugins) — re-running
+   * a built-in's bundled, immutable `activate()` carries no such risk.
+   *
+   * Persists first so a crash mid-transition is recoverable: next launch reads
+   * the persisted intent and reaches the same state. Idempotent: toggling to
+   * the current state is a no-op write and a no-op transition. Permissive by
+   * design — the store is a declared-intent list, so no existence check.
    */
-  setEnabled(pluginId: string, enabled: boolean): void {
+  async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    // Persist intent first (throws on an empty id, validated in the store).
     this.records.setEnabled(pluginId, enabled);
+
+    const isBuiltin =
+      this.plugins.get(pluginId)?.isBuiltin ??
+      this.disabledPlugins.get(pluginId)?.isBuiltin ??
+      false;
+    if (!isBuiltin) return;
+
+    // Serialise live transitions per id so concurrent toggles can't interleave
+    // their unload/load map mutations. Swallow the prior chain's rejection —
+    // `_applyBuiltinToggle` never rejects, but the guard keeps the chain alive.
+    const prior = this.enableTransitions.get(pluginId) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(() => this._applyBuiltinToggle(pluginId, enabled));
+    this.enableTransitions.set(pluginId, next);
+    try {
+      await next;
+    } finally {
+      if (this.enableTransitions.get(pluginId) === next) {
+        this.enableTransitions.delete(pluginId);
+      }
+    }
+  }
+
+  /**
+   * Apply a live enable/disable transition for a built-in plugin (#9304).
+   * Disable: tear the running plugin down through the full `unloadPlugin()`
+   * cascade, then move its manifest into `disabledPlugins` so `listPlugins()`
+   * keeps surfacing it for the toggle. Enable: clear the name reservation and
+   * skipped entry (so `loadPlugin`'s duplicate guard doesn't reject the
+   * re-load), re-register from the cached manifest dir, then activate. Always
+   * broadcasts provenance so every view re-pulls `listPlugins()` and the
+   * restart-required cue clears. Never throws — activation errors are persisted
+   * to `loadError` inside `activatePlugin`, and a failed re-register restores
+   * the skipped state.
+   */
+  private async _applyBuiltinToggle(pluginId: string, enabled: boolean): Promise<void> {
+    try {
+      if (!enabled) {
+        const running = this.plugins.get(pluginId);
+        if (!running) return; // already not running — nothing to unload
+        const { manifest, dir } = running;
+        this.unloadPlugin(pluginId);
+        this.disabledPlugins.set(pluginId, { manifest, dir, isBuiltin: true });
+        this.reservedNames.add(pluginId);
+        return;
+      }
+
+      const entry = this.disabledPlugins.get(pluginId);
+      if (!entry) return; // already running — nothing to load
+      // Release the reservation + skipped entry before re-loading; otherwise the
+      // duplicate guard in loadPlugin() sees the reserved name and bails.
+      this.disabledPlugins.delete(pluginId);
+      this.reservedNames.delete(pluginId);
+      const loaded = await this.loadPlugin(path.dirname(entry.dir), path.basename(entry.dir), {
+        isBuiltin: true,
+        disabled: new Set<string>(),
+      });
+      if (!loaded) {
+        // Engine gate or manifest error: restore the skipped state so the row
+        // stays visible. Persisted intent stays "enabled" → pendingRestart:true.
+        this.disabledPlugins.set(pluginId, entry);
+        this.reservedNames.add(pluginId);
+        return;
+      }
+      await this.activatePlugin(pluginId);
+    } finally {
+      this.broadcaster.broadcastProvenanceChanged();
+    }
   }
 
   /**

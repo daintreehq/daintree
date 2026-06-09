@@ -75,7 +75,7 @@ async function handleList(): Promise<LoadedPluginInfo[]> {
 }
 
 async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
-  pluginService.setEnabled(pluginId, enabled);
+  await pluginService.setEnabled(pluginId, enabled);
 }
 
 // Local-file-header signature that prefixes every ZIP (and therefore every
