@@ -65,15 +65,9 @@ class SemanticAnalysisService {
       this.handlers = handlers;
     }
 
-    // Create worker using Vite's worker import syntax
-    this.worker = new Worker(new URL("../workers/semantic.worker.ts", import.meta.url), {
-      type: "module",
-    });
-
-    this.setupMessageHandler();
-    this.setupErrorHandler();
-
-    // Get the analysis buffer from the main process
+    // Get the analysis buffer first. When it's null (SharedArrayBuffer is
+    // unsupported in the Electron UtilityProcess), the worker would be created
+    // and immediately torn down for nothing — so bail before constructing it.
     try {
       const analysisBuffer = await window.electron.terminal.getAnalysisBuffer();
       if (!analysisBuffer) {
@@ -82,15 +76,19 @@ class SemanticAnalysisService {
         logWarn(`[SemanticAnalysisService] ${errorMsg}`);
         this.handlers.onError?.(errorMsg, "initialization");
 
-        // Clean up worker and reset state so re-init is possible
-        if (this.worker) {
-          this.worker.terminate();
-          this.worker = null;
-        }
+        // No worker was created; just reset state so re-init is possible.
         this.isInitialized = false;
         this.initPromise = null;
         return;
       }
+
+      // Create worker using Vite's worker import syntax
+      this.worker = new Worker(new URL("../workers/semantic.worker.ts", import.meta.url), {
+        type: "module",
+      });
+
+      this.setupMessageHandler();
+      this.setupErrorHandler();
 
       // Send buffer to worker to start polling
       this.postMessage({

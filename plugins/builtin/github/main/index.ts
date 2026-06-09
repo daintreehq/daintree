@@ -1,6 +1,7 @@
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { githubForgeProvider } from "./forgeProvider.js";
 import { registerReviewDecorationProvider } from "./reviewDecorationProvider.js";
+import { startCacheSweep, stopCacheSweep } from "./GitHubCaches.js";
 
 /**
  * Plugin activation entry point — called by `PluginService` after manifest
@@ -17,9 +18,13 @@ export function activate(host: PluginHostApi): () => void {
   // object the host holds — sharing the reference keeps the capability
   // check a single source of truth.
   const disposeDecorations = registerReviewDecorationProvider(host, githubForgeProvider);
+  // Periodic sweep of the data caches' expired entries (lazy get()-time
+  // eviction can pin entries that stop being read). Cleared on deactivation.
+  startCacheSweep();
   return () => {
     disposeForge();
     disposeDecorations();
+    stopCacheSweep();
   };
 }
 

@@ -429,12 +429,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
 
-      return result;
+      // Content was written to the temp file; renderer callers read only
+      // fileCount/stats/error, so drop it to avoid cloning a second copy.
+      return { content: "", fileCount: result.fileCount, stats: result.stats };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to copy context file");
       console.error(`[${traceId}] Failed to save/copy context file:`, errorMessage);
       return {
-        ...result,
+        content: "",
+        fileCount: result.fileCount,
+        stats: result.stats,
         error: `Failed to copy file to clipboard: ${errorMessage}`,
       };
     }
@@ -537,38 +541,47 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const remoteComputeBlock = buildRemoteComputeBlock(worktree);
-      const contentToInject = result.content + remoteComputeBlock;
       const CHUNK_SIZE = 4096;
 
-      for (let i = 0; i < contentToInject.length; ) {
-        if (contextInjectionTracker.isCancelled(injectionId)) {
-          console.log(`[${traceId}] CopyTree inject cancelled by user`);
-          return {
-            content: "",
-            fileCount: 0,
-            error: "Injection cancelled",
-          };
-        }
+      // Write directly over each source string rather than concatenating into a
+      // single (possibly multi-MB) buffer that would stay pinned alongside
+      // result.content across the whole setImmediate-yielding loop. The
+      // remoteComputeBlock — usually empty — is written as trailing chunks.
+      const writeChunked = async (source: string): Promise<string | null> => {
+        for (let i = 0; i < source.length; ) {
+          if (contextInjectionTracker.isCancelled(injectionId)) {
+            console.log(`[${traceId}] CopyTree inject cancelled by user`);
+            return "Injection cancelled";
+          }
 
-        if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
-          return {
-            content: "",
-            fileCount: 0,
-            error: "Terminal closed during injection",
-          };
-        }
+          if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
+            return "Terminal closed during injection";
+          }
 
-        const end = nextChunkBoundary(contentToInject, i, CHUNK_SIZE);
-        const chunk = contentToInject.slice(i, end);
-        deps.ptyClient!.write(validated.terminalId, chunk, traceId);
-        i = end;
-        if (i < contentToInject.length) {
-          await new Promise((resolve) => setImmediate(resolve));
+          const end = nextChunkBoundary(source, i, CHUNK_SIZE);
+          const chunk = source.slice(i, end);
+          deps.ptyClient!.write(validated.terminalId, chunk, traceId);
+          i = end;
+          if (i < source.length) {
+            await new Promise((resolve) => setImmediate(resolve));
+          }
         }
+        return null;
+      };
+
+      let injectError = await writeChunked(result.content);
+      if (!injectError && remoteComputeBlock) {
+        await new Promise((resolve) => setImmediate(resolve));
+        injectError = await writeChunked(remoteComputeBlock);
+      }
+      if (injectError) {
+        return { content: "", fileCount: 0, error: injectError };
       }
 
       console.log(`[${traceId}] CopyTree inject completed successfully`);
-      return result;
+      // The renderer reads only fileCount/stats; drop the (possibly multi-MB)
+      // content so the contextBridge doesn't clone a second copy into the heap.
+      return { content: "", fileCount: result.fileCount, stats: result.stats };
     } finally {
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }

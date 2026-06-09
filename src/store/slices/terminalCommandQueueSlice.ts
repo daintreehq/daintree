@@ -93,12 +93,17 @@ export const createTerminalCommandQueueSlice =
           const cmd = forTerminal[0]!;
           terminalClient.write(cmd.terminalId, cmd.payload);
 
+          const nextCount = Math.max(0, (state.commandQueueCountById[terminalId] ?? 0) - 1);
+          const newCountById = { ...state.commandQueueCountById };
+          if (nextCount === 0) {
+            delete newCountById[terminalId];
+          } else {
+            newCountById[terminalId] = nextCount;
+          }
+
           return {
             commandQueue: [...remaining, ...forTerminal.slice(1)],
-            commandQueueCountById: {
-              ...state.commandQueueCountById,
-              [terminalId]: Math.max(0, (state.commandQueueCountById[terminalId] ?? 0) - 1),
-            },
+            commandQueueCountById: newCountById,
           };
         }
 
@@ -107,13 +112,14 @@ export const createTerminalCommandQueueSlice =
     },
 
     clearQueue: (terminalId) => {
-      set((state) => ({
-        commandQueue: state.commandQueue.filter((c) => c.terminalId !== terminalId),
-        commandQueueCountById: {
-          ...state.commandQueueCountById,
-          [terminalId]: 0,
-        },
-      }));
+      set((state) => {
+        const newCountById = { ...state.commandQueueCountById };
+        delete newCountById[terminalId];
+        return {
+          commandQueue: state.commandQueue.filter((c) => c.terminalId !== terminalId),
+          commandQueueCountById: newCountById,
+        };
+      });
     },
 
     getQueueCount: (terminalId) => {

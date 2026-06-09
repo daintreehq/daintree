@@ -42,6 +42,12 @@ let _nextMessageId = 0;
 const LOG_RATE_WINDOW_MS = 5_000;
 const LOG_RATE_MAX_PER_WINDOW = 5;
 
+// Bound retained CDP objectIds to the renderer's MAX_MESSAGES horizon
+// (consoleCaptureStore.ts). Beyond this, the oldest objectId is released via
+// Runtime.releaseObject so a chatty page within one navigation session can't
+// pin the guest renderer's JS graph alive unbounded.
+const MAX_OBJECT_IDS_PER_PANE = 500;
+
 const LOG_ENTRY_SOURCES: ReadonlySet<string> = new Set<CdpLogEntrySource>([
   "javascript",
   "network",
@@ -129,6 +135,17 @@ function cdpTypeToLevel(cdpType: string): "log" | "info" | "warning" | "error" {
   }
 }
 
+// Cap stored string values/previews/descriptions so a single megabyte-scale
+// console arg can't be retained (and double-copied into summaryText).
+const MAX_STRING_LENGTH = 8 * 1024;
+const TRUNCATION_MARKER = "…[truncated]";
+
+function truncateString(value: string): string {
+  return value.length > MAX_STRING_LENGTH
+    ? value.slice(0, MAX_STRING_LENGTH) + TRUNCATION_MARKER
+    : value;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeRemoteObject(obj: any): CdpRemoteArg {
   if (!obj || typeof obj !== "object") {
@@ -141,8 +158,16 @@ function normalizeRemoteObject(obj: any): CdpRemoteArg {
     return { type: "primitive", kind: "undefined", value: null };
   }
 
-  if (cdpType === "string" || cdpType === "boolean") {
-    return { type: "primitive", kind: cdpType, value: obj.value ?? null };
+  if (cdpType === "string") {
+    return {
+      type: "primitive",
+      kind: "string",
+      value: typeof obj.value === "string" ? truncateString(obj.value) : (obj.value ?? null),
+    };
+  }
+
+  if (cdpType === "boolean") {
+    return { type: "primitive", kind: "boolean", value: obj.value ?? null };
   }
 
   if (cdpType === "number") {
@@ -190,8 +215,9 @@ function normalizeRemoteObject(obj: any): CdpRemoteArg {
     objectId: obj.objectId ?? "",
     className: obj.className,
     subtype: obj.subtype,
-    description: obj.description,
-    preview,
+    description:
+      typeof obj.description === "string" ? truncateString(obj.description) : obj.description,
+    preview: preview !== undefined ? truncateString(preview) : undefined,
   };
 }
 
@@ -228,7 +254,12 @@ function normalizeStackTrace(st: any): CdpStackTrace | undefined {
   };
 }
 
-function trackObjectIds(session: CdpSession, paneId: string, args: CdpRemoteArg[]): void {
+function trackObjectIds(
+  wc: Electron.WebContents,
+  session: CdpSession,
+  paneId: string,
+  args: CdpRemoteArg[]
+): void {
   let ids = session.objectIdsByPane.get(paneId);
   if (!ids) {
     ids = new Set();
@@ -238,6 +269,16 @@ function trackObjectIds(session: CdpSession, paneId: string, args: CdpRemoteArg[
     if ((arg.type === "object" || arg.type === "function") && arg.objectId) {
       ids.add(arg.objectId);
     }
+  }
+  // A Set iterates in insertion order, so the first entry is the oldest. Release
+  // and drop oldest ids beyond the horizon to bound the retained JS graph.
+  while (ids.size > MAX_OBJECT_IDS_PER_PANE) {
+    const oldest = ids.values().next().value as string | undefined;
+    if (oldest === undefined) break;
+    ids.delete(oldest);
+    wc.debugger.sendCommand("Runtime.releaseObject", { objectId: oldest }).catch(() => {
+      // Ignore release failures (object may already be GC'd)
+    });
   }
 }
 
@@ -444,10 +485,12 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   };
 
-  function handleConsoleApiCalled(_wcId: number, session: CdpSession, params: unknown): void {
+  function handleConsoleApiCalled(wcId: number, session: CdpSession, params: unknown): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const p = params as any;
     if (!p) return;
+
+    const wc = webContents.fromId(wcId);
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
@@ -470,7 +513,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       const summaryText = buildSummaryText(args);
       const stackTrace = normalizeStackTrace(p.stackTrace);
 
-      trackObjectIds(session, paneId, args);
+      if (wc && !wc.isDestroyed()) {
+        trackObjectIds(wc, session, paneId, args);
+      }
 
       const row: SerializedConsoleRow = {
         id: _nextMessageId++,

@@ -877,6 +877,19 @@ export class PluginMcpSupervisor {
   }
 
   /**
+   * Drop every supervised-server state entry owned by `pluginId` from the map.
+   * Call this ONLY on a full uninstall, after {@link shutdown} — a plain
+   * disable/reload must keep the entry so the log viewer retains pre-restart
+   * stderr history. Without this, an uninstalled plugin's state (its bounded
+   * stderr ring, contribution, lastError) leaks in `this.states` forever.
+   */
+  removeState(pluginId: string): void {
+    for (const key of this.states.keys()) {
+      if (key.startsWith(`${pluginId} `)) this.states.delete(key);
+    }
+  }
+
+  /**
    * Force a restart of a single server. Used by `PluginService` when a
    * settings entry referenced by the manifest changes — the new value is
    * folded into the env at spawn time, so the existing subprocess has to

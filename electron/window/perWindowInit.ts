@@ -339,7 +339,11 @@ export async function initPerWindowServices(
   }
 
   // Per-window services
-  ctx.services.eventBuffer = new EventBuffer(1000);
+  // Small ring by default: the inspector live-streams new events via onRecord
+  // once subscribed, so only recent history needs retaining. The inspector's
+  // subscribe handler raises the cap to 1000 while open and lowers it back on
+  // the last unsubscribe (see eventInspector.ts).
+  ctx.services.eventBuffer = new EventBuffer(100);
   // EventBuffer.start() must run eagerly — it subscribes to the internal event
   // bus so early-boot events (migrations, PTY init, hydration) reach the
   // inspector. Deferring would drop those events.

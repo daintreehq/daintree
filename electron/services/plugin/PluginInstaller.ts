@@ -908,7 +908,13 @@ export class PluginInstaller {
       // The await covers the signal path only; the Windows tree-kill grace
       // window is ridden out by the `fs.rm` retry options below.
       try {
-        await getPluginMcpSupervisor().shutdown({ pluginId });
+        const supervisor = getPluginMcpSupervisor();
+        await supervisor.shutdown({ pluginId });
+        // Uninstall (not a reload) — drop the supervisor state entries too so
+        // the per-server stderr ring / contribution don't leak after the
+        // plugin's code is gone. `shutdown` alone keeps the entry for the log
+        // viewer; only a full uninstall removes it.
+        supervisor.removeState(pluginId);
       } catch (err) {
         console.error(`[PluginService] MCP shutdown during uninstall of "${pluginId}" threw:`, err);
       }

@@ -107,6 +107,9 @@ export class WorkspaceHostEventRouter {
           worktreeId: event.worktreeId,
           timestamp: Date.now(),
         });
+        // The resolved worktree path is the map key (set on `worktree-update`).
+        // Prune it here so removed paths don't accumulate until `dispose()`.
+        this.worktreePathToProject.delete(path.resolve(event.worktreeId));
         break;
 
       case "clear-wsl-git-opt-in": {

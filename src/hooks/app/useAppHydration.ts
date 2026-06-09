@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { setStartupQuietPeriod } from "@/lib/notify";
+import { releaseBootPayload } from "@/lib/bootPromise";
 import { logError } from "@/utils/logger";
 import { usePanelStore } from "@/store";
 import { suppressMruRecording, useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -165,6 +166,10 @@ export function useAppHydration(
       } catch (error) {
         logError("Failed to restore app state", error);
       } finally {
+        // Hydration has copied the boot payload into Zustand; free its heavy
+        // sub-objects so the cached `use()` thenable doesn't pin them for the
+        // renderer's life. Crash fields are left intact (still read post-boot).
+        releaseBootPayload();
         setIsStateLoaded(true);
         setStartupQuietPeriod(5000);
       }

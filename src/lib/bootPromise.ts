@@ -99,6 +99,29 @@ export function getSafeBootPromise(): Promise<SafeBootResult> {
   return safeBootPromise;
 }
 
+/**
+ * Free the heavy boot payload once hydration has copied it into Zustand. The
+ * resolved `BootResult` is reachable for the renderer's life via the cached
+ * thenables' `value` fields (React `use()` reads them synchronously), so its
+ * large sub-objects (`appState`, `terminalConfig`, `agentSettings`) would
+ * otherwise leak forever. The promise references themselves stay stable — only
+ * the consumed sub-fields are nulled. The crash fields (`crashPending`,
+ * `crashConfig`) are intentionally left intact: they are still read from the
+ * cached payload after hydration. Call exactly once, after hydration settles.
+ */
+export function releaseBootPayload(): void {
+  const releaseFrom = (result: BootResult | undefined): void => {
+    if (!result) return;
+    result.appState = undefined as unknown as BootResult["appState"];
+    result.terminalConfig = undefined as unknown as BootResult["terminalConfig"];
+    result.agentSettings = undefined as unknown as BootResult["agentSettings"];
+  };
+
+  releaseFrom((bootPromise as ReactThenable<BootResult> | null)?.value);
+  const safe = (safeBootPromise as ReactThenable<SafeBootResult> | null)?.value;
+  if (safe?.ok) releaseFrom(safe.result);
+}
+
 /** Test-only: clear the module-scope cache so each case starts fresh. */
 export function resetBootPromiseForTests(): void {
   bootPromise = null;

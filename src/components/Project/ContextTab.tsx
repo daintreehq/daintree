@@ -18,6 +18,11 @@ function formatBytes(bytes: number): string {
 }
 
 const FILE_PREVIEW_COUNT = 10;
+// Cap the per-file manifest retained in state. The headline count
+// (includedFiles) is preserved separately; the expandable list only ever
+// shows this many entries, which keeps a large monorepo's manifest from
+// pinning hundreds of KB while the tab is open.
+const MAX_RETAINED_FILES = 200;
 
 function parsePositiveInt(value: string): number | undefined {
   if (!value) return undefined;
@@ -103,7 +108,11 @@ export function ContextTab({
 
       const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
       if (runIdRef.current !== runId) return;
-      setTestConfigResult(result);
+      setTestConfigResult(
+        result.files && result.files.length > MAX_RETAINED_FILES
+          ? { ...result, files: result.files.slice(0, MAX_RETAINED_FILES) }
+          : result
+      );
     } catch (error) {
       logError("Failed to test config", error);
       if (runIdRef.current !== runId) return;

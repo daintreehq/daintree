@@ -364,7 +364,6 @@ export class TerminalProcess {
       semanticBuffer: [],
       headlessTerminal,
       serializeAddon,
-      rawOutputBuffer: undefined,
       restartCount: 0,
       // Analysis is enabled whenever an agent is expected or live. Plain
       // terminals enable it on the fly when the process detector promotes.

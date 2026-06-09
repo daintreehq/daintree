@@ -183,7 +183,7 @@ describe("TerminalCommandQueueSlice", () => {
       expect(state.commandQueueCountById["test-terminal"]).toBe(2);
 
       state.clearQueue("test-terminal");
-      expect(state.commandQueueCountById["test-terminal"]).toBe(0);
+      expect(state.commandQueueCountById["test-terminal"]).toBeUndefined();
       expect(state.commandQueue).toHaveLength(0);
     });
 
@@ -196,7 +196,7 @@ describe("TerminalCommandQueueSlice", () => {
       expect(state.commandQueueCountById["terminal-b"]).toBe(1);
 
       state.clearQueue("test-terminal");
-      expect(state.commandQueueCountById["test-terminal"]).toBe(0);
+      expect(state.commandQueueCountById["test-terminal"]).toBeUndefined();
       expect(state.commandQueueCountById["terminal-b"]).toBe(1);
     });
 

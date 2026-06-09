@@ -130,7 +130,16 @@ class AgentNotificationService {
       this.agentSpawnTimestamps.set(payload.terminalId, Date.now());
     });
 
-    this.unsubscribers.push(unsubStateChanged, unsubSpawned, unsubDetected);
+    // Prune spawn-grace tracking when an agent exits — otherwise an agent that
+    // goes spawn→working→completed without ever hitting "waiting" leaks its
+    // timestamp entry (the lazy delete only fires on a "waiting" lookup).
+    const unsubExited = events.on("agent:exited", (payload) => {
+      if (payload.terminalId) {
+        this.agentSpawnTimestamps.delete(payload.terminalId);
+      }
+    });
+
+    this.unsubscribers.push(unsubStateChanged, unsubSpawned, unsubDetected, unsubExited);
   }
 
   private isWithinBootGrace(): boolean {
