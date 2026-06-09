@@ -1,4 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { Trash2, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -117,8 +118,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   const [search, setSearch] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const prevLastIdRef = useRef<number | null>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const lastSeenTailIdRef = useRef<number | null>(null);
 
   const allMessages = useConsoleCaptureStore(
@@ -239,31 +239,11 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
 
   const { errorCount, warnCount } = counts;
 
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const threshold = 8;
-    setIsAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
-  }, []);
-
-  const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1]!.id : null;
-  useEffect(() => {
-    if (lastVisibleId === prevLastIdRef.current) return;
-    prevLastIdRef.current = lastVisibleId;
-    if (isAtBottom) {
-      requestAnimationFrame(() => {
-        const el = scrollRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-      });
-    }
-  }, [lastVisibleId, isAtBottom]);
-
   const handleScrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-      setIsAtBottom(true);
-    }
+    // align "end" lands on the true bottom even when the last row is tall
+    // (e.g. an expanded object or long stack trace).
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
+    setIsAtBottom(true);
   }, []);
 
   const toggleGroup = useCallback((msgId: number) => {
@@ -358,27 +338,30 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
       </div>
 
       {/* Message list */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed"
-      >
-        {filtered.length === 0 ? (
+      {filtered.length === 0 ? (
+        <div className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed">
           <div className="flex items-center justify-center h-full text-daintree-text/30 text-xs select-none">
             {allMessages.length === 0 ? "No console output" : "No messages match filter"}
           </div>
-        ) : (
-          filtered.map((msg) => (
+        </div>
+      ) : (
+        <Virtuoso
+          ref={virtuosoRef}
+          data={filtered}
+          computeItemKey={(_index, msg) => msg.id}
+          followOutput={isAtBottom ? "auto" : false}
+          atBottomStateChange={setIsAtBottom}
+          itemContent={(_index, msg) => (
             <ConsoleRow
-              key={msg.id}
               msg={msg}
               webContentsId={webContentsId}
               isGroupCollapsed={collapsedGroups.has(msg.id)}
               onToggleGroup={msg.isGroupHeader ? toggleGroup : undefined}
             />
-          ))
-        )}
-      </div>
+          )}
+          className="flex-1 font-mono text-[11px] leading-relaxed"
+        />
+      )}
     </div>
   );
 }

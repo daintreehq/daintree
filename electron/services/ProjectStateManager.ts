@@ -9,6 +9,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
+const PROJECT_STATE_CACHE_SWEEP_MS = 60_000;
 
 export const PROJECT_STATE_SCHEMA_VERSION = 1;
 
@@ -26,8 +27,32 @@ export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
   private pendingQuarantines = new Map<string, string>();
   private writeQueues = new Map<string, Promise<void>>();
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private projectsConfigDir: string) {}
+  constructor(private projectsConfigDir: string) {
+    // Lazy eviction only fires on a re-read of the same projectId, so a
+    // structuredClone-bearing entry for a project never touched again this
+    // session is retained forever. Sweep expired entries proactively.
+    this.sweepTimer = setInterval(() => this.sweepExpiredCache(), PROJECT_STATE_CACHE_SWEEP_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  private sweepExpiredCache(): void {
+    const now = Date.now();
+    for (const [projectId, entry] of this.projectStateCache) {
+      if (entry.expiresAt <= now) {
+        this.projectStateCache.delete(projectId);
+      }
+    }
+  }
+
+  dispose(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+    this.projectStateCache.clear();
+  }
 
   private cloneProjectState(state: ProjectState | null): ProjectState | null {
     if (!state) return null;

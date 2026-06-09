@@ -68,7 +68,16 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
     set((state) => {
       const existing = state.messages.get(row.paneId) ?? [];
       const willEvict = existing.length >= MAX_MESSAGES;
-      const updated = willEvict ? [...existing.slice(1), msg] : [...existing, msg];
+      // `slice` already yields a fresh, unshared array — push into it in place
+      // to avoid a second copy from spreading the slice back out.
+      let updated: ConsoleMessage[];
+      if (willEvict) {
+        updated = existing.slice(1);
+        updated.push(msg);
+      } else {
+        updated = existing.slice();
+        updated.push(msg);
+      }
 
       const nextMessages = new Map(state.messages);
       nextMessages.set(row.paneId, updated);

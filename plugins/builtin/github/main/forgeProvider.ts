@@ -314,10 +314,21 @@ function buildOrderBy(opts: ListOptions): { field: string; direction: string } {
 // regardless of property insertion order across call sites.
 const stringifyVariables = configure({ bigint: false });
 
-// `\0` can't appear in a GraphQL document, so it can't be forged by a query
-// string that happens to contain the serialized variables.
-function buildCacheKey(query: string, variables: Record<string, unknown>): string {
-  return `${query}\0${stringifyVariables(variables) ?? ""}`;
+// Hash the cache inputs to a fixed-size digest rather than storing the full
+// multi-KB query document as the key. `queryLabel` and `variables` distinguish
+// the named queries; the document is still folded in because batch queries
+// (BATCH_BRANCH_PR / BATCH_PRS / BATCH_REQUIRED_CHECKS) carry their distinct
+// branch/PR set in the document itself with `variables === {}` — without it
+// they'd all collide on one key. `\0` can't appear in a GraphQL document or
+// queryLabel, so neither field can be forged by the serialized variables.
+function buildCacheKey(
+  query: string,
+  variables: Record<string, unknown>,
+  queryLabel: string
+): string {
+  return createHash("sha256")
+    .update(`${queryLabel}\0${stringifyVariables(variables) ?? ""}\0${query}`)
+    .digest("hex");
 }
 
 async function dispatchQuery(
@@ -350,7 +361,7 @@ async function runQuery(
   queryLabel: string,
   bypass = false
 ): Promise<GraphQlQueryResponseData> {
-  const key = buildCacheKey(query, variables);
+  const key = buildCacheKey(query, variables, queryLabel);
 
   if (!bypass) {
     const cached = forgeQueryCache.get(key);
@@ -362,7 +373,11 @@ async function runQuery(
 
   const request = dispatchQuery(query, variables, queryLabel)
     .then((response) => {
-      forgeQueryCache.set(key, response);
+      // `bypass` skips the raw-response cache write too: the list paths
+      // (LIST_ISSUES/LIST_PRS) hold the strictly-larger raw response only to
+      // build a normalized `Page<T>` they cache separately, so caching the raw
+      // form here is redundant. Reads/inflight-joins are already bypassed above.
+      if (!bypass) forgeQueryCache.set(key, response);
       return response;
     })
     .finally(() => {
@@ -625,7 +640,11 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
         orderBy,
       },
       "LIST_ISSUES_QUERY",
-      bypass
+      // Always bypass the raw-response cache: the normalized `Page<Issue>` is
+      // cached in `forgeIssueListCache` and the raw form would be redundant
+      // (and strictly larger). This path has its own `dedupe` above, so the
+      // runQuery-level singleflight isn't needed either.
+      true
     );
 
     const issues = (response?.repository as Record<string, unknown> | undefined)?.issues as
@@ -692,7 +711,11 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
         orderBy,
       },
       "LIST_PRS_QUERY",
-      bypass
+      // Always bypass the raw-response cache: the normalized `Page<PR>` is
+      // cached in `forgePRListCache` and the raw form would be redundant (and
+      // strictly larger). This path has its own `dedupe` above, so the
+      // runQuery-level singleflight isn't needed either.
+      true
     );
 
     const prs = (response?.repository as Record<string, unknown> | undefined)?.pullRequests as

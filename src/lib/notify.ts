@@ -599,6 +599,11 @@ function pruneRateLimitBuckets(): void {
   for (const [key] of toRemove) {
     _rateLimitBuckets.delete(key);
   }
+  // Evicting a bucket while it was in overflow would otherwise strand its
+  // cooldown timestamp forever; drop those keys in lockstep.
+  for (const [key] of toRemove) {
+    _overflowAnnouncementTimestamps.delete(key);
+  }
 }
 
 function getRateLimitKey(payload: NotifyPayload): string {

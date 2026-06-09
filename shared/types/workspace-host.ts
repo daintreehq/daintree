@@ -11,13 +11,7 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type {
-  BranchInfo,
-  CreateWorktreeOptions,
-  FileChangeDetail,
-  RepoState,
-  WorktreeChanges,
-} from "./git.js";
+import type { BranchInfo, CreateWorktreeOptions, RepoState, WorktreeChanges } from "./git.js";
 import type {
   Worktree,
   WorktreeMood,
@@ -89,7 +83,6 @@ export interface WorktreeSnapshot {
   gitDir?: string;
   summary?: string;
   modifiedCount?: number;
-  changes?: FileChangeDetail[];
   mood?: WorktreeMood;
   lastActivityTimestamp?: number | null;
   createdAt?: number;

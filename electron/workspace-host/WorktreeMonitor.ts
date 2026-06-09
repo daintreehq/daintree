@@ -3,7 +3,7 @@ import { isAbsolute, join as pathJoin } from "path";
 import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
-import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
+import type { WorktreeChanges } from "../../shared/types/git.js";
 import type {
   Worktree,
   WorktreeMood,
@@ -22,7 +22,6 @@ import {
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
-import { ensureSerializable } from "../../shared/utils/serialization.js";
 import {
   extractIssueNumberSync,
   extractIssueNumber,
@@ -128,7 +127,6 @@ export class WorktreeMonitor {
 
   // State
   private worktreeChanges: WorktreeChanges | null = null;
-  private changes: FileChangeDetail[] | undefined;
   private mood: WorktreeMood = "stable";
   private summary: string | undefined;
   private modifiedCount: number = 0;
@@ -1131,7 +1129,6 @@ export class WorktreeMonitor {
       gitDir: this._gitDir,
       summary: this.summary,
       modifiedCount: this.modifiedCount,
-      changes: this.changes,
       mood: this.mood,
       lastActivityTimestamp: this.lastActivityTimestamp,
       createdAt: this._createdAt,
@@ -1196,7 +1193,7 @@ export class WorktreeMonitor {
       head: this._head || undefined,
     };
 
-    return ensureSerializable(snapshot) as WorktreeSnapshot;
+    return snapshot;
   }
 
   isCircuitBreakerTripped(): boolean {
@@ -1730,7 +1727,6 @@ export class WorktreeMonitor {
 
       this.previousStateHash = currentHash;
       this.worktreeChanges = newChanges;
-      this.changes = newChanges.changes;
       this.modifiedCount = newChanges.changedFileCount;
       this.mood = nextMood;
       this.aiNote = noteData?.content;

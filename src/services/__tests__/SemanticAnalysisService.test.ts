@@ -58,7 +58,9 @@ describe("SemanticAnalysisService", () => {
 
     await semanticAnalysisService.initialize({ onError });
     expect(getAnalysisBufferMock).toHaveBeenCalledTimes(2);
-    expect(MockWorker.instances).toHaveLength(2);
+    // The first initialize bails before constructing a Worker because the
+    // analysis buffer is null; only the second (buffer-present) call spawns one.
+    expect(MockWorker.instances).toHaveLength(1);
   });
 
   it("handles restart failure after worker crash without unhandled rejection", async () => {

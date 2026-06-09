@@ -322,7 +322,7 @@ export class CrashRecoveryService {
       this.rotateBackup();
 
       const snapshot = this.captureSessionSnapshot();
-      resilientAtomicWriteFileSync(this.backupPath, JSON.stringify(snapshot, null, 2), "utf-8");
+      resilientAtomicWriteFileSync(this.backupPath, JSON.stringify(snapshot), "utf-8");
     } catch (err) {
       console.error("[CrashRecovery] Failed to take backup:", err);
     }
