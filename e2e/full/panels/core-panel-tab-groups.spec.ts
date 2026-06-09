@@ -147,8 +147,10 @@ test.describe.serial("Core: Panel Tab Groups", () => {
 
       // Close the second tab (index 1) via its close button
       const secondTab = tabs.nth(1);
+      await secondTab.hover();
       const closeBtn = secondTab.locator('button[aria-label^="Close"]');
-      await closeBtn.click({ force: true });
+      await expect(closeBtn).toBeVisible({ timeout: T_SHORT });
+      await closeBtn.click();
 
       // Tab list should disappear (only 1 tab remaining)
       await expect(tabList).not.toBeVisible({ timeout: T_MEDIUM });

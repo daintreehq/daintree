@@ -422,6 +422,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               <button
                 onClick={handleClose}
                 onKeyDown={handleCloseKeyDown}
+                onPointerDown={handlePointerDown}
                 className={cn(
                   "shrink-0 p-0.5 -mr-1 rounded transition-[opacity,color,background-color,border-color]",
                   "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
