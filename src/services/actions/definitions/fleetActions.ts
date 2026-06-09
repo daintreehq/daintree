@@ -568,16 +568,21 @@ export function registerFleetActions(actions: ActionRegistry): void {
       const projectId = useProjectStore.getState().currentProject?.id ?? null;
       if (!projectId) return;
       try {
-        const current = await projectClient.getSettings(projectId);
-        if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        const existing = current.fleetSavedScopes ?? [];
+        const settingsState = useProjectSettingsStore.getState();
+        if (settingsState.projectId !== projectId || !settingsState.settings) return;
+        const existing = settingsState.settings.fleetSavedScopes ?? [];
         const next = existing.filter((s) => s.id !== id);
         if (next.length === existing.length) return;
-        const nextSettings = { ...current, fleetSavedScopes: next };
-        await projectClient.saveSettings(projectId, nextSettings);
-        if (useProjectStore.getState().currentProject?.id !== projectId) return;
-        if (useProjectSettingsStore.getState().projectId === projectId) {
-          useProjectSettingsStore.getState().setSettings(nextSettings);
+        const previousSettings = settingsState.settings;
+        const nextSettings = { ...previousSettings, fleetSavedScopes: next };
+        settingsState.setSettings(nextSettings);
+        try {
+          await projectClient.saveSettings(projectId, nextSettings);
+        } catch (saveError) {
+          if (useProjectSettingsStore.getState().projectId === projectId) {
+            useProjectSettingsStore.setState({ settings: previousSettings });
+          }
+          throw saveError;
         }
       } catch (error) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

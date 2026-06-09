@@ -804,51 +804,93 @@ export function ReviewHubContent({
     async (filePath: string) => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
+      const snapshot = status;
+      if (snapshot) {
+        const entry = snapshot.unstaged.find((f) => f.path === filePath);
+        if (entry) {
+          setStatus({
+            ...snapshot,
+            unstaged: snapshot.unstaged.filter((f) => f.path !== filePath),
+            staged: [...snapshot.staged, entry],
+          });
+        }
+      }
       try {
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
+        setStatus(snapshot);
         setActionError(formatErrorMessage(err, "Failed to stage file"));
       }
     },
-    [worktreePath, refresh]
+    [worktreePath, refresh, status]
   );
 
   const handleUnstageFile = useCallback(
     async (filePath: string) => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
+      const snapshot = status;
+      if (snapshot) {
+        const entry = snapshot.staged.find((f) => f.path === filePath);
+        if (entry) {
+          setStatus({
+            ...snapshot,
+            staged: snapshot.staged.filter((f) => f.path !== filePath),
+            unstaged: [...snapshot.unstaged, entry],
+          });
+        }
+      }
       try {
         await window.electron.git.unstageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
+        setStatus(snapshot);
         setActionError(formatErrorMessage(err, "Failed to unstage file"));
       }
     },
-    [worktreePath, refresh]
+    [worktreePath, refresh, status]
   );
 
   const handleStageAll = useCallback(async () => {
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
+    const snapshot = status;
+    if (snapshot && snapshot.unstaged.length > 0) {
+      setStatus({
+        ...snapshot,
+        staged: [...snapshot.staged, ...snapshot.unstaged],
+        unstaged: [],
+      });
+    }
     try {
       await window.electron.git.stageAll(worktreePath);
       await refresh();
     } catch (err) {
+      setStatus(snapshot);
       setActionError(formatErrorMessage(err, "Failed to stage all files"));
     }
-  }, [worktreePath, refresh]);
+  }, [worktreePath, refresh, status]);
 
   const handleUnstageAll = useCallback(async () => {
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
+    const snapshot = status;
+    if (snapshot && snapshot.staged.length > 0) {
+      setStatus({
+        ...snapshot,
+        unstaged: [...snapshot.unstaged, ...snapshot.staged],
+        staged: [],
+      });
+    }
     try {
       await window.electron.git.unstageAll(worktreePath);
       await refresh();
     } catch (err) {
+      setStatus(snapshot);
       setActionError(formatErrorMessage(err, "Failed to unstage all files"));
     }
-  }, [worktreePath, refresh]);
+  }, [worktreePath, refresh, status]);
 
   const handleStageSelection = useCallback(async () => {
     if (isBulkStagingRef.current) return;
