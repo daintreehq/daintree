@@ -14,6 +14,8 @@ const config: KnipConfig = {
     "electron/workspace-host-bootstrap.ts",
     "electron/watchdog-host.ts",
     "electron/watchdog-host-bootstrap.ts",
+    "electron/plugin-dev-worker.ts",
+    "electron/plugin-dev-worker-bootstrap.ts",
     "electron/preload.cts",
     "electron/services/voice/openaiVadWorker.ts",
 

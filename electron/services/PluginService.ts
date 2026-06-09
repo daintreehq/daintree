@@ -1,5 +1,6 @@
 // eager-import-allow: reads plugin settings via store.get synchronously during service init
 import fs from "fs/promises";
+import { existsSync } from "node:fs";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
@@ -56,6 +57,8 @@ import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
+import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
+import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -256,7 +259,21 @@ interface LoadedPlugin {
   isBuiltin: boolean;
   /** SHA-256 hex digest of the `.dntr` archive, set by the installer at install time. */
   archiveHash?: string;
+  /**
+   * True when the plugin dir carries a {@link DEV_MARKER_FILENAME} (written by
+   * `daintree-plugin dev`). Dev plugins activate inside a `utilityProcess.fork`
+   * worker that hot-reloads on `dist/index.js` rebuilds (#9304), instead of the
+   * in-process `import()` loader.
+   */
+  devMode?: boolean;
 }
+
+/**
+ * Marker file `daintree-plugin dev` writes at the symlinked plugin dir root to
+ * flag it for the hot-reload worker path (#9304). Presence alone is the signal;
+ * the file's contents are not read.
+ */
+const DEV_MARKER_FILENAME = ".dev-marker";
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 /**
@@ -521,6 +538,17 @@ export class PluginService {
     { manifest: PluginManifest; dir: string; isBuiltin: boolean }
   >();
   private records = new PluginInstalledRecordsStore();
+  /**
+   * Live dev-mode hot-reload workers, keyed by pluginId (#9304). Each holds the
+   * forked `utilityProcess` lifecycle, the message bridge to the real host, and
+   * the host `revoke` to call on unload. Disposed via the {@link cleanupMap}
+   * disposer registered at activation, so `unloadPlugin` tears the worker down
+   * through its normal cascade.
+   */
+  private devWorkers = new Map<
+    string,
+    { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
+  >();
   private pluginsRoot: string;
   /**
    * Optional override for the built-in plugins directory. When unset, the
@@ -965,6 +993,35 @@ export class PluginService {
       }
     }
 
+    // Dev-mode detection (#9304): a `.dev-marker` at the plugin dir root (written
+    // by `daintree-plugin dev`) routes this plugin through the hot-reload worker
+    // instead of the in-process loader. Built-ins are never dev plugins. Persist
+    // `devMode` to the provenance record so `listPlugins()` surfaces the "DEV"
+    // badge (#9290). A dev plugin needs a `main` entry to run in the worker.
+    //
+    // Synchronous `existsSync` on purpose: an `await` here would split the
+    // synchronous critical section between the duplicate-name check above and
+    // the `this.plugins.set` below, letting two concurrent loads of the same
+    // name both slip past dedup.
+    if (!opts.isBuiltin) {
+      const isDev = existsSync(path.join(pluginDir, DEV_MARKER_FILENAME));
+      if (isDev && plugin.resolvedMain) {
+        plugin.devMode = true;
+        this.records.upsertInstalledRecord(manifest.name, { devMode: true });
+      } else {
+        // Clear a stale dev flag if the marker was removed since last launch.
+        const record = this.records.getInstalledRecord(manifest.name);
+        if (record?.devMode) {
+          this.records.upsertInstalledRecord(manifest.name, { devMode: false });
+        }
+        if (isDev && !plugin.resolvedMain) {
+          console.warn(
+            `[PluginService] Plugin "${manifest.name}" has a ${DEV_MARKER_FILENAME} but no resolvable main entry — loading without hot-reload`
+          );
+        }
+      }
+    }
+
     // Index views by bare id so the panels loop can attach `componentPath` in
     // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
     // runtime panel id is `${manifest.name}.${panel.id}`.
@@ -1291,6 +1348,11 @@ export class PluginService {
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin || !plugin.resolvedMain) return;
+    // Dev-mode plugins run inside a hot-reload worker instead of the in-process
+    // import() loader (#9304).
+    if (plugin.devMode) {
+      return this.activateViaDevWorker(pluginId, plugin);
+    }
     try {
       // Bound the dynamic import — a plugin with a hanging top-level await
       // would otherwise pin this promise forever and stall `Promise.allSettled`
@@ -1331,6 +1393,99 @@ export class PluginService {
       }
       console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
       throw err;
+    }
+  }
+
+  /**
+   * Activate a dev-mode plugin inside a hot-reload worker (#9304). The plugin's
+   * code runs in a `utilityProcess.fork` child; the real host (from
+   * {@link createHost}) is bridged to the worker over MessagePort. The worker
+   * watches `dist/index.js` and respawns on every rebuild, so module-scope state
+   * never leaks across reloads (the robust fix for the Vite ESM cache leak).
+   *
+   * The host is left un-revoked for the worker's lifetime — unlike the
+   * in-process path, the worker legitimately re-registers on every reload, and
+   * the activation-window contract is enforced worker-side by its own proxy.
+   *
+   * A failed `activate()` is recorded but does NOT tear the worker down: the
+   * worker keeps watching so the author can fix the error and save to reload.
+   * Only a fork failure (no worker at all) rejects.
+   */
+  private async activateViaDevWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
+    if (!plugin.resolvedMain) return;
+    // A re-activation while a worker is already live is a no-op — the worker
+    // owns its own reload cycle; activatePlugin's idempotency normally prevents
+    // this, but guard defensively against the unload-race re-entry path.
+    if (this.devWorkers.has(pluginId)) return;
+
+    const { host, revoke } = this.createHost(pluginId);
+    const workerHost = new PluginDevWorkerHost({
+      pluginId,
+      pluginDir: plugin.dir,
+      bundlePath: plugin.resolvedMain,
+    });
+    const bridge = new PluginDevWorkerMainBridge({
+      pluginId,
+      host,
+      workerHost,
+      getCapabilities: () => this.plugins.get(pluginId)?.manifest.capabilities ?? [],
+      clearPriorRegistrations: () => {
+        // Drop the prior generation's activate-time registrations before the
+        // reloaded worker re-registers, so a handler the new code stopped
+        // registering doesn't linger. Manifest-level contributions are unchanged
+        // by a code rebuild and stay registered.
+        this.removeHandlers(pluginId);
+        this.unregisterPluginActions(pluginId);
+      },
+    });
+
+    const entry = { workerHost, bridge, revoke };
+    this.devWorkers.set(pluginId, entry);
+
+    // Register the teardown disposer up front so a concurrent unloadPlugin()
+    // during fork/activation tears the worker down through the normal cascade.
+    const cleanup = (): void => {
+      bridge.dispose();
+      workerHost.dispose();
+      revoke();
+      if (this.devWorkers.get(pluginId) === entry) {
+        this.devWorkers.delete(pluginId);
+      }
+    };
+    this.cleanupMap.set(pluginId, cleanup);
+
+    try {
+      await workerHost.start();
+    } catch (err) {
+      // Fork failure — no worker exists, so this is a hard activation failure.
+      cleanup();
+      const loadError = toPluginLoadError(err);
+      if (!plugin.isBuiltin) {
+        this.records.upsertInstalledRecord(pluginId, { loadError });
+      }
+      console.error(`[PluginService] Failed to start dev worker for ${pluginId}:`, err);
+      throw err;
+    }
+
+    // If an unload raced the fork, the cleanup already disposed everything.
+    if (!this.plugins.has(pluginId) || this.devWorkers.get(pluginId) !== entry) {
+      cleanup();
+      return;
+    }
+
+    try {
+      await bridge.waitForActivation();
+      if (!plugin.isBuiltin && !this.pluginsWithLoadTimeErrors.has(pluginId)) {
+        this.records.upsertInstalledRecord(pluginId, { loadError: null });
+      }
+    } catch (err) {
+      // activate() threw inside the worker. Surface it, but keep the worker
+      // watching so an edit + save reloads it — do NOT rethrow or unload.
+      const loadError = toPluginLoadError(err);
+      if (!plugin.isBuiltin) {
+        this.records.upsertInstalledRecord(pluginId, { loadError });
+      }
+      console.error(`[PluginService] Dev plugin "${pluginId}" activate() failed:`, err);
     }
   }
 

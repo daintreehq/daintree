@@ -124,6 +124,47 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
   getPluginMcpSupervisor: () => mockPluginMcpSupervisor,
 }));
 
+// Dev-mode hot-reload worker (#9304) is mocked so activation doesn't fork a
+// real utilityProcess; tests assert routing/lifecycle via the captured spies.
+const devWorkerMock = vi.hoisted(() => {
+  interface DevWorkerOpts {
+    pluginId: string;
+    pluginDir: string;
+    bundlePath: string;
+  }
+  const instances: MockPluginDevWorkerHost[] = [];
+  const bridges: MockPluginDevWorkerMainBridge[] = [];
+  class MockPluginDevWorkerHost {
+    opts: DevWorkerOpts;
+    start = vi.fn(async () => undefined);
+    dispose = vi.fn();
+    isReady = (): boolean => true;
+    on = vi.fn();
+    off = vi.fn();
+    constructor(opts: DevWorkerOpts) {
+      this.opts = opts;
+      instances.push(this);
+    }
+  }
+  class MockPluginDevWorkerMainBridge {
+    deps: unknown;
+    waitForActivation = vi.fn(async () => undefined);
+    dispose = vi.fn();
+    constructor(deps: unknown) {
+      this.deps = deps;
+      bridges.push(this);
+    }
+  }
+  return { instances, bridges, MockPluginDevWorkerHost, MockPluginDevWorkerMainBridge };
+});
+vi.mock("../plugin/PluginDevWorkerHost.js", () => ({
+  PluginDevWorkerHost: devWorkerMock.MockPluginDevWorkerHost,
+  CRASH_WINDOW_MS: 30 * 60 * 1000,
+}));
+vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
+  PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
+}));
+
 import { z } from "zod";
 import { PluginService } from "../PluginService.js";
 import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
@@ -7347,5 +7388,74 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     service.dispose();
     await inFlight;
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("dev-mode hot reload (#9304)", () => {
+  beforeEach(() => {
+    devWorkerMock.instances.length = 0;
+    devWorkerMock.bridges.length = 0;
+  });
+
+  async function writeDevPlugin(name: string, pluginName: string): Promise<void> {
+    const dir = path.join(tmpDir, name);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: pluginName, version: "1.0.0", main: "dist/index.js" })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+    await fs.writeFile(path.join(dir, ".dev-marker"), "");
+  }
+
+  it("flags a .dev-marker plugin as devMode in listPlugins (drives the DEV badge)", async () => {
+    await writeDevPlugin("dev-plugin", "acme.dev");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.dev");
+    expect(info?.devMode).toBe(true);
+  });
+
+  it("routes activation of a dev plugin through the hot-reload worker", async () => {
+    await writeDevPlugin("dev-plugin", "acme.dev");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.dev");
+
+    expect(devWorkerMock.instances).toHaveLength(1);
+    expect(devWorkerMock.instances[0].opts.pluginId).toBe("acme.dev");
+    expect(devWorkerMock.instances[0].opts.bundlePath).toMatch(/dist[/\\]index\.js$/);
+    expect(devWorkerMock.instances[0].start).toHaveBeenCalledTimes(1);
+    expect(devWorkerMock.bridges[0].waitForActivation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fork a worker for a plugin without a marker", async () => {
+    const dir = path.join(tmpDir, "prod-plugin");
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({ name: "acme.prod", version: "1.0.0", main: "dist/index.js" })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), "export function activate() {}");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.prod");
+
+    expect(devWorkerMock.instances).toHaveLength(0);
+    const info = service.listPlugins().find((p) => p.manifest.name === "acme.prod");
+    expect(info?.devMode).toBe(false);
+  });
+
+  it("disposes the worker and bridge when the dev plugin is unloaded", async () => {
+    await writeDevPlugin("dev-plugin", "acme.dev");
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.activatePlugin("acme.dev");
+
+    const worker = devWorkerMock.instances[0];
+    const bridge = devWorkerMock.bridges[0];
+    service.unloadPlugin("acme.dev");
+    expect(bridge.dispose).toHaveBeenCalled();
+    expect(worker.dispose).toHaveBeenCalled();
   });
 });
