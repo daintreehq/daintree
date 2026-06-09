@@ -6,7 +6,6 @@ import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
-import { withViewTransition } from "@/lib/viewTransition";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -328,14 +327,11 @@ export function ActionPalette({
         if (route.mode) setActiveMode(route.mode);
         return;
       }
-      const { paletteId } = route;
       // Atomic hand-off — `openPalette` replaces `activePaletteId` directly,
       // so the action palette unmounts as the target mounts. No `close()`
       // call needed; an explicit close would briefly null the mutex and
       // teardown focus restoration via the palette-to-palette guard.
-      // Wrap in a view transition so the two dialogs crossfade as one surface
-      // (keyed by the shared `view-transition-name` on the dialog root).
-      withViewTransition(() => usePaletteStore.getState().openPalette(paletteId));
+      usePaletteStore.getState().openPalette(route.paletteId);
     },
     [activeMode, query]
   );

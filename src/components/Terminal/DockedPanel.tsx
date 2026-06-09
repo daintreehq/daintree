@@ -38,11 +38,12 @@ export function DockedPanel({
 
   const handleRestore = useCallback(() => {
     const gridElement = document.querySelector('[data-grid-container="true"]');
+    // Move and close inside the transition callback so both land in the
+    // after-snapshot, and only close when the move actually succeeded (it can
+    // no-op for an already-gridded/missing panel) — matching the prior guard.
     withViewTransition(() => {
-      moveTerminalToGrid(terminal.id);
+      if (moveTerminalToGrid(terminal.id)) onPopoverClose?.();
     }, gridElement);
-
-    onPopoverClose?.();
   }, [moveTerminalToGrid, terminal.id, onPopoverClose]);
 
   const handleMinimize = useCallback(() => {

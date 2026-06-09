@@ -35,6 +35,10 @@ export function withViewTransition(
   mutate: () => void,
   scope?: Element | null
 ): ViewTransition | null {
+  // `mutate` runs as the transition's update callback — asynchronously in the
+  // transition path, synchronously in the fallback path — and update callbacks
+  // run in call order, so keep `mutate` idempotent / order-independent. Don't
+  // depend on it having completed synchronously after this returns.
   const doc = typeof document !== "undefined" ? (document as ViewTransitionDocument) : null;
   const start: StartViewTransition | undefined = scope
     ? (scope as ViewTransitionElement).startViewTransition?.bind(scope)
@@ -50,8 +54,9 @@ export function withViewTransition(
     return null;
   }
 
-  // Coalesce with any in-flight transition (e.g. a rapid re-click) so we don't
-  // stack snapshots; the prior mutation has already been applied.
+  // End any in-flight document transition's animation (e.g. a rapid re-click)
+  // so we don't stack overlapping snapshots. This only skips the animation; the
+  // prior update callback still runs, preserving mutation order.
   doc.activeViewTransition?.skipTransition();
   const transition = start(mutate);
   transition.finished.catch(() => {

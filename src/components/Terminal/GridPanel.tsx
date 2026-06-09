@@ -83,21 +83,27 @@ export const GridPanel = React.memo(function GridPanel({
 
   const handleToggleMaximize = useCallback(() => {
     const snapshot = getGridLayoutSnapshot();
-    // Derive a CSS-safe transition name from the panel id (replace non-ident chars).
-    const vtName = `panel-maximize-${terminalId.replace(/[^a-zA-Z0-9-_]/g, "-")}`;
-    const styleId = `vt-panel-maximize-${terminalId.replace(/[^a-zA-Z0-9-_]/g, "-")}`;
+    // Derive a CSS-safe transition name and selector value from the panel id.
+    const safeId = terminalId.replace(/[^a-zA-Z0-9-_]/g, "-");
+    const vtName = `panel-maximize-${safeId}`;
+    const styleId = `vt-panel-maximize-${safeId}`;
+    // Escape only what an attribute-selector value needs (quotes/backslashes);
+    // CSS.escape isn't available under jsdom in unit tests.
+    const selectorId = terminalId.replace(/["\\]/g, "\\$&");
 
     // Inject a scoped rule so [data-panel-id] carries the view-transition-name in
     // both the before-snapshot (current grid cell) and the after-snapshot (maximized
-    // branch) without threading a prop through ContentPanel.
+    // branch) without threading a prop through ContentPanel. Clear any stale rule
+    // from a prior in-flight toggle first so rapid clicks can't pile up <style> nodes.
+    document.getElementById(styleId)?.remove();
     const styleEl = document.createElement("style");
     styleEl.id = styleId;
-    styleEl.textContent = `[data-panel-id="${CSS.escape(terminalId)}"] { view-transition-name: ${vtName}; }`;
+    styleEl.textContent = `[data-panel-id="${selectorId}"] { view-transition-name: ${vtName}; }`;
     document.head.appendChild(styleEl);
 
-    const cleanup = () => {
-      document.getElementById(styleId)?.remove();
-    };
+    // Remove this specific node (not by id) so a later toggle's cleanup can't
+    // tear down a newer rule.
+    const cleanup = () => styleEl.remove();
 
     const transition = withViewTransition(() => {
       toggleMaximize(terminalId, snapshot.gridCols, snapshot.gridItemCount, getPanelGroup);

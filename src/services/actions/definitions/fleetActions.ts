@@ -569,21 +569,41 @@ export function registerFleetActions(actions: ActionRegistry): void {
       if (!projectId) return;
       try {
         const settingsState = useProjectSettingsStore.getState();
-        if (settingsState.projectId !== projectId || !settingsState.settings) return;
-        const existing = settingsState.settings.fleetSavedScopes ?? [];
+        const inMemory = settingsState.projectId === projectId ? settingsState.settings : null;
+        const inMemoryScopes = inMemory?.fleetSavedScopes ?? [];
+        if (inMemory && inMemoryScopes.some((s) => s.id === id)) {
+          // Optimistic path: the scope is present in the hydrated store (the
+          // dropdown that triggers delete is rendered from it). Remove it in
+          // memory first, persist in the background, roll back on failure.
+          const previousSettings = inMemory;
+          const nextSettings = {
+            ...previousSettings,
+            fleetSavedScopes: inMemoryScopes.filter((s) => s.id !== id),
+          };
+          settingsState.setSettings(nextSettings);
+          try {
+            await projectClient.saveSettings(projectId, nextSettings);
+          } catch (saveError) {
+            if (useProjectSettingsStore.getState().projectId === projectId) {
+              useProjectSettingsStore.setState({ settings: previousSettings });
+            }
+            throw saveError;
+          }
+          return;
+        }
+
+        // Cold/stale path: store unhydrated, or out of sync with the scope being
+        // deleted — read authoritative settings from disk, persist, then hydrate
+        // the in-memory store. Mirrors findFleetScope.
+        const current = await projectClient.getSettings(projectId);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        const existing = current.fleetSavedScopes ?? [];
         const next = existing.filter((s) => s.id !== id);
         if (next.length === existing.length) return;
-        const previousSettings = settingsState.settings;
-        const nextSettings = { ...previousSettings, fleetSavedScopes: next };
-        settingsState.setSettings(nextSettings);
-        try {
-          await projectClient.saveSettings(projectId, nextSettings);
-        } catch (saveError) {
-          if (useProjectSettingsStore.getState().projectId === projectId) {
-            useProjectSettingsStore.setState({ settings: previousSettings });
-          }
-          throw saveError;
-        }
+        const nextSettings = { ...current, fleetSavedScopes: next };
+        await projectClient.saveSettings(projectId, nextSettings);
+        if (useProjectStore.getState().currentProject?.id !== projectId) return;
+        useProjectSettingsStore.setState({ projectId, settings: nextSettings });
       } catch (error) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({

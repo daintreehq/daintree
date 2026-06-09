@@ -577,8 +577,14 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
     try {
       await projectClient.update(id, updates);
-      // Reconcile with server-side normalization in the background
+      // Reconcile with server-side normalization in the background. loadProjects
+      // only fills currentProject when it's null, so explicitly re-sync the
+      // active project from the reloaded list to pick up any normalization.
       await get().loadProjects();
+      if (get().currentProject?.id === id) {
+        const reconciled = get().projects.find((p) => p.id === id);
+        if (reconciled) set({ currentProject: reconciled });
+      }
     } catch (error) {
       // Rollback to pre-optimistic state
       set({ projects: prevProjects, currentProject: prevCurrentProject, isLoading: false });
