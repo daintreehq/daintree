@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { GitHubSettingsTab } from "../GitHubSettingsTab";
-import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
+import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 
 vi.mock("@github-renderer/stores/githubConfigStore", () => ({
   useGitHubConfigStore: vi.fn(),

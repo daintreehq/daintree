@@ -2,13 +2,12 @@ import { useState, useEffect, type ComponentType, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Key, Check, AlertCircle, FlaskConical, ExternalLink } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
-// TODO(#8061): replace with plugin settings contribution when forge settings UI lands
-import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
-import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
-import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { logError } from "@/utils/logger";
 

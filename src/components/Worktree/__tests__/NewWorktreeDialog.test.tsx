@@ -217,6 +217,7 @@ vi.mock("@/components/ui/Spinner", () => ({
 
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   getBuiltinView: () => () => <div data-testid="issue-selector" />,
+  useBuiltinView: () => () => <div data-testid="issue-selector" />,
   registerBuiltinView: vi.fn(),
   unregisterBuiltinView: vi.fn(),
 }));
