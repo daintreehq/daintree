@@ -113,8 +113,16 @@ export class PluginDevWorkerHost extends EventEmitter {
   }
 
   /** Fork the worker and begin watching the bundle. Resolves when the worker
-   * posts `ready`; rejects on fork failure or premature exit. */
-  async start(): Promise<void> {
+   * posts `ready`; rejects on fork failure or premature exit.
+   *
+   * Deliberately NOT `async`: an async wrapper would adopt `readyPromise`'s
+   * state in a *fresh* promise that bypasses the `readyPromise.catch` guard
+   * (constructor / {@link startFresh}), so a fire-and-forget caller
+   * (`void host.start()`) would surface an unhandled rejection when dispose or
+   * a premature exit rejects ready. Returning `readyPromise` directly keeps the
+   * guard in effect; `startWorker`/`startWatching` swallow their own errors and
+   * never throw synchronously, so awaiting callers still observe rejections. */
+  start(): Promise<void> {
     this.startWorker();
     this.startWatching();
     return this.readyPromise;
