@@ -6,6 +6,7 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { startRendererSpan } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { withViewTransition } from "@/lib/viewTransition";
 
 export type CrashRecoveryGateState =
   | { status: "loading" }
@@ -123,7 +124,7 @@ export function useCrashRecoveryGate(bootResult: BootResult | null): {
   const resolve = async (action: CrashRecoveryAction) => {
     if (!isElectronAvailable()) return;
     await window.electron.crashRecovery.resolve(action);
-    setState({ status: "none" });
+    withViewTransition(() => setState({ status: "none" }));
   };
 
   const updateConfig = async (patch: Partial<CrashRecoveryConfig>) => {

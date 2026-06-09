@@ -218,6 +218,7 @@ export function AppPaletteDialog({
               : `${UI_PALETTE_EXIT_DURATION}ms`,
             transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
             "--scroll-shadow-color": "var(--color-surface-dialog)",
+            viewTransitionName: "palette-dialog",
           } as CSSProperties
         }
         onClick={(e) => e.stopPropagation()}

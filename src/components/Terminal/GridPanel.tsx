@@ -16,6 +16,7 @@ import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import { getGridLayoutSnapshot } from "./gridLayoutSnapshot";
 import type { AgentState } from "@/types";
+import { withViewTransition } from "@/lib/viewTransition";
 
 export interface GridPanelProps {
   terminalId: string;
@@ -82,7 +83,31 @@ export const GridPanel = React.memo(function GridPanel({
 
   const handleToggleMaximize = useCallback(() => {
     const snapshot = getGridLayoutSnapshot();
-    toggleMaximize(terminalId, snapshot.gridCols, snapshot.gridItemCount, getPanelGroup);
+    // Derive a CSS-safe transition name from the panel id (replace non-ident chars).
+    const vtName = `panel-maximize-${terminalId.replace(/[^a-zA-Z0-9-_]/g, "-")}`;
+    const styleId = `vt-panel-maximize-${terminalId.replace(/[^a-zA-Z0-9-_]/g, "-")}`;
+
+    // Inject a scoped rule so [data-panel-id] carries the view-transition-name in
+    // both the before-snapshot (current grid cell) and the after-snapshot (maximized
+    // branch) without threading a prop through ContentPanel.
+    const styleEl = document.createElement("style");
+    styleEl.id = styleId;
+    styleEl.textContent = `[data-panel-id="${CSS.escape(terminalId)}"] { view-transition-name: ${vtName}; }`;
+    document.head.appendChild(styleEl);
+
+    const cleanup = () => {
+      document.getElementById(styleId)?.remove();
+    };
+
+    const transition = withViewTransition(() => {
+      toggleMaximize(terminalId, snapshot.gridCols, snapshot.gridItemCount, getPanelGroup);
+    });
+
+    if (transition) {
+      transition.finished.then(cleanup, cleanup);
+    } else {
+      cleanup();
+    }
   }, [toggleMaximize, terminalId, getPanelGroup]);
 
   const handleMinimize = useCallback(() => {
