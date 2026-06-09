@@ -7,7 +7,6 @@ import {
 } from "../services/StoreMigrations.js";
 import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
-import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import {
   agentConnectivityService,
   getServiceConnectivityRegistry,
@@ -720,15 +719,11 @@ export async function initGlobalServices(
     },
   });
 
-  // Background token-health polling (30-minute interval + focus/wake
-  // re-checks). The service guards itself with the GitHubAuth.tokenVersion
-  // so a stale probe cannot clobber a freshly-set token.
-  registerDeferredTask({
-    name: "github-token-health",
-    run: () => {
-      gitHubTokenHealthService.start();
-    },
-  });
+  // GitHub token-health probing is no longer started here — the
+  // daintree.github plugin owns it via activate()/dispose() (#9304
+  // follow-up), so a disabled plugin issues no background GitHub probes.
+  // Token STORAGE stays eager above (GitHubAuth.initializeStorage)
+  // regardless of plugin state.
 
   // Background agent provider reachability probes (Claude, Gemini, Codex)
   // and the registry that aggregates GitHub, agents, and MCP into a single

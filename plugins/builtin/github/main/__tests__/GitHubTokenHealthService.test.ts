@@ -289,4 +289,41 @@ describe("GitHubTokenHealthService", () => {
       expect(state.ssoUrl).toBe("https://github.com/orgs/acme/sso?authorization_request=abc123");
     });
   });
+
+  describe("plugin-owned lifecycle gate", () => {
+    beforeEach(() => {
+      GitHubAuth.setToken("ghp_testtoken0000000000000000000000000000000");
+      fetchMock.mockResolvedValue(buildResponse(200));
+    });
+
+    it("skips probes while stopped — even forced focus/wake refreshes", async () => {
+      gitHubTokenHealthService.stop();
+
+      await gitHubTokenHealthService.refresh({ force: true });
+      await gitHubTokenHealthService.refresh();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("probes again after a stop → start cycle (plugin re-enable)", async () => {
+      gitHubTokenHealthService.stop();
+      await gitHubTokenHealthService.refresh({ force: true });
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      gitHubTokenHealthService.start();
+      await gitHubTokenHealthService.refresh({ force: true });
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    it("stop() keeps host transport listeners wired for a later re-enable", async () => {
+      gitHubTokenHealthService.stop();
+      gitHubTokenHealthService.start();
+
+      await gitHubTokenHealthService.refresh({ force: true });
+
+      // The relay listener registered in beforeEach must still observe the
+      // healthy transition — a disable/enable cycle must not orphan it.
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: "healthy" }));
+    });
+  });
 });
