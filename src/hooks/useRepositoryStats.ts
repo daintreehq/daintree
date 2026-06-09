@@ -7,6 +7,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
 
@@ -223,9 +224,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // Worker instances suppress automatic background polling to conserve
   // GitHub GraphQL quota (#10123) — on-demand `refresh()` stays functional.
   const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
+  // With the GitHub plugin disabled the gated stats IPC rejects anyway —
+  // don't poll into a wall of FORGE_PROVIDER_UNAVAILABLE errors.
+  const githubEnabled = useGitHubPluginEnabled();
 
   const polling = usePollingLifecycle({
-    enabled: !isWorkerInstance,
+    enabled: !isWorkerInstance && githubEnabled,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();

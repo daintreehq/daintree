@@ -45,6 +45,7 @@ import {
   RateLimitDetailsPanel,
 } from "./RateLimitDetails";
 import { GitHubStatPill } from "./GitHubStatPill";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 
 // Hover-to-prefetch tuning. 150ms matches the codebase's Tier 1 state-change
 // timing and is long enough to filter mouse traversal across the toolbar pill
@@ -123,6 +124,7 @@ export const GitHubStatsToolbarButton = memo(
       rateLimitKind,
       freshnessLevel,
     } = useRepositoryStats();
+    const githubEnabled = useGitHubPluginEnabled();
 
     useGitHubTokenExpiryNotification(isTokenError);
 
@@ -823,7 +825,9 @@ export const GitHubStatsToolbarButton = memo(
       [stats, isTokenError, openSettingsForToken]
     );
 
-    if (!currentProject) return null;
+    // With the GitHub plugin disabled the pills have no data source — the
+    // toolbar slot collapses entirely rather than showing dead affordances.
+    if (!currentProject || !githubEnabled) return null;
 
     return (
       <ContextMenu>

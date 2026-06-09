@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
 
@@ -39,12 +40,38 @@ export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
     if (initialized) return;
     initialized = true;
 
-    unsubscribe = window.electron.plugin.onProvenanceChanged(() => {
+    // Consumed from many leaf components (toolbar pills, banners, tooltips,
+    // slot hooks), so tolerate a partially-stubbed bridge instead of pushing
+    // a plugin-namespace mock into every component test. Absent bridge ⇒ the
+    // disabled set stays empty (plugins read as enabled), matching prod
+    // optimism before the first snapshot.
+    const plugin = window.electron?.plugin;
+    if (typeof plugin?.onProvenanceChanged !== "function" || typeof plugin.list !== "function") {
+      return;
+    }
+
+    unsubscribe = plugin.onProvenanceChanged(() => {
       void pullDisabledSet(set);
     });
     void pullDisabledSet(set);
   },
 }));
+
+export const GITHUB_PLUGIN_ID = "daintree.github";
+
+/**
+ * Live GitHub plugin enable state for gating GitHub-shaped UI (stats pills,
+ * health cards, token banner, tooltips). Initializes the mirror on first
+ * mount; until the snapshot lands the plugin reads as enabled, matching the
+ * registry-side optimism — main independently rejects gated IPC if it's
+ * actually off.
+ */
+export function useGitHubPluginEnabled(): boolean {
+  const disabledPluginIds = usePluginRuntimeStore((s) => s.disabledPluginIds);
+  const init = usePluginRuntimeStore((s) => s.init);
+  useEffect(() => init(), [init]);
+  return !disabledPluginIds.has(GITHUB_PLUGIN_ID);
+}
 
 /** Test-only: reset the module-level init guard between cases. */
 export function _resetPluginRuntimeStoreForTest(): void {
