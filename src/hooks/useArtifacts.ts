@@ -12,11 +12,6 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
-// Cap the per-terminal artifact store so a long-lived terminal can't grow it
-// without bound (each artifact carries 1–10KB of content). The dock paginates
-// and sorts by recency, so dropping the oldest beyond the cap is invisible.
-const MAX_ARTIFACTS_PER_TERMINAL = 150;
-
 const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
 const refState = { count: 0, unsubscribe: null as (() => void) | null };
@@ -97,7 +92,7 @@ export function __test_simulateArtifactDetected(
     return false;
   }
   const currentArtifacts = artifactStore.get(terminalId) || [];
-  const newArtifacts = [...currentArtifacts, ...artifacts].slice(-MAX_ARTIFACTS_PER_TERMINAL);
+  const newArtifacts = [...currentArtifacts, ...artifacts];
   artifactStore.set(terminalId, newArtifacts);
   notifyListeners(terminalId, newArtifacts);
   return true;
@@ -161,9 +156,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         // process lands on a now-removed terminal (#10023).
         if (removedTerminals.has(payload.terminalId)) return;
         const currentArtifacts = artifactStore.get(payload.terminalId) || [];
-        const newArtifacts = [...currentArtifacts, ...payload.artifacts].slice(
-          -MAX_ARTIFACTS_PER_TERMINAL
-        );
+        const newArtifacts = [...currentArtifacts, ...payload.artifacts];
         artifactStore.set(payload.terminalId, newArtifacts);
 
         notifyListeners(payload.terminalId, newArtifacts);

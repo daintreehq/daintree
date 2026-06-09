@@ -109,9 +109,7 @@ export const createTrashActions = (
     scheduleTrashExpiry(id, expiresAt);
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      // Trashed PTY is dead — demote to BACKGROUND so deferred addons are
-      // disposed and the WebGL context is released once the panel hides.
-      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       return;
     }
   };
@@ -219,9 +217,7 @@ export const createTrashActions = (
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        // Trashed PTY is dead — demote to BACKGROUND so deferred addons are
-        // disposed and the WebGL context is released once the panel hides.
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     }
   };
@@ -423,9 +419,7 @@ export const createTrashActions = (
       scheduleTrashExpiry(id, expiresAt);
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        // Trashed PTY is dead — demote to BACKGROUND so deferred addons are
-        // disposed and the WebGL context is released once the panel hides.
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     },
 

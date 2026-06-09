@@ -13,12 +13,6 @@ let batchTimeout: NodeJS.Timeout | null = null;
 const BATCH_WINDOW_MS = 50;
 const MAX_BATCH_SIZE = 200;
 
-// Ring capacity while the inspector is open vs. idle. The buffer live-streams
-// new events via onRecord, so a small idle ring is enough; we raise the cap to
-// retain a fuller snapshot only while someone is watching.
-const SUBSCRIBED_BUFFER_SIZE = 1000;
-const IDLE_BUFFER_SIZE = 100;
-
 export function registerEventInspectorHandlers(deps: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
     name: "eventInspector",
@@ -83,7 +77,6 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
       eventBufferUnsubscribe();
       eventBufferUnsubscribe = null;
-      deps.eventBuffer?.setMaxSize(IDLE_BUFFER_SIZE);
     }
   };
 
@@ -107,7 +100,6 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
       if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
         eventBufferUnsubscribe();
         eventBufferUnsubscribe = null;
-        deps.eventBuffer?.setMaxSize(IDLE_BUFFER_SIZE);
       }
     };
 
@@ -115,8 +107,6 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     sender.once("destroyed", destroyListener);
 
     if (!eventBufferUnsubscribe && deps.eventBuffer) {
-      // First subscriber: retain a fuller snapshot while the inspector is open.
-      deps.eventBuffer.setMaxSize(SUBSCRIBED_BUFFER_SIZE);
       eventBufferUnsubscribe = deps.eventBuffer.onRecord(queueEvent);
     }
   };
@@ -135,7 +125,6 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
       eventBufferUnsubscribe();
       eventBufferUnsubscribe = null;
-      deps.eventBuffer?.setMaxSize(IDLE_BUFFER_SIZE);
     }
   };
   ipcMain.on(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, handleUnsubscribe);

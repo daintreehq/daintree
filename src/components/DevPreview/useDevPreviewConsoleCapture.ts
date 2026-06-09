@@ -133,17 +133,6 @@ export function useDevPreviewConsoleCapture(
     };
   }, [paneId, webviewElement, isWebviewReady, isEvicted]);
 
-  // Release the buffered rows while the pane is evicted. Capture is already
-  // gated off above when evicted, so the 500-row buffer would otherwise sit in
-  // the store referencing now-dead CDP objectIds for the duration of eviction.
-  // Capture restarts fresh on de-eviction, so nothing is lost beyond the
-  // eviction event itself.
-  useEffect(() => {
-    if (isEvicted) {
-      useConsoleCaptureStore.getState().clearMessages(paneId);
-    }
-  }, [paneId, isEvicted]);
-
   // Drop this pane's buffered rows + counts only when the panel is gone for
   // good. Unmount alone is not deletion: a DevPreview panel in a grid tab
   // group fully unmounts when another tab is activated, and we must keep its

@@ -21,7 +21,6 @@ describe("event inspector subscription", () => {
     getFiltered: Mock;
     clear: Mock;
     onRecord: Mock;
-    setMaxSize: Mock;
   };
   let onRecordCallback: ((record: EventRecord) => void) | null = null;
   let onRecordUnsubscribe: Mock;
@@ -41,7 +40,6 @@ describe("event inspector subscription", () => {
         onRecordCallback = callback;
         return onRecordUnsubscribe;
       }),
-      setMaxSize: vi.fn(),
     };
 
     const deps = {

@@ -36,17 +36,6 @@ export class EventBuffer {
     this.maxSize = maxSize;
   }
 
-  // Resize the ring at runtime. The inspector raises the cap while subscribed
-  // (it live-streams new events via onRecord, so the snapshot only needs recent
-  // history) and lowers it again on the last unsubscribe to reclaim retained
-  // deep clones. Lowering trims the oldest records in place.
-  public setMaxSize(maxSize: number): void {
-    this.maxSize = maxSize;
-    if (this.buffer.length > maxSize) {
-      this.buffer.splice(0, this.buffer.length - maxSize);
-    }
-  }
-
   public onRecord(callback: (record: EventRecord) => void): () => void {
     this.onRecordCallbacks.push(callback);
     return () => {

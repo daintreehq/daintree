@@ -345,7 +345,6 @@ export async function getWorktreeChangesWithStats(
 
   const fetchPromise = (async () => {
     const MAX_FILES_FOR_NUMSTAT = 100;
-    const MAX_TRACKED_CHANGES = 500;
     try {
       await fs.access(cwd);
     } catch (accessError) {
@@ -679,32 +678,17 @@ export async function getWorktreeChangesWithStats(
         })
       );
 
-      const allChanges = Array.from(changesMap.values());
-      const totalInsertions = allChanges.reduce((sum, change) => sum + (change.insertions ?? 0), 0);
-      const totalDeletions = allChanges.reduce((sum, change) => sum + (change.deletions ?? 0), 0);
+      const changes = Array.from(changesMap.values());
+      const totalInsertions = changes.reduce((sum, change) => sum + (change.insertions ?? 0), 0);
+      const totalDeletions = changes.reduce((sum, change) => sum + (change.deletions ?? 0), 0);
       const latestFileMtime = mtimes.length > 0 ? Math.max(...mtimes) : 0;
-
-      // True total is preserved in `changedFileCount`; only the materialized
-      // entries array is capped to bound transport/memory cost.
-      const changedFileCount = allChanges.length;
-      if (changedFileCount > MAX_TRACKED_CHANGES) {
-        logWarn("Large number of changed files; limiting tracked entries to first 500", {
-          cwd,
-          totalChanged: changedFileCount,
-          limitedTo: MAX_TRACKED_CHANGES,
-        });
-      }
-      const changes =
-        changedFileCount > MAX_TRACKED_CHANGES
-          ? allChanges.slice(0, MAX_TRACKED_CHANGES)
-          : allChanges;
 
       const tracking = status.tracking && status.tracking.length > 0 ? status.tracking : null;
       const result: WorktreeChanges = {
         worktreeId: realpathSync(cwd),
         rootPath: gitRoot,
         changes,
-        changedFileCount,
+        changedFileCount: changes.length,
         totalInsertions,
         totalDeletions,
         insertions: totalInsertions,
