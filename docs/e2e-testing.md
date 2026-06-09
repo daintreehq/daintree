@@ -18,13 +18,14 @@ npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-plugins
 npm run test:e2e:online            # Claude/OpenCode-dependent online tests
 npm run test:e2e:nightly           # Soak / memory-leak nightly tests
+npm run test:e2e:demo              # Demo-engine specs (workers=1, screencast capture)
 npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single file
 PWDEBUG=1 npx playwright test --project=core                         # Debug mode
 ```
 
 ## Test Suites
 
-Tests are split into eleven Playwright projects:
+Tests are split into twelve Playwright projects:
 
 - **core** — Lightweight deterministic release-gate smoke (5 specs). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — PTY mechanics, scrollback, search, layout, recipes, output flood, context injection, fleet broadcast.
@@ -37,6 +38,7 @@ Tests are split into eleven Playwright projects:
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak detection (workers=1, no retries).
 - **screenshots** — Marketing screenshot pipeline. Run on demand via `screenshots.yml`, not part of the PR/release gates.
+- **demo** — Demo-engine specs that exercise the in-app demo automation API (`window.electron.demo`) — screencast recording and scripted terminal input (workers=1, no retries). Runs nightly and on demand via the `demo` suite in `e2e.yml`; not a release gate. The 4K dimension assertion in `demo-reel` is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
 
 ## Configuration
 
@@ -57,6 +59,7 @@ Tests are split into eleven Playwright projects:
 | online          | `./e2e/online`          | 1            | 1-2     |
 | nightly         | `./e2e/nightly`         | 0            | 1       |
 | screenshots     | `./e2e/screenshots`     | 0            | 1-2     |
+| demo            | `./e2e/demo`            | 0            | 1       |
 
 ## Directory Structure
 
@@ -80,8 +83,14 @@ e2e/
 │   └── resilience/      # errors, IPC, crashes, races, perf
 ├── online/              # agent-integration specs (release gate)
 │   └── *.spec.ts
-└── nightly/             # 2 memory-leak specs (nightly only)
-    └── nightly-*.spec.ts
+├── nightly/             # 2 memory-leak specs (nightly only)
+│   └── nightly-*.spec.ts
+├── screenshots/         # marketing screenshot pipeline (on demand)
+│   ├── store-reel.spec.ts
+│   └── theme-review.spec.ts
+└── demo/                # demo-engine specs (nightly + on demand)
+    ├── demo-reel.spec.ts
+    └── demo-terminal-input.spec.ts
 ```
 
 ## Shared Helpers
@@ -149,7 +158,7 @@ Components have `data-testid` and `data-worktree-branch` attributes for reliable
 
 ### `e2e.yml` (unified runner)
 
-A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `online`, or `nightly`.
+A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `online`, `nightly`, or `demo`.
 
 - **Triggers:** workflow_dispatch, workflow_call
 - **Matrix:** macOS-14, ubuntu-22.04, windows-latest (selectable via `platform`)

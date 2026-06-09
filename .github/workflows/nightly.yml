@@ -486,11 +486,25 @@ jobs:
       json_report: true
       enable_blob_report: true
 
+  # Demo-engine specs (workers=1, 4K screencast capture). Non-windows only —
+  # the 4K dimension assertion is skipped on hosted CI, so macOS is the primary
+  # target. Not a release gate: it reports into the nightly issue via notify,
+  # and deliberately does NOT block `publish` (a 30min capture job must not gate
+  # binary uploads).
+  e2e-demo:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e.yml
+    with:
+      suite: demo
+      platform: ${{ inputs.platform || 'non-windows' }}
+      json_report: true
+      enable_blob_report: true
+
   # Merges Playwright blob reports from every nightly e2e shard into a single
   # unified HTML report. Runs independently of publish — a broken merge must
   # not block nightly binary publishing.
   merge-playwright-reports:
-    needs: [e2e-full, e2e-nightly]
+    needs: [e2e-full, e2e-nightly, e2e-demo]
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -684,6 +698,7 @@ jobs:
         e2e-full,
         e2e-online,
         e2e-nightly,
+        e2e-demo,
         publish,
       ]
     runs-on: ubuntu-22.04
@@ -844,6 +859,7 @@ jobs:
         e2e-full,
         e2e-online,
         e2e-nightly,
+        e2e-demo,
         publish,
       ]
     runs-on: ubuntu-22.04
