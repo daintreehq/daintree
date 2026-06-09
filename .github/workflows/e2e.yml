@@ -672,6 +672,7 @@ jobs:
             test-results/
             playwright-report/
             daintree-e2e-artifacts/
+            artifacts/demo/
           retention-days: 7
           if-no-files-found: ignore
 

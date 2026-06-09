@@ -327,9 +327,11 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
         // Hosted CI runners cap the virtual display below 4K, so the exact
         // preset dimensions are unreachable there. Keep the strict pin (the
         // #10152 regression guard) for local runs and self-hosted runners that
-        // opt in via DAINTREE_DEMO_STRICT_DIMS; elsewhere assert only that a
-        // non-degenerate frame was recorded.
-        if (!process.env.CI || process.env.DAINTREE_DEMO_STRICT_DIMS) {
+        // opt in with DAINTREE_DEMO_STRICT_DIMS=1; elsewhere assert only that a
+        // non-degenerate frame was recorded. The opt-in checks for "1"
+        // explicitly so DAINTREE_DEMO_STRICT_DIMS=0 reads as off, not on.
+        const strictDims = process.env.DAINTREE_DEMO_STRICT_DIMS === "1";
+        if (!process.env.CI || strictDims) {
           expect(dims.width).toBe(CAPTURE_W);
           expect(dims.height).toBe(CAPTURE_H);
         } else {
