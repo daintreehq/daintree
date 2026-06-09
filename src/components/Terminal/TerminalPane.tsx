@@ -1088,19 +1088,23 @@ function TerminalPaneComponent({
 
   // The "Send to agent" palette has nothing to offer when this is the only
   // eligible PTY pane — hide it rather than render a button that no-ops.
-  const hasAgentTargets = usePanelStore((s) =>
-    s.panelIds.some((tid) => {
-      const t = s.panelsById[tid];
-      return (
-        !!t &&
-        t.id !== id &&
-        t.location !== "trash" &&
-        t.location !== "background" &&
-        t.location !== "overlay" &&
-        (t.kind ? panelKindHasPty(t.kind) : true) &&
-        (!isPtyPanel(t) || t.hasPty !== false)
-      );
-    })
+  // Short-circuit on agentState: the result only gates the completion
+  // banner's button, so idle/working panes skip the O(N) scan per store write.
+  const hasAgentTargets = usePanelStore(
+    (s) =>
+      agentState === "completed" &&
+      s.panelIds.some((tid) => {
+        const t = s.panelsById[tid];
+        return (
+          !!t &&
+          t.id !== id &&
+          t.location !== "trash" &&
+          t.location !== "background" &&
+          t.location !== "overlay" &&
+          (t.kind ? panelKindHasPty(t.kind) : true) &&
+          (!isPtyPanel(t) || t.hasPty !== false)
+        );
+      })
   );
 
   const handleSendToAssistant = useCallback(() => {

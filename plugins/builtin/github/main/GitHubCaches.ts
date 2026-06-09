@@ -191,9 +191,11 @@ export interface PRRequiredStatusEntry {
 export const MAX_REVIEW_THREAD_PAGES = 5;
 export const REVIEW_THREADS_PER_PAGE = 100;
 
+export const REVIEW_THREADS_TTL_MS = 300000;
+
 export const reviewThreadsCache = new Cache<string, Record<string, number>>({
   maxSize: 200,
-  defaultTTL: 300000,
+  defaultTTL: REVIEW_THREADS_TTL_MS,
 });
 
 export const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({

@@ -144,12 +144,13 @@ async function pollBuffer(): Promise<void> {
         terminalPackets.push(packet.data);
       }
 
+      // Join chunks so extraction, trimming, and hashing run once per terminal
+      // per poll round instead of once per chunk — and so ANSI sequences split
+      // across chunk boundaries are stripped intact.
       await Promise.all(
-        Array.from(packetsByTerminal.entries()).map(async ([terminalId, dataChunks]) => {
-          for (const data of dataChunks) {
-            await processPacket(terminalId, data);
-          }
-        })
+        Array.from(packetsByTerminal.entries()).map(([terminalId, dataChunks]) =>
+          processPacket(terminalId, dataChunks.length === 1 ? dataChunks[0]! : dataChunks.join(""))
+        )
       );
     }
   } catch (error) {

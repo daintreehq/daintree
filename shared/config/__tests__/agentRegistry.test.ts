@@ -13,6 +13,7 @@ import {
   setAgentPresets,
   getAssistantSupportedAgentIds,
   getAssistantWiredAgentIds,
+  invalidateEffectiveRegistryCache,
   AGENT_REGISTRY,
   type AgentConfig,
   type AssistantSupports,
@@ -274,12 +275,14 @@ describe("agentRegistry", () => {
         tier: "experimental",
       };
       AGENT_REGISTRY.codex = { ...original, supports: experimentalSupports } as AgentConfig;
+      invalidateEffectiveRegistryCache();
       try {
         const ids = getAssistantSupportedAgentIds();
         expect(ids).not.toContain("codex");
         expect(ids).toContain("claude");
       } finally {
         AGENT_REGISTRY.codex = original;
+        invalidateEffectiveRegistryCache();
       }
     });
   });

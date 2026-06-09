@@ -243,7 +243,7 @@ function PanelHeaderComponent({
       : undefined;
 
   // Get background activity stats for Zen Mode header
-  const { activeCount, workingCount } = useBackgroundPanelStats(id);
+  const { activeCount, workingCount } = useBackgroundPanelStats(id, isMaximized);
 
   // Check if panel has dangerous launch flags
   const hasDangerousFlags = (() => {
@@ -283,9 +283,10 @@ function PanelHeaderComponent({
     duplicateShortcut
   );
 
-  const terminal = usePanelStore((state) => state.panelsById[id]);
-  const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
-  const isInputLocked = terminalPty?.isInputLocked ?? false;
+  const isInputLocked = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
+  });
   const hasPty = panelKindHasPty(kind);
   const isHibernated = useIsHibernated(id);
 
@@ -350,16 +351,20 @@ function PanelHeaderComponent({
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
       unwatchPanel(id);
-    } else if (
-      terminalPty?.agentState === "completed" ||
-      terminalPty?.agentState === "waiting" ||
-      terminalPty?.agentState === "exited"
+      return;
+    }
+    const panel = usePanelStore.getState().panelsById[id];
+    const panelPty = panel && isPtyPanel(panel) ? panel : undefined;
+    if (
+      panelPty?.agentState === "completed" ||
+      panelPty?.agentState === "waiting" ||
+      panelPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, terminal?.title ?? id, terminalPty.agentState);
+      fireWatchNotification(id, panel?.title ?? id, panelPty.agentState);
     } else {
       watchPanel(id);
     }
-  }, [id, isWatched, unwatchPanel, watchPanel, terminal, terminalPty]);
+  }, [id, isWatched, unwatchPanel, watchPanel]);
 
   // Bump a generation counter on each false→true transition of
   // `isFleetPreviewed` so the enter-cue overlay (keyed by this counter)

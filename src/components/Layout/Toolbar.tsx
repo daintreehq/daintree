@@ -27,7 +27,7 @@ import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
-import { AgentTrayButton } from "./AgentTrayButton";
+import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -73,12 +73,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import {
-  getDominantAgentState,
-  agentStateDotColor,
-} from "@/components/Worktree/AgentStatusIndicator";
-import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
-import { isPtyPanel } from "@shared/types/panel";
+import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { notify } from "@/lib/notify";
 import type { CliAvailability, AgentSettings, AgentState, RepositoryStats } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
@@ -125,16 +120,6 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 // before reverting to its idle state. Long enough to register the success,
 // short enough that re-clicks don't feel stuck.
 const COPY_TREE_FEEDBACK_RESET_MS = 2000;
-
-// Agent states that count as an "active session" when deriving the per-agent
-// dominant state for the overflow menu dot. Mirrors AgentButton's own set so
-// the dot shown in overflow matches what the visible agent button would show.
-const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
-  "idle",
-  "working",
-  "waiting",
-  "directing",
-]);
 
 function GitHubStatsPlaceholder() {
   return (
@@ -491,8 +476,14 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
+  // Per-agent dominant state across panels in the active worktree, used to draw
+  // the agent-state dot on overflow menu items. Shares AgentTrayButton's
+  // derivation so the overflow dot matches the visible agent button; computed
+  // inside useShallow so agent ticks that don't change a dominant state don't
+  // re-render the whole toolbar (issue #7451 pattern).
+  const agentDominantStates = usePanelStore(
+    useShallow((s) => deriveAgentDominantStates(s.panelsById, s.panelIds, activeWorktreeId))
+  );
 
   useEffect(() => {
     loadProjects();
@@ -668,36 +659,6 @@ export function Toolbar({
       setIsCopyingTree(false);
     }
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
-
-  // Per-agent dominant state across panels in the active worktree, used to draw
-  // the agent-state dot on overflow menu items. Mirrors the derivation in
-  // AgentTrayButton so the overflow dot matches the visible agent button.
-  const agentDominantStates = useMemo(() => {
-    const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
-    for (const pid of panelIds) {
-      const p = panelsById[pid];
-      if (
-        !p ||
-        !isPtyPanel(p) ||
-        p.location === "trash" ||
-        p.location === "background" ||
-        p.location === "overlay"
-      )
-        continue;
-      const agentId = getRuntimeOrBootAgentId(p);
-      if (!agentId) continue;
-      if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
-      if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      const arr = statesPerAgent.get(agentId) ?? [];
-      arr.push(p.agentState);
-      statesPerAgent.set(agentId, arr);
-    }
-    const result = new Map<string, AgentState | null>();
-    for (const [agentId, states] of statesPerAgent) {
-      result.set(agentId, getDominantAgentState(states));
-    }
-    return result;
-  }, [panelsById, panelIds, activeWorktreeId]);
 
   const getToolbarItems = useCallback(
     () =>

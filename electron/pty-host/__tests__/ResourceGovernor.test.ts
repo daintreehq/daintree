@@ -34,7 +34,7 @@ function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGove
   return {
     getTerminalIds: vi.fn().mockReturnValue([]),
     getPauseCoordinator: vi.fn().mockReturnValue(undefined),
-    getTerminalPids: vi.fn().mockReturnValue([]),
+    getTerminalCount: vi.fn().mockReturnValue(0),
     incrementPauseCount: vi.fn(),
     sendEvent: vi.fn(),
     emitTerminalStatus: vi.fn(),
@@ -100,7 +100,7 @@ describe("ResourceGovernor", () => {
     governor.start();
 
     vi.advanceTimersByTime(2000);
-    expect(deps.getTerminalPids).toHaveBeenCalled();
+    expect(deps.getTerminalCount).toHaveBeenCalled();
     expect(mockCheckForLeaks).toHaveBeenCalled();
 
     governor.dispose();
@@ -118,10 +118,7 @@ describe("ResourceGovernor", () => {
     });
 
     const deps = createMockDeps({
-      getTerminalPids: vi.fn().mockReturnValue([
-        { id: "t1", pid: 100 },
-        { id: "t2", pid: 200 },
-      ]),
+      getTerminalCount: vi.fn().mockReturnValue(2),
     });
 
     const governor = new ResourceGovernor(deps);

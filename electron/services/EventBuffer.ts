@@ -10,6 +10,8 @@ import { safeStringify } from "../utils/safeStringify.js";
 
 export type { EventRecord };
 
+const SENSITIVE_EVENT_TYPES = new Set<keyof DaintreeEventMap>(["agent:output"]);
+
 export interface FilterOptions {
   types?: Array<keyof DaintreeEventMap>;
   category?: EventCategory;
@@ -54,9 +56,7 @@ export class EventBuffer {
   }
 
   private sanitizePayload(eventType: keyof DaintreeEventMap, payload: any): any {
-    const sensitiveEventTypes: Array<keyof DaintreeEventMap> = ["agent:output"];
-
-    if (!sensitiveEventTypes.includes(eventType)) {
+    if (!SENSITIVE_EVENT_TYPES.has(eventType)) {
       return payload;
     }
 

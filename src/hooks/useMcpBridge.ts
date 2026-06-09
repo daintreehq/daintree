@@ -93,7 +93,7 @@ export function useMcpBridge(): void {
           let effectiveConfirmed = confirmed;
 
           if (effectiveConfirmed !== true) {
-            const definition = actionService.get(actionId as ActionId);
+            const definition = actionService.getDispatchMeta(actionId as ActionId);
             if (definition?.danger === "confirm") {
               inFlightConfirms.add(requestId);
               let decision: McpConfirmationDecision;

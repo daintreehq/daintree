@@ -110,11 +110,15 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
       const existing = state.messages.get(paneId);
       if (!existing || existing.length === 0) return state;
 
-      const updated = existing.map((msg) =>
-        msg.navigationGeneration < navigationGeneration && !msg.isStale
-          ? { ...msg, isStale: true }
-          : msg
-      );
+      let changed = false;
+      const updated = existing.map((msg) => {
+        if (msg.navigationGeneration < navigationGeneration && !msg.isStale) {
+          changed = true;
+          return { ...msg, isStale: true };
+        }
+        return msg;
+      });
+      if (!changed) return state;
       const next = new Map(state.messages);
       next.set(paneId, updated);
       return { messages: next };

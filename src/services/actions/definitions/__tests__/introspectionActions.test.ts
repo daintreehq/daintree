@@ -451,17 +451,28 @@ describe("actions.search", () => {
   });
 
   it("returns matching entries without inputSchema or outputSchema", async () => {
-    vi.mocked(actionService.list).mockReturnValueOnce([
-      makeEntry({
-        id: "git.commit",
-        title: "Commit",
-        description: "Commit staged changes",
-        category: "git",
-        inputSchema: { type: "object", properties: { message: { type: "string" } } },
-        outputSchema: { type: "object" },
-      }),
-      makeEntry({ id: "worktree.list", title: "List Worktrees", category: "worktree" }),
-    ]);
+    // Mirror the real list() contract: schemas are present only when the
+    // caller doesn't opt out — so the assertions below fail if actions.search
+    // stops passing { includeSchemas: false }.
+    vi.mocked(actionService.list).mockImplementationOnce((_ctx, options) => {
+      const entries = [
+        makeEntry({
+          id: "git.commit",
+          title: "Commit",
+          description: "Commit staged changes",
+          category: "git",
+          inputSchema: { type: "object", properties: { message: { type: "string" } } },
+          outputSchema: { type: "object" },
+        }),
+        makeEntry({ id: "worktree.list", title: "List Worktrees", category: "worktree" }),
+      ];
+      if (options?.includeSchemas === false) {
+        return entries.map(
+          ({ inputSchema: _i, outputSchema: _o, ...rest }) => rest as ActionManifestEntry
+        );
+      }
+      return entries;
+    });
 
     const def = registry.get("actions.search")!();
     const result = (await def.run({ query: "commit" } as never, stubCtx)) as {
@@ -766,10 +777,18 @@ describe("search → getSchema roundtrip", () => {
       mcpVisibility: "discoverable",
       inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
     });
-    vi.mocked(actionService.list).mockReturnValueOnce([
-      makeEntry({ id: "actions.list", title: "List Actions", mcpVisibility: "core" }),
-      pushEntry,
-    ]);
+    vi.mocked(actionService.list).mockImplementationOnce((_ctx, options) => {
+      const entries = [
+        makeEntry({ id: "actions.list", title: "List Actions", mcpVisibility: "core" }),
+        pushEntry,
+      ];
+      if (options?.includeSchemas === false) {
+        return entries.map(
+          ({ inputSchema: _i, outputSchema: _o, ...rest }) => rest as ActionManifestEntry
+        );
+      }
+      return entries;
+    });
     vi.mocked(actionService.get).mockReturnValueOnce(pushEntry);
 
     // Step 2: search finds the discoverable tool

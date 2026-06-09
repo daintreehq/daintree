@@ -2,10 +2,6 @@ import type { ManagedTerminal } from "./types";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
-// Reused across writes — TextEncoder holds no state between encode() calls, so
-// a single module-level instance avoids re-allocating one per write.
-const utf8Encoder = new TextEncoder();
-
 /**
  * UTF-8 byte length of a string chunk — the unit the pty-host's IPC
  * flow-control ledger is denominated in (the host charges
@@ -14,9 +10,33 @@ const utf8Encoder = new TextEncoder();
  * under-reports every non-ASCII char — box-drawing/CJK are 3 UTF-8 bytes vs 1
  * code unit, emoji are 4 vs 2 — so the host queue drifts toward its high
  * watermark and triggers spurious backpressure pauses (#9893).
+ *
+ * Counted without TextEncoder.encode(): encoding allocates a throwaway
+ * Uint8Array up to ~3x the chunk length per write on the hot path. Matches
+ * Buffer.byteLength/TextEncoder semantics exactly — lone surrogates count as
+ * 3 bytes (U+FFFD), valid pairs as 4.
  */
 function utf8ByteLength(data: string): number {
-  return utf8Encoder.encode(data).byteLength;
+  let bytes = 0;
+  for (let i = 0; i < data.length; i++) {
+    const code = data.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      i + 1 < data.length &&
+      (data.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+    ) {
+      bytes += 4;
+      i++;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 export interface WriteControllerDeps {

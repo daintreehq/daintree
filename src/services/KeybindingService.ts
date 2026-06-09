@@ -275,6 +275,18 @@ class KeybindingService {
   }
 
   matchesEvent(event: KeyboardEvent, combo: string): boolean {
+    return this.matchesEventInternal(event, combo, isMac(), normalizeKeyForBinding(event));
+  }
+
+  // resolveKeybinding iterates every registered binding per keydown — the
+  // platform check and event-key normalization are per-event invariants, so
+  // callers hoist them out of the loop and pass them in.
+  private matchesEventInternal(
+    event: KeyboardEvent,
+    combo: string,
+    mac: boolean,
+    eventKey: string
+  ): boolean {
     // Chord sequences (e.g., "Cmd+K Cmd+K") should not be matched here.
     // They are handled by findMatchingAction's chord state machine.
     if (combo.includes(" ")) {
@@ -286,7 +298,6 @@ class KeybindingService {
     // Handle Cmd vs Ctrl based on platform
     // On macOS, Cmd (metaKey) is the primary modifier
     // On Windows/Linux, Ctrl is the primary modifier
-    const mac = isMac();
     const hasCmd = mac ? event.metaKey : event.ctrlKey;
 
     // AltGr on Windows synthesizes ctrlKey+altKey on the keyboard event. Reject
@@ -311,10 +322,8 @@ class KeybindingService {
     // On macOS, reject unexpected Ctrl when not explicitly required
     if (mac && !parsed.ctrl && event.ctrlKey) return false;
 
-    // Check key - use normalizeKeyForBinding to handle Alt-modified characters
-    const eventKey = normalizeKeyForBinding(event);
-
-    // Try exact match on the normalized key
+    // Check key - eventKey comes from normalizeKeyForBinding (handles
+    // Alt-modified characters). Try exact match on the normalized key.
     if (eventKey.toLowerCase() === parsed.key.toLowerCase()) return true;
 
     return false;
@@ -395,6 +404,8 @@ class KeybindingService {
     let foundChordPrefix = false;
 
     const currentCombo = this.eventToCombo(event);
+    const mac = isMac();
+    const eventKey = normalizeKeyForBinding(event);
 
     // When a chord is pending, prioritize chord completion over standalone shortcuts
     let chordCompletionMatch: RegisteredKeybindingConfig | undefined;
@@ -421,8 +432,8 @@ class KeybindingService {
           // order produced by eventToCombo. matchesEvent uses parseCombo internally.
           if (this.pendingChord) {
             if (
-              combosFieldsEqual(this.pendingChord, chordParts[0]!) &&
-              this.matchesEvent(event, chordParts[1]!)
+              combosFieldsEqual(this.pendingChord, chordParts[0]!, mac) &&
+              this.matchesEventInternal(event, chordParts[1]!, mac, eventKey)
             ) {
               if (binding.priority > chordCompletionPriority) {
                 chordCompletionMatch = binding;
@@ -431,13 +442,16 @@ class KeybindingService {
             }
           } else {
             // Check if this is the start of a chord
-            if (this.matchesEvent(event, chordParts[0]!)) {
+            if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey)) {
               foundChordPrefix = true;
             }
           }
         } else {
           // Regular non-chord binding - only consider if no chord is pending
-          if (!this.pendingChord && this.matchesEvent(event, effectiveCombo)) {
+          if (
+            !this.pendingChord &&
+            this.matchesEventInternal(event, effectiveCombo, mac, eventKey)
+          ) {
             if (binding.priority > bestPriority) {
               bestMatch = binding;
               bestPriority = binding.priority;

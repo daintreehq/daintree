@@ -43,12 +43,21 @@ describe("appendToAnalysisBuffer", () => {
     expect(appendToAnalysisBuffer("abc", "def")).toBe("abcdef");
   });
 
-  it("normalizes CRLF to LF", () => {
-    expect(appendToAnalysisBuffer("a\r\nb", "c\r\nd")).toBe("a\nb" + "c\nd");
+  it("normalizes CRLF in the incoming chunk to LF", () => {
+    expect(appendToAnalysisBuffer("a\nb", "c\r\nd")).toBe("a\nb" + "c\nd");
   });
 
   it("normalizes a CRLF pair split across the chunk boundary", () => {
     expect(appendToAnalysisBuffer("line\r", "\nnext")).toBe("line\nnext");
+  });
+
+  it("collapses a CR run preceding LF, including across the boundary", () => {
+    expect(appendToAnalysisBuffer("", "a\r\r\nb")).toBe("a\nb");
+    expect(appendToAnalysisBuffer("line\r\r", "\nnext")).toBe("line\nnext");
+  });
+
+  it("preserves a lone CR not followed by LF", () => {
+    expect(appendToAnalysisBuffer("spin\r", "ner")).toBe("spin\rner");
   });
 });
 

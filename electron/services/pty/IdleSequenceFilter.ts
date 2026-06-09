@@ -43,6 +43,10 @@ const DSR_NOISE = /\x1b\[6n/gu;
 const BPASTE_NOISE = /\x1b\[20[01]~/gu;
 
 export function stripIdleTerminalSequences(data: string): string {
+  // Every pattern below requires a literal ESC; skip all passes when absent.
+  if (!data.includes("\x1b")) {
+    return data;
+  }
   return data
     .replace(OSC_NOISE, "")
     .replace(DECSET_NOISE, "")

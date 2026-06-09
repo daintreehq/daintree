@@ -70,7 +70,8 @@ import {
 } from "@/components/Worktree/AgentStatusIndicator";
 import { cn } from "@/lib/utils";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { useShallow } from "zustand/react/shallow";
 
 interface AgentTrayButtonProps {
   agentAvailability?: CliAvailability;
@@ -109,6 +110,43 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
   "waiting",
   "directing",
 ]);
+
+// Per-agent dominant state across panels in the active worktree. Runtime
+// identity wins so a plain shell that starts Claude/Codex is tracked under the
+// same tray entry; launch intent is only a boot-window fallback before any
+// detector result has committed. Designed to run inside a useShallow selector
+// (Map values are primitives) so subscribers only re-render on real state
+// transitions, not every panelsById spread — see issue #7451.
+export function deriveAgentDominantStates(
+  panelsById: Record<string, PanelInstance>,
+  panelIds: readonly string[],
+  activeWorktreeId: string | null
+): Map<string, AgentState | null> {
+  const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
+  for (const pid of panelIds) {
+    const p = panelsById[pid];
+    if (
+      !p ||
+      !isPtyPanel(p) ||
+      p.location === "trash" ||
+      p.location === "background" ||
+      p.location === "overlay"
+    )
+      continue;
+    const agentId = getRuntimeOrBootAgentId(p);
+    if (!agentId) continue;
+    if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
+    if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
+    const arr = statesPerAgent.get(agentId) ?? [];
+    arr.push(p.agentState);
+    statesPerAgent.set(agentId, arr);
+  }
+  const result = new Map<string, AgentState | null>();
+  for (const [agentId, states] of statesPerAgent) {
+    result.set(agentId, getDominantAgentState(states));
+  }
+  return result;
+}
 
 function buildAgentRow(
   id: BuiltInAgentId,
@@ -345,9 +383,10 @@ export function AgentTrayButton({
     if (!open) setCapturingId(null);
   }, [open]);
 
-  const panelsById = usePanelStore((s) => s.panelsById);
-  const panelIds = usePanelStore((s) => s.panelIds);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const agentDominantStates = usePanelStore(
+    useShallow((s) => deriveAgentDominantStates(s.panelsById, s.panelIds, activeWorktreeId))
+  );
 
   // Before the first real availability result lands we can't distinguish
   // "all agents missing" from "still detecting", so we show a spinner.
@@ -400,36 +439,6 @@ export function AgentTrayButton({
   const clearFocusRestoreSuppression = () => {
     isRestoringFocusRef.current = false;
   };
-
-  const agentDominantStates = useMemo(() => {
-    const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
-    for (const pid of panelIds) {
-      const p = panelsById[pid];
-      // Runtime identity wins so a plain shell that starts Claude/Codex is
-      // tracked under the same tray entry. Launch intent is only a boot-window
-      // fallback before any detector result has committed.
-      if (
-        !p ||
-        !isPtyPanel(p) ||
-        p.location === "trash" ||
-        p.location === "background" ||
-        p.location === "overlay"
-      )
-        continue;
-      const agentId = getRuntimeOrBootAgentId(p);
-      if (!agentId) continue;
-      if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
-      if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      const arr = statesPerAgent.get(agentId) ?? [];
-      arr.push(p.agentState);
-      statesPerAgent.set(agentId, arr);
-    }
-    const result = new Map<string, AgentState | null>();
-    for (const [agentId, states] of statesPerAgent) {
-      result.set(agentId, getDominantAgentState(states));
-    }
-    return result;
-  }, [panelsById, panelIds, activeWorktreeId]);
 
   const readyAgentIds = useMemo(() => {
     return BUILT_IN_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id]));

@@ -20,7 +20,7 @@ export interface TerminalActivityInfo {
 export interface ResourceGovernorDeps {
   getTerminalIds: () => string[];
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
-  getTerminalPids: () => Array<{ id: string; pid: number | undefined }>;
+  getTerminalCount: () => number;
   incrementPauseCount: (count: number) => void;
   sendEvent: (event: PtyHostEvent) => void;
   emitTerminalStatus: (
@@ -451,8 +451,7 @@ export class ResourceGovernor {
       }
     }
 
-    const terminals = this.deps.getTerminalPids();
-    const result = this.fdMonitor.checkForLeaks(terminals.length, orphanCandidates);
+    const result = this.fdMonitor.checkForLeaks(this.deps.getTerminalCount(), orphanCandidates);
 
     if (metricsEnabled()) {
       console.log(

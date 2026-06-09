@@ -45,7 +45,8 @@ export class PortBatcher {
   write(id: string, data: Uint8Array, byteCount: number, owned = false): boolean {
     if (this.disposed) return false;
 
-    const terminalPending = this.pendingChunks.get(id)?.bytes ?? 0;
+    let entry = this.pendingChunks.get(id);
+    const terminalPending = entry?.bytes ?? 0;
     if (this.deps.portQueueManager.isAtCapacity(id, terminalPending + byteCount)) {
       // Flush any pending data for this terminal before rejecting to prevent
       // split-channel delivery (buffered data on MessagePort + rejected data on SAB/IPC)
@@ -55,7 +56,6 @@ export class PortBatcher {
       return false;
     }
 
-    let entry = this.pendingChunks.get(id);
     if (!entry) {
       entry = {
         chunks: [],
@@ -107,9 +107,11 @@ export class PortBatcher {
       this.cancelEntryTimers(entry);
     }
 
-    const entries = Array.from(snapshot.entries());
-    for (let i = 0; i < entries.length; i++) {
-      const [id, { chunks, bytes, owned }] = entries[i];
+    // Iterate the detached snapshot directly (no intermediate entries array on
+    // the happy path); delete each entry as it's consumed so the catch block can
+    // build failedBatches from the failed entry plus whatever remains.
+    for (const [id, { chunks, bytes, owned }] of snapshot) {
+      snapshot.delete(id);
       let data: Uint8Array = new Uint8Array(0);
       try {
         data = mergeChunks(chunks, bytes, owned);
@@ -121,7 +123,7 @@ export class PortBatcher {
         );
       } catch (error) {
         const failedBatches: PortBatcherFailedBatch[] = [{ id, data, bytes }];
-        for (const [failedId, pending] of entries.slice(i + 1)) {
+        for (const [failedId, pending] of snapshot) {
           failedBatches.push({
             id: failedId,
             data: mergeChunks(pending.chunks, pending.bytes, pending.owned),

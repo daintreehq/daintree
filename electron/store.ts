@@ -926,7 +926,10 @@ export const store = new Proxy({} as Store<StoreSchema>, {
   },
 });
 
+let windowStatesInstance: Store<WindowStatesStoreSchema> | undefined;
+
 function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
+  if (windowStatesInstance) return windowStatesInstance;
   try {
     const created = new Store<WindowStatesStoreSchema>({
       name: "window-states",
@@ -936,6 +939,7 @@ function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
       configFileMode: 0o600,
     });
     tightenFilePermissions(created.path);
+    windowStatesInstance = created;
     return created;
   } catch (error) {
     console.warn(
@@ -943,7 +947,7 @@ function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
       error
     );
     const memoryStore = new Map();
-    return {
+    const fallback = {
       get: (key: string) => memoryStore.get(key),
       set: (key: string, value: unknown) => memoryStore.set(key, value),
       delete: (key: string) => memoryStore.delete(key),
@@ -952,10 +956,31 @@ function initializeWindowStatesStore(): Store<WindowStatesStoreSchema> {
       store: {},
       path: "",
     } as unknown as Store<WindowStatesStoreSchema>;
+    windowStatesInstance = fallback;
+    return fallback;
   }
 }
 
-export const windowStatesStore = initializeWindowStatesStore();
+// Lazy like the main `store` Proxy: defers the sync read+parse of
+// window-states.json past the single-instance lock check, so a losing second
+// instance never constructs it.
+export const windowStatesStore = new Proxy({} as Store<WindowStatesStoreSchema>, {
+  get(_target, prop) {
+    const instance = initializeWindowStatesStore();
+    const value = Reflect.get(instance as object, prop, instance);
+    return typeof value === "function"
+      ? (value as (...args: unknown[]) => unknown).bind(instance)
+      : value;
+  },
+  set(_target, prop, value) {
+    const instance = initializeWindowStatesStore();
+    return Reflect.set(instance as object, prop, value, instance);
+  },
+  has(_target, prop) {
+    const instance = initializeWindowStatesStore();
+    return Reflect.has(instance as object, prop);
+  },
+});
 
 export type { WindowStateEntry };
 

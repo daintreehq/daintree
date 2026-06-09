@@ -276,6 +276,24 @@ export class ActionService {
     return this.registry.get(id)?.title ?? "";
   }
 
+  /**
+   * Lightweight dispatch-gating metadata via a single O(1) registry lookup.
+   * Bypasses toManifestEntry() (isEnabled/palette predicates, schema
+   * compilation and cloning) — use when only danger/title/description are
+   * needed, e.g. the MCP bridge's confirmation gate.
+   */
+  getDispatchMeta(
+    id: ActionId
+  ): { danger: ActionDanger; title: string; description: string } | null {
+    const definition = this.registry.get(id);
+    if (!definition) return null;
+    return {
+      danger: definition.danger,
+      title: definition.title ?? "",
+      description: definition.description ?? "",
+    };
+  }
+
   /** Remove an action from the registry. Silent no-op if unknown — safe for unload cleanup. */
   unregister(id: ActionId): void {
     this.registry.delete(id);
@@ -450,8 +468,15 @@ export class ActionService {
     }
   }
 
-  list(ctx?: ActionContext): ActionManifestEntry[] {
+  /**
+   * Pass `{ includeSchemas: false }` to skip JSON-schema compilation and
+   * cloning — entries come back with inputSchema/outputSchema undefined. Use
+   * for consumers that never read the schemas (palette, actions.search); the
+   * default keeps the full manifest for MCP.
+   */
+  list(ctx?: ActionContext, options?: { includeSchemas?: boolean }): ActionManifestEntry[] {
     const context = ctx ?? this.getActionContext();
+    const includeSchemas = options?.includeSchemas !== false;
     return Array.from(this.registry.values())
       .filter((def) => def.danger !== "restricted")
       .filter((def) => {
@@ -462,7 +487,7 @@ export class ActionService {
           return true;
         }
       })
-      .map((def) => this.toManifestEntry(def, context));
+      .map((def) => this.toManifestEntry(def, context, includeSchemas));
   }
 
   get(actionId: ActionId, ctx?: ActionContext): ActionManifestEntry | null {
@@ -475,7 +500,8 @@ export class ActionService {
 
   private toManifestEntry(
     definition: AnyActionDefinition,
-    context: ActionContext
+    context: ActionContext,
+    includeSchemas = true
   ): ActionManifestEntry {
     // Fail closed if isEnabled throws: a single broken action must not crash
     // ActionService.list(), which runs during initial render and would take
@@ -540,11 +566,15 @@ export class ActionService {
 
     // JSON schemas are deferred from register-time to first-use (issue #8614).
     // Use .has() rather than truthy-check so an action whose schemas are both
-    // intentionally undefined isn't recomputed on every call.
-    let schemas = this.schemaCache.get(definition.id);
-    if (!this.schemaCache.has(definition.id)) {
-      schemas = computeSchemas(definition);
-      this.schemaCache.set(definition.id, schemas);
+    // intentionally undefined isn't recomputed on every call. Skipped entirely
+    // when the caller opted out of schemas.
+    let schemas: CachedSchemas | undefined;
+    if (includeSchemas) {
+      schemas = this.schemaCache.get(definition.id);
+      if (!this.schemaCache.has(definition.id)) {
+        schemas = computeSchemas(definition);
+        this.schemaCache.set(definition.id, schemas);
+      }
     }
 
     // Deep-clone the cached schemas so a downstream consumer (e.g. an MCP

@@ -15,7 +15,11 @@ vi.mock("../GitHubPRs.js", () => ({
   getPRReviewThreads: (...args: unknown[]) => mockGetPRReviewThreads(...args),
 }));
 
-import { createReviewDecorationProvider } from "../reviewDecorationProvider.js";
+import { REVIEW_THREADS_TTL_MS } from "../GitHubCaches.js";
+import {
+  createReviewDecorationProvider,
+  registerReviewDecorationProvider,
+} from "../reviewDecorationProvider.js";
 
 function makeHost(worktrees: PluginWorktreeSnapshot[] = []): PluginHostApi {
   return {
@@ -272,5 +276,123 @@ describe("createReviewDecorationProvider", () => {
     expect(result["src/has space.ts"]!.url).toBe(
       `https://github.com/owner/repo/pull/42/files#diff-${expected}`
     );
+  });
+});
+
+describe("registerReviewDecorationProvider", () => {
+  function makeRegisterHost() {
+    let onChange: ((snapshots: PluginWorktreeSnapshot[]) => void) | undefined;
+    let providerImpl: FileDecorationProviderImpl | undefined;
+    const host = {
+      getWorktrees: vi.fn().mockResolvedValue([]),
+      registerFileDecorationProvider: vi.fn((_meta: unknown, impl: FileDecorationProviderImpl) => {
+        providerImpl = impl;
+        return () => {};
+      }),
+      onDidChangeWorktrees: vi.fn((cb: (snapshots: PluginWorktreeSnapshot[]) => void) => {
+        onChange = cb;
+        return () => {};
+      }),
+      invalidateFileDecorations: vi.fn(),
+    } as unknown as PluginHostApi;
+    return {
+      host,
+      emit: (snapshots: PluginWorktreeSnapshot[]) => onChange!(snapshots),
+      getProvider: () => providerImpl!,
+    };
+  }
+
+  function unlinkedWorktree(path: string): PluginWorktreeSnapshot {
+    return { path, linked: null } as unknown as PluginWorktreeSnapshot;
+  }
+
+  beforeEach(() => {
+    mockGetPRReviewThreads.mockReset();
+  });
+
+  it("invalidates only PR-linked scopes on the first event", () => {
+    const { host, emit } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+
+    emit([makeWorktree("/linked", 42), unlinkedWorktree("/plain")]);
+
+    expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(1);
+    expect(host.invalidateFileDecorations).toHaveBeenCalledWith("worktree-diff:/linked");
+  });
+
+  it("skips invalidation when linkage is unchanged within the TTL", () => {
+    const { host, emit } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+
+    emit([makeWorktree("/linked", 42)]);
+    emit([makeWorktree("/linked", 42)]);
+    emit([makeWorktree("/linked", 42)]);
+
+    expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates when the linked PR number changes", () => {
+    const { host, emit } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+
+    emit([makeWorktree("/linked", 42)]);
+    emit([makeWorktree("/linked", 43)]);
+
+    expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates when a PR linkage is removed", () => {
+    const { host, emit } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+
+    emit([makeWorktree("/linked", 42)]);
+    emit([unlinkedWorktree("/linked")]);
+
+    expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(2);
+    expect(host.invalidateFileDecorations).toHaveBeenLastCalledWith("worktree-diff:/linked");
+  });
+
+  it("invalidates an unchanged linkage again once the TTL elapses", () => {
+    const { host, emit } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      emit([makeWorktree("/linked", 42)]);
+      nowSpy.mockReturnValue(1_000_000 + REVIEW_THREADS_TTL_MS - 1);
+      emit([makeWorktree("/linked", 42)]);
+      expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(1_000_000 + REVIEW_THREADS_TTL_MS);
+      emit([makeWorktree("/linked", 42)]);
+      expect(host.invalidateFileDecorations).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("serves linkage from the event-fed cache without a snapshot round-trip", async () => {
+    const { host, emit, getProvider } = makeRegisterHost();
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    emit([makeWorktree("/some/path", 42)]);
+    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 2 });
+
+    const result = await getProvider().provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);
+
+    expect(result["src/a.ts"]!.badge).toBe("2");
+    expect(host.getWorktrees).not.toHaveBeenCalled();
+  });
+
+  it("falls back to host.getWorktrees before the first event seeds the cache", async () => {
+    const { host, getProvider } = makeRegisterHost();
+    (host.getWorktrees as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeWorktree("/some/path", 42),
+    ]);
+    registerReviewDecorationProvider(host, makeForgeProvider({ withBuildPRFileUrl: true }));
+    mockGetPRReviewThreads.mockResolvedValueOnce({ "src/a.ts": 1 });
+
+    const result = await getProvider().provideDecorations("worktree-diff:/some/path", ["src/a.ts"]);
+
+    expect(host.getWorktrees).toHaveBeenCalledTimes(1);
+    expect(result["src/a.ts"]!.badge).toBe("1");
   });
 });

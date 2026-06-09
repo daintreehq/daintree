@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { InputTracker, CLEAR_COMMANDS } from "../clearCommandDetection";
+import { InputTracker, CLEAR_COMMANDS, MAX_TRACKED_INPUT_LENGTH } from "../clearCommandDetection";
 
 describe("InputTracker", () => {
   let tracker: InputTracker;
@@ -188,6 +188,31 @@ describe("InputTracker", () => {
       expect(results).toHaveLength(1);
       expect(results[0]!.isClear).toBe(true);
       expect(results[0]!.command).toBe("clear");
+    });
+  });
+
+  describe("buffer length cap", () => {
+    it("caps tracked input at MAX_TRACKED_INPUT_LENGTH and keeps the prefix", () => {
+      const input = "a".repeat(MAX_TRACKED_INPUT_LENGTH * 2);
+      const results = tracker.process(input + "\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(false);
+      expect(results[0]!.command).toBe("a".repeat(MAX_TRACKED_INPUT_LENGTH));
+    });
+
+    it("caps multi-line bracketed paste content", () => {
+      const line = "x".repeat(1024) + "\n";
+      const results = tracker.process("\x1b[200~" + line.repeat(10) + "\x1b[201~\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(false);
+      expect(results[0]!.command!.length).toBeLessThanOrEqual(MAX_TRACKED_INPUT_LENGTH);
+    });
+
+    it("still detects a clear command after a capped command is submitted", () => {
+      tracker.process("b".repeat(MAX_TRACKED_INPUT_LENGTH * 2) + "\r");
+      const results = tracker.process("clear\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(true);
     });
   });
 

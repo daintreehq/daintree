@@ -45,7 +45,13 @@ export async function categorizeWorktree(
       return "active";
     }
 
-    const ageDays = await getLastCommitAgeInDays(worktree.path);
+    // The consolidated git log in getWorktreeChangesWithStats already carries
+    // the last-commit timestamp — only fork git when it's absent.
+    const ts = changes?.lastCommitTimestampMs;
+    const ageDays =
+      ts !== undefined
+        ? Math.max(0, (Date.now() - ts) / MS_PER_DAY)
+        : await getLastCommitAgeInDays(worktree.path);
     if (ageDays !== null && ageDays > staleThresholdDays) {
       return "stale";
     }

@@ -1312,8 +1312,7 @@ export class WorkspaceService {
     }
   }
 
-  private handleMonitorUpdate(monitor: WorktreeMonitor, _snapshot: WorktreeSnapshot): void {
-    const snapshot = monitor.getSnapshot();
+  private handleMonitorUpdate(_monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,

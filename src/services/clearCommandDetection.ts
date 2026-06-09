@@ -1,6 +1,12 @@
 // Commands that trigger visual terminal clear (AI agents + standard shell)
 export const CLEAR_COMMANDS = new Set(["/clear", "/new", "/reset", "clear", "cls"]);
 
+// Cap the tracked input so a multi-MB paste doesn't build (and retain) a
+// multi-MB string via per-char concatenation. Clear commands are ≤6 chars, so
+// truncation never changes isClear; the kept prefix still populates the
+// lastCommand UI for long commands.
+export const MAX_TRACKED_INPUT_LENGTH = 4096;
+
 export interface InputResult {
   isClear: boolean;
   command: string | null;
@@ -38,7 +44,9 @@ export class InputTracker {
 
       // Ignore newlines inside bracketed paste (multi-line paste should not trigger commands)
       if (this.inBracketedPaste && (char === "\r" || char === "\n")) {
-        this.buffer += char;
+        if (this.buffer.length < MAX_TRACKED_INPUT_LENGTH) {
+          this.buffer += char;
+        }
         continue;
       }
 
@@ -86,8 +94,10 @@ export class InputTracker {
         continue;
       }
 
-      // Accumulate printable characters
-      this.buffer += char;
+      // Accumulate printable characters (bounded — see MAX_TRACKED_INPUT_LENGTH)
+      if (this.buffer.length < MAX_TRACKED_INPUT_LENGTH) {
+        this.buffer += char;
+      }
     }
 
     return this.results;

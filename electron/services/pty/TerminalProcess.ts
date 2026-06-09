@@ -1137,9 +1137,15 @@ export class TerminalProcess {
       const row: VisibleContentCell[] = [];
       for (let x = 0; x < terminal.cols; x += 1) {
         const cell = line.getCell(x, reusableCell);
-        if (cell) {
-          row.push(this.createVisibleContentCell(cell));
-        }
+        if (!cell) continue;
+        // Same predicate as visibleCellUnit (SustainedChangeTracker): blank
+        // cells never contribute a unit, so skip before allocating — most of
+        // an idle viewport is whitespace.
+        const width = cell.getWidth();
+        if (width === 0) continue;
+        const chars = cell.getChars();
+        if (chars.length === 0 || /^\s*$/u.test(chars)) continue;
+        row.push(this.createVisibleContentCell(cell, chars, width));
       }
       rows.push(row);
     }
@@ -1147,7 +1153,11 @@ export class TerminalProcess {
     return rows;
   }
 
-  private createVisibleContentCell(cell: IBufferCell): VisibleContentCell {
+  private createVisibleContentCell(
+    cell: IBufferCell,
+    chars: string,
+    width: number
+  ): VisibleContentCell {
     const attributes =
       (cell.isBold() ? 1 : 0) |
       (cell.isItalic() ? 1 << 1 : 0) |
@@ -1160,15 +1170,12 @@ export class TerminalProcess {
       (cell.isOverline() ? 1 << 8 : 0);
 
     return {
-      chars: cell.getChars(),
+      chars,
       code: cell.getCode(),
-      width: cell.getWidth(),
+      width,
       fgColorMode: cell.getFgColorMode(),
       fgColor: cell.getFgColor(),
-      bgColorMode: cell.getBgColorMode(),
-      bgColor: cell.getBgColor(),
       attributes,
-      defaultVisual: cell.isFgDefault() && cell.isBgDefault() && attributes === 0,
     };
   }
 
@@ -1601,9 +1608,17 @@ export class TerminalProcess {
       terminal.firstByteAt = now;
     }
     terminal.lastOutputTime = now;
-    const beforeContentSnapshot = this.isAgentLive
-      ? this.getAgentOutputContentSnapshot()
-      : undefined;
+    // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
+    // full-viewport extraction in other states (it would be computed and
+    // discarded on every chunk during "working", the heaviest output phase).
+    // If the state flips before the async write callback, the
+    // `beforeSnapshot ?? this.agentOutputContentSnapshot` fallback covers it.
+    const agentState = terminal.agentState;
+    const beforeContentSnapshot =
+      this.isAgentLive &&
+      (agentState === "waiting" || agentState === "idle" || agentState === "completed")
+        ? this.getAgentOutputContentSnapshot()
+        : undefined;
 
     // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
     // the agent-state signal is viewport-independent (#8701). The parser is

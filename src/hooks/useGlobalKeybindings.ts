@@ -109,12 +109,13 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // worktreeGrid scope for fleet arming). Scope-gated bindings are checked
       // below in resolveKeybinding → canExecute.
       const hasModifier = e.metaKey || e.ctrlKey;
-      const isFocusRegion = isFocusRegionEvent(e);
       // A single-character key (letter, digit, punctuation, Space) is text input
       // that belongs to the terminal/editor — even if it happens to match a
       // focus-region rebind. Only non-text keys (F-keys, arrows, Home/End/etc.)
       // may bypass the editable/terminal bailouts as a focus-region escape.
-      const isFocusRegionNonTextKey = isFocusRegion && e.key.length !== 1;
+      // Length check first: it short-circuits the combo lookup/parse work in
+      // isFocusRegionEvent for ordinary printable typing.
+      const isFocusRegionNonTextKey = e.key.length !== 1 && isFocusRegionEvent(e);
       const isTerminalTabInput =
         isInTerminal &&
         (e.key === "Tab" || e.code === "Tab" || e.keyCode === 9) &&

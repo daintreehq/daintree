@@ -15,8 +15,10 @@ function classifySchedulerError(error: unknown): TerminalScrollbackRestoreError 
 // Tasks captured at schedule time, keyed by terminalId, so "Retry batch" can
 // re-queue a failed restore using its original location/worktree without
 // re-reading the (possibly stale) panel store at click time (lesson #9514).
-// Entries for already-restored terminals are harmless — the scheduler gate
-// (`scrollbackRestoreState !== "none"`) skips them on re-submit.
+// Entries are dropped once a restore settles as "done" so the map only
+// retains the failed restores the retry path needs; any leftover entries are
+// harmless — the scheduler gate (`scrollbackRestoreState !== "none"`) skips
+// them on re-submit.
 const lastBatchTaskMap = new Map<string, TerminalRestoreTask>();
 
 function notifyRestoreListeners(): void {
@@ -85,6 +87,9 @@ export function scheduleScrollbackRestore(
           logWarn(`Scrollback restore failed for ${task.label}`, { error: restoreError });
         } else {
           managed.scrollbackRestoreState = "done";
+          // Successful restores never need the retry task again — drop it so
+          // the map only retains entries for failed restores.
+          lastBatchTaskMap.delete(task.terminalId);
         }
         terminalInstanceService.notifyRestoreSettledWaiters(task.terminalId);
         notifyRestoreListeners();

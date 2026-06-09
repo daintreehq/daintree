@@ -3,7 +3,8 @@ import type {
   FileDecorationProviderImpl,
   ForgeProviderImpl,
 } from "../../../../shared/types/forge.js";
-import type { PluginHostApi } from "../../../../shared/types/plugin.js";
+import type { PluginHostApi, PluginWorktreeLinked } from "../../../../shared/types/plugin.js";
+import { REVIEW_THREADS_TTL_MS } from "./GitHubCaches.js";
 import { getPRReviewThreads } from "./GitHubPRs.js";
 
 const SCOPE_PREFIX = "worktree-diff:";
@@ -21,7 +22,8 @@ const SCOPE_PREFIX = "worktree-diff:";
  */
 export function createReviewDecorationProvider(
   host: PluginHostApi,
-  provider: ForgeProviderImpl
+  provider: ForgeProviderImpl,
+  getCachedLinked?: (worktreePath: string) => PluginWorktreeLinked | null | undefined
 ): FileDecorationProviderImpl {
   return {
     async provideDecorations(scope, paths) {
@@ -29,9 +31,14 @@ export function createReviewDecorationProvider(
       const worktreePath = scope.slice(SCOPE_PREFIX.length);
       if (worktreePath.length === 0 || paths.length === 0) return {};
 
-      const worktrees = await host.getWorktrees();
-      const worktree = worktrees.find((w) => w.path === worktreePath);
-      const prRef = worktree?.linked?.pr?.ref;
+      // Prefer the linkage cache fed by `onDidChangeWorktrees` (undefined =
+      // not seeded yet); fall back to a full snapshot round-trip on cold start.
+      let linked = getCachedLinked?.(worktreePath);
+      if (linked === undefined) {
+        const worktrees = await host.getWorktrees();
+        linked = worktrees.find((w) => w.path === worktreePath)?.linked ?? null;
+      }
+      const prRef = linked?.pr?.ref;
       const prNumber = prRef?.number;
       if (typeof prNumber !== "number" || prRef === undefined) return {};
 
@@ -90,18 +97,55 @@ export function registerReviewDecorationProvider(
   host: PluginHostApi,
   provider: ForgeProviderImpl
 ): () => void {
+  // Linkage cache (null until the first snapshots event seeds it) doubles as
+  // the previous-state baseline for diffing. Invalidations fire only when a
+  // scope's PR linkage changes (added / removed / renumbered / repo moved) or
+  // when the review-threads cache TTL has elapsed since the scope's last
+  // invalidation — `worktree-update` fires per git-status change in any
+  // worktree, and blanket invalidation re-pulled identical cached counts.
+  let linkedByPath: Map<string, PluginWorktreeLinked | null> | null = null;
+  const lastInvalidatedAt = new Map<string, number>();
+
+  const prKey = (linked: PluginWorktreeLinked | null | undefined): string | undefined => {
+    const ref = linked?.pr?.ref;
+    if (ref === undefined || typeof ref.number !== "number") return undefined;
+    return `${ref.owner}/${ref.repo}#${ref.number}`;
+  };
+
   const disposeProvider = host.registerFileDecorationProvider(
     { id: "worktree-diff-review" },
-    createReviewDecorationProvider(host, provider)
+    createReviewDecorationProvider(host, provider, (worktreePath) =>
+      linkedByPath === null ? undefined : (linkedByPath.get(worktreePath) ?? null)
+    )
   );
 
   // `onDidChangeWorktrees` fires after `activate()` resolves; that is exactly
   // why `invalidateFileDecorations` is not revoke-guarded on the host side.
   const disposeWatch = host.onDidChangeWorktrees((snapshots) => {
+    const previous = linkedByPath;
+    const next = new Map<string, PluginWorktreeLinked | null>();
+    for (const wt of snapshots) next.set(wt.path, wt.linked);
+    linkedByPath = next;
+
+    const now = Date.now();
     for (const wt of snapshots) {
-      if (wt.linked?.pr) {
-        host.invalidateFileDecorations(`${SCOPE_PREFIX}${wt.path}`);
+      if (!wt.linked?.pr) continue;
+      const unchanged = previous !== null && prKey(wt.linked) === prKey(previous.get(wt.path));
+      const fresh = now - (lastInvalidatedAt.get(wt.path) ?? 0) < REVIEW_THREADS_TTL_MS;
+      if (unchanged && fresh) continue;
+      lastInvalidatedAt.set(wt.path, now);
+      host.invalidateFileDecorations(`${SCOPE_PREFIX}${wt.path}`);
+    }
+    if (previous !== null) {
+      for (const [path, linked] of previous) {
+        if (prKey(linked) !== undefined && prKey(next.get(path)) === undefined) {
+          lastInvalidatedAt.delete(path);
+          host.invalidateFileDecorations(`${SCOPE_PREFIX}${path}`);
+        }
       }
+    }
+    for (const path of lastInvalidatedAt.keys()) {
+      if (!next.has(path)) lastInvalidatedAt.delete(path);
     }
   });
 

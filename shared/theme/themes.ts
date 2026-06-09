@@ -673,7 +673,10 @@ export function getAppThemeById(
   id: string,
   customSchemes: AppColorScheme[] = []
 ): AppColorScheme | undefined {
-  return [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((scheme) => scheme.id === id);
+  return (
+    BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === id) ??
+    customSchemes.find((scheme) => scheme.id === id)
+  );
 }
 
 export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {

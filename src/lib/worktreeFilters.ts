@@ -274,7 +274,8 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
   pinnedWorktrees: string[] = [],
   manualOrder: string[] = []
 ): T[] {
-  const pinnedSet = new Set(pinnedWorktrees);
+  const pinnedIndex = new Map(pinnedWorktrees.map((id, i) => [id, i]));
+  const manualIndex = new Map(manualOrder.map((id, i) => [id, i]));
 
   return [...worktrees].sort((a, b) => {
     // Main worktree always first
@@ -282,26 +283,22 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
     if (!a.isMainWorktree && b.isMainWorktree) return 1;
 
     // Pinned worktrees come before unpinned (after main)
-    const aPinned = pinnedSet.has(a.id);
-    const bPinned = pinnedSet.has(b.id);
+    const aPinned = pinnedIndex.has(a.id);
+    const bPinned = pinnedIndex.has(b.id);
     if (aPinned && !bPinned) return -1;
     if (!aPinned && bPinned) return 1;
 
     // If both are pinned, maintain pin order
     if (aPinned && bPinned) {
-      const aIndex = pinnedWorktrees.indexOf(a.id);
-      const bIndex = pinnedWorktrees.indexOf(b.id);
-      return aIndex - bIndex;
+      return pinnedIndex.get(a.id)! - pinnedIndex.get(b.id)!;
     }
 
     // Apply normal sorting to unpinned worktrees
     switch (orderBy) {
       case "manual": {
-        const aIdx = manualOrder.indexOf(a.id);
-        const bIdx = manualOrder.indexOf(b.id);
         // Items not in manualOrder go to the end
-        const aPos = aIdx === -1 ? manualOrder.length : aIdx;
-        const bPos = bIdx === -1 ? manualOrder.length : bIdx;
+        const aPos = manualIndex.get(a.id) ?? manualOrder.length;
+        const bPos = manualIndex.get(b.id) ?? manualOrder.length;
         if (aPos !== bPos) return aPos - bPos;
         return compareWorktreeNames(a.name, b.name);
       }
@@ -335,12 +332,9 @@ export function sortWorktreesByRelevance<T extends Worktree | WorktreeState>(
   const sorted = sortWorktrees(worktrees, orderBy, pinnedWorktrees, manualOrder);
   if (!query.trim()) return sorted;
 
-  return [...sorted].sort((a, b) => {
-    const scoreA = scoreWorktree(a, query);
-    const scoreB = scoreWorktree(b, query);
-    if (scoreA !== scoreB) return scoreB - scoreA;
-    return 0; // preserve sortWorktrees order as tiebreaker
-  });
+  const scores = new Map(sorted.map((w) => [w.id, scoreWorktree(w, query)]));
+  // Stable sort preserves sortWorktrees order as tiebreaker
+  return [...sorted].sort((a, b) => scores.get(b.id)! - scores.get(a.id)!);
 }
 
 export interface GroupedSection<T> {
@@ -557,22 +551,25 @@ export function computeChipCounts(
 
   const baseIsActive = (w: (typeof worktrees)[number]) => w.id === activeWorktreeId;
   const getDerived = (id: string) => derivedMetaMap.get(id) ?? DEFAULT_DERIVED_META;
-  const matchesGroup = (w: (typeof worktrees)[number], groupKey: keyof FilterState) =>
-    matchesFilters(
-      w,
-      withoutGroup(filters, groupKey),
-      getDerived(w.id),
-      baseIsActive(w),
-      sessionsByWorktreeId
-    );
+  const matchesGroup = (w: (typeof worktrees)[number], groupFilters: FilterState) =>
+    matchesFilters(w, groupFilters, getDerived(w.id), baseIsActive(w), sessionsByWorktreeId);
 
-  // Build base set per group — filtered by all OTHER groups + query
-  const statusBase = worktrees.filter((w) => matchesGroup(w, "statusFilters"));
-  const typeBase = worktrees.filter((w) => matchesGroup(w, "typeFilters"));
-  const prIssueBase = worktrees.filter((w) => matchesGroup(w, "prIssueFilters"));
-  const sessionsBase = worktrees.filter((w) => matchesGroup(w, "sessionFilters"));
-  const activityBase = worktrees.filter((w) => matchesGroup(w, "activityFilters"));
-  const devServerBase = worktrees.filter((w) => matchesGroup(w, "devServerFilters"));
+  // Build base set per group — filtered by all OTHER groups + query. The
+  // group-excluded filter variants depend only on `filters`, so hoist them out
+  // of the per-worktree callbacks.
+  const statusVariant = withoutGroup(filters, "statusFilters");
+  const typeVariant = withoutGroup(filters, "typeFilters");
+  const prIssueVariant = withoutGroup(filters, "prIssueFilters");
+  const sessionsVariant = withoutGroup(filters, "sessionFilters");
+  const activityVariant = withoutGroup(filters, "activityFilters");
+  const devServerVariant = withoutGroup(filters, "devServerFilters");
+
+  const statusBase = worktrees.filter((w) => matchesGroup(w, statusVariant));
+  const typeBase = worktrees.filter((w) => matchesGroup(w, typeVariant));
+  const prIssueBase = worktrees.filter((w) => matchesGroup(w, prIssueVariant));
+  const sessionsBase = worktrees.filter((w) => matchesGroup(w, sessionsVariant));
+  const activityBase = worktrees.filter((w) => matchesGroup(w, activityVariant));
+  const devServerBase = worktrees.filter((w) => matchesGroup(w, devServerVariant));
 
   for (const w of statusBase) {
     const statuses = computeStatus(w, baseIsActive(w));
