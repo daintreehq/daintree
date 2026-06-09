@@ -2886,21 +2886,34 @@ export class PluginService {
 
       const entry = this.disabledPlugins.get(pluginId);
       if (!entry) return; // already running — nothing to load
-      // Release the reservation + skipped entry before re-loading; otherwise the
-      // duplicate guard in loadPlugin() sees the reserved name and bails.
-      this.disabledPlugins.delete(pluginId);
+      // Release ONLY the name reservation up front (the duplicate guard's actual
+      // gate), but keep the disabledPlugins entry in place across the async load.
+      // This keeps the id resolvable as a built-in at every await point, so a
+      // concurrent setEnabled can't slip past the isBuiltin check into the
+      // persist-only path while the load is mid-flight. loadPlugin() with an
+      // empty disabled set never touches disabledPlugins, so the entry is safe.
       this.reservedNames.delete(pluginId);
-      const loaded = await this.loadPlugin(path.dirname(entry.dir), path.basename(entry.dir), {
-        isBuiltin: true,
-        disabled: new Set<string>(),
-      });
+      let loaded: LoadedPlugin | null = null;
+      try {
+        loaded = await this.loadPlugin(path.dirname(entry.dir), path.basename(entry.dir), {
+          isBuiltin: true,
+          disabled: new Set<string>(),
+        });
+      } catch (err) {
+        // A throw (e.g. a malformed `when` expression in the manifest) must not
+        // strand the plugin in neither map — fall through to the restore path.
+        console.error(`[PluginService] Re-load of built-in "${pluginId}" threw:`, err);
+      }
       if (!loaded) {
-        // Engine gate or manifest error: restore the skipped state so the row
-        // stays visible. Persisted intent stays "enabled" → pendingRestart:true.
-        this.disabledPlugins.set(pluginId, entry);
+        // Engine gate, manifest error, or a throw: restore the reservation. The
+        // disabledPlugins entry was never removed, so the row stays visible.
+        // Persisted intent stays "enabled" → pendingRestart:true.
         this.reservedNames.add(pluginId);
         return;
       }
+      // Loaded: it's now in `plugins`. Drop the skipped entry synchronously
+      // (no await before this line) so the two maps never both miss the id.
+      this.disabledPlugins.delete(pluginId);
       await this.activatePlugin(pluginId);
     } finally {
       this.broadcaster.broadcastProvenanceChanged();

@@ -2032,6 +2032,49 @@ describe("PluginService built-in plugin loading", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ disabled: true, pendingRestart: false, isBuiltin: true });
     });
+
+    it("a failed built-in re-enable restores the skipped state (no lost row)", async () => {
+      // Launch-disabled built-in whose engine range can never be satisfied by
+      // the running app version, so the re-enable's loadPlugin() returns null at
+      // the engine gate and must fall through to the restore path.
+      storeMock._state.set("plugins", { disabled: ["daintree.future"] });
+      await writeBuiltinPlugin("daintree.future", {
+        name: "daintree.future",
+        version: "1.0.0",
+        engines: { daintree: ">=99.0.0" },
+      });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+      expect(service.listPlugins()).toHaveLength(1);
+
+      await service.setEnabled("daintree.future", true);
+
+      // Intent persisted as enabled, but the load failed: the row stays visible,
+      // not running, flagged pendingRestart — never silently dropped.
+      const rows = service.listPlugins();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        disabled: false,
+        pendingRestart: true,
+        isBuiltin: true,
+      });
+      expect(rows[0].loadedAt).toBe(0);
+    });
+
+    it("an unknown plugin id is treated as a user plugin (persist-only, no transition)", async () => {
+      storeMock._state.set("plugins", { disabled: [] });
+      const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
+      broadcastToRendererMock.mockClear();
+
+      await service.setEnabled("unknown.plugin", false);
+
+      // Persisted, but no live transition runs and no provenance broadcast fires.
+      expect(storeMock._state.get("plugins")).toEqual({ disabled: ["unknown.plugin"] });
+      expect(broadcastToRendererMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: "plugin:provenance-changed" })
+      );
+    });
   });
 
   describe("uninstallPlugin", () => {
