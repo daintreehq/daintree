@@ -14,10 +14,9 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { openProject, dismissTelemetryConsent } from "../helpers/project";
-import { dismissBlockingPalette } from "../helpers/overlays";
+import { openAndOnboardProject } from "../helpers/project";
 import { openTerminal, getFirstGridPanel } from "../helpers/panels";
 import { getTerminalText, waitForTerminalReady, waitForTerminalText } from "../helpers/terminal";
 
@@ -41,10 +40,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     const { dir, cleanup } = createFixtureRepo({ name: "demo-terminal-input" });
     fixtureCleanup = cleanup;
     ctx = await launchApp({ extraArgs: ["--demo-mode"] });
-    await openProject(ctx.app, ctx.window, dir);
-    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
-    await dismissTelemetryConsent(ctx.window);
-    await dismissBlockingPalette(ctx.window);
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir);
   });
 
   test.afterAll(async () => {

@@ -219,7 +219,11 @@ test.describe.serial("Core: Panel Layout Undo/Redo & Maximize Choreography", () 
 
       await test.step("Closing a tab collapses the group; the panel stays in the grid", async () => {
         const tabs = window.locator(SEL.panel.tabList).locator(SEL.panel.tab);
-        await tabs.nth(1).locator('button[aria-label^="Close"]').click({ force: true });
+        const tab = tabs.nth(1);
+        await tab.hover();
+        const closeBtn = tab.locator('button[aria-label^="Close"]');
+        await expect(closeBtn).toBeVisible({ timeout: T_SHORT });
+        await closeBtn.click();
 
         // Down to one tab — the tab bar collapses but the panel persists in the grid.
         await expect(window.locator(SEL.panel.tabList)).not.toBeVisible({ timeout: T_MEDIUM });
