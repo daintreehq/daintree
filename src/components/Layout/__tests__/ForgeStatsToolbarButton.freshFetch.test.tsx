@@ -304,13 +304,28 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
   it("derives the display count via the recency resolver (issue #9741)", () => {
     // The badge no longer prefers the list count unconditionally — it defers to
     // `resolveForgeDisplayCount`, which arbitrates the list count against the
-    // stats poll's `lastUpdated` so a fresher poll wins.
+    // stats poll's count recency. The stats side must be the per-count
+    // refreshed-at stamp (when the forge was actually asked about that count)
+    // rather than `lastUpdated`, which the main process re-stamps on
+    // probe-confirmed "unchanged" polls — arbitrating on `lastUpdated` let a
+    // stale cached count outrank a fresher dropdown-observed total on every
+    // poll. Stale disk fallbacks carry no honest stamp and must resolve to
+    // null recency, not the re-stamped `lastUpdated`.
     expect(source).toContain('from "./forgeStatsCountDisplay"');
     expect(source).toMatch(
-      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*lastUpdated,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
+      /statsRecencyFallback\s*=\s*stats\?\.stale\s*\?\s*null\s*:\s*lastUpdated/
     );
     expect(source).toMatch(
-      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*lastUpdated,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
+      /issueCountRefreshedAt\s*=\s*stats\?\.issueCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
+    );
+    expect(source).toMatch(
+      /prCountRefreshedAt\s*=\s*stats\?\.prCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
+    );
+    expect(source).toMatch(
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
+    );
+    expect(source).toMatch(
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
     );
   });
 

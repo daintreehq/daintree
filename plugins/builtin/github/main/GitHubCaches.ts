@@ -189,6 +189,17 @@ export function getETagCacheVersion(): number {
 }
 
 /**
+ * Invalidate the ETag baselines of any in-flight conditional fetch. Bumped by
+ * the cache-clear paths below and by `updateRepoStatsCount` when a list
+ * query's observed total disagrees with a stored count baseline — without the
+ * bump, a `fetchRestCounts` already past its cache read could 304-recommit
+ * the just-invalidated counts and resurrect the stale value.
+ */
+export function bumpETagCacheVersion(): void {
+  etagCacheVersion++;
+}
+
+/**
  * Per-repo, per-type list-cache epochs for the count-as-cache-buster
  * (#10122 family). Bumped by {@link invalidateRepoListCachesForCountChange}
  * when the cheap REST count poll observes a changed open count. List fetchers

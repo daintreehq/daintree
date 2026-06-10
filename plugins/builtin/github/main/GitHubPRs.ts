@@ -14,6 +14,9 @@ import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
 import {
   repoStatsCache,
+  repoStatsAndPageSnapshotCache,
+  restCountsCache,
+  bumpETagCacheVersion,
   prListCache,
   prTooltipCache,
   prTooltipWrittenAt,
@@ -55,16 +58,23 @@ export function buildListCacheKey(
 }
 
 export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", count: number): void {
+  const now = Date.now();
   const cached = repoStatsCache.get(cacheKey);
+  // Stamp only the updated kind's refreshed-at: a PR list write-back says
+  // nothing about the issue count, and a shared stamp would make a stale
+  // issue count look freshly read — outranking a real issue-list observation
+  // in the renderer arbitration and suppressing its dropdown-open refresh.
   if (cached) {
     const updated: RepoStats = {
       ...cached,
-      lastUpdated: Date.now(),
+      lastUpdated: now,
     };
     if (type === "issue") {
       updated.issueCount = count;
+      updated.issueCountRefreshedAt = now;
     } else {
       updated.prCount = count;
+      updated.prCountRefreshedAt = now;
     }
     repoStatsCache.set(cacheKey, updated);
   } else {
@@ -74,9 +84,49 @@ export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", cou
     const newStats: RepoStats = {
       issueCount: type === "issue" ? count : (diskCached?.issueCount ?? 0),
       prCount: type === "pr" ? count : (diskCached?.prCount ?? 0),
-      lastUpdated: Date.now(),
+      lastUpdated: now,
     };
+    if (type === "issue") {
+      newStats.issueCountRefreshedAt = now;
+    } else {
+      newStats.prCountRefreshedAt = now;
+    }
     repoStatsCache.set(cacheKey, newStats);
+  }
+
+  // A list query's `totalCount` is a direct GitHub observation. The background
+  // poll keeps re-serving `repoStatsAndPageSnapshotCache` (10 min TTL) and
+  // `restCountsCache` (1 h TTL) for as long as the `/events` probe reports no
+  // change, so a disagreeing entry must drop here — otherwise the next poll
+  // resurrects the stale count (rolling the toolbar badge back) until the
+  // entry's own TTL expires. A disagreeing snapshot's first-page items are
+  // stale by the same evidence, so the whole entry goes, and dropping the
+  // REST entry discards its ETag baselines, forcing the next count poll to an
+  // unconditional re-read instead of a 304 replay of the stale value.
+  let droppedBaseline = false;
+  const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+  if (snapshot) {
+    const snapshotCount = type === "issue" ? snapshot.stats.issueCount : snapshot.stats.prCount;
+    if (snapshotCount !== count) {
+      repoStatsAndPageSnapshotCache.invalidate(cacheKey);
+      droppedBaseline = true;
+    }
+  }
+  const restCounts = restCountsCache.get(cacheKey);
+  if (restCounts) {
+    const restCount =
+      type === "issue" ? restCounts.combinedCount - restCounts.prCount : restCounts.prCount;
+    if (restCount !== count) {
+      restCountsCache.invalidate(cacheKey);
+      droppedBaseline = true;
+    }
+  }
+  // Defend the invalidation against in-flight conditional fetches: a
+  // `fetchRestCounts` that read its baseline before the drop would otherwise
+  // 304-recommit the stale counts. The version bump makes its pre-commit
+  // check discard the result, so the next poll re-reads unconditionally.
+  if (droppedBaseline) {
+    bumpETagCacheVersion();
   }
 }
 
