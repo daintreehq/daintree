@@ -58,6 +58,7 @@ vi.mock("../../services/issueExtractor.js", () => ({
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue(null),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
 const mockGetRepoOperationStateSync = vi.fn().mockReturnValue(undefined);
