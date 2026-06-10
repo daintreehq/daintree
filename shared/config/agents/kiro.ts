@@ -9,6 +9,7 @@ export const config: AgentConfig = {
   supportsContextInjection: true,
   tooltip: "Amazon's AI coding agent",
   usageUrl: "https://kiro.dev/",
+  externalLinks: [{ label: "View docs", url: "https://kiro.dev/docs/" }],
   version: {
     args: ["--version"],
   },
