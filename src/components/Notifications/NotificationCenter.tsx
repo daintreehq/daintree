@@ -833,7 +833,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
-      <div className="flex items-start justify-between px-3 py-2 border-b border-divider gap-2">
+      {/* pr-2, not px-3: the right-side icon buttons carry 4px of internal p-1
+          touch padding, so an 8px container edge lands their glyphs at the same
+          12px optical inset as the title text on the left. */}
+      <div className="flex items-start justify-between pl-3 pr-2 py-2 border-b border-divider gap-2">
         <div className="flex flex-1 flex-wrap items-center gap-1.5 min-w-0">
           <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
           {entries.length > 0 && (
@@ -912,10 +915,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               aria-pressed={groupByContext}
               title="Group by project or worktree"
               onClick={() => setGroupByContext(!groupByContext)}
-              className={cn(
-                "toolbar-icon-button p-1 rounded-[var(--radius-sm)] border text-daintree-text/50",
-                groupByContext ? "border-transparent" : "border-daintree-text/15"
-              )}
+              className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
             >
               <Layers className="w-3 h-3" aria-hidden="true" />
             </button>

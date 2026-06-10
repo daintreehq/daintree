@@ -120,33 +120,33 @@ describe("NotificationCenterEntry unread signal", () => {
     }
   });
 
-  it("renders the unread dot at the leading edge, as the first child of the row", () => {
+  it("renders the unread dot out of flow, inside the leading icon wrapper", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
-    const slot = container.firstElementChild?.firstElementChild;
-    expect(slot).not.toBeNull();
-    if (slot instanceof HTMLElement) {
-      expect(slot.tagName).toBe("SPAN");
-      expect(slot.className).toMatch(/bg-status-info/);
-      expect(slot.className).toMatch(/rounded-full/);
-      // Stable spacer classes must be present in both states so the leading
-      // slot reserves the same horizontal width regardless of read/unread.
-      expect(slot.className).toMatch(/\bw-1\.5\b/);
-      expect(slot.className).toMatch(/\bshrink-0\b/);
+    const iconWrapper = container.firstElementChild?.firstElementChild;
+    expect(iconWrapper).not.toBeNull();
+    const dot = container.querySelector(".bg-status-info.rounded-full");
+    expect(dot).not.toBeNull();
+    if (iconWrapper instanceof HTMLElement && dot instanceof HTMLElement) {
+      // The dot lives in the gutter via absolute positioning — it must not
+      // participate in the row's flex flow, or read/unread toggles would
+      // shift the icon column.
+      expect(iconWrapper.contains(dot)).toBe(true);
+      expect(dot.className).toMatch(/\babsolute\b/);
     }
   });
 
-  it("renders an invisible leading slot (no dot styling) when isNew is false", () => {
-    const { container } = render(<NotificationCenterEntry entry={makeEntry()} />);
-    const slot = container.firstElementChild?.firstElementChild;
-    expect(slot).not.toBeNull();
-    if (slot instanceof HTMLElement) {
-      expect(slot.tagName).toBe("SPAN");
-      expect(slot.className).not.toMatch(/bg-status-info/);
-      expect(slot.className).not.toMatch(/rounded-full/);
-      // The spacer must always reserve the leading width — losing these
-      // classes would re-introduce the layout shift on read/unread toggle.
-      expect(slot.className).toMatch(/\bw-1\.5\b/);
-      expect(slot.className).toMatch(/\bshrink-0\b/);
+  it("keeps the same leading in-flow child whether read or unread (no layout shift)", () => {
+    const read = render(<NotificationCenterEntry entry={makeEntry()} />);
+    const unread = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
+    const readFirst = read.container.firstElementChild?.firstElementChild;
+    const unreadFirst = unread.container.firstElementChild?.firstElementChild;
+    expect(readFirst).not.toBeNull();
+    expect(unreadFirst).not.toBeNull();
+    if (readFirst instanceof HTMLElement && unreadFirst instanceof HTMLElement) {
+      // No spacer node may reappear ahead of the icon in either state.
+      expect(readFirst.querySelector("svg")).not.toBeNull();
+      expect(unreadFirst.querySelector("svg")).not.toBeNull();
+      expect(readFirst.className).toBe(unreadFirst.className);
     }
   });
 
