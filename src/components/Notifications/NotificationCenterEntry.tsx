@@ -185,15 +185,17 @@ export function NotificationCenterEntry({
           "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-daintree-accent/50"
       )}
     >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "w-1.5 shrink-0 self-start mt-1.5",
-          isNew && "h-1.5 rounded-full bg-status-info"
+      <div className={cn("relative shrink-0", config.className)}>
+        {/* The unread dot floats in the row's px-3 gutter (absolute, anchored
+            to the icon) so read rows don't carry a phantom spacer column and
+            the icon shares the 12px gutter with the header and section labels. */}
+        {isNew && (
+          <span
+            aria-hidden="true"
+            className="absolute right-full mr-[3px] top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-status-info"
+          />
         )}
-      />
-      <div className={cn("mt-0.5 shrink-0", config.className)}>
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
         {entry.title && (
