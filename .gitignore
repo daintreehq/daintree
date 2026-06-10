@@ -115,6 +115,7 @@ planning/
 .claude/nf-session-seen-*.flag
 .claude/scheduled_tasks.lock
 .claude/workflows/
+.claude/worktrees/
 
 # Claude scratch / working notes (private, ephemeral)
 .claude-scratch/
