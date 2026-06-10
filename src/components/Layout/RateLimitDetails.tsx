@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import type { GitHubRateLimitDetails } from "@shared/types";
+import type { RateLimitBucket, RateLimitDetails } from "@shared/types/forge";
 
 export function formatRateLimitCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
@@ -27,10 +27,10 @@ export function msUntilNextLabelChange(remainingMs: number): number {
 }
 
 /**
- * Live GitHub rate-limit reset countdown for in-panel banners (e.g. the
- * issues/PRs dropdown). Re-evaluates on the shared minute ticker — minute
- * granularity is intentional for a passive banner; the per-second readout
- * lives in the toolbar {@link RateLimitDetailsPanel} tooltip.
+ * Live rate-limit reset countdown for in-panel banners (e.g. the issues/PRs
+ * dropdown). Re-evaluates on the shared minute ticker — minute granularity is
+ * intentional for a passive banner; the per-second readout lives in the
+ * toolbar {@link RateLimitDetailsPanel} tooltip.
  */
 export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
   useGlobalMinuteTicker();
@@ -38,9 +38,21 @@ export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
   return <>{remaining <= 0 ? "any moment now" : formatRateLimitCountdown(remaining)}</>;
 }
 
+// Display names for bucket identifiers common across providers. Unknown
+// names render capitalized as reported — the host never interprets them.
+const BUCKET_LABELS: Record<string, string> = {
+  graphql: "GraphQL",
+  core: "REST core",
+  search: "Search",
+};
+
+function bucketLabel(name: string): string {
+  return BUCKET_LABELS[name] ?? (name ? name[0]!.toUpperCase() + name.slice(1) : name);
+}
+
 interface RateLimitDetailsPanelProps {
   kind: "primary" | "secondary" | null;
-  details: GitHubRateLimitDetails | null;
+  details: RateLimitDetails | null;
   now: number;
   fallbackResetAt: number | null;
 }
@@ -56,19 +68,11 @@ export function RateLimitDetailsPanel({
       ? "Secondary rate limit"
       : kind === "primary"
         ? "Rate limit reached"
-        : "GitHub API quota";
+        : "API quota";
   const subheading =
     kind === "secondary"
-      ? "GitHub paused requests for abuse protection. Polling resumes automatically."
+      ? "Requests are paused for abuse protection. Polling resumes automatically."
       : "Polling resumes when the bucket resets.";
-
-  const buckets: Array<{ label: string; bucket: GitHubRateLimitDetails["core"] | null }> = details
-    ? [
-        { label: "GraphQL", bucket: details.graphql },
-        { label: "REST core", bucket: details.core },
-        { label: "Search", bucket: details.search },
-      ]
-    : [];
 
   return (
     <div className="w-[260px] px-3.5 py-3.5">
@@ -78,11 +82,14 @@ export function RateLimitDetailsPanel({
       </div>
       {details ? (
         <div className="flex flex-col gap-4">
-          {buckets.map(({ label, bucket }) =>
-            bucket ? (
-              <RateLimitBucketRow key={label} label={label} bucket={bucket} now={now} />
-            ) : null
-          )}
+          {details.buckets.map((bucket) => (
+            <RateLimitBucketRow
+              key={bucket.name}
+              label={bucketLabel(bucket.name)}
+              bucket={bucket}
+              now={now}
+            />
+          ))}
         </div>
       ) : (
         <div className="text-muted-foreground text-[11px] tabular-nums">
@@ -97,7 +104,7 @@ export function RateLimitDetailsPanel({
 
 interface RateLimitBucketRowProps {
   label: string;
-  bucket: GitHubRateLimitDetails["core"];
+  bucket: RateLimitBucket;
   now: number;
 }
 

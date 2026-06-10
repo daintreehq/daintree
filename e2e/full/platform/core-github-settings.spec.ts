@@ -89,8 +89,8 @@ test.describe.serial("Core: GitHub settings token flow", () => {
     const { window } = ctx;
     await openGitHubSettings(window);
 
-    // github.setToken backs the Save button.
-    await injectFault(ctx.app, "github:set-token", "E2E_INJECTED_ERROR");
+    // window.electron.forge.setCredential (the forge:set-credential IPC channel) backs the Save button.
+    await injectFault(ctx.app, "forge:set-credential", "E2E_INJECTED_ERROR");
 
     await window.locator(SEL.github.tokenInput).fill("ghp_unsavable_token");
     await window.locator(SEL.github.saveButton).click();

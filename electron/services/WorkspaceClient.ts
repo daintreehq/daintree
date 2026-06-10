@@ -19,6 +19,7 @@ import {
   WorkspaceCopyTreeClient,
 } from "./workspace-client/index.js";
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
+import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type {
   WorkspaceClientConfig,
   WorktreeSnapshot,
@@ -344,6 +345,12 @@ export class WorkspaceClient extends EventEmitter {
 
   relayFetchThrottle(multiplier: number): void {
     this.pool.relayFetchThrottle(multiplier);
+  }
+
+  // ── Forge provider matchers ──
+
+  relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.pool.relayForgeProviderMatchers(matchers);
   }
 
   // ── State queries ──

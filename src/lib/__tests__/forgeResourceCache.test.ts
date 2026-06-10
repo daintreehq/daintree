@@ -37,29 +37,21 @@ describe("forgeResourceCache", () => {
   });
 
   describe("buildCacheKey", () => {
-    it("produces a deterministic provider-scoped key", () => {
-      expect(buildCacheKey("acme.gitea", "acme", "widgets", "issue", "open", "created")).toBe(
-        "acme.gitea:acme:widgets:issue:open:created"
-      );
+    it("produces a deterministic project-scoped key", () => {
+      expect(buildCacheKey("/proj", "issue", "open", "created")).toBe("/proj:issue:open:created");
     });
 
-    it("different providers produce different keys for the same repo identity", () => {
-      const a = buildCacheKey("p.github", "acme", "widgets", "issue", "open", "created");
-      const b = buildCacheKey("q.gitea", "acme", "widgets", "issue", "open", "created");
-      expect(a).not.toBe(b);
-    });
-
-    it("different repos produce different keys", () => {
-      const a = buildCacheKey("p", "acme", "widgets", "issue", "open", "created");
-      const b = buildCacheKey("p", "acme", "gadgets", "issue", "open", "created");
+    it("different projects produce different keys", () => {
+      const a = buildCacheKey("/proj-a", "issue", "open", "created");
+      const b = buildCacheKey("/proj-b", "issue", "open", "created");
       expect(a).not.toBe(b);
     });
 
     it("type, filter, and sort each disambiguate the key", () => {
-      const base = buildCacheKey("p", "o", "r", "issue", "open", "created");
-      expect(base).not.toBe(buildCacheKey("p", "o", "r", "pr", "open", "created"));
-      expect(base).not.toBe(buildCacheKey("p", "o", "r", "issue", "closed", "created"));
-      expect(base).not.toBe(buildCacheKey("p", "o", "r", "issue", "open", "updated"));
+      const base = buildCacheKey("/proj", "issue", "open", "created");
+      expect(base).not.toBe(buildCacheKey("/proj", "pr", "open", "created"));
+      expect(base).not.toBe(buildCacheKey("/proj", "issue", "closed", "created"));
+      expect(base).not.toBe(buildCacheKey("/proj", "issue", "open", "updated"));
     });
   });
 
@@ -108,6 +100,21 @@ describe("forgeResourceCache", () => {
     });
   });
 
+  describe("LRU eviction", () => {
+    it("evicts the oldest entry when capacity is exceeded", () => {
+      for (let i = 0; i < 20; i++) {
+        setCache(`key${i}`, entry([]));
+      }
+      expect(getCache("key0")).toBeDefined();
+
+      setCache("key20", entry([]));
+
+      expect(getCache("key0")).toBeUndefined();
+      expect(getCache("key1")).toBeDefined();
+      expect(getCache("key20")).toBeDefined();
+    });
+  });
+
   describe("TTL expiry", () => {
     afterEach(() => {
       vi.useRealTimers();
@@ -132,31 +139,23 @@ describe("forgeResourceCache", () => {
 
   describe("mutateCacheEntries", () => {
     const seed = (
-      providerId: string,
-      owner: string,
-      repo: string,
+      projectPath: string,
       type: string,
       filter: string,
       sort: string,
       items: Issue[]
     ): string => {
-      const key = buildCacheKey(providerId, owner, repo, type, filter, sort);
+      const key = buildCacheKey(projectPath, type, filter, sort);
       setCache(key, entry(items));
       return key;
     };
 
-    it("applies the transform across every (filter, sort) slot for the matching tuple", () => {
-      const openCreated = seed("p", "o", "r", "issue", "open", "created", [
-        makeIssue(1),
-        makeIssue(2),
-      ]);
-      const closedCreated = seed("p", "o", "r", "issue", "closed", "created", [makeIssue(3)]);
-      const openUpdated = seed("p", "o", "r", "issue", "open", "updated", [
-        makeIssue(1),
-        makeIssue(2),
-      ]);
+    it("applies the transform across every (filter, sort) slot for the matching project + type", () => {
+      const openCreated = seed("/proj", "issue", "open", "created", [makeIssue(1), makeIssue(2)]);
+      const closedCreated = seed("/proj", "issue", "closed", "created", [makeIssue(3)]);
+      const openUpdated = seed("/proj", "issue", "open", "updated", [makeIssue(1), makeIssue(2)]);
 
-      mutateCacheEntries("p", "o", "r", "issue", (e) => ({
+      mutateCacheEntries("/proj", "issue", (e) => ({
         ...e,
         items: e.items.filter((i) => i.number !== 2),
       }));
@@ -166,33 +165,56 @@ describe("forgeResourceCache", () => {
       expect(getCache(openUpdated)?.items.map((i) => i.number)).toEqual([1]);
     });
 
-    it("does not touch slots from a different provider for the same repo", () => {
-      const githubSlot = seed("gh", "o", "r", "issue", "open", "created", [makeIssue(1)]);
-      const giteaSlot = seed("gt", "o", "r", "issue", "open", "created", [makeIssue(1)]);
+    it("does not touch slots from a different project", () => {
+      const sameProj = seed("/proj-a", "issue", "open", "created", [makeIssue(1)]);
+      const otherProj = seed("/proj-b", "issue", "open", "created", [makeIssue(1)]);
 
-      mutateCacheEntries("gh", "o", "r", "issue", (e) => ({ ...e, items: [] }));
+      mutateCacheEntries("/proj-a", "issue", (e) => ({ ...e, items: [] }));
 
-      expect(getCache(githubSlot)?.items).toEqual([]);
-      expect(getCache(giteaSlot)?.items.map((i) => i.number)).toEqual([1]);
+      expect(getCache(sameProj)?.items).toEqual([]);
+      expect(getCache(otherProj)?.items.map((i) => i.number)).toEqual([1]);
     });
 
     it("does not touch slots from a different resource type", () => {
-      const issueSlot = seed("p", "o", "r", "issue", "open", "created", [makeIssue(1)]);
-      const prSlot = seed("p", "o", "r", "pr", "open", "created", [makeIssue(1)]);
+      const issueSlot = seed("/proj", "issue", "open", "created", [makeIssue(1)]);
+      const prSlot = seed("/proj", "pr", "open", "created", [makeIssue(1)]);
 
-      mutateCacheEntries("p", "o", "r", "issue", (e) => ({ ...e, items: [] }));
+      mutateCacheEntries("/proj", "issue", (e) => ({ ...e, items: [] }));
 
       expect(getCache(issueSlot)?.items).toEqual([]);
       expect(getCache(prSlot)?.items.map((i) => i.number)).toEqual([1]);
     });
 
+    it("passes the key remainder (filterState:sortOrder) to the transform", () => {
+      seed("/proj", "issue", "open", "created", [makeIssue(1)]);
+      seed("/proj", "issue", "closed", "updated", [makeIssue(2)]);
+      const remainders: string[] = [];
+
+      mutateCacheEntries("/proj", "issue", (_e, keyRemainder) => {
+        remainders.push(keyRemainder);
+        return null;
+      });
+
+      expect(remainders.sort()).toEqual(["closed:updated", "open:created"]);
+    });
+
+    it("handles project paths that contain colons (Windows-style)", () => {
+      const windowsKey = seed("C:\\projects\\repo", "issue", "open", "created", [makeIssue(1)]);
+      const otherKey = seed("C:\\projects\\other", "issue", "open", "created", [makeIssue(10)]);
+
+      mutateCacheEntries("C:\\projects\\repo", "issue", (e) => ({ ...e, items: [] }));
+
+      expect(getCache(windowsKey)?.items).toEqual([]);
+      expect(getCache(otherKey)?.items.map((i) => i.number)).toEqual([10]);
+    });
+
     it("bumps the generation counter only for changed slots", () => {
-      const changed = seed("p", "o", "r", "issue", "open", "created", [makeIssue(1)]);
-      const skipped = seed("p", "o", "r", "issue", "closed", "created", [makeIssue(3)]);
+      const changed = seed("/proj", "issue", "open", "created", [makeIssue(1)]);
+      const skipped = seed("/proj", "issue", "closed", "created", [makeIssue(3)]);
       const changedBefore = getGeneration(changed);
       const skippedBefore = getGeneration(skipped);
 
-      mutateCacheEntries("p", "o", "r", "issue", (e) =>
+      mutateCacheEntries("/proj", "issue", (e) =>
         e.items.some((i) => i.number === 1) ? { ...e, items: [] } : null
       );
 
@@ -202,7 +224,7 @@ describe("forgeResourceCache", () => {
 
     it("is a no-op on an empty cache", () => {
       expect(() =>
-        mutateCacheEntries("p", "o", "r", "issue", (e) => ({ ...e, items: [] }))
+        mutateCacheEntries("/proj", "issue", (e) => ({ ...e, items: [] }))
       ).not.toThrow();
     });
   });

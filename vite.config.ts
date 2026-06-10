@@ -932,7 +932,6 @@ export default defineConfig(({ command, mode }) => {
       alias: {
         "@": path.resolve(__dirname, "./src"),
         "@shared": path.resolve(__dirname, "./shared"),
-        "@github-renderer": path.resolve(__dirname, "./plugins/builtin/github/renderer"),
       },
     },
     server: {

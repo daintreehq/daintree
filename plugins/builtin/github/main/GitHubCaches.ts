@@ -1,23 +1,27 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { Cache } from "../../../../electron/utils/cache.js";
-import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
   GitHubPRCIStatus,
   GitHubPRCISummary,
   GitHubListResponse,
-  IssueTooltipData,
-  PRTooltipData,
-} from "../../../../shared/types/github.js";
+} from "../shared/types.js";
 import type {
   RepoContext,
   RepoStats,
   RepoStatsAndPageSnapshot,
   RestCountsSnapshot,
 } from "./types.js";
-import type { Issue, PR, Page } from "../../../../shared/types/forge.js";
+import type {
+  Issue,
+  IssueTooltipData,
+  PR,
+  PRTooltipData,
+  Page,
+} from "../../../../shared/types/forge.js";
 
 export const repoContextCache = new Cache<string, RepoContext>({ maxSize: 20, defaultTTL: 300000 });
 export const repoStatsCache = new Cache<string, RepoStats>({ maxSize: 20, defaultTTL: 60000 });
@@ -312,6 +316,16 @@ export function clearGitHubCaches(): void {
 export function _resetForgeQueryCachesForTests(): void {
   forgeQueryCache.clear();
   forgeQueryInflight.clear();
+}
+
+/**
+ * ISO timestamp → epoch milliseconds for the forge tooltip shapes. `0` for
+ * missing/unparseable values — mirrors `isoToMs` in `forgeProvider.ts`.
+ */
+export function isoToEpochMs(value: unknown): number {
+  if (typeof value !== "string") return 0;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : 0;
 }
 
 export function truncateBody(body: string | null | undefined, maxLength = 150): string {

@@ -5,7 +5,7 @@ import {
   gitHubTokenHealthService,
   HEALTH_CHECK_FOCUS_COOLDOWN_MS,
 } from "../GitHubTokenHealthService.js";
-import type { GitHubTokenHealthPayload } from "../../../../../shared/types/ipc/github.js";
+import type { GitHubTokenHealthPayload } from "../../shared/types.js";
 
 function createStorage() {
   let token: string | undefined;

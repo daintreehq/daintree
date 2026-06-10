@@ -7,7 +7,25 @@ import type {
   Page,
   RepoMetadata,
   ListOptions,
+  IssueTooltipData,
+  PRTooltipData,
+  ReviewThread,
+  ForgeTokenHealthState,
+  RateLimitDetails,
 } from "@shared/types/forge";
+import type {
+  ForgeRepositoryStats,
+  ForgeRepoStatsAndPagePayload,
+  ForgeRepoCountsUpdatedPayload,
+  ForgeFirstPageCachePayload,
+  ForgeProjectHealthPayload,
+  ForgeRateLimitChangedPayload,
+  ForgeTokenHealthChangedPayload,
+  PRDetectedPayload,
+  PRClearedPayload,
+  IssueDetectedPayload,
+  IssueNotFoundPayload,
+} from "@shared/types/ipc/forge";
 
 export const forgeClient = {
   openIssues: (cwd: string, query?: string, state?: string): Promise<void> => {
@@ -71,5 +89,89 @@ export const forgeClient = {
     stderr: string
   ): Promise<{ providerId: string; classification: PushErrorClassification | null } | null> => {
     return window.electron.forge.classifyPushError({ cwd, stderr });
+  },
+
+  getRepoStats: (cwd: string, bypassCache?: boolean): Promise<ForgeRepositoryStats> => {
+    return window.electron.forge.getRepoStats({ cwd, bypassCache });
+  },
+
+  getFirstPageCache: (cwd: string): Promise<ForgeFirstPageCachePayload | null> => {
+    return window.electron.forge.getFirstPageCache({ cwd });
+  },
+
+  getProjectHealth: (cwd: string, bypassCache?: boolean): Promise<ForgeProjectHealthPayload> => {
+    return window.electron.forge.getProjectHealth({ cwd, bypassCache });
+  },
+
+  getIssueTooltip: (cwd: string, issueNumber: number): Promise<IssueTooltipData | null> => {
+    return window.electron.forge.getIssueTooltip({ cwd, issueNumber });
+  },
+
+  getPRTooltip: (cwd: string, prNumber: number): Promise<PRTooltipData | null> => {
+    return window.electron.forge.getPRTooltip({ cwd, prNumber });
+  },
+
+  getIssuesByNumbers: (cwd: string, numbers: number[]): Promise<Issue[]> => {
+    return window.electron.forge.getIssuesByNumbers({ cwd, numbers });
+  },
+
+  getPRsByNumbers: (cwd: string, numbers: number[]): Promise<PR[]> => {
+    return window.electron.forge.getPRsByNumbers({ cwd, numbers });
+  },
+
+  getPRReviewThreads: (cwd: string, prNumber: number): Promise<ReviewThread[]> => {
+    return window.electron.forge.getPRReviewThreads({ cwd, prNumber });
+  },
+
+  resolveAuthorAvatar: (cwd: string, email: string): Promise<string | null> => {
+    return window.electron.forge.resolveAuthorAvatar({ cwd, email });
+  },
+
+  getTokenHealth: (providerId: string): Promise<ForgeTokenHealthState | null> => {
+    return window.electron.forge.getTokenHealth({ providerId });
+  },
+
+  getRateLimitDetails: (cwd: string): Promise<RateLimitDetails | null> => {
+    return window.electron.forge.getRateLimitDetails({ cwd });
+  },
+
+  openPR: (cwd: string, prNumber: number): Promise<void> => {
+    return window.electron.forge.openPR({ cwd, prNumber });
+  },
+
+  onRepoStatsAndPageUpdated: (
+    callback: (data: ForgeRepoStatsAndPagePayload) => void
+  ): (() => void) => {
+    return window.electron.forge.onRepoStatsAndPageUpdated(callback);
+  },
+
+  onRepoCountsUpdated: (callback: (data: ForgeRepoCountsUpdatedPayload) => void): (() => void) => {
+    return window.electron.forge.onRepoCountsUpdated(callback);
+  },
+
+  onRateLimitChanged: (callback: (data: ForgeRateLimitChangedPayload) => void): (() => void) => {
+    return window.electron.forge.onRateLimitChanged(callback);
+  },
+
+  onTokenHealthChanged: (
+    callback: (data: ForgeTokenHealthChangedPayload) => void
+  ): (() => void) => {
+    return window.electron.forge.onTokenHealthChanged(callback);
+  },
+
+  onPRDetected: (callback: (data: PRDetectedPayload) => void): (() => void) => {
+    return window.electron.forge.onPRDetected(callback);
+  },
+
+  onPRCleared: (callback: (data: PRClearedPayload) => void): (() => void) => {
+    return window.electron.forge.onPRCleared(callback);
+  },
+
+  onIssueDetected: (callback: (data: IssueDetectedPayload) => void): (() => void) => {
+    return window.electron.forge.onIssueDetected(callback);
+  },
+
+  onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void): (() => void) => {
+    return window.electron.forge.onIssueNotFound(callback);
   },
 } as const;

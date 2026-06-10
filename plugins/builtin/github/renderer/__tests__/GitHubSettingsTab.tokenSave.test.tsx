@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 
-vi.mock("@github-renderer/stores/githubConfigStore", () => ({
+vi.mock("../stores/githubConfigStore", () => ({
   useGitHubConfigStore: vi.fn(),
 }));
 
@@ -22,7 +22,7 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
-import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 
@@ -30,9 +30,21 @@ const mockedUseGitHubConfigStore = vi.mocked(useGitHubConfigStore);
 const mockedDispatch = vi.mocked(actionService.dispatch);
 const mockedNotify = vi.mocked(notify);
 
+const setCredentialMock = vi.fn();
+const clearCredentialMock = vi.fn(async () => {});
+
+function installForgeMocks() {
+  window.electron = {
+    forge: {
+      setCredential: setCredentialMock,
+      clearCredential: clearCredentialMock,
+    },
+  } as unknown as typeof window.electron;
+}
+
 function setupStore(overrides: Record<string, unknown> = {}) {
   mockedUseGitHubConfigStore.mockReturnValue({
-    config: { hasToken: false, owner: null, repo: null },
+    config: { hasToken: false },
     isLoading: false,
     error: null,
     initialize: vi.fn(),
@@ -44,23 +56,37 @@ function setupStore(overrides: Record<string, unknown> = {}) {
 describe("GitHubSettingsTab handleSaveToken", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installForgeMocks();
     setupStore();
   });
 
+  it("saves via forge.setCredential keyed by the canonical GitHub provider id", async () => {
+    setCredentialMock.mockResolvedValue({ valid: true, scopes: [] });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "  ghp_valid_token  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+
+    await waitFor(() => {
+      expect(setCredentialMock).toHaveBeenCalledWith("daintree.github.github", {
+        token: "ghp_valid_token",
+      });
+    });
+  });
+
   it("dispatches worktree.refresh after a successful token save so the sidebar re-fetches", async () => {
-    mockedDispatch.mockImplementation(async (actionId: string) => {
-      if (actionId === "github.setToken") {
-        return { ok: true, result: { valid: true, scopes: [] } } as never;
-      }
-      if (actionId === "github.getConfig") {
-        return {
-          ok: true,
-          result: { hasToken: true, owner: null, repo: null },
-        } as never;
-      }
-      if (actionId === "worktree.refresh") {
-        return { ok: true, result: undefined } as never;
-      }
+    setCredentialMock.mockResolvedValue({ valid: true, scopes: [] });
+    mockedDispatch.mockImplementation(async () => {
       return { ok: true, result: undefined } as never;
     });
 
@@ -91,13 +117,8 @@ describe("GitHubSettingsTab handleSaveToken", () => {
   });
 
   it("does not dispatch worktree.refresh when token validation fails", async () => {
-    mockedDispatch.mockImplementation(async (actionId: string) => {
-      if (actionId === "github.setToken") {
-        return {
-          ok: true,
-          result: { valid: false, scopes: [], error: "Invalid token" },
-        } as never;
-      }
+    setCredentialMock.mockResolvedValue({ valid: false, scopes: [], error: "Invalid token" });
+    mockedDispatch.mockImplementation(async () => {
       return { ok: true, result: undefined } as never;
     });
 
@@ -129,10 +150,8 @@ describe("GitHubSettingsTab handleSaveToken", () => {
   });
 
   it("shows inline error on IPC failure without firing notify", async () => {
-    mockedDispatch.mockImplementation(async (actionId: string) => {
-      if (actionId === "github.setToken") {
-        return { ok: false, error: { message: "IPC down" } } as never;
-      }
+    setCredentialMock.mockRejectedValue(new Error("IPC down"));
+    mockedDispatch.mockImplementation(async () => {
       return { ok: true, result: undefined } as never;
     });
 
@@ -152,6 +171,25 @@ describe("GitHubSettingsTab handleSaveToken", () => {
     });
 
     expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
+  it("clears via forge.clearCredential keyed by the canonical GitHub provider id", async () => {
+    setupStore({ config: { hasToken: true } });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear token" }));
+
+    await waitFor(() => {
+      expect(clearCredentialMock).toHaveBeenCalledWith("daintree.github.github");
+    });
   });
 
   it("shows inline error when token validation IPC fails", async () => {

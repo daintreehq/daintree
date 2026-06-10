@@ -5,7 +5,7 @@ import { GitHubIcon } from "@/components/icons/brands";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
-import type { GitHubTokenConfig, GitHubTokenValidation } from "@/types";
+import type { GitHubTokenValidation } from "../../shared/types.js";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
@@ -88,27 +88,15 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
-      const result = await actionService.dispatch<GitHubTokenValidation>(
-        "github.setToken",
-        { token: githubToken.trim() },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      const validation = result.result;
+      // The host's forge credential surface validates against GitHub before
+      // persisting and delivers the token to the live provider impl.
+      const validation = await window.electron.forge.setCredential(BUILTIN_GITHUB_PROVIDER_ID, {
+        token: githubToken.trim(),
+      });
       if (validation.valid) {
         setGithubToken("");
         setValidationResult("success");
-        const configResult = await actionService.dispatch<GitHubTokenConfig>(
-          "github.getConfig",
-          undefined,
-          { source: "user" }
-        );
-        if (!configResult.ok) {
-          throw new Error(configResult.error.message);
-        }
-        updateConfig(configResult.result);
+        updateConfig({ hasToken: true });
         void actionService.dispatch("worktree.refresh", undefined, {
           source: "user",
         });
@@ -127,21 +115,8 @@ export function GitHubSettingsTab() {
 
   const handleClearToken = async () => {
     try {
-      const clearResult = await actionService.dispatch("github.clearToken", undefined, {
-        source: "user",
-      });
-      if (!clearResult.ok) {
-        throw new Error(clearResult.error.message);
-      }
-      const configResult = await actionService.dispatch<GitHubTokenConfig>(
-        "github.getConfig",
-        undefined,
-        { source: "user" }
-      );
-      if (!configResult.ok) {
-        throw new Error(configResult.error.message);
-      }
-      updateConfig(configResult.result);
+      await window.electron.forge.clearCredential(BUILTIN_GITHUB_PROVIDER_ID);
+      updateConfig({ hasToken: false });
       setValidationResult(null);
       setErrorMessage(null);
     } catch (error) {

@@ -1,9 +1,9 @@
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { FolderGit2 } from "@/components/icons";
-import type { GitHubPR } from "@shared/types/github";
+import type { PR } from "@shared/types/forge";
 
 interface PrHeaderProps {
-  pr: GitHubPR;
+  pr: PR;
 }
 
 export function PrHeader({ pr }: PrHeaderProps) {

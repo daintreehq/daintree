@@ -53,7 +53,7 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
       await refresh();
     });
 
-    await injectFault(ctx.app, "github:list-issues", "E2E_INJECTED_ERROR");
+    await injectFault(ctx.app, "forge:list-issues", "E2E_INJECTED_ERROR");
 
     const issuesButton = ctx.window.locator('button[aria-label*="open issues"]');
     await expect(issuesButton).toBeVisible({ timeout: T_MEDIUM });

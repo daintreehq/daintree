@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ServiceConnectivityRegistry } from "../ServiceConnectivityRegistry.js";
-import type { GitHubTokenHealthPayload } from "../../../../shared/types/ipc/github.js";
+import type { ForgeTokenHealthState } from "../../../../shared/types/forge.js";
 import type {
   ConnectivityServiceKey,
   ServiceConnectivityStatus,
 } from "../../../../shared/types/ipc/connectivity.js";
 
 interface FakeGitHubHealth {
-  state: GitHubTokenHealthPayload;
-  listeners: Set<(payload: GitHubTokenHealthPayload) => void>;
-  getState(): GitHubTokenHealthPayload;
-  onStateChange(listener: (payload: GitHubTokenHealthPayload) => void): () => void;
-  emit(payload: GitHubTokenHealthPayload): void;
+  state: ForgeTokenHealthState;
+  listeners: Set<(payload: ForgeTokenHealthState) => void>;
+  getState(): ForgeTokenHealthState;
+  onStateChange(listener: (payload: ForgeTokenHealthState) => void): () => void;
+  emit(payload: ForgeTokenHealthState): void;
 }
 
 interface FakeMcpServer {
@@ -52,7 +52,7 @@ interface FakeAgentConnectivity {
   }): void;
 }
 
-function createFakeGitHubHealth(initial: GitHubTokenHealthPayload): FakeGitHubHealth {
+function createFakeGitHubHealth(initial: ForgeTokenHealthState): FakeGitHubHealth {
   const fake: FakeGitHubHealth = {
     state: initial,
     listeners: new Set(),

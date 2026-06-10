@@ -2268,7 +2268,7 @@ body,
  */
 
 /* Loading shimmer - left to right sweep */
-@keyframes github-status-shimmer {
+@keyframes forge-status-shimmer {
   0% {
     transform: translateX(-100%);
   }
@@ -2277,11 +2277,11 @@ body,
   }
 }
 
-.github-status-loading {
+.forge-status-loading {
   background: color-mix(in oklab, var(--color-daintree-accent) 20%, transparent);
 }
 
-.github-status-loading::after {
+.forge-status-loading::after {
   content: "";
   position: absolute;
   top: 0;
@@ -2294,7 +2294,7 @@ body,
     color-mix(in oklab, var(--color-daintree-accent) 80%, transparent),
     transparent
   );
-  animation: github-status-shimmer 1.5s ease-in-out infinite;
+  animation: forge-status-shimmer 1.5s ease-in-out infinite;
   will-change: transform;
 }
 
@@ -2336,7 +2336,7 @@ body,
 }
 
 /* Success fade - scale in then fade out */
-@keyframes github-status-success-fade {
+@keyframes forge-status-success-fade {
   0% {
     opacity: 0;
     transform: scaleX(0);
@@ -2351,15 +2351,15 @@ body,
   }
 }
 
-.github-status-success {
+.forge-status-success {
   background: var(--color-status-success);
   transform-origin: left;
-  animation: github-status-success-fade 500ms ease-out forwards;
+  animation: forge-status-success-fade 500ms ease-out forwards;
   will-change: opacity, transform;
 }
 
 /* Error pulse - subtle breathing animation */
-@keyframes github-status-error-pulse {
+@keyframes forge-status-error-pulse {
   0%,
   100% {
     opacity: 0.8;
@@ -2369,29 +2369,29 @@ body,
   }
 }
 
-.github-status-error {
+.forge-status-error {
   background: var(--color-status-error);
-  animation: github-status-error-pulse 2s ease-in-out infinite;
+  animation: forge-status-error-pulse 2s ease-in-out infinite;
   will-change: opacity;
 }
 
 /* Respect user's motion preferences */
 @variant reduce-motion {
-  .github-status-loading::after {
+  .forge-status-loading::after {
     display: none;
   }
 
-  .github-status-loading {
+  .forge-status-loading {
     background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent);
   }
 
-  .github-status-success {
+  .forge-status-success {
     animation: none;
     opacity: 1;
     transform: scaleX(1);
   }
 
-  .github-status-error {
+  .forge-status-error {
     animation: none;
     opacity: 1;
   }
@@ -2404,11 +2404,11 @@ body,
 }
 
 /* Disable in performance mode */
-body[data-performance-mode="true"] .github-status-loading::after {
+body[data-performance-mode="true"] .forge-status-loading::after {
   display: none !important;
 }
 
-body[data-performance-mode="true"] .github-status-loading {
+body[data-performance-mode="true"] .forge-status-loading {
   background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent) !important;
 }
 
@@ -2418,12 +2418,12 @@ body[data-performance-mode="true"] .palette-loading-bar__sweep {
   background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent) !important;
 }
 
-body[data-performance-mode="true"] .github-status-success {
+body[data-performance-mode="true"] .forge-status-success {
   opacity: 1 !important;
   transform: scaleX(1) !important;
 }
 
-body[data-performance-mode="true"] .github-status-error {
+body[data-performance-mode="true"] .forge-status-error {
   opacity: 1 !important;
 }
 

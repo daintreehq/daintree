@@ -1,4 +1,4 @@
-import type { ProjectHealthData } from "@shared/types";
+import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { CheckCircle2, XCircle, Clock, CircleMinus, GitPullRequest, CircleDot } from "lucide-react";
 
@@ -10,10 +10,10 @@ export interface AggregateCounts {
 }
 
 interface MainWorktreeSummaryRowsProps {
-  health: ProjectHealthData | null;
+  health: ForgeProjectHealthPayload | null;
 }
 
-function ciStatusIcon(status: ProjectHealthData["ciStatus"]) {
+function ciStatusIcon(status: ForgeProjectHealthPayload["ciStatus"]) {
   switch (status) {
     case "success":
       return <CheckCircle2 className="w-2.5 h-2.5 text-status-success" />;
@@ -28,7 +28,7 @@ function ciStatusIcon(status: ProjectHealthData["ciStatus"]) {
   }
 }
 
-function ciStatusLabel(status: ProjectHealthData["ciStatus"]): string {
+function ciStatusLabel(status: ForgeProjectHealthPayload["ciStatus"]): string {
   switch (status) {
     case "success":
       return "passing";

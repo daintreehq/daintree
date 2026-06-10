@@ -36,7 +36,8 @@ import {
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
-import type { BulkCreateWorktreeDialogProps } from "@github-renderer/components/BulkCreateWorktreeDialog";
+import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { FleetPickerPalette } from "@/components/Fleet/FleetPickerPalette";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -502,10 +503,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       closeBulkCreateDialog: state.closeBulkCreateDialog,
     }))
   );
-  // Resolved reactively so the dialog drops out (and back in) live with the
-  // GitHub plugin's enable state instead of holding a stale slot reference.
-  const BulkCreateWorktreeDialog = useBuiltinView<BulkCreateWorktreeDialogProps>(
-    "github.bulkCreateWorktreeDialog"
+  // Resolved reactively from the active provider's slot so the dialog drops
+  // out (and back in) live with the owning plugin's enable state instead of
+  // holding a stale slot reference.
+  const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const BulkCreateWorktreeDialog = useBuiltinView<ForgeBulkCreateWorktreeDialogProps>(
+    forgeProviderEntry?.contribution.slots?.bulkCreateWorktreeDialog ?? ""
   );
   // Direct subscription (no useDeferredValue) so the skeleton renders the
   // moment the dialog submits — defer would make the placeholder lag the

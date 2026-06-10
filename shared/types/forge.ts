@@ -147,7 +147,12 @@ export interface RepoMetadata {
  * do not support. `cursor` is opaque and provider-defined.
  */
 export interface ListOptions {
-  state?: "open" | "closed" | "all";
+  /**
+   * State filter. `"merged"` is PR-only — `listIssues` providers treat it as
+   * the default open set since issues have no merged state. Advisory: a
+   * provider that can't filter by a given state ignores it.
+   */
+  state?: "open" | "closed" | "merged" | "all";
   cursor?: string | null;
   perPage?: number;
   labels?: string[];
@@ -229,6 +234,18 @@ export interface ForgeLabel {
   color?: string;
 }
 
+/**
+ * Compact projection of a PR linked to an issue, for list-row badges. The
+ * provider decides what "linked" means on its forge (GitHub closing
+ * references, GitLab related MRs, …).
+ */
+export interface LinkedPRSummary {
+  number: number;
+  state: NormalizedPRState;
+  url: string;
+  ciStatus?: CIStatusState;
+}
+
 export interface Issue {
   number: number;
   title: string;
@@ -240,6 +257,10 @@ export interface Issue {
   author?: ForgeUser;
   assignees: ForgeUser[];
   labels: ForgeLabel[];
+  /** Comment count, when the provider reports one. */
+  commentCount?: number;
+  /** Linked PR, when the provider links issues to PRs. */
+  linkedPR?: LinkedPRSummary;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -286,6 +307,10 @@ export interface PR {
    * `undefined` when not reported. See {@link NormalizedReviewDecision}.
    */
   reviewDecision?: NormalizedReviewDecision;
+  /** Comment count, when the provider reports one. */
+  commentCount?: number;
+  /** Roll-up CI status for the head commit, when the provider reports one in lists. */
+  ciStatus?: CIStatusState;
   /** Epoch milliseconds. */
   createdAt: number;
   /** Epoch milliseconds. */
@@ -429,6 +454,7 @@ export type PRListProbeResult =
 export interface BatchLookupCapability {
   getCIStatuses?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, CIStatus | null>>;
   findPRsByNumbers?(repo: RepoRef, prNumbers: number[]): Promise<Map<number, PR | null>>;
+  findIssuesByNumbers?(repo: RepoRef, issueNumbers: number[]): Promise<Map<number, Issue | null>>;
   /**
    * Optional cheap conditional probe of the repo's open-PR list. Given the
    * caller's current {@link PRSnapshot}s of the PRs it tracks, return only
@@ -451,6 +477,290 @@ export interface BatchLookupCapability {
  */
 export interface IdentityCapability {
   getCurrentUser(): Promise<ForgeUser | null>;
+}
+
+/**
+ * Hover-tooltip projection of an issue — the subset a hover card renders
+ * without fetching the full resource. Providers truncate `bodyExcerpt`
+ * themselves; the host renders it verbatim.
+ */
+export interface IssueTooltipData {
+  number: number;
+  title: string;
+  bodyExcerpt: string;
+  state: NormalizedIssueState;
+  /** Verbatim provider state value, for provider-flavored display if needed. */
+  rawState: string;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  author?: ForgeUser;
+  assignees: ForgeUser[];
+  labels: ForgeLabel[];
+}
+
+/** Hover-tooltip projection of a PR. See {@link IssueTooltipData}. */
+export interface PRTooltipData {
+  number: number;
+  title: string;
+  bodyExcerpt: string;
+  state: NormalizedPRState;
+  /** Verbatim provider state value, for provider-flavored display if needed. */
+  rawState: string;
+  /** `false` for forges with no draft concept. */
+  isDraft: boolean;
+  /** Epoch milliseconds. */
+  createdAt: number;
+  author?: ForgeUser;
+  assignees: ForgeUser[];
+  labels: ForgeLabel[];
+}
+
+/**
+ * Optional hover-tooltip lookups. Distinct from `getIssue`/`getPR` so a
+ * provider can serve tooltips from a dedicated short-TTL cache without
+ * disturbing its list caches. Returns `null` when the resource doesn't exist
+ * or the lookup fails — tooltip rendering is best-effort and never surfaces
+ * an error state.
+ */
+export interface TooltipCapability {
+  getIssueTooltip(repo: RepoRef, issueNumber: number): Promise<IssueTooltipData | null>;
+  getPRTooltip(repo: RepoRef, prNumber: number): Promise<PRTooltipData | null>;
+}
+
+/**
+ * Forge-side repository counts plus freshness metadata, as returned by
+ * {@link RepoStatsCapability.getRepoStats}. Local-git facts (commit count)
+ * are deliberately absent — the host computes those itself; the provider
+ * reports only what lives on the forge.
+ */
+export interface ForgeRepoCounts {
+  /** Open issues count, `null` when unavailable. */
+  issueCount: number | null;
+  /** Open PRs count, `null` when unavailable. */
+  prCount: number | null;
+  /** Counts came from a cache and may be outdated. */
+  stale?: boolean;
+  /** Epoch milliseconds of the last successful forge fetch. */
+  lastUpdated?: number;
+  /** Human-readable error when the forge fetch failed (counts may be cached). */
+  error?: string;
+  /** Epoch milliseconds when an active rate-limit block resumes. */
+  rateLimitResetAt?: number;
+  /** Kind of active rate limit (primary quota vs secondary abuse throttle). */
+  rateLimitKind?: "primary" | "secondary";
+  /**
+   * Suggested delay (ms) until the next background stats poll, derived from
+   * the provider's own activity probing/backoff. Absent when the provider has
+   * no adaptive signal.
+   */
+  nextPollIntervalMs?: number;
+}
+
+/**
+ * One page of items in stats/first-page payloads. Narrower than {@link Page}:
+ * stats snapshots don't round-trip freshness tokens.
+ */
+export interface StatsPage<T> {
+  items: T[];
+  endCursor: string | null;
+  hasNextPage: boolean;
+  totalCount?: number;
+}
+
+/** Result of {@link RepoStatsCapability.getRepoStats}. */
+export interface RepoStatsSnapshot {
+  counts: ForgeRepoCounts;
+  /** First page of open issues (created-desc) when the fetch produced page data. */
+  issues?: StatsPage<Issue> | null;
+  /** First page of open PRs (created-desc) when the fetch produced page data. */
+  prs?: StatsPage<PR> | null;
+  /** Where the snapshot came from; `network` results are push-broadcast by the host. */
+  source?: "network" | "memory-cache" | "disk";
+}
+
+/** Disk-persisted first-page snapshot for cold-start hydration. */
+export interface FirstPageSnapshot {
+  issues: StatsPage<Issue>;
+  prs: StatsPage<PR>;
+  /** Epoch milliseconds when the snapshot was written. */
+  lastUpdated: number;
+  /** Bootstrap-eligible cached counts, present even if page items expired. */
+  counts?: { issueCount: number; prCount: number; lastUpdated: number };
+}
+
+/**
+ * Optional repository-stats lookups powering the toolbar counts badge and
+ * dropdown priming. Providers own caching, activity probing, and backoff;
+ * the host owns local-git facts and push-broadcasting fresh results.
+ */
+export interface RepoStatsCapability {
+  getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot>;
+  /** Cold-start hydration from the provider's disk cache; `null` when absent. */
+  getFirstPageCache?(repo: RepoRef): Promise<FirstPageSnapshot | null>;
+}
+
+/**
+ * Project-health roll-up for the project pulse card. All fields are
+ * forge-sourced; `none`-ish defaults mean "provider has no signal", not an
+ * error.
+ */
+export interface ProjectHealthSnapshot {
+  ciStatus: "success" | "failure" | "error" | "pending" | "expected" | "none";
+  issueCount: number;
+  prCount: number;
+  latestRelease: {
+    tagName: string;
+    publishedAt: string | null;
+    url: string;
+  } | null;
+  securityAlerts: {
+    visible: boolean;
+    count: number;
+  };
+  mergeVelocity: {
+    mergedCounts: Record<60 | 120 | 180, number>;
+  };
+  repoUrl: string;
+  /** Epoch milliseconds of the last successful fetch. */
+  lastUpdated?: number;
+}
+
+/** Optional project-health lookup powering the project pulse card. */
+export interface ProjectHealthCapability {
+  getProjectHealth(
+    repo: RepoRef,
+    opts?: { bypassCache?: boolean }
+  ): Promise<{ health: ProjectHealthSnapshot | null; error?: string }>;
+}
+
+/**
+ * Optional commit-author avatar resolution. Maps a commit author email to an
+ * avatar URL via the provider's user search, or `null` when unresolvable.
+ * Providers cache internally; the lookup must be cheap to call repeatedly.
+ */
+export interface AvatarCapability {
+  resolveAuthorAvatar(email: string): Promise<string | null>;
+}
+
+/** A single named rate-limit bucket as reported by the provider. */
+export interface RateLimitBucket {
+  /** Provider-defined bucket name (e.g. `core`, `graphql`, `search`). */
+  name: string;
+  limit: number;
+  used: number;
+  remaining: number;
+  /** Epoch milliseconds when this bucket's quota resets. */
+  resetAt: number;
+}
+
+/**
+ * Detailed per-bucket rate-limit snapshot for diagnostics UI. Providers with
+ * a single quota return one bucket; providers with no inspectable quota omit
+ * the capability method entirely.
+ */
+export interface RateLimitDetails {
+  buckets: RateLimitBucket[];
+  /** Epoch milliseconds when the snapshot was fetched. */
+  fetchedAt: number;
+}
+
+/**
+ * Current health of the provider's stored credential.
+ *
+ * - `unknown`: no credential configured or no probe has completed yet
+ * - `healthy`: the most recent probe succeeded
+ * - `unhealthy`: the provider authoritatively rejected the credential
+ *   (expired/revoked) — transient network failures must NOT flip to this
+ */
+export type ForgeTokenHealthStatus = "unknown" | "healthy" | "unhealthy";
+
+/** Token-health state pushed through {@link HealthEventsCapability}. */
+export interface ForgeTokenHealthState {
+  status: ForgeTokenHealthStatus;
+  /** Monotonic credential version at the time of the last completed probe. */
+  tokenVersion: number;
+  /** Epoch milliseconds at which the last probe completed. */
+  checkedAt: number;
+  /** Provider re-authorization URL (e.g. SSO), when one was observed. */
+  reauthUrl?: string;
+}
+
+/**
+ * Optional health-event surface. The host subscribes once per registered
+ * provider and relays state to every renderer over the providerId-keyed
+ * `forge:*` push channels, and paces workspace-host background polling from
+ * the rate-limit `throttleMultiplier`. Subscriptions return a disposer; the
+ * host disposes them when the provider implementation is replaced or
+ * unregistered.
+ */
+export interface HealthEventsCapability {
+  /** Replay the current token-health state (for late-mounting windows). */
+  getTokenHealth(): ForgeTokenHealthState;
+  onTokenHealthChanged(callback: (state: ForgeTokenHealthState) => void): () => void;
+  onRateLimitChanged?(callback: (info: RateLimitInfo) => void): () => void;
+  /** Detailed per-bucket snapshot for diagnostics UI; omit when not inspectable. */
+  getRateLimitDetails?(): Promise<RateLimitDetails | null>;
+  /**
+   * Optional. Re-probe credential health now. The host calls this on
+   * focus-regain (unforced — the provider applies its own cooldown) and on
+   * system wake (`force: true`, so a credential that expired during a long
+   * sleep is detected promptly). Results surface via
+   * {@link onTokenHealthChanged}; the host never awaits the result.
+   */
+  refreshTokenHealth?(options?: { force?: boolean }): Promise<void> | void;
+}
+
+/** Result of probing whether a provider can authenticate a clone. */
+export interface CloneAuthProbe {
+  authenticated: boolean;
+  /** Short human-readable explanation when `authenticated` is `false`. */
+  reason?: string;
+}
+
+/** Options for {@link CloneCapability.cloneRepository}. */
+export interface CloneRequestOptions {
+  /** Clone with `--depth 1` semantics when the provider's tooling supports it. */
+  shallow?: boolean;
+  /** Abort signal — the provider must kill its clone process tree on abort. */
+  signal?: AbortSignal;
+  /** Progress relay; `stage` is a stable lowercase dedup key, `message` is display text. */
+  onProgress?(stage: string, progress: number, message: string): void;
+}
+
+/**
+ * Optional authenticated-clone support, powering the host's clone-repository
+ * flow without it hardcoding any one forge's CLI. The host probes
+ * {@link probeAuth} first and only takes a capability path when it reports
+ * `authenticated: true`; otherwise — or when the provider omits the
+ * capability entirely — it falls back to a plain anonymous `git clone`.
+ * {@link cloneRepository} is preferred over {@link getAuthenticatedCloneUrl}
+ * when both are present. Errors thrown from `cloneRepository` surface to the
+ * user directly (no plain-git retry), so a provider whose tooling may be
+ * absent should report that through `probeAuth` rather than failing the
+ * clone. Authenticated URLs may embed credentials: the host never logs or
+ * persists them, and providers must not either.
+ */
+export interface CloneCapability {
+  /**
+   * Probe whether an authenticated clone path is currently available
+   * (tooling installed and signed in, or a valid stored credential). Drives
+   * the host's path selection; an unauthenticated probe also means the clone
+   * dialog shows no provider sign-in recovery affordance beyond the standard
+   * auth-failure banner.
+   */
+  probeAuth(signal?: AbortSignal): Promise<CloneAuthProbe>;
+  /**
+   * Rewrite a clone URL to carry the provider's credentials (e.g. an
+   * embedded token). Return `null` when no authenticated URL is available;
+   * the host then clones the original URL anonymously.
+   */
+  getAuthenticatedCloneUrl?(url: string): Promise<string | null>;
+  /**
+   * Clone using the provider's own tooling (e.g. `gh repo clone`).
+   * `targetDir` is the absolute directory the clone must create; its parent
+   * is validated to exist before the call.
+   */
+  cloneRepository?(url: string, targetDir: string, opts: CloneRequestOptions): Promise<void>;
 }
 
 /**
@@ -572,6 +882,12 @@ export interface ForgeProviderImpl {
   milestones?: MilestoneCapability;
   batchLookups?: BatchLookupCapability;
   identity?: IdentityCapability;
+  tooltips?: TooltipCapability;
+  repoStats?: RepoStatsCapability;
+  projectHealth?: ProjectHealthCapability;
+  avatars?: AvatarCapability;
+  healthEvents?: HealthEventsCapability;
+  clone?: CloneCapability;
 }
 
 /**
@@ -597,6 +913,7 @@ export type ForgeCapabilityHint =
   | "batch-branch-prs"
   | "identity"
   | "pr-files"
+  | "clone"
   | (string & {});
 
 /**
@@ -669,6 +986,29 @@ export interface ForgeProviderContribution {
   settingsScopeRef?: string;
   /** IDs of `views` contributions shown under this provider's panel section. */
   viewRefs?: string[];
+  /**
+   * Named renderer view-slot refs for provider-owned UI. Each value is a
+   * builtin-view id the plugin's renderer registers via
+   * `registerBuiltinView`; the host resolves the ACTIVE provider's ref for
+   * each seam instead of hardcoding any one plugin's view ids. All optional —
+   * the host renders a neutral fallback (or hides the seam) when a ref is
+   * absent or the view is unregistered (e.g. plugin disabled).
+   */
+  slots?: ForgeProviderSlots;
+}
+
+/** Named view-slot refs a forge provider can fill. See {@link ForgeProviderContribution.slots}. */
+export interface ForgeProviderSlots {
+  /** Provider settings panel (Settings → Code forge). */
+  settingsTab?: string;
+  /** Brand icon component rendered beside the provider's name. */
+  icon?: string;
+  /** Content of the toolbar stats dropdown (issues / PRs / commits lists). */
+  statsDropdown?: string;
+  /** Bulk create-worktrees-from-issues dialog. */
+  bulkCreateWorktreeDialog?: string;
+  /** Issue-selector view used by worktree attach/create flows. */
+  issueSelector?: string;
 }
 
 /**
@@ -683,6 +1023,7 @@ export interface ForgeProviderDescriptor {
   capabilities?: ForgeCapabilityHint[];
   settingsScopeRef?: string;
   viewRefs?: string[];
+  slots?: ForgeProviderSlots;
 }
 
 /**

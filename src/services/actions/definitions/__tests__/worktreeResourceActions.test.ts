@@ -12,7 +12,6 @@ const mockOnAddTerminal = vi.fn();
 // Stub all external imports that worktreeActions.ts pulls in
 vi.mock("@/clients", () => ({
   copyTreeClient: {},
-  githubClient: {},
   systemClient: {},
   worktreeClient: { resourceAction: mockResourceAction },
   projectClient: {},

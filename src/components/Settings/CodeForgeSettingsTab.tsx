@@ -8,11 +8,10 @@ import {
   type ReactNode,
 } from "react";
 import { GitBranch, Key, Check, AlertCircle, ScrollText } from "lucide-react";
-import { GitHubIcon } from "@/components/icons/brands";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
-import { makeForgeProviderId, BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
@@ -30,14 +29,9 @@ import { useTabLoad } from "@/hooks";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 
-type ForgeIcon = ComponentType<{ className?: string; size?: number; "aria-hidden"?: boolean }>;
-
-function getForgeIcon(canonicalId: string): ForgeIcon {
-  return canonicalId === BUILTIN_GITHUB_PROVIDER_ID ? GitHubIcon : GitBranch;
-}
+type ForgeIcon = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
 const GENERAL_ID = "general";
-const GITHUB_ID = BUILTIN_GITHUB_PROVIDER_ID;
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
 const COPY_FEEDBACK_MS = 2000;
 
@@ -70,7 +64,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   });
 
   // Refetch on plugin enable/disable so the provider dropdown (and the
-  // GitHub subtab below) track the live forge registry, not a mount-time
+  // provider subtabs below) track the live forge registry, not a mount-time
   // snapshot — same broadcast PluginsTab follows.
   useEffect(() => {
     return window.electron.plugin.onProvenanceChanged(() => {
@@ -80,12 +74,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       });
     });
   }, [loadProviders]);
-
-  // The GitHub settings panel is contributed by the daintree.github plugin
-  // (slot resolves null while the plugin is disabled), so disabling the
-  // plugin genuinely removes its settings interface instead of the host
-  // rendering a panel for a provider that no longer exists.
-  const GitHubSettingsView = useBuiltinView<Record<string, never>>("github.forgeSettingsTab");
 
   const [auditRecords, setAuditRecords] = useState<ForgeAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
@@ -220,23 +208,24 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     [providers]
   );
 
-  // Fall back to the GitHub subtab only while its provider is actually
-  // registered — with the GitHub plugin disabled the provider list omits it,
-  // and defaulting to a panel for an absent provider is exactly the "disable
-  // does nothing" bug (#9304 follow-up). General settings always exist.
-  const githubAvailable = providerOptions.some((p) => p.id === GITHUB_ID);
-  const effectiveSubtab =
-    activeSubtab &&
-    (activeSubtab === GENERAL_ID || providerOptions.some((p) => p.id === activeSubtab))
-      ? activeSubtab
-      : githubAvailable
-        ? GITHUB_ID
-        : GENERAL_ID;
+  // Subtab resolution is provider-generic. A fresh open (no subtab yet)
+  // defaults to the first registered provider so the tab lands on something
+  // configurable; a stale subtab (e.g. a deep-link to a provider whose plugin
+  // was disabled — the provider list omits it) falls back to General, because
+  // defaulting to a panel for an absent provider is exactly the "disable does
+  // nothing" bug (#9304 follow-up) and General settings always exist.
+  const isKnownSubtab =
+    activeSubtab !== null &&
+    (activeSubtab === GENERAL_ID || providerOptions.some((p) => p.id === activeSubtab));
+  const effectiveSubtab = isKnownSubtab
+    ? (activeSubtab as string)
+    : activeSubtab !== null
+      ? GENERAL_ID
+      : (providerOptions[0]?.id ?? GENERAL_ID);
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
   const isGeneral = effectiveSubtab === GENERAL_ID;
-  const isGitHub = effectiveSubtab === GITHUB_ID;
   const selectedEntry = !isGeneral
     ? providers.find((p) => makeForgeProviderId(p.pluginId, p.contribution.id) === effectiveSubtab)
     : null;
@@ -295,26 +284,17 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           </>
         )}
 
-        {isGitHub && GitHubSettingsView && (
-          <ForgeProviderCard name="GitHub" Icon={GitHubIcon}>
-            <GitHubSettingsView />
-          </ForgeProviderCard>
-        )}
-
-        {!isGeneral && !isGitHub && selectedEntry && (
+        {!isGeneral && selectedEntry && (
           <ForgeProviderCard
             name={selectedEntry.contribution.name}
-            Icon={getForgeIcon(
-              makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)
-            )}
+            iconSlotId={selectedEntry.contribution.slots?.icon}
           >
-            <ProviderSettingsBody
+            <ProviderPanel
               providerId={makeForgeProviderId(
                 selectedEntry.pluginId,
                 selectedEntry.contribution.id
               )}
-              pluginId={selectedEntry.pluginId}
-              contribution={selectedEntry.contribution}
+              entry={selectedEntry}
             />
           </ForgeProviderCard>
         )}
@@ -333,17 +313,28 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   );
 }
 
+/**
+ * Provider brand icon resolved through the provider's `slots.icon` builtin-view
+ * ref. Falls back to a neutral `GitBranch` glyph when the provider declares no
+ * icon slot or the owning plugin's view is unregistered/disabled.
+ */
+function ProviderIcon({ slotId, className }: { slotId?: string; className?: string }) {
+  const SlotIcon = useBuiltinView<{ className?: string; "aria-hidden"?: boolean }>(slotId ?? "");
+  const Icon: ForgeIcon = SlotIcon ?? GitBranch;
+  return <Icon className={className} aria-hidden={true} />;
+}
+
 interface ForgeProviderCardProps {
   name: string;
-  Icon: ForgeIcon;
+  iconSlotId?: string;
   children: ReactNode;
 }
 
-function ForgeProviderCard({ name, Icon, children }: ForgeProviderCardProps) {
+function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProps) {
   return (
     <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
       <div className="flex items-center gap-3 pb-3 border-b border-daintree-border">
-        <Icon className="w-6 h-6 text-daintree-text" aria-hidden={true} />
+        <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-daintree-text" />
         <div>
           <h4 className="text-sm font-medium text-daintree-text">{name} settings</h4>
           <p className="text-xs text-daintree-text/50 select-text">
@@ -353,6 +344,27 @@ function ForgeProviderCard({ name, Icon, children }: ForgeProviderCardProps) {
       </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * Body of a provider's settings card. A provider-owned panel contributed via
+ * `slots.settingsTab` wins (the slot resolves null while the owning plugin is
+ * disabled, so disabling genuinely removes the plugin's settings interface);
+ * otherwise the host renders the generic credential form built from the
+ * provider's declared `credentialFields`.
+ */
+function ProviderPanel({ providerId, entry }: { providerId: string; entry: ForgeProviderEntry }) {
+  const SlotView = useBuiltinView<Record<string, never>>(
+    entry.contribution.slots?.settingsTab ?? ""
+  );
+  if (SlotView) return <SlotView />;
+  return (
+    <ProviderSettingsBody
+      providerId={providerId}
+      pluginId={entry.pluginId}
+      contribution={entry.contribution}
+    />
   );
 }
 
@@ -367,7 +379,11 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
   const capabilities = contribution.capabilities;
 
   return (
-    <div className="space-y-4">
+    // `forge-access-token` is the stable anchor settings-search and the
+    // token-recovery surfaces target — generic for any provider, regardless
+    // of whether the provider ships its own settings slot or uses the host
+    // credential form below.
+    <div className="space-y-4" id="forge-access-token">
       {credentialFields.length > 0 ? (
         <GenericCredentialForm
           providerId={providerId}

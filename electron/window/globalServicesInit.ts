@@ -6,12 +6,10 @@ import {
   isStoreMigrationError,
 } from "../services/StoreMigrations.js";
 import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
-import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import {
   agentConnectivityService,
   getServiceConnectivityRegistry,
 } from "../services/connectivity/index.js";
-import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
@@ -123,7 +121,7 @@ async function evictStaleSessionFiles(): Promise<void> {
 /**
  * Run the once-per-app-lifecycle global initialization on the first window
  * setup. Migrations run inline (synchronous, blocking); everything else is
- * either a synchronous boot (GitHubAuth storage, ActionBreadcrumbService) or
+ * either a synchronous boot (ActionBreadcrumbService) or
  * registered as a deferred task that drains after first-interactive.
  *
  * Returns "exit-requested" when migrations fail and `app.exit(1)` has been
@@ -172,34 +170,14 @@ export async function initGlobalServices(
     return "exit-requested";
   }
 
-  // Initialize GitHubAuth storage (must stay eager — synchronous reads)
-  GitHubAuth.initializeStorage({
-    get: () => secureStorage.get("userConfig.githubToken"),
-    set: (token) => secureStorage.set("userConfig.githubToken", token),
-    delete: () => secureStorage.delete("userConfig.githubToken"),
-  });
-  console.log("[MAIN] GitHubAuth initialized with storage");
-
-  // E2E hook: seed/clear an in-memory GitHub token so fault-mode tests can
-  // reach IPC paths gated on `hasToken: true` without hitting the network.
-  // Skips token validation by pre-seeding cached user info, mirroring the
-  // post-validate state. Mirrors the __daintreeFaultRegistry / __daintreeResetRateLimits
-  // pattern — gated on DAINTREE_E2E_FAULT_MODE, never present in production.
+  // Adaptive-recovery + watchdog E2E seams (#9599), gated on
+  // DAINTREE_E2E_FAULT_MODE — never present in production. Drive a synthetic
+  // resource-profile transition and a synthetic watchdog cap-hit so the
+  // full-resilience specs can assert the side-effects (PVM fan-out, the
+  // `watchdog:disabled` broadcast) without real memory pressure or three
+  // genuine watchdog crashes. (The GitHub token seams moved into the
+  // daintree.github plugin's main module alongside its token storage.)
   if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
-    (globalThis as Record<string, unknown>).__daintreeSeedGitHubToken = (token: string) => {
-      GitHubAuth.setMemoryToken(token);
-      const version = GitHubAuth.getTokenVersion();
-      GitHubAuth.setValidatedUserInfo("e2e-user", undefined, ["repo"], version);
-    };
-    (globalThis as Record<string, unknown>).__daintreeClearGitHubToken = () => {
-      GitHubAuth.setMemoryToken(null);
-    };
-
-    // Adaptive-recovery + watchdog E2E seams (#9599). Drive a synthetic
-    // resource-profile transition and a synthetic watchdog cap-hit so the
-    // full-resilience specs can assert the side-effects (PVM fan-out, the
-    // `watchdog:disabled` broadcast) without real memory pressure or three
-    // genuine watchdog crashes. Same gating as the GitHub-token seams above.
     const VALID_RESOURCE_PROFILES = new Set<ResourceProfile>([
       "performance",
       "balanced",
@@ -515,11 +493,10 @@ export async function initGlobalServices(
     },
   });
 
-  // GitHub token-health probing is no longer started here — the
-  // daintree.github plugin owns it via activate()/dispose() (#9304
-  // follow-up), so a disabled plugin issues no background GitHub probes.
-  // Token STORAGE stays eager above (GitHubAuth.initializeStorage)
-  // regardless of plugin state.
+  // GitHub token storage, startup validation, and token-health probing are
+  // all owned by the daintree.github plugin (storage initializes at plugin
+  // module load; probing starts in activate() and stops on deactivation), so
+  // a disabled plugin issues no GitHub network and holds no token state.
 
   // Background agent provider reachability probes (Claude, Gemini, Codex)
   // and the registry that aggregates GitHub, agents, and MCP into a single
@@ -539,51 +516,6 @@ export async function initGlobalServices(
       getServiceConnectivityRegistry().start();
     },
   });
-
-  // Skip startup token validation when the GitHub plugin is disabled — the
-  // /user fetch is GitHub network work the user opted out of. Read the
-  // persisted disabled list directly: this task is registered before the
-  // plugin-service deferred task runs, so the forge registry can't be
-  // consulted yet. (Re-enable validates on next launch or via set-token.)
-  const persistedPlugins = store.get("plugins") as { disabled?: unknown } | undefined;
-  const githubPluginDisabled =
-    Array.isArray(persistedPlugins?.disabled) &&
-    persistedPlugins.disabled.includes("daintree.github");
-
-  if (GitHubAuth.hasToken() && !githubPluginDisabled) {
-    const token = GitHubAuth.getToken();
-    if (token) {
-      const versionAtStart = GitHubAuth.getTokenVersion();
-      registerDeferredTask({
-        name: "github-auth-validate",
-        // Floated, not awaited: GitHubAuth.validate has an internal 10s
-        // AbortSignal.timeout, and no later task depends on the validated user
-        // info. Returning void lets drainNext advance immediately instead of
-        // stalling the whole queue on a slow/offline network. The versionAtStart
-        // guard makes setValidatedUserInfo a safe no-op if the token rotates
-        // mid-flight, and the shutdown hard-timeout budget (#4287) bounds any
-        // in-flight fetch still pending at quit.
-        run: () => {
-          void (async () => {
-            try {
-              const validation = await GitHubAuth.validate(token);
-              if (validation.valid && validation.username) {
-                GitHubAuth.setValidatedUserInfo(
-                  validation.username,
-                  validation.avatarUrl,
-                  validation.scopes,
-                  versionAtStart
-                );
-                console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
-              }
-            } catch (err) {
-              console.warn("[MAIN] Failed to validate stored GitHub token:", err);
-            }
-          })();
-        },
-      });
-    }
-  }
 
   // Low-frequency re-invocation of the boot cleanup routines so on-disk state
   // doesn't grow unbounded across a long session (#9537). Gated on system idle
@@ -624,6 +556,18 @@ export async function initGlobalServices(
       const { agentNotificationService } = await import("../services/AgentNotificationService.js");
       setAgentNotificationServiceRef(agentNotificationService);
       agentNotificationService.initialize();
+    },
+  });
+
+  // Forge matcher relay — pushes the provider hostname-matcher table into
+  // workspace hosts on every registry change so worktree monitors can resolve
+  // remote URLs to provider ids; the initial push covers providers registered
+  // before this task ran.
+  registerDeferredTask({
+    name: "forge-matcher-relay",
+    run: async () => {
+      const { initForgeMatcherRelay } = await import("../services/forgeMatcherRelay.js");
+      initForgeMatcherRelay();
     },
   });
 

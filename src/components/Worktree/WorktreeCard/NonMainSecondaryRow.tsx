@@ -101,6 +101,7 @@ export function NonMainSecondaryRow({
       fetchAuthFailed={Boolean(worktree.fetchAuthFailed)}
       fetchNetworkFailed={Boolean(worktree.fetchNetworkFailed)}
       hasAuthFailedSignIn={hasAuthFailedSignIn}
+      authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
       containerGapClass="gap-1.5"
       baseBranchName={worktree.baseBranchName}
       baseAheadCount={worktree.baseAheadCount}

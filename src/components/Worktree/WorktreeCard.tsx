@@ -95,7 +95,7 @@ export interface WorktreeCardProps {
   onMoveDown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
-  projectHealth?: import("@shared/types").ProjectHealthData | null;
+  projectHealth?: import("@shared/types/ipc/forge").ForgeProjectHealthPayload | null;
   /**
    * Multi-select state (grid variant only). When provided, modifier-clicks
    * (Ctrl/Cmd/Shift) route through `onToggleSelect` instead of `onSelect`

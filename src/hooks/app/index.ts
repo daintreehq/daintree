@@ -18,7 +18,7 @@ export { useErrorRetry } from "./useErrorRetry";
 export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
-export { useGitHubEnableRecommendation } from "./useGitHubEnableRecommendation";
+export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 export { usePluginDeepLink } from "./usePluginDeepLink";
 export type { PluginDeepLinkState } from "./usePluginDeepLink";

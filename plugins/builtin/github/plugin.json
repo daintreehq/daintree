@@ -23,8 +23,16 @@
           "assignees",
           "releases",
           "batch-branch-prs",
-          "identity"
-        ]
+          "identity",
+          "clone"
+        ],
+        "slots": {
+          "settingsTab": "github.forgeSettingsTab",
+          "icon": "github.providerIcon",
+          "statsDropdown": "github.statsDropdown",
+          "bulkCreateWorktreeDialog": "github.bulkCreateWorktreeDialog",
+          "issueSelector": "github.issueSelector"
+        }
       }
     ],
     "fileDecorationProviders": [

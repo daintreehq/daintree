@@ -5,7 +5,7 @@ import type {
   ServiceConnectivityStatus,
 } from "../../../shared/types/ipc/connectivity.js";
 import { CONNECTIVITY_SERVICE_KEYS } from "../../../shared/types/ipc/connectivity.js";
-import type { GitHubTokenHealthPayload } from "../../../shared/types/ipc/github.js";
+import type { ForgeTokenHealthState } from "../../../shared/types/forge.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -15,8 +15,8 @@ import {
 } from "./AgentConnectivityService.js";
 
 interface GitHubHealthLike {
-  getState(): GitHubTokenHealthPayload;
-  onStateChange(listener: (payload: GitHubTokenHealthPayload) => void): () => void;
+  getState(): ForgeTokenHealthState;
+  onStateChange(listener: (payload: ForgeTokenHealthState) => void): () => void;
 }
 
 interface McpServerLike {
@@ -68,9 +68,10 @@ export interface ServiceConnectivityRegistryOptions {
  * snapshot keyed by `ConnectivityServiceKey`.
  *
  * - `agent:claude|gemini|codex` is sourced from `AgentConnectivityService`.
- * - `github` is derived from `GitHubTokenHealthService`. A 401 (token revoked)
- *   maps to `unknown` here, not `unreachable` — token validity is a separate
- *   concern surfaced via `GitHubTokenHealthPayload`.
+ * - `github` is derived from the GitHub forge provider's `healthEvents`
+ *   capability. A 401 (token revoked) maps to `unknown` here, not
+ *   `unreachable` — token validity is a separate concern surfaced via the
+ *   forge token-health push channel.
  * - `mcp` is derived synchronously from `mcpServerService.isRunning`.
  *
  * The renderer subscribes to a single broadcast channel and reads a fixed-shape
@@ -172,7 +173,7 @@ export class ServiceConnectivityRegistry {
   }
 
   private applyGitHubState(
-    payload: GitHubTokenHealthPayload,
+    payload: ForgeTokenHealthState,
     options: { silent?: boolean } = {}
   ): void {
     // Deliberately collapse `healthy` → `reachable` and `unhealthy|unknown`

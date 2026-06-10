@@ -199,7 +199,7 @@ export function getBoostedCategories(context: RankContext | undefined): Set<stri
   ) {
     boosted.add("worktree");
     boosted.add("git");
-    boosted.add("github");
+    boosted.add("forge");
   }
 
   if (context.isSettingsOpen) {

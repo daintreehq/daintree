@@ -9,10 +9,10 @@ import {
   getCache,
   getGeneration,
   _resetForTests as resetCache,
-} from "@/lib/githubResourceCache";
+} from "@/lib/forgeResourceCache";
 import { useProjectStore } from "@/store/projectStore";
 import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
-import type { GitHubPR, GitHubPRCIStatus } from "@shared/types/github";
+import type { CIStatusState, PR } from "@shared/types/forge";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
@@ -60,21 +60,27 @@ function makeWorktree(id: string, overrides: Partial<WorktreeSnapshot> = {}): Wo
     prNumber: 42,
     prUrl: "https://example.test/pr/42",
     prState: "open",
-    prCiStatus: "PENDING",
+    prCiStatus: "pending",
     ...overrides,
   } as WorktreeSnapshot;
 }
 
-function makePR(number: number, ciStatus?: GitHubPRCIStatus): GitHubPR {
+function makePR(number: number, ciStatus?: CIStatusState): PR {
   return {
     number,
     title: `PR #${number}`,
+    body: "",
     url: `https://example.test/pr/${number}`,
-    state: "OPEN",
+    state: "open",
+    rawState: "OPEN",
     isDraft: false,
-    updatedAt: "",
-    author: { login: "u", avatarUrl: "" },
+    merged: false,
+    baseRef: "main",
+    headRef: `pr-${number}`,
+    createdAt: 0,
+    updatedAt: 0,
     ciStatus,
+    rawData: null,
   };
 }
 
@@ -150,17 +156,17 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("clears prCiStatus when the event omits it (full-replace, matches backend)", async () => {
     const store = await renderProvider();
     act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1", { prCiStatus: "FAILURE" }), nextV());
+      store.getState().applyUpdate(makeWorktree("wt-1", { prCiStatus: "failure" }), nextV());
     });
 
     act(() => {
@@ -184,9 +190,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [makePR(42, "PENDING"), makePR(43, "SUCCESS")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending"), makePR(43, "success")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -198,15 +204,15 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
     const entry = getCache(key);
-    const pr42 = entry?.items.find((it) => (it as GitHubPR).number === 42) as GitHubPR;
-    const pr43 = entry?.items.find((it) => (it as GitHubPR).number === 43) as GitHubPR;
-    expect(pr42.ciStatus).toBe("FAILURE");
-    expect(pr43.ciStatus).toBe("SUCCESS");
+    const pr42 = entry?.items.find((it) => (it as PR).number === 42) as PR;
+    const pr43 = entry?.items.find((it) => (it as PR).number === 43) as PR;
+    expect(pr42.ciStatus).toBe("failure");
+    expect(pr43.ciStatus).toBe("success");
     expect(getGeneration(key)).toBe(genBefore + 1);
   });
 
@@ -218,9 +224,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [makePR(42, "SUCCESS")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "success")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -232,7 +238,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -247,9 +253,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [makePR(42, "SUCCESS")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "success")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -264,7 +270,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
       });
     });
 
-    expect((getCache(key)?.items[0] as GitHubPR).ciStatus).toBeUndefined();
+    expect((getCache(key)?.items[0] as PR).ciStatus).toBeUndefined();
     expect(getGeneration(key)).toBe(genBefore + 1);
   });
 
@@ -277,9 +283,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     setCurrentProject(null);
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -291,11 +297,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
-    expect((getCache(key)?.items[0] as GitHubPR).ciStatus).toBe("PENDING");
+    expect((getCache(key)?.items[0] as PR).ciStatus).toBe("pending");
     expect(getGeneration(key)).toBe(genBefore);
   });
 
@@ -308,15 +314,15 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     const sameProj = buildCacheKey("/repo/proj", "pr", "open", "created");
     const otherProj = buildCacheKey("/repo/other", "pr", "open", "created");
     setCache(sameProj, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     setCache(otherProj, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
 
@@ -327,12 +333,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect((getCache(sameProj)?.items[0] as GitHubPR).ciStatus).toBe("SUCCESS");
-    expect((getCache(otherProj)?.items[0] as GitHubPR).ciStatus).toBe("PENDING");
+    expect((getCache(sameProj)?.items[0] as PR).ciStatus).toBe("success");
+    expect((getCache(otherProj)?.items[0] as PR).ciStatus).toBe("pending");
   });
 
   it("applies last-write-wins across rapid successive events for the same PR", async () => {
@@ -343,14 +349,14 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
 
     act(() => {
-      for (const ciStatus of ["PENDING", "FAILURE", "SUCCESS"] as const) {
+      for (const ciStatus of ["pending", "failure", "success"] as const) {
         emit("pr-detected", {
           type: "pr-detected",
           worktreeId: "wt-1",
@@ -362,17 +368,17 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
       }
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
-    expect((getCache(key)?.items[0] as GitHubPR).ciStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
+    expect((getCache(key)?.items[0] as PR).ciStatus).toBe("success");
   });
 
   it("does nothing when the worktree is not in the store", async () => {
     const store = await renderProvider();
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -384,12 +390,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
     expect(store.getState().worktrees.get("wt-missing")).toBeUndefined();
-    expect((getCache(key)?.items[0] as GitHubPR).ciStatus).toBe("PENDING");
+    expect((getCache(key)?.items[0] as PR).ciStatus).toBe("pending");
     expect(getGeneration(key)).toBe(genBefore);
   });
 
@@ -399,7 +405,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
       store
         .getState()
         .applyUpdate(
-          makeWorktree("wt-1", { branch: "feature/bar", prCiStatus: "FAILURE", prNumber: 99 }),
+          makeWorktree("wt-1", { branch: "feature/bar", prCiStatus: "failure", prNumber: 99 }),
           nextV()
         );
     });
@@ -411,14 +417,14 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
         branchName: "feature/foo",
       });
     });
 
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.prNumber).toBe(99);
-    expect(wt?.prCiStatus).toBe("FAILURE");
+    expect(wt?.prCiStatus).toBe("failure");
   });
 
   it("applies the overlay when event.branchName matches the worktree's current branch", async () => {
@@ -434,12 +440,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
         branchName: "feature/foo",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("applies the overlay when the event omits branchName (older host backward compat)", async () => {
@@ -455,11 +461,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("drops a stale pr-detected that arrives after a worktree-update changed the branch", async () => {
@@ -489,7 +495,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 999,
         prUrl: "https://example.test/pr/999",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
         branchName: "feature/foo",
       });
     });
@@ -497,7 +503,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.branch).toBe("feature/bar");
     expect(wt?.prNumber).not.toBe(999);
-    expect(wt?.prCiStatus).not.toBe("FAILURE");
+    expect(wt?.prCiStatus).not.toBe("failure");
   });
 
   it("applies the overlay when the worktree has no branch (detached HEAD)", async () => {
@@ -513,12 +519,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
         branchName: "feature/foo",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("uses the project path read at event time so closures cannot go stale", async () => {
@@ -533,15 +539,15 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     const newKey = buildCacheKey("/repo/proj-new", "pr", "open", "created");
     const oldKey = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(newKey, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     setCache(oldKey, {
-      items: [makePR(42, "PENDING")],
-      endCursor: null,
-      hasNextPage: false,
+      items: [makePR(42, "pending")],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
 
@@ -552,12 +558,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect((getCache(newKey)?.items[0] as GitHubPR).ciStatus).toBe("SUCCESS");
-    expect((getCache(oldKey)?.items[0] as GitHubPR).ciStatus).toBe("PENDING");
+    expect((getCache(newKey)?.items[0] as PR).ciStatus).toBe("success");
+    expect((getCache(oldKey)?.items[0] as PR).ciStatus).toBe("pending");
   });
 
   it("evicts a PR from the 'open' slot once it closes", async () => {
@@ -569,11 +575,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
       items: [
-        { ...makePR(42, "PENDING"), state: "OPEN" },
-        { ...makePR(43, "SUCCESS"), state: "OPEN" },
+        { ...makePR(42, "pending"), state: "open" },
+        { ...makePR(43, "success"), state: "open" },
       ],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -585,11 +591,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "closed",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
-    const items = getCache(key)?.items as GitHubPR[];
+    const items = getCache(key)?.items as PR[];
     expect(items.find((it) => it.number === 42)).toBeUndefined();
     expect(items.find((it) => it.number === 43)).toBeDefined();
     expect(getGeneration(key)).toBe(genBefore + 1);
@@ -605,9 +611,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     const updatedKey = buildCacheKey("/repo/proj", "pr", "open", "updated");
     for (const key of [createdKey, updatedKey]) {
       setCache(key, {
-        items: [{ ...makePR(42, "PENDING"), state: "OPEN" }],
-        endCursor: null,
-        hasNextPage: false,
+        items: [{ ...makePR(42, "pending"), state: "open" }],
+        nextCursor: null,
+        hasMore: false,
         timestamp: 1,
       });
     }
@@ -621,16 +627,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "closed",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
-    expect(
-      (getCache(createdKey)?.items as GitHubPR[]).find((it) => it.number === 42)
-    ).toBeUndefined();
-    expect(
-      (getCache(updatedKey)?.items as GitHubPR[]).find((it) => it.number === 42)
-    ).toBeUndefined();
+    expect((getCache(createdKey)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
+    expect((getCache(updatedKey)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
     expect(getGeneration(createdKey)).toBe(genCreatedBefore + 1);
     expect(getGeneration(updatedKey)).toBe(genUpdatedBefore + 1);
   });
@@ -643,9 +645,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [{ ...makePR(42, "SUCCESS"), state: "OPEN" }],
-      endCursor: null,
-      hasNextPage: false,
+      items: [{ ...makePR(42, "success"), state: "open" }],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -657,11 +659,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "merged",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect((getCache(key)?.items as GitHubPR[]).find((it) => it.number === 42)).toBeUndefined();
+    expect((getCache(key)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
     expect(getGeneration(key)).toBe(genBefore + 1);
   });
 
@@ -673,9 +675,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "closed", "created");
     setCache(key, {
-      items: [{ ...makePR(42, "FAILURE"), state: "CLOSED" }],
-      endCursor: null,
-      hasNextPage: false,
+      items: [{ ...makePR(42, "failure"), state: "closed" }],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -687,11 +689,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "PENDING",
+        prCiStatus: "pending",
       });
     });
 
-    expect((getCache(key)?.items as GitHubPR[]).find((it) => it.number === 42)).toBeUndefined();
+    expect((getCache(key)?.items as PR[]).find((it) => it.number === 42)).toBeUndefined();
     expect(getGeneration(key)).toBe(genBefore + 1);
   });
 
@@ -703,9 +705,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "open", "created");
     setCache(key, {
-      items: [{ ...makePR(42, "PENDING"), state: "OPEN" }],
-      endCursor: null,
-      hasNextPage: false,
+      items: [{ ...makePR(42, "pending"), state: "open" }],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -717,13 +719,13 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    const pr42 = (getCache(key)?.items as GitHubPR[]).find((it) => it.number === 42);
+    const pr42 = (getCache(key)?.items as PR[]).find((it) => it.number === 42);
     expect(pr42).toBeDefined();
-    expect(pr42?.ciStatus).toBe("SUCCESS");
+    expect(pr42?.ciStatus).toBe("success");
     expect(getGeneration(key)).toBe(genBefore + 1);
   });
 
@@ -735,9 +737,9 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
 
     const key = buildCacheKey("/repo/proj", "pr", "all", "created");
     setCache(key, {
-      items: [{ ...makePR(42, "PENDING"), state: "OPEN" }],
-      endCursor: null,
-      hasNextPage: false,
+      items: [{ ...makePR(42, "pending"), state: "open" }],
+      nextCursor: null,
+      hasMore: false,
       timestamp: 1,
     });
     const genBefore = getGeneration(key);
@@ -749,13 +751,13 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "merged",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    const pr42 = (getCache(key)?.items as GitHubPR[]).find((it) => it.number === 42);
+    const pr42 = (getCache(key)?.items as PR[]).find((it) => it.number === 42);
     expect(pr42).toBeDefined();
-    expect(pr42?.ciStatus).toBe("SUCCESS");
+    expect(pr42?.ciStatus).toBe("success");
     expect(getGeneration(key)).toBe(genBefore + 1);
   });
 });
@@ -841,7 +843,7 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
       store
         .getState()
         .applyUpdate(
-          makeWorktree("wt-1", { branch: "feature/foo", prNumber: 42, prCiStatus: "FAILURE" }),
+          makeWorktree("wt-1", { branch: "feature/foo", prNumber: 42, prCiStatus: "failure" }),
           nextV()
         );
     });
@@ -869,7 +871,7 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
           prNumber: 999,
           prUrl: "https://example.test/pr/999",
           prState: "open",
-          prCiStatus: "SUCCESS",
+          prCiStatus: "success",
         }),
         nextV()
       );
@@ -886,7 +888,7 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
 
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.prNumber).toBe(999);
-    expect(wt?.prCiStatus).toBe("SUCCESS");
+    expect(wt?.prCiStatus).toBe("success");
   });
 });
 

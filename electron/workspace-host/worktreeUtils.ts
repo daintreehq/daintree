@@ -11,10 +11,7 @@ import {
 } from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
-import { isGitHubRemoteUrl } from "../../shared/utils/githubUrl.js";
 import { NOTE_PATH } from "./types.js";
-
-export { isGitHubRemoteUrl };
 
 // Hard ceiling on the `git lfs version` probe. `git` is already on PATH, so a
 // healthy probe returns in milliseconds; the 3 s cap only matters on slow/

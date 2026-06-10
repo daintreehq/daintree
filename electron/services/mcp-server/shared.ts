@@ -304,18 +304,17 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "git.snapshotRevert",
   "git.snapshotDelete",
 
-  "github.checkCli",
-  "github.getRepoStats",
-  "github.listIssues",
-  "github.listPullRequests",
-  "github.getIssueByNumber",
+  "forge.getRepoStats",
+  "forge.listIssues",
+  "forge.listPRs",
+  "forge.getIssue",
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
+  "forge.openPR",
   "forge.assignIssue",
   "forge.validateToken",
-  "github.openPR",
 
   "terminal.list",
   "terminal.getOutput",
@@ -390,7 +389,7 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * duplicate issue/PR. The seed cohort (`terminal.new`,
  * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
  * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
- * `github.openPR`) now that the args-hash collision guard (#8429) is in
+ * `forge.openPR`) now that the args-hash collision guard (#8429) is in
  * place to make the widening safe. Widened further (#9156) to the remaining
  * destructive mutations — `worktree.delete`, `git.snapshotRevert`,
  * `git.snapshotDelete`, `forge.assignIssue` — so every side-effecting tool
@@ -407,7 +406,7 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "git.commit",
   "git.push",
   "forge.openIssue",
-  "github.openPR",
+  "forge.openPR",
   "worktree.delete",
   "git.snapshotRevert",
   "git.snapshotDelete",
@@ -475,7 +474,7 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.commit", RATE_LIMIT_TIERS.mutation],
   ["git.push", RATE_LIMIT_TIERS.mutation],
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
-  ["github.openPR", RATE_LIMIT_TIERS.mutation],
+  ["forge.openPR", RATE_LIMIT_TIERS.mutation],
   ["worktree.delete", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
@@ -522,7 +521,7 @@ export const RESOURCE_BACKING_ACTIONS: Readonly<Record<ResourceKind, string>> = 
   pulse: "git.getProjectPulse",
   scrollback: "terminal.getOutput",
   agentState: "terminal.list",
-  issues: "github.listIssues",
+  issues: "forge.listIssues",
 };
 
 export const RESOURCE_TEXT_MAX_BYTES = 50 * 1024;

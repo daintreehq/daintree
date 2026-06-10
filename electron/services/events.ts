@@ -1,7 +1,6 @@
 import { EventEmitter } from "events";
 import type { NotificationPayload, AgentState, EventCategory } from "../types/index.js";
 import type { EventContext } from "../../shared/types/events.js";
-import type { GitHubPRCIStatus } from "../../shared/types/github.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import type {
   TerminalReliabilityMetricPayload,
@@ -116,7 +115,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "system",
     requiresContext: true,
     requiresTimestamp: true,
-    description: "GitHub confirmed issue does not exist on current repo",
+    description: "Forge provider confirmed issue does not exist on current repo",
   },
 
   // File events
@@ -444,7 +443,7 @@ export type DaintreeEventMap = {
     prNumber: number;
     prUrl: string;
     prState: import("../../shared/types/forge.js").NormalizedPRState;
-    prCiStatus?: GitHubPRCIStatus;
+    prCiStatus?: import("../../shared/types/forge.js").CIStatusState;
     /**
      * True on the synchronous phase-1 emit that precedes a fire-and-forget CI
      * enrichment; signals the receiver to keep its prior `prCiStatus` rather

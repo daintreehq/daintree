@@ -128,11 +128,6 @@ vi.mock("../../services/SystemSleepService.js", () => ({
   getSystemSleepService: vi.fn(() => systemSleepMock),
 }));
 
-const ghTokenHealthMock = vi.hoisted(() => ({ dispose: vi.fn() }));
-vi.mock("../../services/github/GitHubTokenHealthService.js", () => ({
-  gitHubTokenHealthService: ghTokenHealthMock,
-}));
-
 const agentConnectivityMock = vi.hoisted(() => ({ dispose: vi.fn() }));
 const connectivityRegistryMock = vi.hoisted(() => ({ dispose: vi.fn() }));
 vi.mock("../../services/connectivity/index.js", () => ({
@@ -760,7 +755,6 @@ describe("registerShutdownHandler", () => {
       expect(hibernationMock.stop).toHaveBeenCalledTimes(1);
       expect(idleTerminalMock.stop).toHaveBeenCalledTimes(1);
       expect(systemSleepMock.dispose).toHaveBeenCalledTimes(1);
-      expect(ghTokenHealthMock.dispose).toHaveBeenCalledTimes(1);
       expect(agentConnectivityMock.dispose).toHaveBeenCalledTimes(1);
       expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.dispose).toHaveBeenCalledTimes(1);

@@ -133,7 +133,7 @@ describe("Toolbar responsive design — issue #4133", () => {
 
   describe("overflow state management", () => {
     it("closes dropdowns when items overflow", () => {
-      expect(source).toMatch(/overflowSet\.has\("github-stats"\)/);
+      expect(source).toMatch(/overflowSet\.has\("forge-stats"\)/);
       expect(source).toMatch(/overflowSet\.has\("notification-center"\)/);
     });
 

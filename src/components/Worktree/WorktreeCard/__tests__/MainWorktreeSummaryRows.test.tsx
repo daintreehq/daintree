@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MainWorktreeSummaryRows } from "../MainWorktreeSummaryRows";
-import type { ProjectHealthData } from "@shared/types";
+import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("react-dom", async () => {
@@ -17,7 +17,7 @@ function renderWithTooltip(ui: ReactNode) {
   return render(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-const baseHealth: ProjectHealthData = {
+const baseHealth: ForgeProjectHealthPayload = {
   ciStatus: "success",
   prCount: 3,
   issueCount: 12,
@@ -44,21 +44,21 @@ describe("MainWorktreeSummaryRows", () => {
   });
 
   it("renders CI failure status", () => {
-    const health: ProjectHealthData = { ...baseHealth, ciStatus: "failure" };
+    const health: ForgeProjectHealthPayload = { ...baseHealth, ciStatus: "failure" };
     renderWithTooltip(<MainWorktreeSummaryRows health={health} />);
     const row = screen.getByTestId("github-pulse-row");
     expect(row.textContent).toContain("failing");
   });
 
   it("renders CI pending status", () => {
-    const health: ProjectHealthData = { ...baseHealth, ciStatus: "pending" };
+    const health: ForgeProjectHealthPayload = { ...baseHealth, ciStatus: "pending" };
     renderWithTooltip(<MainWorktreeSummaryRows health={health} />);
     const row = screen.getByTestId("github-pulse-row");
     expect(row.textContent).toContain("pending");
   });
 
   it("renders CI none status", () => {
-    const health: ProjectHealthData = { ...baseHealth, ciStatus: "none" };
+    const health: ForgeProjectHealthPayload = { ...baseHealth, ciStatus: "none" };
     renderWithTooltip(<MainWorktreeSummaryRows health={health} />);
     const row = screen.getByTestId("github-pulse-row");
     expect(row.textContent).toContain("no CI");

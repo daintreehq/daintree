@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import type { GitHubRateLimitKind, RepositoryStats } from "../types";
-// eslint-disable-next-line no-restricted-imports
-import { githubClient, projectClient } from "@/clients";
-import { isTokenRelatedError } from "@/lib/githubErrors";
+import type { ForgeRateLimitKind, ForgeRepositoryStats } from "@shared/types/ipc/forge";
+import { projectClient } from "@/clients";
+import { forgeClient } from "@/clients/forgeClient";
+import { isTokenRelatedError } from "@/lib/forgeErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { buildCacheKey, getCache, setCache } from "@/lib/githubResourceCache";
+import { buildCacheKey, getCache, setCache } from "@/lib/forgeResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
-import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { useProjectStore } from "@/store/projectStore";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
-import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+import {
+  useForgeProviderHealthStore,
+  DEFAULT_PROVIDER_HEALTH,
+} from "@/store/forgeProviderHealthStore";
 
 function isValidPagePayload(page: unknown): page is {
   items: unknown[];
@@ -26,9 +30,9 @@ const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
 const ERROR_BACKOFF_INTERVAL = 2 * 60 * 1000;
 
 // Add a small buffer to the reset timestamp to avoid scheduling a poll at the
-// exact instant GitHub releases the quota — paired with the main-process
-// buffer in GitHubRateLimitService, this keeps the next attempt safely past
-// reset even under clock skew.
+// exact instant the provider releases the quota — paired with the provider's
+// own buffer, this keeps the next attempt safely past reset even under clock
+// skew.
 const RATE_LIMIT_RESUME_BUFFER_MS = 2_000;
 
 // Freshness tier thresholds keyed off the active poll cadence
@@ -55,7 +59,7 @@ export const AGING_THRESHOLD_MS = 300_000;
 export type FreshnessLevel = "fresh" | "aging" | "stale-disk" | "errored";
 
 export interface UseRepositoryStatsReturn {
-  stats: RepositoryStats | null;
+  stats: ForgeRepositoryStats | null;
   loading: boolean;
   // True while a refetch is in flight regardless of whether stats are already
   // available. Distinct from `loading`, which narrows to the first-fetch
@@ -67,7 +71,7 @@ export interface UseRepositoryStatsReturn {
   isStale: boolean;
   lastUpdated: number | null;
   rateLimitResetAt: number | null;
-  rateLimitKind: GitHubRateLimitKind | null;
+  rateLimitKind: ForgeRateLimitKind | null;
   freshnessLevel: FreshnessLevel;
   refresh: (options?: { force?: boolean }) => Promise<void>;
 }
@@ -92,23 +96,23 @@ export interface UseRepositoryStatsReturn {
  * ```
  */
 export function useRepositoryStats(): UseRepositoryStatsReturn {
-  const [stats, setStats] = useState<RepositoryStats | null>(null);
+  const [stats, setStats] = useState<ForgeRepositoryStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isStale, setIsStale] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [rateLimitResetAt, setRateLimitResetAt] = useState<number | null>(null);
-  const [rateLimitKind, setRateLimitKind] = useState<GitHubRateLimitKind | null>(null);
+  const [rateLimitKind, setRateLimitKind] = useState<ForgeRateLimitKind | null>(null);
   const rateLimitResetAtRef = useRef<number | null>(null);
   // Mirrors the `lastUpdated` state for synchronous reads from event-handler
   // closures (push subscribers). Used to skip stale stat pushes whose
   // `fetchedAt` is older than what we've already applied.
   const lastUpdatedRef = useRef<number | null>(null);
-  // Adaptive visible-poll cadence (ms) suggested by the main-process `/events`
-  // activity probe (issue #9741): ~60s while changes are landing, growing
-  // toward ~5min on an idle repo. Read synchronously by `calculateNextInterval`
-  // when the document is visible; `null` falls back to the fixed active poll.
+  // Adaptive visible-poll cadence (ms) suggested by the provider's activity
+  // probe (issue #9741): ~60s while changes are landing, growing toward ~5min
+  // on an idle repo. Read synchronously by `calculateNextInterval` when the
+  // document is visible; `null` falls back to the fixed active poll.
   const nextPollIntervalRef = useRef<number | null>(null);
 
   // Tracks whether any result (success, error, or stale) has already been
@@ -134,12 +138,12 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     };
   }, []);
 
-  // Apply a `RepositoryStats` result to local state — shared by the network
-  // fetch path (`fetchStats`) and the broadcast push path
+  // Apply a `ForgeRepositoryStats` result to local state — shared by the
+  // network fetch path (`fetchStats`) and the broadcast push path
   // (`onRepoStatsAndPageUpdated`). Both paths must run identical preservation
   // logic so a list-fetch-triggered update can't flash a `0` count when stale.
   const applyStatsResult = useCallback(
-    (repoStats: RepositoryStats, opts: { projectPath: string }) => {
+    (repoStats: ForgeRepositoryStats, opts: { projectPath: string }) => {
       if (!mountedRef.current) return;
 
       hasAppliedResultRef.current = true;
@@ -149,7 +153,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       lastKnownCountsRef.current.projectPath = opts.projectPath;
 
       // Only preserve counts when data is stale or errored (not on successful fresh fetch)
-      const shouldPreserve = repoStats.stale === true || repoStats.ghError !== undefined;
+      const shouldPreserve = repoStats.stale === true || repoStats.error !== undefined;
 
       if (!shouldPreserve) {
         // Fresh successful data — record the confirmed counts so a later
@@ -172,7 +176,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // valid prior count and flash a `—` dash in the toolbar badge; a stale
       // broadcast can surface `0`, which would flash a `0`. Both are preserved
       // while a genuine fresh `0` (shouldPreserve === false) still shows `0`.
-      const preservedStats: RepositoryStats = {
+      const preservedStats: ForgeRepositoryStats = {
         ...repoStats,
         issueCount:
           shouldPreserve &&
@@ -197,7 +201,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // Carry the probe-derived cadence forward only on successful reads — a
       // stale/errored result has no fresh cadence to offer, so the existing
       // value keeps driving the schedule. On a success that reports no cadence
-      // (e.g. a future main-process path that omits it), fall back to null so
+      // (e.g. a future provider that omits it), fall back to null so
       // `calculateNextInterval` reverts to the fixed active interval rather than
       // sticking on a now-meaningless previous value.
       if (!shouldPreserve) {
@@ -210,9 +214,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setRateLimitResetAt(nextResetAt);
       setRateLimitKind(nextKind);
 
-      if (repoStats.ghError) {
-        setError(repoStats.ghError);
-        lastErrorRef.current = repoStats.ghError;
+      if (repoStats.error) {
+        setError(repoStats.error);
+        lastErrorRef.current = repoStats.error;
       } else {
         setError(null);
         lastErrorRef.current = null;
@@ -221,15 +225,25 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     []
   );
 
-  // Worker instances suppress automatic background polling to conserve
-  // GitHub GraphQL quota (#10123) — on-demand `refresh()` stays functional.
+  // Worker instances suppress automatic background polling to conserve the
+  // provider's API quota (#10123) — on-demand `refresh()` stays functional.
   const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
-  // With the GitHub plugin disabled the gated stats IPC rejects anyway —
+  // No resolved forge provider for the active project (no matching plugin, or
+  // the owning plugin is disabled) means the gated stats IPC rejects anyway —
   // don't poll into a wall of FORGE_PROVIDER_UNAVAILABLE errors.
-  const githubEnabled = useGitHubPluginEnabled();
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const { entry: providerEntry, providerId } = useResolvedForgeProvider(currentProjectId);
+  const providerResolved = providerEntry !== null;
+  // Ref mirror for the push subscriptions: payloads are providerId-keyed, and
+  // the subscriber closures must compare against the live resolution without
+  // re-subscribing on every resolve.
+  const providerIdRef = useRef<string | null>(providerId);
+  useEffect(() => {
+    providerIdRef.current = providerId;
+  }, [providerId]);
 
   const polling = usePollingLifecycle({
-    enabled: !isWorkerInstance && githubEnabled,
+    enabled: !isWorkerInstance && providerResolved,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();
@@ -256,7 +270,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           if (!hasAppliedResultRef.current) setLoading(true);
         }
 
-        const repoStats = await githubClient.getRepoStats(project.path, force);
+        const repoStats = await forgeClient.getRepoStats(project.path, force);
 
         if (!mountedRef.current) return;
         if (isInvalidated()) return;
@@ -294,7 +308,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       }
       if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
       if (isVisible) {
-        // Honor the main-process probe's adaptive cadence (issue #9741): poll
+        // Honor the provider probe's adaptive cadence (issue #9741): poll
         // ~every minute while changes are landing, backing off toward the idle
         // ceiling on a quiet repo. Clamp to [ACTIVE_POLL_INTERVAL,
         // IDLE_POLL_INTERVAL] so a malformed hint can't poll faster than 30s or
@@ -306,7 +320,11 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         }
         return ACTIVE_POLL_INTERVAL;
       }
-      const multiplier = useGitHubRateLimitStore.getState().throttleMultiplier ?? 1;
+      const resolvedId = providerIdRef.current;
+      const multiplier = resolvedId
+        ? (useForgeProviderHealthStore.getState().providers[resolvedId] ?? DEFAULT_PROVIDER_HEALTH)
+            .rateLimitMultiplier
+        : 1;
       return IDLE_POLL_INTERVAL * multiplier;
     },
     onProjectSwitch: () => {
@@ -326,7 +344,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       setRateLimitResetAt(null);
       setRateLimitKind(null);
       // Reset error state too — without this the previous project's failure
-      // (e.g. ghError = "no token") would carry into the new project's
+      // (e.g. "token not configured") would carry into the new project's
       // freshness tier as `errored` until its first poll completes.
       setError(null);
       lastErrorRef.current = null;
@@ -339,14 +357,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // budget are dropped on read by the main-side cache and surface as `null`.
   // Within-session project switches don't re-hydrate from disk — the broadcast
   // subscription below seeds the renderer cache once the next poll completes.
+  // Gated on the provider resolution so a payload written by provider A can't
+  // hydrate a project that now resolves to provider B.
+  const hasHydratedRef = useRef(false);
   useEffect(() => {
+    if (!providerId || hasHydratedRef.current) return;
+    hasHydratedRef.current = true;
     let cancelled = false;
     void (async () => {
       try {
         const project = await projectClient.getCurrent();
         if (!project || cancelled || !mountedRef.current) return;
-        const cached = await githubClient.getFirstPageCache(project.path);
+        const cached = await forgeClient.getFirstPageCache(project.path);
         if (!cached || cancelled || !mountedRef.current) return;
+        if (cached.providerId !== providerIdRef.current) return;
 
         // Re-verify project identity after the async cache read. A project
         // switch may have fired while we were waiting for the IPC response.
@@ -360,7 +384,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         // result (network fetch success, error, or stale push) has landed
         // yet — the network poll will replace these with fresh data.
         if (cached.stats && !hasAppliedResultRef.current) {
-          const bootstrapStats: RepositoryStats = {
+          const bootstrapStats: ForgeRepositoryStats = {
             commitCount: 0,
             issueCount: cached.stats.issueCount,
             prCount: cached.stats.prCount,
@@ -384,8 +408,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           if (!existingIssues || existingIssues.timestamp < cached.lastUpdated) {
             setCache(issuesKey, {
               items: cached.issues.items,
-              endCursor: cached.issues.endCursor,
-              hasNextPage: cached.issues.hasNextPage,
+              nextCursor: cached.issues.endCursor,
+              hasMore: cached.issues.hasNextPage,
               timestamp: cached.lastUpdated,
             });
           }
@@ -395,8 +419,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           if (!existingPRs || existingPRs.timestamp < cached.lastUpdated) {
             setCache(prsKey, {
               items: cached.prs.items,
-              endCursor: cached.prs.endCursor,
-              hasNextPage: cached.prs.hasNextPage,
+              nextCursor: cached.prs.endCursor,
+              hasMore: cached.prs.hasNextPage,
               timestamp: cached.lastUpdated,
             });
           }
@@ -409,18 +433,21 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return () => {
       cancelled = true;
     };
-  }, [applyStatsResult]);
+  }, [providerId, applyStatsResult]);
 
   // Subscribe to the combined repo-stats-and-first-page push from the main
   // process. Whenever a poll completes successfully, main broadcasts the
   // counts AND the first 20 open issues + open PRs (sorted by created-desc).
-  // Seed the renderer's `githubResourceCache` for the matching default-filter
+  // Seed the renderer's `forgeResourceCache` for the matching default-filter
   // cache key so the next dropdown click reads from hot cache instantly, and
   // apply the pushed stats to the toolbar count immediately so the badge
   // converges with the dropdown without waiting for the next 30s poll.
   useEffect(() => {
-    const cleanup = githubClient.onRepoStatsAndPageUpdated((payload) => {
+    const cleanup = forgeClient.onRepoStatsAndPageUpdated((payload) => {
       if (!mountedRef.current) return;
+      // Payloads are providerId-keyed; only the project's resolved provider
+      // may write this view's cache and counts.
+      if (payload.providerId !== providerIdRef.current) return;
       // Filter by current project. Each `WebContentsView` runs its own
       // renderer with isolated module state, so the cache writes below are
       // scoped to this view's project.
@@ -435,7 +462,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           if (!isValidPagePayload(payload.issues) || !isValidPagePayload(payload.prs)) return;
 
           // Stats freshness guard: compare the broadcast's `stats.lastUpdated`
-          // (the actual GitHub API fetch time) to whatever we last applied.
+          // (the actual provider fetch time) to whatever we last applied.
           // Same units on both sides since the helper writes
           // `lastUpdatedRef.current = repoStats.lastUpdated`. Using `fetchedAt`
           // here would be over-permissive — `fetchedAt` is set later in the
@@ -449,7 +476,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             pushedLastUpdated <= lastUpdatedRef.current;
 
           // Cache freshness guard: the renderer cache may have been written by
-          // a more-recent SWR revalidation in `GitHubResourceList` whose
+          // a more-recent SWR revalidation in the dropdown list whose
           // timestamp is independent of `lastUpdatedRef`. Don't downgrade a
           // fresher entry — same pattern as the disk-hydration block above.
           const issuesKey = buildCacheKey(payload.projectPath, "issue", "open", "created");
@@ -459,16 +486,16 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           if (!existingIssues || existingIssues.timestamp < payload.fetchedAt) {
             setCache(issuesKey, {
               items: payload.issues.items,
-              endCursor: payload.issues.endCursor,
-              hasNextPage: payload.issues.hasNextPage,
+              nextCursor: payload.issues.endCursor,
+              hasMore: payload.issues.hasNextPage,
               timestamp: payload.fetchedAt,
             });
           }
           if (!existingPRs || existingPRs.timestamp < payload.fetchedAt) {
             setCache(prsKey, {
               items: payload.prs.items,
-              endCursor: payload.prs.endCursor,
-              hasNextPage: payload.prs.hasNextPage,
+              nextCursor: payload.prs.endCursor,
+              hasMore: payload.prs.hasNextPage,
               timestamp: payload.fetchedAt,
             });
           }
@@ -486,13 +513,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return cleanup;
   }, [applyStatsResult]);
 
-  // Subscribe to the count-only push from the cheap REST background poll
+  // Subscribe to the count-only push from the cheap background poll
   // (issue #10122). Carries no page items — only the toolbar counts — so it
   // skips the cache seeding above and just applies the stats, behind the same
-  // project filter and freshness guard as the combined push.
+  // provider + project filters and freshness guard as the combined push.
   useEffect(() => {
-    const cleanup = githubClient.onRepoCountsUpdated((payload) => {
+    const cleanup = forgeClient.onRepoCountsUpdated((payload) => {
       if (!mountedRef.current) return;
+      if (payload.providerId !== providerIdRef.current) return;
       projectClient
         .getCurrent()
         .then((project) => {
@@ -538,10 +566,20 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   }, [wakeEpoch, polling, isWorkerInstance]);
 
   useEffect(() => {
-    const cleanup = githubClient.onRateLimitChanged((payload) => {
+    const cleanup = forgeClient.onRateLimitChanged((payload) => {
       if (!mountedRef.current) return;
-      const nextResetAt = payload.blocked && payload.resetAt ? payload.resetAt : null;
-      const nextKind = payload.blocked ? payload.kind : null;
+      if (payload.providerId !== providerIdRef.current) return;
+      // Project the neutral RateLimitInfo onto the poll-scheduling state.
+      // `remaining === 0` is the canonical "blocked" signal (the host forces
+      // it to 0 inside a hard-stop band); `secondaryThrottled` marks an abuse
+      // pause that may not exhaust the quota counter.
+      const blocked = payload.state.remaining === 0 || payload.state.secondaryThrottled === true;
+      const nextResetAt = blocked ? (payload.state.resetAt ?? null) : null;
+      const nextKind: ForgeRateLimitKind | null = blocked
+        ? payload.state.secondaryThrottled
+          ? "secondary"
+          : "primary"
+        : null;
       rateLimitResetAtRef.current = nextResetAt;
       setRateLimitResetAt(nextResetAt);
       setRateLimitKind(nextKind);
@@ -552,7 +590,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       // When blocked, just reschedule against the new resume time. The clear
       // is an automatic system event, not a user action — suppressed on
       // worker instances like the polling loop itself (#10123).
-      if (!payload.blocked) {
+      if (!blocked) {
         if (isWorkerInstance) return;
         void polling.refresh();
       } else {
@@ -569,17 +607,17 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // paused while the document is hidden — fine because the visibility handler
   // refetches on resume and the next render will reset the tier.
   const tick = useGlobalMinuteTicker();
-  const ghError = stats?.ghError;
+  const statsError = stats?.error;
   const freshnessLevel = useMemo<FreshnessLevel>(() => {
-    // Disk-fallback path: `GitHubService` only sets `stale: true` when it
+    // Disk-fallback path: the provider only sets `stale: true` when it
     // returned persistent-cache data after a token / rate-limit / network
     // failure. The presence of an upstream error string upgrades that to
     // "errored" so the user sees something distinct from a quiet cold start.
     if (isStale) {
-      return ghError ? "errored" : "stale-disk";
+      return statsError ? "errored" : "stale-disk";
     }
     // Errored without a successful baseline: covers two paths the `isStale`
-    // branch above misses — the IPC handler returning `ghError` with `stale=
+    // branch above misses — the IPC handler returning `error` with `stale=
     // false` (no-token / first-launch failure) and `fetchStats`'s catch block
     // setting `error` after a throw before any `lastUpdated` was applied.
     // Once a fresh poll lands (`lastUpdated` set) a transient subsequent
@@ -605,7 +643,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     // a fifth tier. The threshold is exported as documentation of the
     // "expected" freshness ceiling and is consumed by tests.
     return "aging";
-  }, [isStale, ghError, error, lastUpdated, tick]);
+  }, [isStale, statsError, error, lastUpdated, tick]);
 
   return {
     stats,

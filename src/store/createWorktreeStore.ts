@@ -1549,7 +1549,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
     a.isFetchInFlight === b.isFetchInFlight &&
-    a.isGitHubRemote === b.isGitHubRemote &&
+    a.matchedForgeProviderId === b.matchedForgeProviderId &&
     a.worktreeMode === b.worktreeMode &&
     a.worktreeEnvironmentLabel === b.worktreeEnvironmentLabel &&
     a.hasResourceConfig === b.hasResourceConfig &&

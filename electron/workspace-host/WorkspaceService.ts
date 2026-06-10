@@ -44,12 +44,15 @@ import { waitForPathExists } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   probeGitLfsAvailable,
-  isGitHubRemoteUrl,
   parseCheckedOutBranches,
   nextAvailableBranchName,
   ensureNoteFile,
   assertWorktreePathContained,
 } from "./worktreeUtils.js";
+import {
+  matchProviderForRemoteUrl,
+  type ForgeProviderMatcher,
+} from "../../shared/utils/forgeHostnames.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import parcelWatcher from "@parcel/watcher";
@@ -171,6 +174,10 @@ export class WorkspaceService {
   // worktree is never present here. Mutated via lruTouch/lruRemove; budget
   // enforced by applyWatcherBudget().
   private readonly backgroundGitWatcherLru = new Map<string, true>();
+  // Provider hostname-matcher table relayed from main's forge registry.
+  // Empty until the first relay lands (after plugin load), so monitors start
+  // unmatched and re-resolve when the table arrives or changes.
+  private forgeProviderMatchers: ForgeProviderMatcher[] = [];
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
@@ -1227,10 +1234,10 @@ export class WorkspaceService {
       }
     })();
 
-    // Resolve origin → github.com? once at monitor start. Setter re-emits the
-    // snapshot only if the value differs from the initial `false`, so this is
-    // a no-op for the (small) set of non-GitHub repos.
-    void this.probeGitHubRemoteAsync(monitor);
+    // Resolve origin → registered forge provider at monitor start. Setter
+    // re-emits the snapshot only if the value differs from the initial `null`,
+    // so this is a no-op for repos no registered provider matches.
+    void this.probeForgeRemoteAsync(monitor);
   }
 
   private async initResourceConfigAsync(
@@ -1419,19 +1426,41 @@ export class WorkspaceService {
   }
 
   /**
-   * Probe origin's fetch URL once and tell the monitor whether it points at
-   * github.com. Runs off the critical path — failures are silent (the
-   * affordance simply stays hidden, which matches the non-GitHub behavior).
+   * Probe origin's fetch URL once at monitor start, remember it on the
+   * monitor, and resolve it against the relayed provider-matcher table. Runs
+   * off the critical path — failures are silent (the affordance simply stays
+   * hidden, which matches the unmatched-remote behavior). The remembered URL
+   * lets `setForgeProviderMatchers` re-match without re-probing git.
    */
-  private async probeGitHubRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
+  private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
     try {
       const git = createHardenedGit(monitor.path);
       const remotes = await git.getRemotes(true);
       const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
       const fetchUrl = origin?.refs?.fetch;
-      monitor.setIsGitHubRemote(isGitHubRemoteUrl(fetchUrl));
+      monitor.setRemoteFetchUrl(fetchUrl);
+      monitor.setMatchedForgeProviderId(
+        fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
+      );
     } catch {
       // Remote probe is best-effort; keep the affordance hidden on failure.
+    }
+  }
+
+  /**
+   * Store the relayed provider-matcher table and re-resolve every running
+   * monitor's matched provider id. The table arrives async after plugin load
+   * (and again on registry changes), so monitors that started unmatched gain
+   * their provider id here once the owning plugin registers.
+   */
+  setForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeProviderMatchers = Array.isArray(matchers) ? matchers : [];
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isRunning) continue;
+      const fetchUrl = monitor.remoteFetchUrl;
+      monitor.setMatchedForgeProviderId(
+        fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
+      );
     }
   }
 

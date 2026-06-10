@@ -10,9 +10,9 @@ import {
   repoStatsCache,
   velocityCache,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
-import type { CIStatus, ProjectHealth, ProjectHealthResult } from "./types.js";
-import type { ProjectHealthData } from "../../../../electron/types/index.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import type { CIStatus, ProjectHealth, ProjectHealthResult, RepoContext } from "./types.js";
+import type { ProjectHealthData } from "../shared/types.js";
 
 type GraphQLClient = NonNullable<ReturnType<typeof GitHubAuth.createClient>>;
 
@@ -195,16 +195,22 @@ async function resolveMergeVelocity(
   return { 60: 0, 120: 0, 180: 0 };
 }
 
-export async function getProjectHealth(
-  cwd: string,
-  bypassCache = false,
+export interface ProjectHealthForContextOptions {
+  bypassCache?: boolean;
+  /**
+   * Re-resolve the repo context after a repo-not-found error. Supplied by the
+   * cwd wrapper to preserve its remote-changed retry; context-only callers
+   * (the forge `projectHealth` capability) omit it and get no retry.
+   */
+  refreshContext?: () => Promise<RepoContext | null>;
+}
+
+export async function getProjectHealthForContext(
+  context: RepoContext,
+  options: ProjectHealthForContextOptions = {},
   _retried = false
 ): Promise<ProjectHealthResult> {
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    return { health: null, error: "Not a GitHub repository" };
-  }
-
+  const bypassCache = options.bypassCache === true;
   const cacheKey = `${context.owner}/${context.repo}`;
   const repoUrl = `https://github.com/${context.owner}/${context.repo}`;
 
@@ -279,17 +285,34 @@ export async function getProjectHealth(
       }
     }
 
-    if (!_retried && isRepoNotFoundError(error)) {
-      repoContextCache.invalidate(cwd);
-      const freshContext = await getRepoContext(cwd);
+    if (!_retried && isRepoNotFoundError(error) && options.refreshContext) {
+      const freshContext = await options.refreshContext();
       if (
         freshContext &&
         (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
       ) {
-        return getProjectHealth(cwd, bypassCache, true);
+        return getProjectHealthForContext(freshContext, options, true);
       }
     }
 
     return { health: null, error: parseGitHubError(error) };
   }
+}
+
+export async function getProjectHealth(
+  cwd: string,
+  bypassCache = false
+): Promise<ProjectHealthResult> {
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return { health: null, error: "Not a GitHub repository" };
+  }
+
+  return getProjectHealthForContext(context, {
+    bypassCache,
+    refreshContext: async () => {
+      repoContextCache.invalidate(cwd);
+      return getRepoContext(cwd);
+    },
+  });
 }

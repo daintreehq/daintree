@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 import {
   planIssueWorktrees,
   planPRWorktrees,
@@ -14,25 +14,25 @@ import {
   MAX_TRANSIENT_RETRY_MS,
 } from "../components/bulkCreateUtils";
 
-function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
+function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     number: 1,
     title: "Test issue",
-    state: "OPEN",
+    state: "open",
     url: "https://github.com/foo/bar/issues/1",
     ...overrides,
-  } as GitHubIssue;
+  } as Issue;
 }
 
-function makePR(overrides: Partial<GitHubPR> = {}): GitHubPR {
+function makePR(overrides: Partial<PR> = {}): PR {
   return {
     number: 1,
     title: "Test PR",
-    state: "OPEN",
+    state: "open",
     url: "https://github.com/foo/bar/pull/1",
-    headRefName: "feature/test",
+    headRef: "feature/test",
     ...overrides,
-  } as GitHubPR;
+  } as PR;
 }
 
 describe("planIssueWorktrees", () => {
@@ -49,7 +49,7 @@ describe("planIssueWorktrees", () => {
   });
 
   it("skips closed issues", () => {
-    const result = planIssueWorktrees([makeIssue({ number: 1, state: "CLOSED" })], new Set());
+    const result = planIssueWorktrees([makeIssue({ number: 1, state: "closed" })], new Set());
     expect(result[0]!.skipped).toBe(true);
     expect(result[0]!.skipReason).toBe("Closed");
   });
@@ -76,8 +76,8 @@ describe("planPRWorktrees", () => {
     expect(planPRWorktrees([], new Set())).toEqual([]);
   });
 
-  it("plans a single open PR with headRefName", () => {
-    const result = planPRWorktrees([makePR({ number: 1, headRefName: "feature/foo" })], new Set());
+  it("plans a single open PR with headRef", () => {
+    const result = planPRWorktrees([makePR({ number: 1, headRef: "feature/foo" })], new Set());
     expect(result).toHaveLength(1);
     expect(result[0]!.skipped).toBe(false);
     expect(result[0]!.branchName).toBe("feature/foo");
@@ -85,25 +85,22 @@ describe("planPRWorktrees", () => {
   });
 
   it("skips merged PRs", () => {
-    const result = planPRWorktrees(
-      [makePR({ number: 1, state: "MERGED" as GitHubPR["state"] })],
-      new Set()
-    );
+    const result = planPRWorktrees([makePR({ number: 1, state: "merged" })], new Set());
     expect(result[0]!.skipped).toBe(true);
     expect(result[0]!.skipReason).toBe("Merged");
   });
 
   it("skips closed PRs", () => {
-    const result = planPRWorktrees(
-      [makePR({ number: 1, state: "CLOSED" as GitHubPR["state"] })],
-      new Set()
-    );
+    const result = planPRWorktrees([makePR({ number: 1, state: "closed" })], new Set());
     expect(result[0]!.skipped).toBe(true);
     expect(result[0]!.skipReason).toBe("Closed");
   });
 
-  it("skips PRs without headRefName", () => {
-    const result = planPRWorktrees([makePR({ number: 1, headRefName: undefined })], new Set());
+  it("skips PRs without headRef", () => {
+    const result = planPRWorktrees(
+      [makePR({ number: 1, headRef: undefined as unknown as string })],
+      new Set()
+    );
     expect(result[0]!.skipped).toBe(true);
     expect(result[0]!.skipReason).toBe("No branch info");
   });

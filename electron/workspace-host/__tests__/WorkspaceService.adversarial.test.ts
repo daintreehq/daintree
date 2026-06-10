@@ -41,12 +41,6 @@ vi.mock("../../services/issueExtractor.js", () => ({
   deriveIssueTitleFromBranch: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
-}));
-
 vi.mock("../../services/PullRequestService.js", () => ({
   pullRequestService: {
     initialize: vi.fn(),
@@ -517,21 +511,21 @@ describe("WorkspaceService adversarial", () => {
         worktreeId: "/repo/wt",
         branch: "feature/x",
         prNumber: 42,
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
 
       getOnPRDetected()("/repo/wt", baseEvent({ isCiStatusLoading: true, prCiStatus: undefined }));
 
-      // The monitor write and both outbound events keep SUCCESS — no blink.
-      expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: "SUCCESS" }));
+      // The monitor write and both outbound events keep success — no blink.
+      expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: "success" }));
       const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
         | (WorkspaceHostEvent & { prCiStatus?: string })
         | undefined;
-      expect(prDetected?.prCiStatus).toBe("SUCCESS");
+      expect(prDetected?.prCiStatus).toBe("success");
       const wtUpdate = sentEvents.find((e) => e.type === "worktree-update") as
         | (WorkspaceHostEvent & { worktree: { prCiStatus?: string } })
         | undefined;
-      expect(wtUpdate?.worktree.prCiStatus).toBe("SUCCESS");
+      expect(wtUpdate?.worktree.prCiStatus).toBe("success");
     });
 
     it("full-replaces to undefined when no loading flag is set (checks genuinely gone)", () => {
@@ -539,7 +533,7 @@ describe("WorkspaceService adversarial", () => {
         worktreeId: "/repo/wt",
         branch: "feature/x",
         prNumber: 42,
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
 
       getOnPRDetected()("/repo/wt", baseEvent({ prCiStatus: undefined }));
@@ -556,7 +550,7 @@ describe("WorkspaceService adversarial", () => {
         worktreeId: "/repo/wt",
         branch: "feature/x",
         prNumber: 41,
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
 
       // New PR number 42 arrives loading — prior PR #41's dot must not carry over.

@@ -802,7 +802,7 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "github.listPullRequests" as ActionId,
+          id: "forge.listPRs" as ActionId,
           title: "List PRs",
           description: "List pull requests",
           category: "github",
@@ -830,7 +830,7 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const ghTool = result.tools.find((t) => t.name === "github.listPullRequests");
+    const ghTool = result.tools.find((t) => t.name === "forge.listPRs");
     const systemTool = result.tools.find((t) => t.name === "system.checkCommand");
     const wtTool = result.tools.find((t) => t.name === "worktree.create");
 
@@ -2732,9 +2732,9 @@ describe("McpServerService", () => {
         description: "Validate credentials via the forge provider",
       }),
       createManifestEntry({
-        id: "github.openPR" as ActionId,
+        id: "forge.openPR" as ActionId,
         title: "Open PR",
-        description: "Open a pull request on GitHub",
+        description: "Open a pull request via the forge provider",
       }),
     ];
 
@@ -4398,9 +4398,9 @@ describe("McpServerService", () => {
     function manifestForResources(): ActionManifestEntry[] {
       return [
         createManifestEntry({
-          id: "github.listIssues" as ActionId,
+          id: "forge.listIssues" as ActionId,
           title: "List Issues",
-          description: "List GitHub issues",
+          description: "List forge issues",
           kind: "query",
         }),
         createManifestEntry({
@@ -4518,9 +4518,9 @@ describe("McpServerService", () => {
       expect(patterns).toContain("daintree://agent/{id}/state");
     });
 
-    it("readResource for project issues dispatches github.listIssues", async () => {
+    it("readResource for project issues dispatches forge.listIssues", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
-        if (payload.actionId === "github.listIssues") {
+        if (payload.actionId === "forge.listIssues") {
           return { ok: true, result: [{ number: 1, title: "Hello" }] };
         }
         return { ok: true, result: [] };
@@ -4540,7 +4540,7 @@ describe("McpServerService", () => {
       expect(content.mimeType).toBe("application/json");
       expect(JSON.parse(content.text)).toEqual([{ number: 1, title: "Hello" }]);
       expect(dispatchMock).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "github.listIssues" })
+        expect.objectContaining({ actionId: "forge.listIssues" })
       );
     });
 

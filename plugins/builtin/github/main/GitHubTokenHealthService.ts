@@ -1,7 +1,4 @@
-import type {
-  GitHubTokenHealthPayload,
-  GitHubTokenHealthStatus,
-} from "../../../../shared/types/ipc/github.js";
+import type { GitHubTokenHealthPayload, GitHubTokenHealthStatus } from "../shared/types.js";
 import { logDebug, logInfo, logWarn } from "../../../../electron/utils/logger.js";
 import { GitHubAuth, captureAuthMetadata, getLastAuthMetadata } from "./GitHubAuth.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";

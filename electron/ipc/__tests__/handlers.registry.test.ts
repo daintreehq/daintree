@@ -34,7 +34,6 @@ const registerMocks = vi.hoisted(() => ({
   registerGlobalEnvHandlers: vi.fn(),
   registerTerminalLayoutHandlers: vi.fn(),
   registerProjectInRepoSettingsHandlers: vi.fn(),
-  registerGithubHandlers: vi.fn(),
   registerAppHandlers: vi.fn(),
   registerPortalHandlers: vi.fn(),
   registerMenuHandlers: vi.fn(),
@@ -133,9 +132,6 @@ vi.mock("../handlers/terminalLayout.js", () => ({
 }));
 vi.mock("../handlers/projectInRepoSettings.js", () => ({
   registerProjectInRepoSettingsHandlers: registerMocks.registerProjectInRepoSettingsHandlers,
-}));
-vi.mock("../handlers/github.js", () => ({
-  registerGithubHandlers: registerMocks.registerGithubHandlers,
 }));
 vi.mock("../handlers/app.js", () => ({
   registerAppHandlers: registerMocks.registerAppHandlers,
@@ -324,11 +320,11 @@ describe("registerIpcHandlers", () => {
 
   it("cleans up already-registered handlers when registration fails mid-stream", () => {
     const cleanups = registerWithTrackedCleanups();
-    registerMocks.registerGithubHandlers.mockImplementation(() => {
-      throw new Error("github registration failed");
+    registerMocks.registerAppHandlers.mockImplementation(() => {
+      throw new Error("app registration failed");
     });
 
-    expect(() => registerIpcHandlers({} as never)).toThrow("github registration failed");
+    expect(() => registerIpcHandlers({} as never)).toThrow("app registration failed");
 
     expect(cleanups.length).toBeGreaterThan(0);
     for (const cleanup of cleanups) {

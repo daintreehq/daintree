@@ -111,12 +111,12 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
   });
 
-  describe("github-stats group label", () => {
-    it("wraps the three GitHub items in a labelled group", () => {
+  describe("forge-stats group label", () => {
+    it("wraps the three forge items in a group labelled with the provider name", () => {
       // DropdownMenuLabel alone is insufficient — the Group wires role=group +
       // aria-labelledby so the boundary is announced.
       expect(source).toMatch(
-        /<DropdownMenuGroup[\s\S]*?<DropdownMenuLabel>GitHub<\/DropdownMenuLabel>/
+        /<DropdownMenuGroup[\s\S]*?<DropdownMenuLabel>\{forgeProviderName\}<\/DropdownMenuLabel>/
       );
     });
   });

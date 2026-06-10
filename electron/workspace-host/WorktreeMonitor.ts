@@ -11,7 +11,7 @@ import type {
   WorktreeLifecyclePhaseResult,
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
-import type { GitHubPRCIStatus } from "../../shared/types/github.js";
+import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
@@ -153,7 +153,7 @@ export class WorktreeMonitor {
   private prNumber: number | undefined;
   private prUrl: string | undefined;
   private prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
-  private prCiStatus: GitHubPRCIStatus | undefined;
+  private prCiStatus: CIStatusState | undefined;
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
   private _branchDerivedTitle: string | undefined;
@@ -256,16 +256,18 @@ export class WorktreeMonitor {
   private readonly fetchScheduler: FetchScheduler;
 
   // Fetch freshness state — surfaced to the renderer via the snapshot so the
-  // worktree card can show "Last fetched X ago", an in-flight pulse, and a
-  // GitHub auth-failure affordance. `_lastFetchedAt` and `_fetchAuthFailed`
-  // are pushed in via `setFetchState` from `WorkspaceService` (which receives
-  // them on every coordinator round-trip and fans them out to siblings sharing
-  // the commondir). `_isGitHubRemote` is set once at monitor start when the
-  // origin URL is probed.
+  // worktree card can show "Last fetched X ago", an in-flight pulse, and an
+  // auth-failure affordance. `_lastFetchedAt` and `_fetchAuthFailed` are
+  // pushed in via `setFetchState` from `WorkspaceService` (which receives
+  // them on every coordinator round-trip and fans them out to siblings
+  // sharing the commondir). `_remoteFetchUrl` is probed once at monitor
+  // start; `_matchedForgeProviderId` is resolved from it against the relayed
+  // provider-matcher table and re-resolved whenever the table changes.
   private _lastFetchedAt: number | null = null;
   private _fetchAuthFailed: boolean = false;
   private _fetchNetworkFailed: boolean = false;
-  private _isGitHubRemote: boolean = false;
+  private _remoteFetchUrl: string | undefined;
+  private _matchedForgeProviderId: string | null = null;
 
   // Poll queue concurrency
   private _pendingPollPromise: Promise<void> | null = null;
@@ -522,20 +524,36 @@ export class WorktreeMonitor {
   }
 
   /**
-   * Set once at monitor start when `WorkspaceService` resolves the origin URL.
-   * Gates the "Sign in to refresh" affordance — non-GitHub remotes silently
-   * hide the affordance even when an auth failure is recorded.
+   * Origin fetch URL probed once at monitor start by `WorkspaceService`.
+   * Remembered so the matched provider id can be re-resolved without
+   * re-probing git when the provider-matcher table changes.
+   */
+  get remoteFetchUrl(): string | undefined {
+    return this._remoteFetchUrl;
+  }
+
+  setRemoteFetchUrl(url: string | undefined): void {
+    if (!this._isRunning) return;
+    this._remoteFetchUrl = url;
+  }
+
+  /**
+   * Resolved when `WorkspaceService` matches the origin URL against the
+   * relayed provider-matcher table — at monitor start and again on every
+   * table change. Gates forge affordances ("Sign in to refresh", PR badge) —
+   * unmatched remotes silently hide them even when an auth failure is
+   * recorded.
    *
-   * Guarded against post-stop emits: `probeGitHubRemoteAsync` is a fire-and-
+   * Guarded against post-stop emits: `probeForgeRemoteAsync` is a fire-and-
    * forget async call that may resolve after the monitor is torn down (e.g.
    * worktree removal, project switch). Without this check the late resolution
    * would emit a `worktree-update` after `worktree-removed`, re-adding a
    * ghost card to the renderer.
    */
-  setIsGitHubRemote(value: boolean): void {
+  setMatchedForgeProviderId(value: string | null): void {
     if (!this._isRunning) return;
-    if (this._isGitHubRemote === value) return;
-    this._isGitHubRemote = value;
+    if (this._matchedForgeProviderId === value) return;
+    this._matchedForgeProviderId = value;
     if (this._hasInitialStatus) {
       this.emitUpdate();
     }
@@ -658,7 +676,7 @@ export class WorktreeMonitor {
     prNumber?: number;
     prUrl?: string;
     prState?: import("../../shared/types/forge.js").NormalizedPRState;
-    prCiStatus?: GitHubPRCIStatus;
+    prCiStatus?: CIStatusState;
     prTitle?: string;
     issueTitle?: string;
     prLastUpdatedAt?: number;
@@ -1107,15 +1125,13 @@ export class WorktreeMonitor {
         ? "closed"
         : linkedPr.state
       : undefined;
-    const linkedPrCiStatus: GitHubPRCIStatus | undefined = linkedPr?.ciStatus
-      ? linkedPr.ciStatus.state === "success"
-        ? "SUCCESS"
-        : linkedPr.ciStatus.state === "failure"
-          ? "FAILURE"
-          : linkedPr.ciStatus.state === "pending"
-            ? "PENDING"
-            : undefined
-      : undefined;
+    const linkedPrCiStatus: CIStatusState | undefined =
+      linkedPr?.ciStatus &&
+      (linkedPr.ciStatus.state === "success" ||
+        linkedPr.ciStatus.state === "failure" ||
+        linkedPr.ciStatus.state === "pending")
+        ? linkedPr.ciStatus.state
+        : undefined;
 
     const snapshot: WorktreeSnapshot = {
       id: this.id,
@@ -1175,7 +1191,7 @@ export class WorktreeMonitor {
       // so a snapshot emitted between fetch-start and fetch-end always
       // serializes the correct value, never a stale cached copy.
       isFetchInFlight: this.fetchScheduler.isFetchInFlight || undefined,
-      isGitHubRemote: this._isGitHubRemote || undefined,
+      matchedForgeProviderId: this._matchedForgeProviderId ?? undefined,
       isWslPath: this._isWslPath || undefined,
       wslDistro: this._wslDistro,
       wslPosixPath: this._wslPosixPath,

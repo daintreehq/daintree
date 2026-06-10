@@ -637,13 +637,13 @@ describe("useActionPalette", () => {
       expect(result.current.results[0]!.id).toBe("browser.close");
     });
 
-    it("boosts worktree, git, and github categories when a worktree is focused", async () => {
+    it("boosts worktree, git, and forge categories when a worktree is focused", async () => {
       // Fixture order puts browser.open first so only the boost can push it to the back.
       listMock.mockReturnValue([
         makeEntry("browser.open", "Open", true, "browser"),
         makeEntry("worktree.open", "Open", true, "worktree"),
         makeEntry("git.open", "Open", true, "git"),
-        makeEntry("github.open", "Open", true, "github"),
+        makeEntry("forge.open", "Open", true, "forge"),
       ]);
       getContextMock.mockReturnValue({ focusedWorktreeId: "wt-1" });
 
@@ -657,7 +657,7 @@ describe("useActionPalette", () => {
       expect(ids.indexOf("browser.open")).toBe(3);
       expect(ids.indexOf("worktree.open")).toBeLessThan(3);
       expect(ids.indexOf("git.open")).toBeLessThan(3);
-      expect(ids.indexOf("github.open")).toBeLessThan(3);
+      expect(ids.indexOf("forge.open")).toBeLessThan(3);
     });
 
     it("boosts settings and preferences categories when settings panel is open", async () => {

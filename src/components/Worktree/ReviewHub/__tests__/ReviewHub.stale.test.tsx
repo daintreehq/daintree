@@ -11,7 +11,6 @@ const {
   onUpdateMock,
   debounceCancelSpy,
   compareWorktreesMock,
-  openPRMock,
   abortRepositoryOperationMock,
   continueRepositoryOperationMock,
   openInEditorMock,
@@ -25,7 +24,6 @@ const {
   onUpdateMock: vi.fn(),
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
-  openPRMock: vi.fn().mockResolvedValue(undefined),
   abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   openInEditorMock: vi.fn().mockResolvedValue(undefined),
@@ -63,10 +61,6 @@ vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
-}));
-
-vi.mock("@/clients/githubClient", () => ({
-  githubClient: { openPR: openPRMock },
 }));
 
 vi.mock("@/services/ActionService", () => ({

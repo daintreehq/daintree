@@ -7,7 +7,7 @@ import type { IdleTerminalNotificationService } from "../services/IdleTerminalNo
 import type { PreAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
-import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
+import { getForgeProviderImplEntries } from "../services/forgeProviderRegistry.js";
 import { agentConnectivityService } from "../services/connectivity/AgentConnectivityService.js";
 import {
   setDiskSpaceMonitorPollInterval,
@@ -24,6 +24,17 @@ export function clearResumeTimeout(): void {
   if (resumeTimeout) {
     clearTimeout(resumeTimeout);
     resumeTimeout = null;
+  }
+}
+
+/** Fire-and-forget token-health re-probe across every registered forge provider. */
+function refreshForgeTokenHealth(options?: { force?: boolean }): void {
+  for (const [, impl] of getForgeProviderImplEntries()) {
+    try {
+      void impl.healthEvents?.refreshTokenHealth?.(options);
+    } catch {
+      // A throwing provider must not break resume/focus handling.
+    }
   }
 }
 
@@ -91,10 +102,10 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           workspaceClient.resumeHealthCheck();
           await workspaceClient.refreshOnWake();
         }
-        // Force an immediate token-health probe on wake — a PAT that expired
-        // during a long laptop sleep would otherwise sit undetected until the
-        // next 30-minute poll tick.
-        void gitHubTokenHealthService.refresh({ force: true });
+        // Force an immediate token-health probe on wake — a credential that
+        // expired during a long laptop sleep would otherwise sit undetected
+        // until the provider's next scheduled probe.
+        refreshForgeTokenHealth({ force: true });
         // Re-probe agent provider reachability on wake. A long sleep across a
         // network change (Wi-Fi swap, airplane mode toggle) often invalidates
         // the cached "reachable" state.
@@ -232,10 +243,9 @@ function removeThrottle(): void {
     preAgentSnapshotService.updatePollInterval(PRE_AGENT_PRUNE_NORMAL);
   }
 
-  // Opportunistic token-health re-check on focus regain, gated by the
-  // service's own 5-minute cooldown so rapid window switching doesn't
-  // hammer the API.
-  void gitHubTokenHealthService.refresh();
+  // Opportunistic token-health re-check on focus regain, gated by each
+  // provider's own cooldown so rapid window switching doesn't hammer APIs.
+  refreshForgeTokenHealth();
   // Same opportunistic re-check for agent reachability — internal cooldown
   // prevents the alt-tab path from fanning out probes.
   void agentConnectivityService.refresh({ reason: "focus" });

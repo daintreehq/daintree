@@ -6,7 +6,7 @@ import {
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
-import type { GitHubPR, GitHubPRCIStatus } from "@shared/types/github";
+import type { CIStatusState, PR } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -15,7 +15,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
-import { mutateCacheEntries } from "@/lib/githubResourceCache";
+import { mutateCacheEntries } from "@/lib/forgeResourceCache";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -47,7 +47,7 @@ interface PRDetectedEvent {
   prNumber: number;
   prUrl: string;
   prState: "open" | "merged" | "closed";
-  prCiStatus?: GitHubPRCIStatus;
+  prCiStatus?: CIStatusState;
   prTitle?: string;
   issueNumber?: number;
   issueTitle?: string;
@@ -478,12 +478,22 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           overlayVersion(store.getState().version)
         );
 
-        // Sync the GitHub PR dropdown cache so the sidebar PRBadge and the
+        // Sync the PR dropdown cache so the sidebar PRBadge and the
         // dropdown row can't drift. Read the project path at event time —
         // capturing it in the effect closure would corrupt cache slots after
         // a project switch (#4670).
         const projectPath = useProjectStore.getState().currentProject?.path;
         if (!projectPath) return;
+        // The dropdown cache stores normalized forge rows whose ciStatus is
+        // the same CIStatusState vocabulary as the detection wire. Only the
+        // three render-bearing states are written; neutral/unknown collapse to
+        // undefined ("no checks") to match the row badge's vocabulary.
+        const cacheCiStatus: CIStatusState | undefined =
+          event.prCiStatus === "success" ||
+          event.prCiStatus === "failure" ||
+          event.prCiStatus === "pending"
+            ? event.prCiStatus
+            : undefined;
         mutateCacheEntries(projectPath, "pr", (entry, keyRemainder) => {
           // keyRemainder is `${filterState}:${sortOrder}`; filterState values
           // ("open" | "closed" | "merged" | "all") contain no colons. Unknown
@@ -496,7 +506,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           let changed = false;
           const items: (typeof entry.items)[number][] = [];
           for (const item of entry.items) {
-            const pr = item as GitHubPR;
+            const pr = item as PR;
             if (pr.number !== event.prNumber) {
               items.push(item);
               continue;
@@ -508,16 +518,16 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // stay ahead of the CI-only branch below: it sets changed=true on
             // removal even when ciStatus is unchanged, which is what triggers
             // the generation bump in mutateCacheEntries.
-            if (isFilteredSlot && pr.state && pr.state.toLowerCase() !== event.prState) {
+            if (isFilteredSlot && pr.state && pr.state !== event.prState) {
               changed = true;
               continue;
             }
-            if (pr.ciStatus === event.prCiStatus) {
+            if (pr.ciStatus === cacheCiStatus) {
               items.push(item);
               continue;
             }
             changed = true;
-            items.push({ ...pr, ciStatus: event.prCiStatus });
+            items.push({ ...pr, ciStatus: cacheCiStatus });
           }
           if (!changed) return null;
           return { ...entry, items };

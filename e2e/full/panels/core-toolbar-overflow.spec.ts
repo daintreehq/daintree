@@ -140,7 +140,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
         "dev-server": 3,
         settings: 4,
         "notification-center": 4,
-        "github-stats": 5,
+        "forge-stats": 5,
         "copy-tree": 5,
         problems: 5,
       };
@@ -184,7 +184,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
     // The overflow computation should hide low-priority items
     expect(overflowResult.overflowTriggered).toBe(true);
     if (overflowResult.overflowTriggered) {
-      // Priority 5 items (github-stats, copy-tree, problems) should overflow first
+      // Priority 5 items (forge-stats, copy-tree, problems) should overflow first
       expect(overflowResult.overflowed).toContain("problems");
       expect(overflowResult.overflowed).toContain("copy-tree");
       // Priority 1 items should remain visible
@@ -210,11 +210,11 @@ test.describe.serial("Core: Toolbar Overflow", () => {
       const PRIORITIES: Record<string, number> = {
         terminal: 3,
         browser: 3,
-        "github-stats": 1,
+        "forge-stats": 1,
         settings: 5,
         "copy-tree": 5,
       };
-      const ids = ["terminal", "browser", "github-stats", "settings", "copy-tree"];
+      const ids = ["terminal", "browser", "forge-stats", "settings", "copy-tree"];
       const widths = new Map(ids.map((id) => [id, 36] as const));
 
       const RESTORE_BUFFER = 16;

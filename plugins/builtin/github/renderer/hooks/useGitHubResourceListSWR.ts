@@ -14,13 +14,18 @@ import {
   setCache,
   nextGeneration,
   getGeneration,
-} from "@/lib/githubResourceCache";
-import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
-import { githubClient } from "@/clients/githubClient";
-import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+} from "@/lib/forgeResourceCache";
+import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
+import { forgeClient } from "@/clients/forgeClient";
+import {
+  useForgeProviderHealthStore,
+  DEFAULT_PROVIDER_HEALTH,
+} from "@/store/forgeProviderHealthStore";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
-import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
+import type { Issue, ListOptions, PR } from "@shared/types/forge";
+import type { GitHubSortOrder } from "../../shared/types.js";
 import { parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -59,7 +64,7 @@ interface UseGitHubResourceListSWRParams {
 }
 
 export interface UseGitHubResourceListSWRReturn {
-  data: (GitHubIssue | GitHubPR)[];
+  data: (Issue | PR)[];
   debouncedSearch: string;
   numberQuery: ReturnType<typeof parseNumberQuery>;
   hasMore: boolean;
@@ -96,9 +101,9 @@ export function useGitHubResourceListSWR({
   );
   const cachedEntry = useMemo(() => getCache(cacheKey), [cacheKey]);
 
-  const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>(() => cachedEntry?.items ?? []);
-  const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.endCursor ?? null);
-  const [hasMore, setHasMore] = useState(() => cachedEntry?.hasNextPage ?? false);
+  const [data, setData] = useState<(Issue | PR)[]>(() => cachedEntry?.items ?? []);
+  const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.nextCursor ?? null);
+  const [hasMore, setHasMore] = useState(() => cachedEntry?.hasMore ?? false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   // Tracks any in-flight background revalidate (manual refresh button,
@@ -152,11 +157,16 @@ export function useGitHubResourceListSWR({
   // so we read directly here and mirror into a ref for `fetchData` (same
   // rationale as `githubConfigRef` — adding `rateLimitBlocked` to fetchData's
   // deps would recreate the callback on every rate-limit flip and reflash
-  // the skeleton). `recentlyHitRateLimit` covers the brief race window where
+  // the skeleton). The plugin reads its own provider slice from the keyed
+  // health store. `recentlyHitRateLimit` covers the brief race window where
   // a fetch fires just before the store-push lands: the catch path sets it,
   // a successful fetch clears it. `isRateLimited` is the OR.
-  const rateLimitBlocked = useGitHubRateLimitStore((s) => s.blocked);
-  const rateLimitResetAt = useGitHubRateLimitStore((s) => s.resetAt);
+  const rateLimitBlocked = useForgeProviderHealthStore(
+    (s) => (s.providers[BUILTIN_GITHUB_PROVIDER_ID] ?? DEFAULT_PROVIDER_HEALTH).rateLimitBlocked
+  );
+  const rateLimitResetAt = useForgeProviderHealthStore(
+    (s) => (s.providers[BUILTIN_GITHUB_PROVIDER_ID] ?? DEFAULT_PROVIDER_HEALTH).rateLimitResetAt
+  );
   const rateLimitBlockedRef = useRef(rateLimitBlocked);
   useEffect(() => {
     rateLimitBlockedRef.current = rateLimitBlocked;
@@ -225,10 +235,11 @@ export function useGitHubResourceListSWR({
       try {
         const searchOverride =
           numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
-        const fetchOptions = {
-          cwd: projectPath,
+        // `merged` is a GitHub-supported PR state the provider accepts beyond
+        // the contract's documented set — pass it through with a cast.
+        const fetchOptions: ListOptions = {
           search: searchOverride || debouncedSearch || undefined,
-          state: filterState as "open" | "closed" | "merged" | "all",
+          state: filterState as ListOptions["state"],
           cursor: currentCursor || undefined,
           // Append (load-more) always wants the next page from network.
           // SWR revalidates also bypass cache — that's the whole point of
@@ -238,19 +249,15 @@ export function useGitHubResourceListSWR({
           // synchronously and avoids the click-time round-trip the user
           // sees as "reload".
           bypassCache: append ? false : isRevalidate ? true : false,
-          sortOrder,
+          sort: sortOrder,
         };
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
             const result =
               type === "issue"
-                ? await githubClient.listIssues(
-                    fetchOptions as Parameters<typeof githubClient.listIssues>[0]
-                  )
-                : await githubClient.listPullRequests(
-                    fetchOptions as Parameters<typeof githubClient.listPullRequests>[0]
-                  );
+                ? await forgeClient.listIssues(projectPath, fetchOptions)
+                : await forgeClient.listPRs(projectPath, fetchOptions);
 
             // Check if aborted before updating state
             if (abortSignal?.aborted) return;
@@ -267,8 +274,8 @@ export function useGitHubResourceListSWR({
               setData(result.items);
               setError(null);
             }
-            setCursor(result.pageInfo.endCursor);
-            setHasMore(result.pageInfo.hasNextPage);
+            setCursor(result.nextCursor);
+            setHasMore(result.hasMore);
             // Successful response clears the sticky catch-path flag. The
             // store-driven `rateLimitBlocked` continues to gate the UI.
             setRecentlyHitRateLimit(false);
@@ -278,8 +285,8 @@ export function useGitHubResourceListSWR({
               const now = Date.now();
               setCache(options.cacheKey, {
                 items: result.items,
-                endCursor: result.pageInfo.endCursor,
-                hasNextPage: result.pageInfo.hasNextPage,
+                nextCursor: result.nextCursor,
+                hasMore: result.hasMore,
                 timestamp: now,
               });
               setLastUpdatedAt(now);
@@ -309,7 +316,7 @@ export function useGitHubResourceListSWR({
               if (filterState === "open") {
                 onCountUpdate?.(
                   result.totalCount ?? result.items.length,
-                  result.totalCount == null ? result.pageInfo.hasNextPage : false
+                  result.totalCount == null ? result.hasMore : false
                 );
               }
               // Notify parent (toolbar count badge) that fresh first-page data
@@ -443,8 +450,8 @@ export function useGitHubResourceListSWR({
         // the previously-shown rows must clear on Activity reveal instead
         // of lingering until the revalidate resolves.
         setData(cached.items);
-        setCursor(cached.endCursor);
-        setHasMore(cached.hasNextPage);
+        setCursor(cached.nextCursor);
+        setHasMore(cached.hasMore);
         setLastUpdatedAt(cached.timestamp);
         setError(null);
         setExactNumberNotFound(null);
@@ -490,8 +497,8 @@ export function useGitHubResourceListSWR({
         // warm slot doesn't render the skeleton via `loading && !data.length`.
         setLoading(false);
         setData(targetCached.items);
-        setCursor(targetCached.endCursor);
-        setHasMore(targetCached.hasNextPage);
+        setCursor(targetCached.nextCursor);
+        setHasMore(targetCached.hasMore);
         setLastUpdatedAt(targetCached.timestamp);
         setExactNumberNotFound(null);
         setError(null);
@@ -634,16 +641,15 @@ export function useGitHubResourceListSWR({
 
     const getByNumber = (num: number) =>
       type === "issue"
-        ? githubClient.getIssueByNumber(projectPath, num)
-        : githubClient.getPRByNumber(projectPath, num);
+        ? forgeClient.getIssue(projectPath, num)
+        : forgeClient.getPR(projectPath, num);
 
     const getByNumbers = (numbers: number[]) =>
       type === "issue"
-        ? githubClient.getIssuesByNumbers(projectPath, numbers)
-        : githubClient.getPRsByNumbers(projectPath, numbers);
+        ? forgeClient.getIssuesByNumbers(projectPath, numbers)
+        : forgeClient.getPRsByNumbers(projectPath, numbers);
 
-    const matchesFilter = (item: GitHubIssue | GitHubPR) =>
-      filterState === "all" || item.state.toLowerCase() === filterState;
+    const matchesFilter = (item: Issue | PR) => filterState === "all" || item.state === filterState;
 
     const runNumericAttempt = async () => {
       switch (numberQuery.kind) {
@@ -684,25 +690,20 @@ export function useGitHubResourceListSWR({
         }
 
         case "open-ended": {
-          const options = {
-            cwd: projectPath,
+          const options: ListOptions = {
             search: `number:>=${numberQuery.from}`,
-            state: filterState as "open" | "closed" | "merged" | "all",
+            state: filterState as ListOptions["state"],
             bypassCache: true,
-            sortOrder: "created" as const,
+            sort: "created",
           };
           const result =
             type === "issue"
-              ? await githubClient.listIssues(
-                  options as Parameters<typeof githubClient.listIssues>[0]
-                )
-              : await githubClient.listPullRequests(
-                  options as Parameters<typeof githubClient.listPullRequests>[0]
-                );
+              ? await forgeClient.listIssues(projectPath, options)
+              : await forgeClient.listPRs(projectPath, options);
           if (abortController.signal.aborted) return;
           setData(result.items);
-          setCursor(result.pageInfo.endCursor);
-          setHasMore(result.pageInfo.hasNextPage);
+          setCursor(result.nextCursor);
+          setHasMore(result.hasMore);
           break;
         }
       }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
-import type { RemoteInfo } from "@shared/types/ipc/github";
+import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
 
 interface CodeForgeTabProps {

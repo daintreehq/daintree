@@ -251,7 +251,7 @@ export function ReviewHubContent({
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
   // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
-  // searchable code (e.g. GitHub's `GH###`); `forgeProviderId` is the resolved
+  // searchable code (e.g. `GH###`); `forgeProviderId` is the resolved
   // provider's contribution id, used to route the settings CTA. Both null when
   // no provider resolves or it doesn't recognize the stderr.
   const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
@@ -485,7 +485,7 @@ export function ReviewHubContent({
   );
 
   // Per-file review-thread badges now come from the generic plugin
-  // file-decoration system (the built-in GitHub plugin contributes the
+  // file-decoration system (the active provider plugin contributes the
   // `worktree-diff:*` provider) rather than a direct `getPRReviewThreads`
   // call here. The scope is empty (→ no-op, no IPC) unless the base-branch
   // diff is showing for a worktree with a linked PR.

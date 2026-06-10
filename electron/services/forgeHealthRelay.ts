@@ -1,0 +1,154 @@
+import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
+import {
+  getForgeProviderImplEntries,
+  onForgeProviderRegistryChanged,
+} from "./forgeProviderRegistry.js";
+import type { ForgeProviderImpl } from "../../shared/types/forge.js";
+import type {
+  ForgeRateLimitChangedPayload,
+  ForgeTokenHealthChangedPayload,
+} from "../../shared/types/ipc/forge.js";
+
+/**
+ * Host-side relay between each registered provider's `healthEvents`
+ * capability and the providerId-keyed `forge:*` push channels. The host
+ * subscribes once per bound impl (diffed against the registry on every
+ * change) and disposes subscriptions when an impl is replaced or
+ * unregistered, so plugin reloads can't leak listeners or double-emit.
+ */
+
+interface RelayEntry {
+  impl: ForgeProviderImpl;
+  disposers: Array<() => void>;
+}
+
+let subscriptions: Map<string, RelayEntry> | null = null;
+let unsubscribeRegistry: (() => void) | null = null;
+
+// Relay the fetch-throttle multiplier into every workspace host so worktree
+// monitor polling backs off as the provider's rate-limit budget depletes.
+// The hosts don't observe provider rate limits themselves (#8870) — main
+// pushes the state in.
+async function relayFetchThrottleToWorkspaceHosts(multiplier: number): Promise<void> {
+  try {
+    const { getWorkspaceClient } = await import("./WorkspaceClient.js");
+    getWorkspaceClient().relayFetchThrottle(multiplier);
+  } catch {
+    // WorkspaceClient may not be initialized yet — hosts created later are
+    // seeded from the pool cache, and this relay fires again on every change.
+  }
+}
+
+function disposeEntry(entry: RelayEntry): void {
+  for (const dispose of entry.disposers) {
+    try {
+      dispose();
+    } catch {
+      // A throwing disposer must not block the rest of the teardown.
+    }
+  }
+}
+
+function subscribeProvider(providerId: string, impl: ForgeProviderImpl): RelayEntry | null {
+  const health = impl.healthEvents;
+  if (!health) return null;
+  const disposers: Array<() => void> = [];
+
+  try {
+    subscribeHealthEvents(providerId, health, disposers);
+  } catch (error) {
+    // Partial subscriptions must not leak when a later subscribe throws.
+    disposeEntry({ impl, disposers });
+    throw error;
+  }
+
+  return { impl, disposers };
+}
+
+function subscribeHealthEvents(
+  providerId: string,
+  health: NonNullable<ForgeProviderImpl["healthEvents"]>,
+  disposers: Array<() => void>
+): void {
+  disposers.push(
+    health.onTokenHealthChanged((state) => {
+      const payload: ForgeTokenHealthChangedPayload = {
+        providerId,
+        isUnhealthy: state.status === "unhealthy",
+        state,
+      };
+      broadcastToRenderer(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, payload);
+    })
+  );
+
+  if (health.onRateLimitChanged) {
+    disposers.push(
+      health.onRateLimitChanged((info) => {
+        const payload: ForgeRateLimitChangedPayload = { providerId, state: info };
+        broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, payload);
+        // Pace workspace-host background fetch cadence against the observed
+        // budget — read live from the callback arg, never a cached payload
+        // that could predate a token rotation.
+        void relayFetchThrottleToWorkspaceHosts(info.throttleMultiplier ?? 1);
+      })
+    );
+  }
+}
+
+function syncSubscriptions(): void {
+  if (!subscriptions) return;
+  const current = new Map(getForgeProviderImplEntries());
+
+  // Drop subscriptions for impls that disappeared or were re-bound — a
+  // re-registered key carries a new impl object, so identity diffing
+  // re-subscribes against the fresh capability. A removed provider also
+  // gets a healthy reset broadcast so renderer health slices don't pin a
+  // stale unhealthy/rate-limited state after the plugin is disabled.
+  for (const [providerId, entry] of [...subscriptions]) {
+    if (current.get(providerId) !== entry.impl) {
+      disposeEntry(entry);
+      subscriptions.delete(providerId);
+      if (!current.has(providerId)) {
+        broadcastToRenderer(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, {
+          providerId,
+          isUnhealthy: false,
+        } satisfies ForgeTokenHealthChangedPayload);
+        broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+          providerId,
+          state: { limit: null, remaining: null, resetAt: null },
+        } satisfies ForgeRateLimitChangedPayload);
+      }
+    }
+  }
+
+  for (const [providerId, impl] of current) {
+    if (subscriptions.has(providerId)) continue;
+    // One provider's throwing subscribe must not block the others or the
+    // initial relay registration.
+    try {
+      const entry = subscribeProvider(providerId, impl);
+      if (entry) subscriptions.set(providerId, entry);
+    } catch (error) {
+      console.warn(`[forgeHealthRelay] subscribe failed for ${providerId}:`, error);
+    }
+  }
+}
+
+export function initForgeHealthRelay(): void {
+  if (subscriptions) return;
+  subscriptions = new Map();
+  unsubscribeRegistry = onForgeProviderRegistryChanged(syncSubscriptions);
+  syncSubscriptions();
+}
+
+/** Tear down all subscriptions and the registry listener (test isolation). */
+export function disposeForgeHealthRelay(): void {
+  if (!subscriptions) return;
+  unsubscribeRegistry?.();
+  unsubscribeRegistry = null;
+  for (const entry of subscriptions.values()) {
+    disposeEntry(entry);
+  }
+  subscriptions = null;
+}

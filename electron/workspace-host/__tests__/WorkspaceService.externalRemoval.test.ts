@@ -98,12 +98,6 @@ vi.mock("../../services/worktree/index.js", () => ({
   }),
 }));
 
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
-}));
-
 vi.mock("../../services/PullRequestService.js", () => ({
   pullRequestService: {
     initialize: vi.fn(),

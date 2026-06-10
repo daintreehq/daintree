@@ -19,7 +19,7 @@ async function getRunCommandDetector(): Promise<
   return cachedRunCommandDetector;
 }
 import { z } from "zod";
-import { typedHandle, typedHandleValidated } from "../../utils.js";
+import { typedHandle, typedHandleValidated, checkRateLimit } from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
 import type { ProjectSettings } from "../../../types/index.js";
@@ -54,10 +54,6 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     const previousRemote = previousSettings.forgeRemote ?? previousSettings.githubRemote;
     const nextRemote = settings.forgeRemote ?? settings.githubRemote;
     const remoteChanged = nextRemote !== previousRemote;
-    if (remoteChanged) {
-      const { clearGitHubCaches } = await import("../../../services/GitHubService.js");
-      clearGitHubCaches();
-    }
     // Re-resolve the workspace host's PR provider when the provider override
     // or selected remote changes — otherwise the running host keeps the
     // provider it resolved at load-project and stored settings drift out of
@@ -180,5 +176,54 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_CREATE_FOLDER, handleProjectCreateFolder));
 
+  // Lists all git remotes (origin, upstream, …) with an optional parsed
+  // owner/repo for remotes whose URL looks like a forge repo. Display-only
+  // parse — provider routing resolves remotes through `parseRemote` instead.
+  const handleProjectListRemotes = async (
+    cwd: string
+  ): Promise<
+    Array<{ name: string; fetchUrl: string; parsedRepo: { owner: string; repo: string } | null }>
+  > => {
+    checkRateLimit(CHANNELS.PROJECT_LIST_REMOTES, 10, 10_000);
+    if (typeof cwd !== "string" || !cwd) {
+      throw new Error("Invalid working directory");
+    }
+    if (!path.isAbsolute(cwd)) {
+      throw new Error("Working directory must be an absolute path");
+    }
+    const { GitService } = await import("../../../services/GitService.js");
+    const remotes = await new GitService(cwd).listRemotes(cwd);
+    const result = remotes.map((r) => ({
+      name: r.name,
+      fetchUrl: r.fetchUrl,
+      parsedRepo: parseOwnerRepo(r.fetchUrl),
+    }));
+    result.sort((a, b) => {
+      if (a.name === "origin") return -1;
+      if (b.name === "origin") return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return result;
+  };
+  handlers.push(typedHandle(CHANNELS.PROJECT_LIST_REMOTES, handleProjectListRemotes));
+
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+/** Forge-agnostic owner/repo extraction from https or scp-style git remote URLs. */
+function parseOwnerRepo(url: string): { owner: string; repo: string } | null {
+  if (!url) return null;
+  const normalized = url.replace(/^(?:ssh:\/\/)?git@([^/:]+)[/:]/, "https://$1/");
+  try {
+    const parsed = new URL(normalized);
+    const parts = parsed.pathname
+      .replace(/^\//, "")
+      .replace(/\/$/, "")
+      .replace(/\.git$/, "")
+      .split("/");
+    if (parts.length < 2 || !parts[0] || !parts[parts.length - 1]) return null;
+    return { owner: parts[0], repo: parts[parts.length - 1] };
+  } catch {
+    return null;
+  }
 }

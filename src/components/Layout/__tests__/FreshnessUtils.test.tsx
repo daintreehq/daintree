@@ -86,7 +86,7 @@ describe("freshnessSuffix", () => {
   });
 
   it("returns error message for errored level", () => {
-    expect(freshnessSuffix("errored", null, now)).toBe(" · couldn't reach GitHub");
+    expect(freshnessSuffix("errored", null, now)).toBe(" · couldn't refresh");
   });
 });
 

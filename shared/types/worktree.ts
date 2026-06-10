@@ -1,5 +1,5 @@
 import type { FileChangeDetail, RepoState, WorktreeChanges } from "./git.js";
-import type { GitHubPRCIStatus } from "./github.js";
+import type { CIStatusState } from "./forge.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 
 /**
@@ -180,11 +180,11 @@ export interface Worktree {
   prState?: "open" | "merged" | "closed";
 
   /**
-   * Roll-up CI check status for the PR's head commit (uppercase GraphQL
-   * enum). Absent when the PR has no checks configured or before the first
-   * PR poll has landed.
+   * Roll-up CI check status for the PR's head commit, in the normalized
+   * forge vocabulary. Absent when the PR has no checks configured or before
+   * the first PR poll has landed.
    */
-  prCiStatus?: GitHubPRCIStatus;
+  prCiStatus?: CIStatusState;
 
   /** Pull request title */
   prTitle?: string;
@@ -285,11 +285,13 @@ export interface Worktree {
   isFetchInFlight?: boolean;
 
   /**
-   * True when origin's fetch URL points at github.com (HTTPS or SSH form).
-   * Resolved once at monitor start; gates the "Sign in to refresh" affordance
-   * so we don't surface a GitHub-token CTA for non-GitHub remotes.
+   * Canonical id of the registered forge provider whose hostname patterns
+   * match the remote's fetch URL, or `null` when no registered provider
+   * matches. Resolved at monitor start from the provider-matcher table main
+   * relays into the workspace hosts; gates forge affordances (PR badge,
+   * "sign in to refresh") without naming any one forge.
    */
-  isGitHubRemote?: boolean;
+  matchedForgeProviderId?: string | null;
 
   /**
    * Provider-agnostic projection of the worktree's linked forge resources

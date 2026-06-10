@@ -32,7 +32,7 @@ export type ToolbarButtonId =
   | "browser"
   | "dev-server"
   | "voice-recording"
-  | "github-stats"
+  | "forge-stats"
   | "copy-tree"
   | "command-palette"
   | "settings"
@@ -88,7 +88,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "sidebar-toggle": 1,
   "assistant-toggle": 1,
   "portal-toggle": 1,
-  "github-stats": 1,
+  "forge-stats": 1,
   "voice-recording": 1,
   "agent-tray": 2,
   ...(Object.fromEntries(

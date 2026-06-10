@@ -20,7 +20,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
 
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
-  "github-stats",
+  "forge-stats",
   "notification-center",
   "copy-tree",
   "command-palette",
@@ -185,7 +185,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 9,
+      version: 10,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -329,6 +329,33 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           }
           if (Array.isArray(layout?.rightButtons)) {
             layout.rightButtons = layout.rightButtons.map(stripPluginPrefix);
+          }
+        }
+        if (version < 10) {
+          // The stats button went forge-neutral: persisted id "github-stats"
+          // became "forge-stats". Rename the position arrays and pin map keys
+          // so user pin/hide layout prefs survive.
+          const renameForgeStats = (id: string): string =>
+            id === "github-stats" ? "forge-stats" : id;
+          const layout = state.layout as
+            | {
+                pinnedButtons?: Record<string, boolean>;
+                leftButtons?: string[];
+                rightButtons?: string[];
+              }
+            | undefined;
+          if (layout?.pinnedButtons) {
+            const renamed: Record<string, boolean> = {};
+            for (const [key, value] of Object.entries(layout.pinnedButtons)) {
+              renamed[renameForgeStats(key)] = value;
+            }
+            layout.pinnedButtons = renamed;
+          }
+          if (Array.isArray(layout?.leftButtons)) {
+            layout.leftButtons = layout.leftButtons.map(renameForgeStats);
+          }
+          if (Array.isArray(layout?.rightButtons)) {
+            layout.rightButtons = layout.rightButtons.map(renameForgeStats);
           }
         }
         return state as unknown as ToolbarPreferencesState;

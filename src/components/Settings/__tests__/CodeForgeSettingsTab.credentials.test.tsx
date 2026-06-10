@@ -37,12 +37,22 @@ function makeProvider(
   pluginId: string,
   id: string,
   name: string,
-  credentialFields?: ForgeProviderEntry["contribution"]["credentialFields"]
+  credentialFields?: ForgeProviderEntry["contribution"]["credentialFields"],
+  slots?: ForgeProviderEntry["contribution"]["slots"]
 ): ForgeProviderEntry {
   return {
     pluginId,
-    contribution: { id, name, matches: ["gitea.example.com"], credentialFields },
+    contribution: { id, name, matches: ["gitea.example.com"], credentialFields, slots },
   };
+}
+
+// The built-in GitHub provider contributes its own settings panel through the
+// `slots.settingsTab` builtin-view ref — the host resolves it generically.
+function makeGitHubProvider(): ForgeProviderEntry {
+  return makeProvider("daintree.github", "github", "GitHub", undefined, {
+    settingsTab: "github.forgeSettingsTab",
+    icon: "github.providerIcon",
+  });
 }
 
 interface ForgeMockOptions {
@@ -280,7 +290,7 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
   it("routes the built-in GitHub card and a third-party 'github' contribution independently", async () => {
     const { getCredentialStatus } = installForgeMocks({
       providers: [
-        makeProvider("daintree.github", "github", "GitHub"),
+        makeGitHubProvider(),
         makeProvider("acme", "github", "Acme GitHub", [
           { id: "token", label: "API token", type: "password" },
         ]),
@@ -305,10 +315,32 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     expect(screen.queryByTestId("github-settings-tab")).toBeNull();
   });
 
-  it("falls back to the GitHub subtab for an unrecognized subtab while GitHub is registered", async () => {
+  it("defaults a fresh open (no subtab) to the first registered provider", async () => {
     installForgeMocks({
       providers: [
-        makeProvider("daintree.github", "github", "GitHub"),
+        makeGitHubProvider(),
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const onSubtabChange = vi.fn();
+    render(<CodeForgeSettingsTab activeSubtab={null} onSubtabChange={onSubtabChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+    // The fallback is display-only — the component must not rewrite the
+    // caller's subtab state.
+    expect(onSubtabChange).not.toHaveBeenCalled();
+  });
+
+  it("falls back to General for a stale unrecognized subtab even while providers are registered", async () => {
+    installForgeMocks({
+      providers: [
+        makeGitHubProvider(),
         makeProvider("acme", "gitea", "Gitea", [
           { id: "token", label: "API token", type: "password" },
         ]),
@@ -319,11 +351,9 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={onSubtabChange} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+      expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
     });
-    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
-    // The fallback is display-only — the component must not rewrite the
-    // caller's subtab state.
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
     expect(onSubtabChange).not.toHaveBeenCalled();
   });
 
@@ -348,7 +378,7 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     expect(screen.queryByTestId("github-settings-tab")).toBeNull();
   });
 
-  it("falls back to General when GitHub is not registered (plugin disabled)", async () => {
+  it("falls back to General for a stale subtab when GitHub is not registered (plugin disabled)", async () => {
     installForgeMocks({
       providers: [
         makeProvider("acme", "gitea", "Gitea", [

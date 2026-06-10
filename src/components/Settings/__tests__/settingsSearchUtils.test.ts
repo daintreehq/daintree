@@ -37,7 +37,7 @@ const GOLDEN_QUERIES = [
   { query: "microphone", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
   { query: "appearance", expectedTopResults: ["tab-nav-terminalAppearance", "appearance-theme"] },
   { query: "hibernate", expectedTopResults: ["general-hibernation"] },
-  { query: "github", expectedTopResults: ["github-token", "tab-nav-code-forge"] },
+  { query: "github", expectedTopResults: ["forge-access-token", "tab-nav-code-forge"] },
   { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
   { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
 ] as const;
@@ -95,9 +95,9 @@ describe("filterSettings", () => {
     expect(filterSettings(SETTINGS_SEARCH_INDEX, "zzznomatch999")).toHaveLength(0);
   });
 
-  it("matches github token entry by id", () => {
+  it("matches the forge access-token entry for a github token query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "github token");
-    expect(results.some((r) => r.id === "github-token")).toBe(true);
+    expect(results.some((r) => r.id === "forge-access-token")).toBe(true);
   });
 
   it("can match across multiple tabs", () => {

@@ -102,9 +102,10 @@ describe("registerForgeDataHandlers", () => {
     });
   });
 
-  it("registers six IPC handlers", () => {
+  it("registers the core and capability IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(6);
+    // 6 core data handlers + the 11-op forgeCapabilityData namespace.
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(17);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
@@ -114,6 +115,41 @@ describe("registerForgeDataHandlers", () => {
       expect.any(Function)
     );
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-current-user", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-repo-stats", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-first-page-cache",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-project-health",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-issue-tooltip",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-pr-tooltip", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-issues-by-numbers",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-prs-by-numbers",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-pr-review-threads",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:resolve-author-avatar",
+      expect.any(Function)
+    );
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-token-health", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      "forge:get-rate-limit-details",
+      expect.any(Function)
+    );
     cleanup();
   });
 

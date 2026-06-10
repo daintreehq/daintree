@@ -20,8 +20,8 @@ import type {
   WorktreeResourceStatus,
   WslGitEligibility,
 } from "./worktree.js";
-import type { Credentials, RepoRef } from "./forge.js";
-import type { GitHubPRCIStatus } from "./github.js";
+import type { CIStatusState, Credentials, RepoRef } from "./forge.js";
+import type { ForgeProviderMatcher } from "../utils/forgeHostnames.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 import type {
   CopyTreeOptions,
@@ -93,11 +93,11 @@ export interface WorktreeSnapshot {
   prUrl?: string;
   prState?: "open" | "merged" | "closed";
   /**
-   * Roll-up CI check status for the PR's head commit, sourced from GitHub's
-   * `statusCheckRollup.state` (uppercase enum). Absent when the PR has no
-   * checks configured or before the first PR detection lands.
+   * Roll-up CI check status for the PR's head commit, in the normalized
+   * forge vocabulary. Absent when the PR has no checks configured or before
+   * the first PR detection lands.
    */
-  prCiStatus?: GitHubPRCIStatus;
+  prCiStatus?: CIStatusState;
   prTitle?: string;
   issueTitle?: string;
   /**
@@ -174,8 +174,11 @@ export interface WorktreeSnapshot {
   /** True while a background `git fetch` is in-flight for this worktree's repo. */
   isFetchInFlight?: boolean;
 
-  /** True when origin's fetch URL points at github.com (HTTPS or SSH form). */
-  isGitHubRemote?: boolean;
+  /**
+   * Canonical id of the registered forge provider whose hostname patterns
+   * match the remote's fetch URL, or `null` when none matches.
+   */
+  matchedForgeProviderId?: string | null;
 
   /**
    * Provider-agnostic projection of the worktree's linked forge resources
@@ -383,6 +386,9 @@ export type WorkspaceHostRequest =
   // GitHub rate-limit fetch-throttle multiplier relayed from main, where the
   // forge HTTP calls (and thus rate-limit observations) live post-#8870.
   | { type: "apply-fetch-throttle"; multiplier: number }
+  // Forge provider hostname-matcher table relayed from main's registry so
+  // monitors can resolve remote URLs to a provider id without registry access.
+  | { type: "forge-provider-matchers"; matchers: ForgeProviderMatcher[] }
   // Health check
   | { type: "health-check" }
   // Lifecycle
@@ -635,7 +641,7 @@ export type WorkspaceHostEvent =
       prNumber: number;
       prUrl: string;
       prState: "open" | "merged" | "closed";
-      prCiStatus?: GitHubPRCIStatus;
+      prCiStatus?: CIStatusState;
       prTitle?: string;
       issueNumber?: number;
       issueTitle?: string;

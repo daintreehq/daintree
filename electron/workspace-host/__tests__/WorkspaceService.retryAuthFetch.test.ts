@@ -74,12 +74,6 @@ vi.mock("../../services/worktree/index.js", () => ({
   }),
 }));
 
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
-}));
-
 const mockPullRequestService = {
   initialize: vi.fn(),
   start: vi.fn(),
