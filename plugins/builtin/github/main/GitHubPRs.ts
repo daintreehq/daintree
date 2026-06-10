@@ -21,6 +21,7 @@ import {
   prRequiredStatusCache,
   truncateBody,
   isoToEpochMs,
+  getRepoListEpoch,
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
   type PRRequiredStatusEntry,
@@ -439,6 +440,11 @@ export async function listPullRequests(
       if (cached) return cached;
     }
 
+    // Captured before the network call: if the count-as-cache-buster bumps
+    // the epoch mid-flight, this page predates the observed change and must
+    // not repopulate the just-busted cache.
+    const epochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+
     try {
       let result: GitHubListResponse<GitHubPR>;
 
@@ -525,27 +531,34 @@ export async function listPullRequests(
           totalCount,
         };
 
-        prListCache.set(cacheKey, result);
+        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
+        // updates sit behind the same guard: a response too old to repopulate
+        // the list cache is also too old to roll `repoStatsCache` (or the
+        // disk stats) back to its pre-change total under a fresh
+        // `lastUpdated`.
+        if (getRepoListEpoch("pr", context.owner, context.repo) === epochAtStart) {
+          prListCache.set(cacheKey, result);
 
-        if (
-          (!options.state || options.state === "open") &&
-          !options.cursor &&
-          totalCount !== undefined
-        ) {
-          const statsCacheKey = `${context.owner}/${context.repo}`;
-          updateRepoStatsCount(statsCacheKey, "pr", totalCount);
+          if (
+            (!options.state || options.state === "open") &&
+            !options.cursor &&
+            totalCount !== undefined
+          ) {
+            const statsCacheKey = `${context.owner}/${context.repo}`;
+            updateRepoStatsCount(statsCacheKey, "pr", totalCount);
 
-          const memoryStats = repoStatsCache.get(statsCacheKey);
-          if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-            const persistentCache = GitHubStatsCache.getInstance();
-            persistentCache.set(
-              statsCacheKey,
-              {
-                issueCount: memoryStats.issueCount,
-                prCount: memoryStats.prCount,
-              },
-              options.cwd
-            );
+            const memoryStats = repoStatsCache.get(statsCacheKey);
+            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+              const persistentCache = GitHubStatsCache.getInstance();
+              persistentCache.set(
+                statsCacheKey,
+                {
+                  issueCount: memoryStats.issueCount,
+                  prCount: memoryStats.prCount,
+                },
+                options.cwd
+              );
+            }
           }
         }
       }

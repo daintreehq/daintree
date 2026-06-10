@@ -361,6 +361,85 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("marks diverged open list entries stale on a count push without removing rows (count buster)", async () => {
+      const project = { id: "p", path: "/repo/buster" };
+      getCurrentMock.mockResolvedValue(project);
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 0,
+        issueCount: 2,
+        prCount: 3,
+        loading: false,
+        stale: false,
+        lastUpdated: 1000,
+      });
+
+      let pushHandler: ((payload: unknown) => void) | undefined;
+      onRepoCountsUpdatedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb;
+        return () => {};
+      });
+
+      const issuesKey = buildCacheKey(project.path, "issue", "open", "created");
+      const prsKey = buildCacheKey(project.path, "pr", "open", "created");
+      const row: Issue = {
+        number: 1,
+        title: "t",
+        body: "",
+        url: "",
+        state: "open",
+        rawState: "OPEN",
+        author: { login: "u", avatarUrl: "", rawData: null },
+        assignees: [],
+        labels: [],
+        commentCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      };
+      setCache(issuesKey, {
+        items: [row],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+        countAtWrite: 2,
+      });
+      setCache(prsKey, {
+        items: [row],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+        countAtWrite: 3,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(2);
+      });
+
+      // Issue count moved 2 → 7; PR count is unchanged at 3.
+      await act(async () => {
+        pushHandler?.(
+          countsPayload(project.path, {
+            commitCount: 0,
+            issueCount: 7,
+            prCount: 3,
+            loading: false,
+            stale: false,
+            lastUpdated: 2000,
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getCache(issuesKey)?.stale).toBe(true);
+      });
+      expect(getCache(issuesKey)?.items).toHaveLength(1);
+      expect(getCache(prsKey)?.stale).toBeUndefined();
+    });
+
     it("ignores count pushes for a different project", async () => {
       const project = { id: "p", path: "/repo/current" };
       getCurrentMock.mockResolvedValue(project);

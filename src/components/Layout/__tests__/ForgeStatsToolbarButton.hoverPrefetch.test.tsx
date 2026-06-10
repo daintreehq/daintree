@@ -503,4 +503,66 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
   });
+
+  it("stamps freshBypassAt and the open-count fingerprint on the prefetched entry", async () => {
+    mockListIssues.mockResolvedValue({
+      items: [makeIssue(11)],
+      nextCursor: "c1",
+      hasMore: true,
+      totalCount: 7,
+    });
+    const { container } = renderToolbar();
+
+    pointerEnter(getIssuesButton(container));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const cached = getCache(buildCacheKey("/test/proj", "issue", "open", "created"));
+    expect(typeof cached?.freshBypassAt).toBe("number");
+    expect(cached?.countAtWrite).toBe(7);
+  });
+
+  it("a slow prefetch response never clobbers a fresher cache write (ownership guard)", async () => {
+    let resolvePrefetch!: (value: Page<Issue>) => void;
+    mockListIssues.mockImplementation(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          resolvePrefetch = resolve;
+        })
+    );
+    const { container } = renderToolbar();
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+
+    pointerEnter(getIssuesButton(container));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150); // prefetch request starts
+    });
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+
+    // While the prefetch hangs, a competing path (the dropdown's own bypass
+    // revalidate) commits a fresher page.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    setCache(cacheKey, {
+      items: [makeIssue(99)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+    });
+
+    // The slow prefetch finally lands — it must not overwrite the newer entry.
+    await act(async () => {
+      resolvePrefetch(makeIssuePage([makeIssue(11)]));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const cached = getCache(cacheKey);
+    expect(cached?.items.map((i) => i.number)).toEqual([99]);
+  });
 });

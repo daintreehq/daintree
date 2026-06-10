@@ -11,9 +11,17 @@ import {
   repoEventsNoChangeCount,
   repoEventsLastProbeAt,
   repoStatsAndPageSnapshotCache,
+  forgeIssueListCache,
+  forgePRListCache,
+  issueListCache,
+  prListCache,
+  getRepoListEpoch,
+  invalidateRepoListCachesForCountChange,
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
+import type { Issue, PR, Page } from "../../../../../shared/types/forge.js";
+import type { GitHubIssue, GitHubPR, GitHubListResponse } from "../../shared/types.js";
 
 describe("GitHubCaches ETag caches", () => {
   beforeEach(() => {
@@ -154,6 +162,121 @@ describe("polling-optimization caches (issues #8757, #9041)", () => {
       120: 2,
       180: 3,
     });
+  });
+});
+
+describe("invalidateRepoListCachesForCountChange (count-as-cache-buster)", () => {
+  const forgePage = { items: [], nextCursor: null, hasMore: false } as Page<Issue> & Page<PR>;
+  const legacyPage = {
+    items: [],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  } as GitHubListResponse<GitHubIssue> & GitHubListResponse<GitHubPR>;
+
+  beforeEach(() => {
+    forgeIssueListCache.clear();
+    forgePRListCache.clear();
+    issueListCache.clear();
+    prListCache.clear();
+    repoStatsAndPageSnapshotCache.clear();
+  });
+
+  function seedLists(): void {
+    // Every state/sort/cursor variant for the target repo, in both the forge
+    // and legacy cache families, plus a second repo that must survive.
+    forgeIssueListCache.set("issue:owner/repo:open::created:", forgePage);
+    forgeIssueListCache.set("issue:owner/repo:closed::updated:cursor123", forgePage);
+    issueListCache.set("issue:owner/repo:open::created:", legacyPage);
+    issueListCache.set("issue:owner/repo:all:search-term:created:", legacyPage);
+    forgeIssueListCache.set("issue:other/repo:open::created:", forgePage);
+    issueListCache.set("issue:other/repo:open::created:", legacyPage);
+
+    forgePRListCache.set("pr:owner/repo:open::created:", forgePage);
+    forgePRListCache.set("pr:owner/repo:merged::updated:", forgePage);
+    prListCache.set("pr:owner/repo:open::created:", legacyPage);
+    forgePRListCache.set("pr:other/repo:open::created:", forgePage);
+
+    repoStatsAndPageSnapshotCache.set("owner/repo", {
+      stats: { issueCount: 4, prCount: 5, lastUpdated: 1 },
+      issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 4 },
+      prs: { items: [], endCursor: null, hasNextPage: false, totalCount: 5 },
+    });
+    repoStatsAndPageSnapshotCache.set("other/repo", {
+      stats: { issueCount: 1, prCount: 1, lastUpdated: 1 },
+      issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 1 },
+      prs: { items: [], endCursor: null, hasNextPage: false, totalCount: 1 },
+    });
+  }
+
+  it("an issue-count change drops every issue variant for the repo but no PR pages", () => {
+    seedLists();
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: false });
+
+    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+    expect(forgeIssueListCache.get("issue:owner/repo:closed::updated:cursor123")).toBeUndefined();
+    expect(issueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+    expect(issueListCache.get("issue:owner/repo:all:search-term:created:")).toBeUndefined();
+
+    expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBe(forgePage);
+    expect(forgePRListCache.get("pr:owner/repo:merged::updated:")).toBe(forgePage);
+    expect(prListCache.get("pr:owner/repo:open::created:")).toBe(legacyPage);
+  });
+
+  it("a PR-count change drops every PR variant but no issue pages", () => {
+    seedLists();
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: false, prs: true });
+
+    expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBeUndefined();
+    expect(forgePRListCache.get("pr:owner/repo:merged::updated:")).toBeUndefined();
+    expect(prListCache.get("pr:owner/repo:open::created:")).toBeUndefined();
+
+    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBe(forgePage);
+    expect(issueListCache.get("issue:owner/repo:open::created:")).toBe(legacyPage);
+  });
+
+  it("other repos' entries always survive", () => {
+    seedLists();
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: true });
+
+    expect(forgeIssueListCache.get("issue:other/repo:open::created:")).toBe(forgePage);
+    expect(issueListCache.get("issue:other/repo:open::created:")).toBe(legacyPage);
+    expect(forgePRListCache.get("pr:other/repo:open::created:")).toBe(forgePage);
+    expect(repoStatsAndPageSnapshotCache.get("other/repo")).toBeDefined();
+  });
+
+  it("drops the combined stats-and-page snapshot on any delta — it embeds both first pages", () => {
+    seedLists();
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: false });
+    expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeUndefined();
+  });
+
+  it("is a no-op when nothing changed", () => {
+    seedLists();
+    const issueEpoch = getRepoListEpoch("issue", "owner", "repo");
+    const prEpoch = getRepoListEpoch("pr", "owner", "repo");
+
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: false, prs: false });
+
+    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBe(forgePage);
+    expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBe(forgePage);
+    expect(repoStatsAndPageSnapshotCache.get("owner/repo")).toBeDefined();
+    expect(getRepoListEpoch("issue", "owner", "repo")).toBe(issueEpoch);
+    expect(getRepoListEpoch("pr", "owner", "repo")).toBe(prEpoch);
+  });
+
+  it("bumps only the changed type's epoch so in-flight writes of the other type stay valid", () => {
+    const issueBefore = getRepoListEpoch("issue", "owner", "repo");
+    const prBefore = getRepoListEpoch("pr", "owner", "repo");
+
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: false });
+
+    expect(getRepoListEpoch("issue", "owner", "repo")).toBe(issueBefore + 1);
+    expect(getRepoListEpoch("pr", "owner", "repo")).toBe(prBefore);
+  });
+
+  it("epochs are scoped per repo", () => {
+    const before = getRepoListEpoch("issue", "unrelated", "repo");
+    invalidateRepoListCachesForCountChange("owner", "repo", { issues: true, prs: true });
+    expect(getRepoListEpoch("issue", "unrelated", "repo")).toBe(before);
   });
 });
 

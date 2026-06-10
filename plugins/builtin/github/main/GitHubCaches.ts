@@ -188,6 +188,81 @@ export function getETagCacheVersion(): number {
   return etagCacheVersion;
 }
 
+/**
+ * Per-repo, per-type list-cache epochs for the count-as-cache-buster
+ * (#10122 family). Bumped by {@link invalidateRepoListCachesForCountChange}
+ * when the cheap REST count poll observes a changed open count. List fetchers
+ * capture the epoch before their network call and skip the shared-cache write
+ * when it moved — without this, a list query already in flight when the count
+ * delta lands would repopulate the just-busted cache with a page fetched
+ * before the change, pinning it for the full 60s TTL.
+ *
+ * Deliberately separate from `etagCacheVersion`: that guards REST/event ETag
+ * commit baselines in `fetchRestCounts`, and bumping it here would discard
+ * unrelated in-flight count commits.
+ *
+ * Keyed `${type}:${owner}/${repo}`. A plain Map (not a TTL cache): entries are
+ * one integer per repo the session has polled, and an epoch must never be
+ * evicted mid-flight or the guard would compare against a fresh zero.
+ */
+const repoListCacheEpochs = new Map<string, number>();
+
+export function getRepoListEpoch(type: "issue" | "pr", owner: string, repo: string): number {
+  return repoListCacheEpochs.get(`${type}:${owner}/${repo}`) ?? 0;
+}
+
+function bumpRepoListEpoch(type: "issue" | "pr", owner: string, repo: string): void {
+  const key = `${type}:${owner}/${repo}`;
+  repoListCacheEpochs.set(key, (repoListCacheEpochs.get(key) ?? 0) + 1);
+}
+
+/** Drop every entry whose key starts with `prefix`. `Cache.forEach` snapshots
+ *  entries up front, so invalidating inside the walk is safe. */
+function invalidateByPrefix(cache: Cache<string, unknown>, prefix: string): void {
+  const keys: string[] = [];
+  cache.forEach((_value, key) => {
+    if (key.startsWith(prefix)) keys.push(key);
+  });
+  for (const key of keys) cache.invalidate(key);
+}
+
+/**
+ * Count-as-cache-buster: the cheap REST count poll observed a different open
+ * count, so every cached list page for the changed type is provably stale —
+ * drop it (zero network; the next read refetches) and bump the type's epoch so
+ * in-flight list queries can't write a pre-change page back.
+ *
+ * Per-type on purpose: issue churn must not evict PR pages (and vice versa) —
+ * busting both on any delta would double the refetch volume on active repos.
+ * The combined stats-and-page snapshot embeds BOTH first pages, so any delta
+ * drops it; same for the legacy list caches that the `window.electron.github`
+ * dropdown IPC path still reads alongside the forge caches.
+ *
+ * List keys are `${type}:${owner}/${repo}:${state}:${search}:${sort}:${cursor}`
+ * (see `buildListCacheKey`), so the repo prefix sweeps every state/sort/cursor
+ * variant — a close/merge/reopen changes the closed and all views too.
+ */
+export function invalidateRepoListCachesForCountChange(
+  owner: string,
+  repo: string,
+  changed: { issues: boolean; prs: boolean }
+): void {
+  if (!changed.issues && !changed.prs) return;
+  if (changed.issues) {
+    const prefix = `issue:${owner}/${repo}:`;
+    invalidateByPrefix(forgeIssueListCache as Cache<string, unknown>, prefix);
+    invalidateByPrefix(issueListCache as Cache<string, unknown>, prefix);
+    bumpRepoListEpoch("issue", owner, repo);
+  }
+  if (changed.prs) {
+    const prefix = `pr:${owner}/${repo}:`;
+    invalidateByPrefix(forgePRListCache as Cache<string, unknown>, prefix);
+    invalidateByPrefix(prListCache as Cache<string, unknown>, prefix);
+    bumpRepoListEpoch("pr", owner, repo);
+  }
+  repoStatsAndPageSnapshotCache.invalidate(`${owner}/${repo}`);
+}
+
 export interface PRRequiredStatusEntry {
   ciStatus: GitHubPRCIStatus | undefined;
   ciSummary: GitHubPRCISummary | undefined;

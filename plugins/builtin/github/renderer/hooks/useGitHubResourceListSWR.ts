@@ -14,6 +14,7 @@ import {
   setCache,
   nextGeneration,
   getGeneration,
+  type ForgeResourceCacheEntry,
 } from "@/lib/forgeResourceCache";
 import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { forgeClient } from "@/clients/forgeClient";
@@ -33,6 +34,60 @@ type StateFilter = string;
 
 const FETCH_MAX_ATTEMPTS = 3;
 const FETCH_RETRY_DELAYS_MS = [500, 1500];
+
+// Open-time fetch policy windows (quota guards, #10122 family).
+//
+// FRESH_REVALIDATE_SKIP_MS: an entry whose `freshBypassAt` is this recent was
+// just fetched from GitHub with `bypassCache: true` (hover prefetch landing
+// right before the click is the canonical case) — firing the usual mount-time
+// bypass revalidate would be a second GraphQL query for the same data within
+// seconds. Mirrors the toolbar's PREFETCH_FRESHNESS_MS so hover→click costs
+// one query, not two. Only `freshBypassAt` qualifies; `timestamp` alone can
+// describe broadcast-seeded snapshot content.
+const FRESH_REVALIDATE_SKIP_MS = 10_000;
+
+/**
+ * Open-time fetch policy for warm-cache hydrations in the mount effect. Never
+ * consulted by manual refresh, focus, or wake revalidation — those keep their
+ * unconditional `bypassCache: true`.
+ *
+ * - `"skip"`: the entry was written by a real bypass fetch (hover prefetch /
+ *   bypass revalidate) under FRESH_REVALIDATE_SKIP_MS ago — refetching now
+ *   would double-spend GraphQL on data that just left GitHub.
+ * - `"cached"`: issues-only downgrade. The cheap REST count poll fingerprints
+ *   open-issue counts; while the entry's `countAtWrite` matches every fresh
+ *   poll (no `stale` mark), the revalidate may honor the backend's 60s list
+ *   cache. Issues only: PR rows render CI rollup state, and check-run flips
+ *   never surface in the `/events` feed or the counts, so the PR list keeps
+ *   its unconditional bypass. Count equality can also miss same-count row
+ *   churn (close one, open one) — the 45s renderer TTL and the backend's 60s
+ *   TTL bound that staleness, and manual/focus/wake bypass stays the escape
+ *   hatch.
+ * - `"bypass"`: today's behavior (fresh GraphQL).
+ */
+function planWarmRevalidate(
+  cached: ForgeResourceCacheEntry,
+  type: "issue" | "pr",
+  filterState: string,
+  hasSearch: boolean
+): "skip" | "cached" | "bypass" {
+  if (hasSearch) return "bypass";
+  // Stale wins over everything: a count delta can land between a hover
+  // prefetch and the click, marking the just-prefetched entry stale — the
+  // fresh `freshBypassAt` must not let a provably-diverged page skip its
+  // revalidate.
+  if (cached.stale) return "bypass";
+  if (
+    cached.freshBypassAt != null &&
+    Date.now() - cached.freshBypassAt < FRESH_REVALIDATE_SKIP_MS
+  ) {
+    return "skip";
+  }
+  if (type === "issue" && filterState === "open" && cached.countAtWrite != null) {
+    return "cached";
+  }
+  return "bypass";
+}
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -188,7 +243,20 @@ export function useGitHubResourceListSWR({
       currentCursor: string | null | undefined,
       append: boolean = false,
       abortSignal?: AbortSignal,
-      options?: { revalidating?: boolean; generation?: number; cacheKey?: string }
+      options?: {
+        revalidating?: boolean;
+        generation?: number;
+        cacheKey?: string;
+        /**
+         * Override the revalidate default of `bypassCache: true`. Set to
+         * `false` by the mount effect's downgraded path when the count signal
+         * says the cached page is still consistent — the request then honors
+         * the backend's 60s list cache instead of forcing fresh GraphQL.
+         * Manual refresh, focus, and wake revalidation never pass this, so
+         * they keep their unconditional bypass.
+         */
+        bypass?: boolean;
+      }
     ) => {
       if (!projectPath) return;
       // Skip the fetch entirely when no token is configured. The render path
@@ -235,20 +303,23 @@ export function useGitHubResourceListSWR({
       try {
         const searchOverride =
           numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
+        // Append (load-more) always wants the next page from network.
+        // SWR revalidates default to bypassing the backend cache — that's
+        // the point of a revalidate — unless the mount effect downgraded
+        // this one via `options.bypass: false` (count signal says the
+        // cached page is still consistent). Cold-mount fetches (no cache,
+        // no revalidating flag) honor the backend's 60s in-memory cache
+        // instead of bypassing — same data either way, but the cached path
+        // returns synchronously and avoids the click-time round-trip the
+        // user sees as "reload".
+        const usedBypass = append ? false : (options?.bypass ?? isRevalidate);
         // `merged` is a GitHub-supported PR state the provider accepts beyond
         // the contract's documented set — pass it through with a cast.
         const fetchOptions: ListOptions = {
           search: searchOverride || debouncedSearch || undefined,
           state: filterState as ListOptions["state"],
           cursor: currentCursor || undefined,
-          // Append (load-more) always wants the next page from network.
-          // SWR revalidates also bypass cache — that's the whole point of
-          // a revalidate. Cold-mount fetches (no cache, no revalidating
-          // flag) honor the backend's 60s in-memory cache instead of
-          // bypassing — same data either way, but the cached path returns
-          // synchronously and avoids the click-time round-trip the user
-          // sees as "reload".
-          bypassCache: append ? false : isRevalidate ? true : false,
+          bypassCache: usedBypass,
           sort: sortOrder,
         };
 
@@ -288,6 +359,16 @@ export function useGitHubResourceListSWR({
                 nextCursor: result.nextCursor,
                 hasMore: result.hasMore,
                 timestamp: now,
+                // `freshBypassAt` only when this request actually skipped the
+                // backend cache — a downgraded/cold fetch may have been served
+                // a cached page, which must not arm the skip-revalidate gate.
+                ...(usedBypass ? { freshBypassAt: now } : {}),
+                // Open-count fingerprint for the count-as-cache-buster: only
+                // the open filter tracks a polled count, so other states stay
+                // un-fingerprinted (and therefore never downgrade).
+                ...(filterState === "open" && result.totalCount != null
+                  ? { countAtWrite: result.totalCount }
+                  : {}),
               });
               setLastUpdatedAt(now);
               // Bind the toolbar count badge to the authoritative server total
@@ -320,15 +401,15 @@ export function useGitHubResourceListSWR({
                 );
               }
               // Notify parent (toolbar count badge) that fresh first-page data
-              // landed. Gated on `isRevalidate` so it fires only when
-              // `bypassCache: true` was sent — the main process's
+              // landed. Gated on the request actually having sent
+              // `bypassCache: true` — the main process's
               // `updateRepoStatsCount` runs on the GraphQL path that follows a
               // bypass, so the toolbar's `refresh()` call is guaranteed to see
-              // an updated `repoStatsCache` entry. Cold-mount fetches
-              // (`bypassCache: false`) may hit the main-process cache and
-              // skip the count update entirely; firing onFreshFetch there
-              // would be a wasted IPC round-trip.
-              if (isRevalidate) {
+              // an updated `repoStatsCache` entry. Cold-mount and downgraded
+              // revalidate fetches (`bypassCache: false`) may hit the
+              // main-process cache and skip the count update entirely; firing
+              // onFreshFetch there would be a wasted IPC round-trip.
+              if (usedBypass) {
                 onFreshFetch?.();
               }
             }
@@ -455,11 +536,23 @@ export function useGitHubResourceListSWR({
         setLastUpdatedAt(cached.timestamp);
         setError(null);
         setExactNumberNotFound(null);
-        fetchData(null, false, abortController.signal, {
-          revalidating: true,
-          generation: gen,
-          cacheKey,
-        });
+        const plan = planWarmRevalidate(cached, type, filterState, debouncedSearch !== "");
+        if (plan === "skip") {
+          // No fetch will run its `finally` cleanup — clear the activity
+          // flags here. An Activity hide aborts an in-flight revalidate,
+          // whose aborted `finally` deliberately skips `setRefreshing(false)`;
+          // without this, a skip on reveal would leave the header spinner
+          // stuck forever.
+          setLoading(false);
+          setRefreshing(false);
+        } else {
+          fetchData(null, false, abortController.signal, {
+            revalidating: true,
+            generation: gen,
+            cacheKey,
+            ...(plan === "cached" ? { bypass: false } : {}),
+          });
+        }
         lastLoadedEffectKeyRef.current = effectKey;
         return () => abortController.abort();
       }
@@ -502,11 +595,18 @@ export function useGitHubResourceListSWR({
         setLastUpdatedAt(targetCached.timestamp);
         setExactNumberNotFound(null);
         setError(null);
-        fetchData(null, false, abortController.signal, {
-          revalidating: true,
-          generation: gen,
-          cacheKey,
-        });
+        const plan = planWarmRevalidate(targetCached, type, filterState, false);
+        if (plan === "skip") {
+          // Same activity-flag cleanup as the mount/reveal skip above.
+          setRefreshing(false);
+        } else {
+          fetchData(null, false, abortController.signal, {
+            revalidating: true,
+            generation: gen,
+            cacheKey,
+            ...(plan === "cached" ? { bypass: false } : {}),
+          });
+        }
         lastLoadedEffectKeyRef.current = effectKey;
         return () => abortController.abort();
       }

@@ -4,7 +4,7 @@ import { projectClient } from "@/clients";
 import { forgeClient } from "@/clients/forgeClient";
 import { isTokenRelatedError } from "@/lib/forgeErrors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { buildCacheKey, getCache, setCache } from "@/lib/forgeResourceCache";
+import { buildCacheKey, getCache, markCountStale, setCache } from "@/lib/forgeResourceCache";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
@@ -167,6 +167,19 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
         if (repoStats.prCount !== null) {
           lastKnownCountsRef.current.prCount = repoStats.prCount;
+        }
+
+        // Count-as-cache-buster: a fresh count that diverges from what a
+        // cached dropdown page recorded at write time means the page is
+        // provably stale — flag it (metadata only, rows stay) so the next
+        // open revalidates with `bypassCache: true` instead of the
+        // downgraded cached read. Stale/errored polls are excluded: their
+        // counts are fallbacks, not observations.
+        if (repoStats.issueCount !== null) {
+          markCountStale(opts.projectPath, "issue", repoStats.issueCount);
+        }
+        if (repoStats.prCount !== null) {
+          markCountStale(opts.projectPath, "pr", repoStats.prCount);
         }
       }
 
@@ -483,12 +496,18 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
           const prsKey = buildCacheKey(payload.projectPath, "pr", "open", "created");
           const existingIssues = getCache(issuesKey);
           const existingPRs = getCache(prsKey);
+          // `countAtWrite` is stamped so the count-as-cache-buster can compare
+          // later REST polls against it; `freshBypassAt` is deliberately NOT
+          // stamped — this payload can carry a re-stamped main-process
+          // snapshot (probe-unchanged path), so it must never satisfy the
+          // "just fetched from GitHub, skip the open revalidate" gate.
           if (!existingIssues || existingIssues.timestamp < payload.fetchedAt) {
             setCache(issuesKey, {
               items: payload.issues.items,
               nextCursor: payload.issues.endCursor,
               hasMore: payload.issues.hasNextPage,
               timestamp: payload.fetchedAt,
+              countAtWrite: payload.issues.totalCount,
             });
           }
           if (!existingPRs || existingPRs.timestamp < payload.fetchedAt) {
@@ -497,6 +516,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
               nextCursor: payload.prs.endCursor,
               hasMore: payload.prs.hasNextPage,
               timestamp: payload.fetchedAt,
+              countAtWrite: payload.prs.totalCount,
             });
           }
 
