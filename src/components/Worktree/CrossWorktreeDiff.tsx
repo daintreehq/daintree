@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { GitCompare, FileIcon, AlertCircle } from "lucide-react";
+import { GitCompare, FileIcon, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -218,6 +219,58 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     [leftWorktree, rightWorktree, ignoreWhitespace]
   );
 
+  // File stepping through the comparison set, mirroring the diff modals:
+  // `[` / `]` keys plus a footer stepper in the diff panel.
+  const files = result?.files ?? null;
+  const selectedFileIndex = useMemo(() => {
+    if (!files || !selectedFile) return -1;
+    return files.findIndex((f) => f.path === selectedFile.path && f.status === selectedFile.status);
+  }, [files, selectedFile]);
+
+  const navigateFile = useCallback(
+    (delta: -1 | 1) => {
+      if (!files || files.length === 0) return;
+      // No selection yet: `]` starts the walk at the first file.
+      const target =
+        selectedFileIndex < 0
+          ? delta === 1
+            ? files[0]
+            : undefined
+          : files[selectedFileIndex + delta];
+      if (!target) return;
+      void fetchFileDiff(target);
+      const name = target.path.split(/[/\\]/).filter(Boolean).pop() || target.path;
+      const position = selectedFileIndex < 0 ? 1 : selectedFileIndex + delta + 1;
+      useAnnouncerStore.getState().announce(`${name}, file ${position} of ${files.length}`);
+    },
+    [files, selectedFileIndex, fetchFileDiff]
+  );
+
+  useEffect(() => {
+    if (!isOpen || !files || files.length === 0) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "[" && e.key !== "]") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (
+        e.target instanceof HTMLElement &&
+        (e.target.tagName === "INPUT" ||
+          e.target.tagName === "TEXTAREA" ||
+          e.target.tagName === "SELECT" ||
+          e.target.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      navigateFile(e.key === "]" ? 1 : -1);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, files, navigateFile]);
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -312,48 +365,80 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         </div>
 
         {/* Diff panel */}
-        <div className="flex-1 overflow-auto bg-surface-canvas">
-          {!selectedFile && (
-            <div className="flex items-center justify-center h-full text-text-muted text-sm">
-              {result ? "Select a file to view its diff" : ""}
-            </div>
-          )}
-          {selectedFile && fileDiffLoading && (
-            <div className="p-4 space-y-3">
-              <Skeleton label="Loading diff">
-                <SkeletonBone className="h-7 w-3/4" />
-                <SkeletonText lines={8} />
-              </Skeleton>
-            </div>
-          )}
-          {selectedFile && !fileDiffLoading && fileDiffError && (
-            <div className="flex flex-col items-center justify-center gap-3 h-full">
-              <div className="flex items-center gap-2 text-status-error text-sm">
-                <AlertCircle className="w-4 h-4" />
-                Couldn't load diff
-              </div>
+        <div className="flex-1 flex flex-col overflow-hidden bg-surface-canvas">
+          {selectedFile && files && files.length > 1 && (
+            <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-border-subtle shrink-0">
               <button
                 type="button"
-                onClick={() => void fetchFileDiff(selectedFile)}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
+                onClick={() => navigateFile(-1)}
+                disabled={selectedFileIndex <= 0}
+                aria-label="Previous file"
+                title="Previous file ([)"
+                className="p-1 rounded transition-colors text-text-muted hover:text-text-primary hover:bg-surface-panel-elevated disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
               >
-                Retry
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span
+                data-testid="cross-worktree-file-position"
+                className="text-xs text-text-muted tabular-nums"
+              >
+                {selectedFileIndex + 1} of {files.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => navigateFile(1)}
+                disabled={selectedFileIndex >= files.length - 1}
+                aria-label="Next file"
+                title="Next file (])"
+                className="p-1 rounded transition-colors text-text-muted hover:text-text-primary hover:bg-surface-panel-elevated disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
-          {selectedFile && !fileDiffLoading && !fileDiffError && fileDiff !== null && (
-            // Split view is required here — the inline cross-worktree split-pane
-            // layout depends on it, so this is not driven by the persisted
-            // diffViewType preference. rootPath is the RIGHT worktree's checkout:
-            // the new side of the A..B comparison, i.e. the file the user is
-            // inspecting.
-            <DiffViewer
-              diff={fileDiff}
-              viewType="split"
-              rootPath={rightWorktree?.path}
-              onRetry={() => void fetchFileDiff(selectedFile)}
-            />
-          )}
+          <div className="flex-1 overflow-auto">
+            {!selectedFile && (
+              <div className="flex items-center justify-center h-full text-text-muted text-sm">
+                {result ? "Select a file to view its diff" : ""}
+              </div>
+            )}
+            {selectedFile && fileDiffLoading && (
+              <div className="p-4 space-y-3">
+                <Skeleton label="Loading diff">
+                  <SkeletonBone className="h-7 w-3/4" />
+                  <SkeletonText lines={8} />
+                </Skeleton>
+              </div>
+            )}
+            {selectedFile && !fileDiffLoading && fileDiffError && (
+              <div className="flex flex-col items-center justify-center gap-3 h-full">
+                <div className="flex items-center gap-2 text-status-error text-sm">
+                  <AlertCircle className="w-4 h-4" />
+                  Couldn't load diff
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchFileDiff(selectedFile)}
+                  className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {selectedFile && !fileDiffLoading && !fileDiffError && fileDiff !== null && (
+              // Split view is required here — the inline cross-worktree split-pane
+              // layout depends on it, so this is not driven by the persisted
+              // diffViewType preference. rootPath is the RIGHT worktree's checkout:
+              // the new side of the A..B comparison, i.e. the file the user is
+              // inspecting.
+              <DiffViewer
+                diff={fileDiff}
+                viewType="split"
+                rootPath={rightWorktree?.path}
+                onRetry={() => void fetchFileDiff(selectedFile)}
+              />
+            )}
+          </div>
         </div>
       </div>
     </AppDialog>

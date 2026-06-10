@@ -2648,6 +2648,70 @@ body[data-performance-mode="true"] .forge-status-error {
   background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-surface));
 }
 
+/* Moved-block styling (client-side --color-moved, diffMovedUtils.ts): code
+   relocated within the file hue-shifts toward info and gains an inset edge
+   bar, so big refactors read as "moved, verify in transit" instead of raw
+   add/delete churn. The bar is a luminance/shape cue that survives grayscale
+   (the gutter also carries sr-only "moved" text); inset box-shadow instead of
+   border-left so moved cells don't shift 2px against their neighbors under
+   border-collapse: separate. Side-specific classes keep the unmoved partner
+   cell of a split row plain. */
+.diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+.diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+  background: color-mix(in oklab, var(--color-status-info) 11%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--color-status-info) 65%, transparent);
+}
+
+.diff-viewer tr.diff-line-moved-old td.diff-gutter-delete,
+.diff-viewer tr.diff-line-moved-new td.diff-gutter-insert {
+  color: var(--color-status-info);
+}
+
+/* Whitespace-only edit segments (renderTokenWithInvisibles): the changed text
+   has no glyphs, so overlay one · per space cell and a → per tab. The real
+   space/tab characters stay as the DOM text — copying is unaffected. */
+.diff-viewer .diff-ws-space {
+  background-image: radial-gradient(
+    circle at 0.5ch 50%,
+    color-mix(in oklab, var(--color-daintree-text) 55%, transparent) 1px,
+    transparent 1.5px
+  );
+  background-size: 1ch 100%;
+  background-repeat: repeat-x;
+}
+
+.diff-viewer .diff-ws-tab {
+  position: relative;
+}
+
+.diff-viewer .diff-ws-tab::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: color-mix(in oklab, var(--color-daintree-text) 55%, transparent);
+  pointer-events: none;
+}
+
+/* Trailing whitespace on added lines — the classic review catch git paints red. */
+.diff-viewer .diff-ws-trailing {
+  background: color-mix(in oklab, var(--color-status-danger) 28%, transparent);
+  border-radius: var(--radius-xs);
+}
+
+/* In-diff search: all matches share the editor's search-highlight token; the
+   modal promotes the active one with diff-search-current as the single focus
+   anchor of the find flow. */
+.diff-viewer .diff-search-match {
+  background: var(--color-search-highlight-background);
+  border-radius: var(--radius-xs);
+}
+
+.diff-viewer .diff-search-match.diff-search-current {
+  outline: 1px solid var(--color-accent-primary);
+  outline-offset: 1px;
+}
+
 /* Hunk header rows (react-diff-view <Decoration>): the @@ context line plus
    expand-hidden-lines controls. The inner block is sticky against horizontal
    scroll so the header text stays readable on wide tables. */
@@ -2707,6 +2771,31 @@ body[data-performance-mode="true"] .forge-status-error {
 
 .diff-viewer .diff-hunk-header-expanders button:hover {
   background: color-mix(in oklab, var(--color-daintree-border) 80%, var(--color-daintree-text));
+}
+
+/* Per-hunk copy: ghost button that surfaces on header hover (or keyboard
+   focus), copying the hunk's new-side text without +/- prefixes. */
+.diff-viewer .diff-hunk-header-copy {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted, var(--color-daintree-text));
+  opacity: 0;
+  transition-property: color, background-color, opacity;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+.diff-viewer .diff-decoration-content:hover .diff-hunk-header-copy,
+.diff-viewer .diff-hunk-header-copy:focus-visible,
+.diff-viewer .diff-hunk-header-copy[data-copied] {
+  opacity: 1;
+}
+
+.diff-viewer .diff-hunk-header-copy:hover {
+  color: var(--color-daintree-text);
+  background: var(--color-daintree-border);
 }
 
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
@@ -3239,6 +3328,24 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .diff-viewer .diff-gutter {
     border-right: 1px solid CanvasText;
   }
+  /* Moved lines: the tinted fill and inset bar are stripped, so the cue rides
+     a pattern change — dash the side edge the rules above draw solid. */
+  .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+  .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+    border-left-style: dashed;
+    box-shadow: none;
+  }
+  /* Search/whitespace marks lose their backgrounds; system outlines and a
+     dotted underline (text-decoration survives forced colors) stand in. */
+  .diff-viewer .diff-search-match {
+    outline: 1px solid Highlight;
+  }
+  .diff-viewer .diff-ws-trailing {
+    outline: 1px dashed LinkText;
+  }
+  .diff-viewer .diff-ws-space {
+    text-decoration: underline dotted;
+  }
 }
 
 /* Increased contrast mode — heavier borders for visibility.
@@ -3332,6 +3439,25 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
   .diff-viewer .diff-code-edit .diff-code-delete-edit {
     background: color-mix(in oklab, var(--color-status-danger) 50%, transparent);
+  }
+  /* Moved lines: raise the fill and let the edge bar take over the
+     status-colored border the rules above add to insert/delete cells. */
+  .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+  .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+    background: color-mix(in oklab, var(--color-status-info) 22%, transparent);
+    border-left-color: var(--color-status-info);
+    box-shadow: none;
+  }
+  /* Whitespace overlays at full text color when contrast is requested. */
+  .diff-viewer .diff-ws-space {
+    background-image: radial-gradient(
+      circle at 0.5ch 50%,
+      var(--color-daintree-text) 1px,
+      transparent 1.5px
+    );
+  }
+  .diff-viewer .diff-ws-tab::before {
+    color: var(--color-daintree-text);
   }
 }
 

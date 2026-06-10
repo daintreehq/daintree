@@ -744,11 +744,14 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
-  // Allowlist — react-diff-view file viewer and worktree diff.
+  // Allowlist — react-diff-view file viewer and worktree diff (DiffViewer's
+  // helper modules live in the same lazy chunk).
   {
     files: [
       "src/components/FileViewer/FileViewerModal.tsx",
       "src/components/Worktree/DiffViewer.tsx",
+      "src/components/Worktree/diffMovedUtils.ts",
+      "src/components/Worktree/diffTokenRanges.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },
