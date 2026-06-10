@@ -24,7 +24,14 @@
           "releases",
           "batch-branch-prs",
           "identity"
-        ]
+        ],
+        "slots": {
+          "settingsTab": "github.forgeSettingsTab",
+          "icon": "github.providerIcon",
+          "statsDropdown": "github.statsDropdown",
+          "bulkCreateWorktreeDialog": "github.bulkCreateWorktreeDialog",
+          "issueSelector": "github.issueSelector"
+        }
       }
     ],
     "fileDecorationProviders": [

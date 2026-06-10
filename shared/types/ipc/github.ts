@@ -162,50 +162,6 @@ export interface GitHubTokenValidation {
   error?: string;
 }
 
-/** PR detected payload */
-export interface PRDetectedPayload {
-  worktreeId: string;
-  prNumber: number;
-  prUrl: string;
-  prState: "open" | "merged" | "closed";
-  /**
-   * Roll-up CI check status for the PR's head commit. Absent when the PR has
-   * no checks configured.
-   */
-  prCiStatus?: import("../github.js").GitHubPRCIStatus;
-  prTitle?: string;
-  issueNumber?: number;
-  issueTitle?: string;
-  timestamp: number;
-}
-
-/** Payload for PR cleared notification */
-export interface PRClearedPayload {
-  worktreeId: string;
-  timestamp: number;
-}
-
-/** Issue detected payload */
-export interface IssueDetectedPayload {
-  worktreeId: string;
-  issueNumber: number;
-  issueTitle: string;
-}
-
-/** Git remote with parsed GitHub repo info */
-export interface RemoteInfo {
-  name: string;
-  fetchUrl: string;
-  parsedRepo: { owner: string; repo: string } | null;
-}
-
-/** Issue not found payload - emitted when GitHub confirms issue doesn't exist on current repo */
-export interface IssueNotFoundPayload {
-  worktreeId: string;
-  issueNumber: number;
-  timestamp: number;
-}
-
 /**
  * Disk-persisted first page returned by `getFirstPageCache`. Surfaces the same
  * shape the renderer's `githubResourceCache` expects — minus a wall-clock

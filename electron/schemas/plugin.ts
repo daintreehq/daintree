@@ -179,6 +179,16 @@ export const ForgeProviderContributionSchema = z
     credentialFields: z.array(CredentialFieldSchema).optional(),
     settingsScopeRef: z.string().min(1).optional(),
     viewRefs: z.array(z.string().min(1)).optional(),
+    slots: z
+      .object({
+        settingsTab: z.string().min(1).optional(),
+        icon: z.string().min(1).optional(),
+        statsDropdown: z.string().min(1).optional(),
+        bulkCreateWorktreeDialog: z.string().min(1).optional(),
+        issueSelector: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

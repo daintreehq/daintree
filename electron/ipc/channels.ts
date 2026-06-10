@@ -845,6 +845,20 @@ export const CHANNELS = {
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
+  FORGE_GET_REPO_STATS: "forge:get-repo-stats",
+  FORGE_GET_FIRST_PAGE_CACHE: "forge:get-first-page-cache",
+  FORGE_GET_PROJECT_HEALTH: "forge:get-project-health",
+  FORGE_GET_ISSUE_TOOLTIP: "forge:get-issue-tooltip",
+  FORGE_GET_PR_TOOLTIP: "forge:get-pr-tooltip",
+  FORGE_GET_ISSUES_BY_NUMBERS: "forge:get-issues-by-numbers",
+  FORGE_GET_PRS_BY_NUMBERS: "forge:get-prs-by-numbers",
+  FORGE_GET_PR_REVIEW_THREADS: "forge:get-pr-review-threads",
+  FORGE_RESOLVE_AUTHOR_AVATAR: "forge:resolve-author-avatar",
+  FORGE_GET_TOKEN_HEALTH: "forge:get-token-health",
+  FORGE_GET_RATE_LIMIT_DETAILS: "forge:get-rate-limit-details",
+  FORGE_OPEN_PR: "forge:open-pr",
+  FORGE_REPO_STATS_AND_PAGE_UPDATED: "forge:repo-stats-and-page-updated",
+  FORGE_REPO_COUNTS_UPDATED: "forge:repo-counts-updated",
 
   // Forge audit log channels — separate prefix from `forge:*` so the codegen
   // produces a dedicated `forgeAudit` namespace in the renderer rather than
