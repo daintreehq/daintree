@@ -243,6 +243,50 @@ describe("registerPluginHandlers", () => {
     expect(mockSetEnabled).toHaveBeenCalledWith("acme.my-plugin", false);
   });
 
+  it("PLUGIN_LIST answers only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    registerPluginHandlers();
+    const listHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:list"
+    )![1] as (...args: unknown[]) => unknown;
+    const inFlight = listHandler() as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockListPlugins).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockListPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_SET_ENABLED applies only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    registerPluginHandlers();
+    const setEnabledHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:set-enabled"
+    )![1] as (...args: unknown[]) => unknown;
+    const inFlight = setEnabledHandler({}, "daintree.github", true) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockSetEnabled).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockSetEnabled).toHaveBeenCalledWith("daintree.github", true);
+  });
+
   function getHandler(channel: string) {
     registerPluginHandlers();
     return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
@@ -1464,6 +1508,26 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     const handler = getHandler();
     const result = await handler({});
     expect(result).toEqual([]);
+  });
+
+  it("reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    mockGetRegisteredForgeProviders.mockReturnValue([]);
+    const handler = getHandler();
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockGetRegisteredForgeProviders).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockGetRegisteredForgeProviders).toHaveBeenCalledTimes(1);
   });
 });
 

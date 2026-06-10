@@ -25,6 +25,28 @@ function readDefaultProviderId(): string | null {
   return normalizeProviderId(store.get("forgeDefaultProviderId"));
 }
 
+// PluginService is loaded lazily (mirrors forgeRpcServer) so this eagerly
+// registered handler module never constructs the singleton at import time.
+type PluginInitGate = { waitForInit(): Promise<void> };
+let pluginServicePromise: Promise<PluginInitGate> | null = null;
+
+/**
+ * Block registry reads until startup plugin load + activation has settled.
+ * Forge provider descriptors register during the DEFERRED `PluginService.
+ * initialize()` (which only runs after the renderer reports first-interactive),
+ * so a mount-time `forge:resolve-provider` / `forge:get-providers` call always
+ * races it. Answering from the pre-init empty registry returns `{entry: null}`,
+ * which the renderer caches for the session (`useResolvedForgeProvider`'s
+ * resolutionCache) — no later signal re-triggers resolution, so every forge
+ * surface (stats pills, sidebar affordances) silently stays hidden. Same
+ * init-race guard as `handleToolbarButtons` (#9285); the workspace-host got
+ * its equivalent via the "not-ready" retry status (#9997).
+ */
+function awaitPluginInit(): Promise<void> {
+  pluginServicePromise ??= import("../../services/PluginService.js").then((m) => m.pluginService);
+  return pluginServicePromise.then((svc) => svc.waitForInit());
+}
+
 /**
  * Look up a registered provider's declared credential fields by canonical id.
  * Returns `[]` when the provider declares none (or is not registered) — the
@@ -115,7 +137,8 @@ export function registerForgeSettingsHandlers(): () => void {
   );
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_GET_PROVIDERS, () => {
+    typedHandle(CHANNELS.FORGE_GET_PROVIDERS, async () => {
+      await awaitPluginInit();
       return getRegisteredForgeProviders();
     })
   );
@@ -126,6 +149,7 @@ export function registerForgeSettingsHandlers(): () => void {
         return { entry: null, resolvedVia: null };
       }
       try {
+        await awaitPluginInit();
         const project = projectStore.getProjectById(projectId);
         if (!project) return { entry: null, resolvedVia: null };
 

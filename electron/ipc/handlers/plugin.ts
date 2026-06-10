@@ -71,10 +71,19 @@ import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRe
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 
 async function handleList(): Promise<LoadedPluginInfo[]> {
+  // Same init-race guard as `handleToolbarButtons` (#9285): a mount-time pull
+  // (pluginRuntimeStore, plugin manager) before the deferred initialize()
+  // populates the maps would cache an empty list — wrong `disabled` gating in
+  // the renderer until the next provenance broadcast.
+  await pluginService.waitForInit();
   return pluginService.listPlugins();
 }
 
 async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
+  // A toggle arriving mid-init finds both `plugins` and `disabledPlugins`
+  // unpopulated, mis-classifies a built-in as a user plugin, and silently
+  // takes the persist-only path — no live load, no provenance broadcast.
+  await pluginService.waitForInit();
   await pluginService.setEnabled(pluginId, enabled);
 }
 
@@ -473,6 +482,9 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
+  // Same init-race guard as the surrounding pull-on-mount handlers (#9285) —
+  // forge descriptors register during the deferred initialize().
+  await pluginService.waitForInit();
   return getRegisteredForgeProviders();
 }
 

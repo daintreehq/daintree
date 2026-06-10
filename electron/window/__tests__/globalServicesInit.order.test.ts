@@ -529,6 +529,10 @@ describe("initGlobalServices task ordering", () => {
 
     expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
     expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+    // activateStartupFinishedPlugins() must also still run: its `finally` is
+    // what settles waitForInit(), which the renderer-facing plugin/forge IPC
+    // gates await — dropping it would hang those handlers forever.
+    expect(pluginActivateStartup).toHaveBeenCalledTimes(1);
   });
 
   it("does not touch plugin-MCP audit/consent services eagerly during initGlobalServices() (#10073)", async () => {
