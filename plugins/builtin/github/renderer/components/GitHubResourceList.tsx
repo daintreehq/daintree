@@ -18,6 +18,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+import { safeStringify } from "@/lib/safeStringify";
 import { GitHubListItem } from "./GitHubListItem";
 import { BulkActionBar } from "./BulkActionBar";
 import { useIssueSelection } from "@/hooks/useIssueSelection";
@@ -337,19 +339,48 @@ export function GitHubResourceList({
   const handleOpenInGitHub = () => {
     const query = searchQuery.trim() || undefined;
     const state = filterState as string;
-    if (type === "issue") {
-      void actionService.dispatch(
-        "forge.openIssues",
+    // dispatch() never throws — failures come back as { ok: false }, so they
+    // must be surfaced here or the click silently does nothing.
+    const actionId = type === "issue" ? ("forge.openIssues" as const) : ("forge.openPRs" as const);
+    const open = () => {
+      const dispatched = actionService.dispatch(
+        actionId,
         { projectPath, query, state },
         { source: "user" }
       );
-    } else {
-      void actionService.dispatch(
-        "forge.openPRs",
-        { projectPath, query, state },
-        { source: "user" }
-      );
-    }
+      void dispatched.then((result) => {
+        if (!result.ok) {
+          const message =
+            "The page couldn't be opened in your browser. Check that this project has a GitHub remote and the GitHub plugin is enabled, then try again.";
+          notify({
+            type: "error",
+            title: "Couldn't open GitHub",
+            message,
+            coalesce: {
+              key: `forge-open-failed:${projectPath}:${actionId}`,
+              buildMessage: () => message,
+            },
+            action: { label: "Try again", variant: "primary", onClick: open },
+            actions: [
+              {
+                label: "Copy details",
+                successLabel: "Copied",
+                variant: "secondary",
+                onClick: () => {
+                  void navigator.clipboard
+                    ?.writeText(safeStringify({ action: actionId, error: result.error }, 2))
+                    .catch(() => {
+                      // Clipboard writes can reject in unfocused contexts; the
+                      // toast already carries the friendly summary.
+                    });
+                },
+              },
+            ],
+          });
+        }
+      });
+    };
+    open();
     handleClose();
   };
 

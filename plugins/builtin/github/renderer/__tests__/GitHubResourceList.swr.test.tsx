@@ -62,6 +62,12 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
 }));
 
+const notifyMock = vi.fn();
+
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => notifyMock(...args),
+}));
+
 let mockIsSelectionActive = false;
 const mockSelectionClear = vi.fn();
 
@@ -203,6 +209,7 @@ beforeEach(() => {
   mockGetPRByNumber.mockReset();
   LiveTimeAgoMock.mockClear();
   dispatchMock.mockReset();
+  notifyMock.mockReset();
   initializeMock.mockClear();
   mockSelectionClear.mockReset();
   useIssueSelectionStore.setState({ selections: new Map() });
@@ -2520,5 +2527,64 @@ describe("GitHubResourceList dismissal preserves bulk selection", () => {
     expect(
       useIssueSelectionStore.getState().selections.get("issue:/test/proj-a")?.selectedIds.size ?? 0
     ).toBe(0);
+  });
+
+  it("surfaces a failed open-in-GitHub dispatch as an error toast with retry", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "No remote URL found for this repository" },
+    });
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    screen.getByRole("button", { name: "GitHub" }).click();
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openIssues",
+      { projectPath: "/test/proj", query: undefined, state: "open" },
+      { source: "user" }
+    );
+
+    const payload = notifyMock.mock.calls[0]?.[0] as {
+      type: string;
+      title: string;
+      action: { label: string; onClick: () => void };
+      actions: Array<{ label: string }>;
+    };
+    expect(payload.type).toBe("error");
+    expect(payload.action.label).toBe("Try again");
+    expect(payload.actions[0]?.label).toBe("Copy details");
+
+    // "Try again" re-dispatches with the args captured at click time.
+    dispatchMock.mockClear();
+    payload.action.onClick();
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "forge.openIssues",
+        { projectPath: "/test/proj", query: undefined, state: "open" },
+        { source: "user" }
+      )
+    );
+  });
+
+  it("does not toast when the open-in-GitHub dispatch succeeds", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    screen.getByRole("button", { name: "GitHub" }).click();
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "forge.openPRs",
+        { projectPath: "/test/proj", query: undefined, state: "open" },
+        { source: "user" }
+      )
+    );
+    await act(async () => {});
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });
