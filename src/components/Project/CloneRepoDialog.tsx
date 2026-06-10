@@ -10,7 +10,11 @@ import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
-import { isGitHubRemoteUrl } from "@shared/utils/githubUrl";
+import {
+  matchProviderForRemoteUrl,
+  type ForgeProviderMatcher,
+} from "@shared/utils/forgeHostnames";
+import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
 import { isClientGitError } from "@/utils/clientGitError";
@@ -71,6 +75,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [isComplete, setIsComplete] = useState(false);
   const [clonedPath, setClonedPath] = useState<string | null>(null);
+  // Registered forge provider hostname matchers — gates the auth-failed
+  // recovery banner on the clone URL belonging to a registered provider.
+  const [forgeMatchers, setForgeMatchers] = useState<ForgeProviderMatcher[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
   const hasFinalizedRef = useRef(false);
 
@@ -114,6 +121,30 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     });
 
     return cleanup;
+  }, [isOpen]);
+
+  // Load the registered forge providers' hostname matchers per open —
+  // best-effort, the recovery banner simply stays generic on failure.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    void window.electron.forge
+      .getProviders()
+      .then((entries) => {
+        if (cancelled) return;
+        setForgeMatchers(
+          entries.map((entry) => ({
+            providerId: makeForgeProviderId(entry.pluginId, entry.contribution.id),
+            hostnames: entry.contribution.matches,
+          }))
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setForgeMatchers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   // Auto-scroll progress log
@@ -365,9 +396,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             queued an "error" row in the log. */}
         {error &&
           (() => {
-            const showGitHubAuth =
-              error.gitReason === "auth-failed" && isGitHubRemoteUrl(normalizeCloneUrl(url));
-            if (showGitHubAuth) {
+            const showForgeAuth =
+              error.gitReason === "auth-failed" &&
+              matchProviderForRemoteUrl(normalizeCloneUrl(url), forgeMatchers) !== null;
+            if (showForgeAuth) {
               const signInAction: BannerAction = {
                 id: "signin-github",
                 label: "Sign in with GitHub",

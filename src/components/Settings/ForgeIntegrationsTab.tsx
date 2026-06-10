@@ -5,7 +5,7 @@ import type {
   ForgeProviderResolutionVia,
   ResolvedForgeProvider,
 } from "@shared/types";
-import type { RemoteInfo } from "@shared/types/ipc/github";
+import type { RemoteInfo } from "@shared/types/ipc/forge";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";

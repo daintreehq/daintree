@@ -60,7 +60,7 @@ function makeWorktree(id: string, overrides: Partial<WorktreeSnapshot> = {}): Wo
     prNumber: 42,
     prUrl: "https://example.test/pr/42",
     prState: "open",
-    prCiStatus: "PENDING",
+    prCiStatus: "pending",
     ...overrides,
   } as WorktreeSnapshot;
 }
@@ -150,17 +150,17 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("clears prCiStatus when the event omits it (full-replace, matches backend)", async () => {
     const store = await renderProvider();
     act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1", { prCiStatus: "FAILURE" }), nextV());
+      store.getState().applyUpdate(makeWorktree("wt-1", { prCiStatus: "failure" }), nextV());
     });
 
     act(() => {
@@ -198,7 +198,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
@@ -232,7 +232,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -291,7 +291,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
@@ -327,7 +327,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -350,7 +350,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     });
 
     act(() => {
-      for (const ciStatus of ["PENDING", "FAILURE", "SUCCESS"] as const) {
+      for (const ciStatus of ["pending", "failure", "success"] as const) {
         emit("pr-detected", {
           type: "pr-detected",
           worktreeId: "wt-1",
@@ -362,7 +362,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
       }
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
     expect((getCache(key)?.items[0] as GitHubPR).ciStatus).toBe("SUCCESS");
   });
 
@@ -384,7 +384,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -399,7 +399,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
       store
         .getState()
         .applyUpdate(
-          makeWorktree("wt-1", { branch: "feature/bar", prCiStatus: "FAILURE", prNumber: 99 }),
+          makeWorktree("wt-1", { branch: "feature/bar", prCiStatus: "failure", prNumber: 99 }),
           nextV()
         );
     });
@@ -411,14 +411,14 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
         branchName: "feature/foo",
       });
     });
 
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.prNumber).toBe(99);
-    expect(wt?.prCiStatus).toBe("FAILURE");
+    expect(wt?.prCiStatus).toBe("failure");
   });
 
   it("applies the overlay when event.branchName matches the worktree's current branch", async () => {
@@ -434,12 +434,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
         branchName: "feature/foo",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("applies the overlay when the event omits branchName (older host backward compat)", async () => {
@@ -455,11 +455,11 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("drops a stale pr-detected that arrives after a worktree-update changed the branch", async () => {
@@ -489,7 +489,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 999,
         prUrl: "https://example.test/pr/999",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
         branchName: "feature/foo",
       });
     });
@@ -497,7 +497,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.branch).toBe("feature/bar");
     expect(wt?.prNumber).not.toBe(999);
-    expect(wt?.prCiStatus).not.toBe("FAILURE");
+    expect(wt?.prCiStatus).not.toBe("failure");
   });
 
   it("applies the overlay when the worktree has no branch (detached HEAD)", async () => {
@@ -513,12 +513,12 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
         branchName: "feature/foo",
       });
     });
 
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("SUCCESS");
+    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   it("uses the project path read at event time so closures cannot go stale", async () => {
@@ -552,7 +552,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -585,7 +585,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "closed",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
@@ -621,7 +621,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "closed",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
     });
 
@@ -657,7 +657,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "merged",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -687,7 +687,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "PENDING",
+        prCiStatus: "pending",
       });
     });
 
@@ -717,7 +717,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "open",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -749,7 +749,7 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
         prNumber: 42,
         prUrl: "https://example.test/pr/42",
         prState: "merged",
-        prCiStatus: "SUCCESS",
+        prCiStatus: "success",
       });
     });
 
@@ -841,7 +841,7 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
       store
         .getState()
         .applyUpdate(
-          makeWorktree("wt-1", { branch: "feature/foo", prNumber: 42, prCiStatus: "FAILURE" }),
+          makeWorktree("wt-1", { branch: "feature/foo", prNumber: 42, prCiStatus: "failure" }),
           nextV()
         );
     });
@@ -869,7 +869,7 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
           prNumber: 999,
           prUrl: "https://example.test/pr/999",
           prState: "open",
-          prCiStatus: "SUCCESS",
+          prCiStatus: "success",
         }),
         nextV()
       );
@@ -886,7 +886,7 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
 
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.prNumber).toBe(999);
-    expect(wt?.prCiStatus).toBe("SUCCESS");
+    expect(wt?.prCiStatus).toBe("success");
   });
 });
 

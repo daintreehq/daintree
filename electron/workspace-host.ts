@@ -532,6 +532,13 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.applyFetchThrottle(request.multiplier);
         break;
 
+      // Provider hostname-matcher table relayed from main's forge registry.
+      // Arrives async after plugin load (and again on registry changes), so
+      // the service re-evaluates running monitors' matched provider ids.
+      case "forge-provider-matchers":
+        workspaceService.setForgeProviderMatchers(request.matchers);
+        break;
+
       case "background":
         workspaceService.pause();
         break;

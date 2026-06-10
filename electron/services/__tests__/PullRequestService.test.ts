@@ -788,8 +788,8 @@ describe("PullRequestService", () => {
     const ciByWorktree = new Map(
       detected.filter((d) => d.prCiStatus).map((d) => [d.worktreeId, d.prCiStatus])
     );
-    expect(ciByWorktree.get("wt-1")).toBe("SUCCESS");
-    expect(ciByWorktree.get("wt-2")).toBe("SUCCESS");
+    expect(ciByWorktree.get("wt-1")).toBe("success");
+    expect(ciByWorktree.get("wt-2")).toBe("success");
 
     unsubscribe();
     pullRequestService.destroy();
@@ -834,7 +834,7 @@ describe("PullRequestService", () => {
     expect(phase1?.prCiStatus).toBeUndefined();
 
     // Phase-2: enriched emit carries the resolved status and NOT the flag.
-    const phase2 = detected.find((d) => d.prCiStatus === "SUCCESS");
+    const phase2 = detected.find((d) => d.prCiStatus === "success");
     expect(phase2).toBeDefined();
     expect(phase2?.isCiStatusLoading).toBeFalsy();
 
@@ -2264,7 +2264,7 @@ describe("PullRequestService", () => {
     // detectedPRs directly in tests that access private helpers.
     function makeDetectedPR(overrides?: {
       number?: number;
-      ciStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      ciStatus?: "success" | "failure" | "pending";
       stagnantPollCount?: number;
     }) {
       return {
@@ -2287,7 +2287,7 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "PENDING" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
       pullRequestService.destroy();
@@ -2301,7 +2301,7 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10, ciStatus: "PENDING" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10, ciStatus: "pending" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(60_000);
       pullRequestService.destroy();
@@ -2315,7 +2315,7 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "PENDING" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "pending" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(120_000);
       pullRequestService.destroy();
@@ -2332,12 +2332,12 @@ describe("PullRequestService", () => {
       // SUCCESS PR with high count — should be ignored
       svc.detectedPRs.set(
         "wt-1",
-        makeDetectedPR({ number: 1, stagnantPollCount: 20, ciStatus: "SUCCESS" })
+        makeDetectedPR({ number: 1, stagnantPollCount: 20, ciStatus: "success" })
       );
       // PENDING PR with lower count — this one counts
       svc.detectedPRs.set(
         "wt-2",
-        makeDetectedPR({ number: 2, stagnantPollCount: 12, ciStatus: "PENDING" })
+        makeDetectedPR({ number: 2, stagnantPollCount: 12, ciStatus: "pending" })
       );
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(60_000);
@@ -2352,7 +2352,7 @@ describe("PullRequestService", () => {
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "SUCCESS" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "success" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
       pullRequestService.destroy();
@@ -2451,11 +2451,11 @@ describe("PullRequestService", () => {
       // fire-and-forget chain is not easily testable with vitest 4 fake timers,
       // but its behavior is exercised by scheduleRevalidation interval
       // selection in the tests above).
-      const pr = makeDetectedPR({ stagnantPollCount: 0, ciStatus: "PENDING" });
+      const pr = makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" });
 
       // Simulate unchanged CI result
       const prevSame = pr.ciStatus;
-      pr.ciStatus = "PENDING";
+      pr.ciStatus = "pending";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevSame === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
       }
@@ -2463,7 +2463,7 @@ describe("PullRequestService", () => {
 
       // Simulate another unchanged poll
       const prevSame2 = pr.ciStatus;
-      pr.ciStatus = "PENDING";
+      pr.ciStatus = "pending";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevSame2 === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
       }
@@ -2471,7 +2471,7 @@ describe("PullRequestService", () => {
 
       // Simulate CI transition
       const prevDiff = pr.ciStatus as string | undefined;
-      pr.ciStatus = "SUCCESS";
+      pr.ciStatus = "success";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevDiff === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
       }
@@ -2519,7 +2519,7 @@ describe("PullRequestService", () => {
 
     function makeDetectedPR(overrides?: {
       number?: number;
-      ciStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      ciStatus?: "success" | "failure" | "pending";
       stagnantPollCount?: number;
     }) {
       return {
@@ -2635,7 +2635,7 @@ describe("PullRequestService", () => {
 
         pullRequestService.initialize("/repo");
         svc.repoRef = makeMockRepoRef();
-        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "pending" }));
         svc.boostExpiresAt = Date.now() + 15 * 60 * 1000;
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
@@ -2672,7 +2672,7 @@ describe("PullRequestService", () => {
 
         pullRequestService.initialize("/repo");
         svc.repoRef = makeMockRepoRef();
-        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "SUCCESS" }));
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "success" }));
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
@@ -2680,7 +2680,7 @@ describe("PullRequestService", () => {
         pullRequestService.setCIEnrichmentEnabled(false);
 
         // SUCCESS is already correct for the renderer — no sweep, no noise emit.
-        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("SUCCESS");
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("success");
         expect(detected).toHaveLength(0);
 
         unsubscribe();
@@ -2699,7 +2699,7 @@ describe("PullRequestService", () => {
 
         pullRequestService.initialize("/repo");
         svc.repoRef = makeMockRepoRef();
-        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "pending" }));
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
@@ -2707,13 +2707,13 @@ describe("PullRequestService", () => {
         pullRequestService.setCIEnrichmentEnabled(false);
         const afterFirst = detected.length;
         // Re-seed a PENDING entry: if the second call still swept, it would emit.
-        svc.detectedPRs.get("wt-1").ciStatus = "PENDING";
+        svc.detectedPRs.get("wt-1").ciStatus = "pending";
         pullRequestService.setCIEnrichmentEnabled(false);
 
         expect(afterFirst).toBe(1);
         expect(detected).toHaveLength(afterFirst);
         // The re-seeded value is left alone — the no-op early-returns before sweep.
-        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("PENDING");
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("pending");
 
         unsubscribe();
         pullRequestService.destroy();
@@ -2795,8 +2795,8 @@ describe("PullRequestService", () => {
         svc.repoRef = makeMockRepoRef();
         // Two distinct PR objects coincidentally numbered 42: one PENDING (to be
         // swept), one SUCCESS (must survive untouched).
-        svc.detectedPRs.set("wt-pending", makeDetectedPR({ number: 42, ciStatus: "PENDING" }));
-        svc.detectedPRs.set("wt-success", makeDetectedPR({ number: 42, ciStatus: "SUCCESS" }));
+        svc.detectedPRs.set("wt-pending", makeDetectedPR({ number: 42, ciStatus: "pending" }));
+        svc.detectedPRs.set("wt-success", makeDetectedPR({ number: 42, ciStatus: "success" }));
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
@@ -2804,7 +2804,7 @@ describe("PullRequestService", () => {
         pullRequestService.setCIEnrichmentEnabled(false);
 
         // The SUCCESS entry keeps its status and is never re-emitted as cleared.
-        expect(svc.detectedPRs.get("wt-success").ciStatus).toBe("SUCCESS");
+        expect(svc.detectedPRs.get("wt-success").ciStatus).toBe("success");
         expect(detected.some((d) => d.worktreeId === "wt-success")).toBe(false);
         // The PENDING entry was swept and re-emitted without a CI status.
         expect(svc.detectedPRs.get("wt-pending").ciStatus).toBeUndefined();

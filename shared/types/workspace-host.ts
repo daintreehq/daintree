@@ -21,6 +21,7 @@ import type {
   WslGitEligibility,
 } from "./worktree.js";
 import type { CIStatusState, Credentials, RepoRef } from "./forge.js";
+import type { ForgeProviderMatcher } from "../utils/forgeHostnames.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 import type {
   CopyTreeOptions,
@@ -385,6 +386,9 @@ export type WorkspaceHostRequest =
   // GitHub rate-limit fetch-throttle multiplier relayed from main, where the
   // forge HTTP calls (and thus rate-limit observations) live post-#8870.
   | { type: "apply-fetch-throttle"; multiplier: number }
+  // Forge provider hostname-matcher table relayed from main's registry so
+  // monitors can resolve remote URLs to a provider id without registry access.
+  | { type: "forge-provider-matchers"; matchers: ForgeProviderMatcher[] }
   // Health check
   | { type: "health-check" }
   // Lifecycle

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { GitHubUser, IssueTooltipData, PRTooltipData } from "@shared/types/github";
+import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 
 import { IssueTooltipContent, PRTooltipContent } from "../GitHubTooltipContent";
 
@@ -16,16 +16,17 @@ vi.mock("@/components/ui/tooltip", () => ({
 function user(
   login: string,
   avatarUrl = `https://avatars.githubusercontent.com/u/${login}`
-): GitHubUser {
-  return { login, avatarUrl };
+): ForgeUser {
+  return { login, avatarUrl, rawData: null };
 }
 
 const baseIssue: IssueTooltipData = {
   number: 42,
   title: "Something is broken",
   bodyExcerpt: "",
-  state: "OPEN",
-  createdAt: "2025-06-15T12:00:00Z",
+  state: "open",
+  rawState: "OPEN",
+  createdAt: Date.parse("2025-06-15T12:00:00Z"),
   author: user("octocat"),
   assignees: [],
   labels: [],
@@ -140,9 +141,10 @@ describe("GitHubTooltipContent avatars", () => {
       number: 7,
       title: "Add the thing",
       bodyExcerpt: "",
-      state: "OPEN",
+      state: "open",
+  rawState: "OPEN",
       isDraft: false,
-      createdAt: "2025-06-15T12:00:00Z",
+      createdAt: Date.parse("2025-06-15T12:00:00Z"),
       author: user("octocat"),
       assignees: [user("alice"), user("bob")],
       labels: [],
@@ -159,8 +161,9 @@ const issueData: IssueTooltipData = {
   number: 42,
   title: "Something is broken",
   bodyExcerpt: "Steps to reproduce…",
-  state: "OPEN",
-  createdAt: "2026-01-02T00:00:00.000Z",
+  state: "open",
+  rawState: "OPEN",
+  createdAt: Date.parse("2026-01-02T00:00:00.000Z"),
   author: user("octocat"),
   assignees: [],
   labels: [],
@@ -170,9 +173,10 @@ const prData: PRTooltipData = {
   number: 7,
   title: "Fix the thing",
   bodyExcerpt: "This fixes the thing.",
-  state: "OPEN",
+  state: "open",
+  rawState: "OPEN",
   isDraft: false,
-  createdAt: "2026-01-02T00:00:00.000Z",
+  createdAt: Date.parse("2026-01-02T00:00:00.000Z"),
   author: user("octocat"),
   assignees: [],
   labels: [],

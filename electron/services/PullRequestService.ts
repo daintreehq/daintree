@@ -12,6 +12,7 @@ import type {
   PRSnapshot,
   RateLimitInfo,
   CIStatus,
+  CIStatusState,
   NormalizedPRState,
 } from "../../shared/types/forge.js";
 
@@ -59,15 +60,15 @@ const UPDATE_DEBOUNCE_MS = 100;
 // Slow-cadence revalidation for resolved PRs to detect state changes (merged/closed)
 const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
 
-// Adaptive boost: when any resolved PR has CI in-flight (PENDING/EXPECTED), drop
+// Adaptive boost: when any resolved PR has CI in-flight (pending), drop
 // the revalidation cadence so users see green/red transitions promptly. 30s is
 // the floor. Each CI status query costs ~2 GraphQL points (commits(last:1) +
 // nested contexts(first:100) = 101 nodes; 101/100 rounds to 2), and with the
 // accompanying getPR call (~1 point), revalidating each resolved PR costs ~3
 // points total. At 30s the full 5000/hr primary limit can support ~14 PRs; the
 // decay bands reduce that burn rate proportionally. The ceiling caps boosted
-// polling at 15 min after the last observed PENDING result, preventing a hung
-// CI from indefinitely burning quota; subsequent PENDING observations slide the
+// polling at 15 min after the last observed pending result, preventing a hung
+// CI from indefinitely burning quota; subsequent pending observations slide the
 // window forward.
 const RESOLVED_REVALIDATION_BOOST_INTERVAL_MS = 30 * 1000; // 30 seconds
 const RESOLVED_REVALIDATION_BOOST_DURATION_MS = 15 * 60 * 1000; // 15 minutes
@@ -96,8 +97,8 @@ interface InternalLinkedPR {
   url: string;
   state: NormalizedPRState;
   isDraft?: boolean;
-  ciStatus?: import("../../shared/types/github.js").GitHubPRCIStatus;
-  _ciStatus?: import("../../shared/types/forge.js").CIStatus;
+  ciStatus?: CIStatusState;
+  _ciStatus?: CIStatus;
   providerId: string;
   stagnantPollCount: number;
   // REST change-detection markers for the open-PR-list revalidation probe.
@@ -141,7 +142,7 @@ class PullRequestService {
   // and attended instances toggle it off on window blur. When disabled, the
   // cheap REST probe (probeOpenPRList) still tracks PR existence/state, but the
   // ~2-point-per-PR getCIStatuses fan-out is skipped — absent CI reads as
-  // "unknown" (undefined), never SUCCESS (#6240). Initialized at field-
+  // "unknown" (undefined), never success (#6240). Initialized at field-
   // declaration time so it's correct before the singleton's first checkForPRs.
   private ciEnrichmentEnabled: boolean = process.env.DAINTREE_INSTANCE_ROLE !== "worker";
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
@@ -236,7 +237,7 @@ class PullRequestService {
     // Drop PR state whenever we de-track a previously-tracked worktree, not
     // just on a branch change. Otherwise a worktree that flips to
     // isMainWorktree without a branch swap (e.g., user designates it the
-    // root) leaves a stale detectedPRs entry behind — and any PENDING
+    // root) leaves a stale detectedPRs entry behind — and any pending
     // ciStatus on that entry would keep the adaptive boost armed for up to
     // 15 minutes against a worktree we no longer poll.
     const shouldClearPRState = currentContext && (branchChanged || !shouldTrack);
@@ -827,10 +828,10 @@ class PullRequestService {
    * fan-out is gated.
    *
    * On disable we must sweep any in-flight CI state so the adaptive boost
-   * collapses: a PENDING/EXPECTED entry left in `detectedPRs` keeps
+   * collapses: a pending entry left in `detectedPRs` keeps
    * `updateBoostFromDetectedPRs` re-arming the 30s boost every revalidation
    * tick with no fetch behind it (#6149). Clearing those entries to `undefined`
-   * — not SUCCESS — also keeps "no CI fetched" from reading as passing (#6240),
+   * — not success — also keeps "no CI fetched" from reading as passing (#6240),
    * and re-emits so the renderer drops any preserved dot rather than holding it
    * stale forever (no phase-2 emit is coming while disabled).
    */
@@ -861,7 +862,7 @@ class PullRequestService {
 
   // Clear in-flight CI state and re-emit the affected PRs without a CI status so
   // the boost decays and the renderer stops showing a stale spinner/dot. Only
-  // PENDING/EXPECTED entries are touched — terminal states (SUCCESS/FAILURE) and
+  // pending entries are touched — terminal states (success/failure) and
   // already-unknown PRs are correct as-is, so re-emitting them would be noise.
   private sweepStaleCiStatus(): void {
     const repo = this.repoRef;
@@ -869,12 +870,12 @@ class PullRequestService {
     // on the same branch share one InternalLinkedPR object (so clearing it once
     // covers them all), while two worktrees that coincidentally resolve the same
     // PR number through different objects must not cross-clear — re-emitting a
-    // SUCCESS worktree without its CI field would wrongly blank its dot.
+    // success worktree without its CI field would wrongly blank its dot.
     const sweptWorktrees: string[] = [];
     const sweptObjects = new Set<InternalLinkedPR>();
 
     for (const [worktreeId, pr] of this.detectedPRs) {
-      if (pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED") {
+      if (pr.ciStatus === "pending") {
         sweptWorktrees.push(worktreeId);
         sweptObjects.add(pr);
       }
@@ -885,7 +886,7 @@ class PullRequestService {
       pr.stagnantPollCount = 0;
     }
 
-    // updateBoostFromDetectedPRs runs unconditionally — with no PENDING entries
+    // updateBoostFromDetectedPRs runs unconditionally — with no pending entries
     // left it collapses boostExpiresAt to null so the next scheduleRevalidation
     // picks the 90s baseline instead of the boosted 30s.
     this.updateBoostFromDetectedPRs();
@@ -1034,7 +1035,7 @@ class PullRequestService {
   // accidentally cancel a live boost.
   private updateBoostFromDetectedPRs(): void {
     const hasPendingCi = Array.from(this.detectedPRs.values()).some(
-      (pr) => pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED"
+      (pr) => pr.ciStatus === "pending"
     );
     this.boostExpiresAt = hasPendingCi
       ? Date.now() + RESOLVED_REVALIDATION_BOOST_DURATION_MS
@@ -1045,7 +1046,7 @@ class PullRequestService {
     const maxStagnant = Math.max(
       0,
       ...Array.from(this.detectedPRs.values(), (pr) =>
-        pr.ciStatus === "PENDING" || pr.ciStatus === "EXPECTED" ? pr.stagnantPollCount : 0
+        pr.ciStatus === "pending" ? pr.stagnantPollCount : 0
       )
     );
     if (maxStagnant >= STAGNANT_POLL_DECAY_AT_20) {
@@ -1367,13 +1368,13 @@ class PullRequestService {
       // polling CI for any in-flight PR not already enriched above, so green/red
       // transitions still surface promptly even on an otherwise-quiet tick.
       // Skipped entirely when enrichment is disabled (unattended instance): the
-      // sweep on disable already cleared PENDING/EXPECTED, so this loop would be
+      // sweep on disable already cleared pending entries, so this loop would be
       // a no-op anyway, but the guard keeps it from re-fetching after a
-      // re-detection re-seeds a PENDING state mid-blur.
+      // re-detection re-seeds a pending state mid-blur.
       if (this.ciEnrichmentEnabled) {
         for (const detectedPR of this.detectedPRs.values()) {
           if (enrichedPRNumbers.has(detectedPR.number)) continue;
-          if (detectedPR.ciStatus === "PENDING" || detectedPR.ciStatus === "EXPECTED") {
+          if (detectedPR.ciStatus === "pending") {
             enrichedPRNumbers.add(detectedPR.number);
             this.enrichPRWithCIStatus(detectedPR, repo);
           }
@@ -1642,7 +1643,7 @@ class PullRequestService {
           for (const worktreeId of worktreeIds) {
             // Drop any stale detection alongside the clear: refresh() empties
             // `resolvedWorktrees` but keeps `detectedPRs`, so a PR that
-            // disappeared between cycles would otherwise leave a PENDING
+            // disappeared between cycles would otherwise leave a pending
             // entry keeping the 30s revalidation boost armed indefinitely.
             this.detectedPRs.delete(worktreeId);
             events.emit("sys:pr:cleared", {
@@ -1809,15 +1810,13 @@ class PullRequestService {
         // confirmed "no CI checks." Map it to undefined and still re-emit so a
         // dot the phase-1 emit preserved is actually cleared once checks
         // genuinely disappear, rather than lingering stale (#9551).
-        pr.ciStatus = ciStatus
-          ? ciStatus.state === "success"
-            ? "SUCCESS"
-            : ciStatus.state === "failure"
-              ? "FAILURE"
-              : ciStatus.state === "pending"
-                ? "PENDING"
-                : undefined
-          : undefined;
+        pr.ciStatus =
+          ciStatus &&
+          (ciStatus.state === "success" ||
+            ciStatus.state === "failure" ||
+            ciStatus.state === "pending")
+            ? ciStatus.state
+            : undefined;
         pr._ciStatus = ciStatus ?? undefined;
         if (pr.ciStatus !== undefined) {
           pr.stagnantPollCount = prevCiStatus === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;

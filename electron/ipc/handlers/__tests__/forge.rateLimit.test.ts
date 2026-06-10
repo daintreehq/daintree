@@ -17,6 +17,7 @@ const fakeImpl = vi.hoisted(() => ({
   buildPRsUrl: vi.fn(),
   buildCommitsUrl: vi.fn(),
   buildIssueUrl: vi.fn(),
+  buildPRUrl: vi.fn(),
   assignIssue: vi.fn(),
   unassignIssue: vi.fn(),
   validateToken: vi.fn(),
@@ -26,6 +27,7 @@ const fakeImpl = vi.hoisted(() => ({
   getIssue: vi.fn(),
   getPR: vi.fn(),
   getRepoMetadata: vi.fn(),
+  repoStats: { getRepoStats: vi.fn() },
 }));
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
@@ -46,6 +48,7 @@ vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 
 vi.mock("../../utils.js", () => ({
   checkRateLimit: checkRateLimitMock,
+  broadcastToRenderer: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -55,6 +58,10 @@ vi.mock("../../utils.js", () => ({
   typedHandleValidated: vi.fn(),
   typedHandleWithContext: vi.fn(),
   typedHandleWithContextValidated: vi.fn(),
+}));
+
+vi.mock("../../../utils/git.js", () => ({
+  getCommitCount: vi.fn(async () => 0),
 }));
 
 vi.mock("../../../utils/openExternal.js", () => ({
@@ -109,6 +116,11 @@ describe("forge handlers — rate limiting", () => {
     fakeImpl.buildPRsUrl.mockReturnValue("https://fake.test/acme/widgets/pulls");
     fakeImpl.buildCommitsUrl.mockReturnValue("https://fake.test/acme/widgets/commits");
     fakeImpl.buildIssueUrl.mockReturnValue("https://fake.test/acme/widgets/issues/1");
+    fakeImpl.buildPRUrl.mockReturnValue("https://fake.test/acme/widgets/pulls/1");
+    fakeImpl.repoStats.getRepoStats.mockResolvedValue({
+      counts: { issueCount: 0, prCount: 0 },
+      source: "memory-cache",
+    });
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
     fakeImpl.validateToken.mockResolvedValue({ valid: true, username: "user", avatarUrl: null });
@@ -292,6 +304,8 @@ describe("forge handlers — rate limiting", () => {
     type HandlerSpec = {
       channel: string;
       maxCalls: number;
+      /** Rate-limit window — defaults to 10s; the avatar/diagnostics probes use 60s. */
+      windowMs?: number;
       invoke: (handler: (...args: unknown[]) => Promise<unknown>) => Promise<unknown>;
     };
 
@@ -343,21 +357,67 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 5,
         invoke: (h) => h({}, { cwd, issueNumber: 1, username: "octocat" }),
       },
+      // open-PR: 20/10s (matches forge:open-issue)
+      { channel: CHANNELS.FORGE_OPEN_PR, maxCalls: 20, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
+      // capability reads: 10/10s (matches github:get-repo-stats family)
+      { channel: CHANNELS.FORGE_GET_REPO_STATS, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
+      { channel: CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
+      { channel: CHANNELS.FORGE_GET_PROJECT_HEALTH, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
+      {
+        channel: CHANNELS.FORGE_GET_PR_REVIEW_THREADS,
+        maxCalls: 10,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      // tooltip + batch lookups: 20/10s (matches github:get-*-tooltip / by-numbers)
+      {
+        channel: CHANNELS.FORGE_GET_ISSUE_TOOLTIP,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_GET_PR_TOOLTIP,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, numbers: [1] }),
+      },
+      {
+        channel: CHANNELS.FORGE_GET_PRS_BY_NUMBERS,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, numbers: [1] }),
+      },
+      // long-window probes: 30/60s (matches github:resolve-author-avatar / rate-limit-details)
+      {
+        channel: CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR,
+        maxCalls: 30,
+        windowMs: 60_000,
+        invoke: (h) => h({}, { cwd, email: "dev@fake.test" }),
+      },
+      {
+        channel: CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS,
+        maxCalls: 30,
+        windowMs: 60_000,
+        invoke: (h) => h({}, { cwd }),
+      },
     ];
 
-    it("registers all forge channels (14 rate-limited + 1 unrated identity probe)", () => {
-      expect(specs).toHaveLength(14);
-      // FORGE_GET_CURRENT_USER is an intentionally unrated identity probe with no
-      // checkRateLimit, so it registers a handler but stays out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(15);
+    it("registers all forge channels (25 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(25);
+      // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
+      // unrated replay/identity probes with no checkRateLimit, so they register
+      // handlers but stay out of `specs`.
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(27);
     });
 
     it.each(specs)(
-      "$channel calls checkRateLimit($channel, $maxCalls, 10_000)",
-      async ({ channel, maxCalls, invoke }) => {
+      "$channel calls checkRateLimit($channel, $maxCalls, windowMs)",
+      async ({ channel, maxCalls, windowMs, invoke }) => {
         const handler = getInvokeHandler(channel);
         await invoke(handler);
-        expect(checkRateLimitMock).toHaveBeenCalledWith(channel, maxCalls, 10_000);
+        expect(checkRateLimitMock).toHaveBeenCalledWith(channel, maxCalls, windowMs ?? 10_000);
       }
     );
 

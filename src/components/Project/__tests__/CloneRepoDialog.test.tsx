@@ -154,6 +154,19 @@ describe("CloneRepoDialog", () => {
       value: vi.fn(),
     });
 
+    // The dialog loads registered forge provider matchers on open to gate the
+    // auth-failed recovery banner.
+    (globalThis as { window?: { electron?: unknown } }).window!.electron = {
+      forge: {
+        getProviders: vi.fn().mockResolvedValue([
+          {
+            pluginId: "daintree.github",
+            contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+          },
+        ]),
+      },
+    } as unknown as typeof window.electron;
+
     onCloneProgressMock.mockImplementation((callback: (event: CloneRepoProgressEvent) => void) => {
       progressHandler = callback;
       return vi.fn();

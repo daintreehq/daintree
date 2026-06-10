@@ -732,7 +732,7 @@ describe("getPR tooltip pre-warm", () => {
     expect(tooltip).toBeDefined();
     expect(tooltip?.assignees[0]?.login).toBe("alice");
     expect(tooltip?.labels[0]?.name).toBe("bug");
-    expect(tooltip?.createdAt).toBe("2025-01-01T00:00:00.000Z");
+    expect(tooltip?.createdAt).toBe(Date.parse("2025-01-01T00:00:00Z"));
   });
 
   it("coalesces concurrent identical detail fetches", async () => {

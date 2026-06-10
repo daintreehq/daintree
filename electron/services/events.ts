@@ -1,7 +1,6 @@
 import { EventEmitter } from "events";
 import type { NotificationPayload, AgentState, EventCategory } from "../types/index.js";
 import type { EventContext } from "../../shared/types/events.js";
-import type { GitHubPRCIStatus } from "../../shared/types/github.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 import type {
   TerminalReliabilityMetricPayload,
@@ -444,7 +443,7 @@ export type DaintreeEventMap = {
     prNumber: number;
     prUrl: string;
     prState: import("../../shared/types/forge.js").NormalizedPRState;
-    prCiStatus?: GitHubPRCIStatus;
+    prCiStatus?: import("../../shared/types/forge.js").CIStatusState;
     /**
      * True on the synchronous phase-1 emit that precedes a fire-and-forget CI
      * enrichment; signals the receiver to keep its prior `prCiStatus` rather

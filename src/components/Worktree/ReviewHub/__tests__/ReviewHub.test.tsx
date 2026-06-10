@@ -1060,7 +1060,7 @@ describe("ReviewHub", () => {
       prNumber: number;
       prUrl: string;
       prState: "open" | "merged" | "closed";
-      prCiStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      prCiStatus?: "success" | "failure" | "pending";
     }) {
       const existing = worktreeStoreData.current.get("main-wt")!;
       const mappedState =
@@ -1070,11 +1070,11 @@ describe("ReviewHub", () => {
             ? ("merged" as const)
             : ("open" as const);
       const ciState =
-        prData.prCiStatus === "SUCCESS"
+        prData.prCiStatus === "success"
           ? ("success" as const)
-          : prData.prCiStatus === "FAILURE" || prData.prCiStatus === "ERROR"
+          : prData.prCiStatus === "failure"
             ? ("failure" as const)
-            : prData.prCiStatus === "PENDING" || prData.prCiStatus === "EXPECTED"
+            : prData.prCiStatus === "pending"
               ? ("pending" as const)
               : undefined;
       worktreeStoreData.current.set("main-wt", {
@@ -1212,7 +1212,7 @@ describe("ReviewHub", () => {
         prNumber: 42,
         prUrl: "https://github.com/test/repo/pull/42",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 

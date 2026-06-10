@@ -29,6 +29,9 @@ import type {
   RepoMetadata,
   ListOptions,
   ForgeUser,
+  ReviewThread,
+  ForgeTokenHealthState,
+  RateLimitDetails,
 } from "../forge.js";
 import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
@@ -121,11 +124,18 @@ import type {
   RepoStatsAndPagePayload,
   RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
+} from "./github.js";
+import type {
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
-} from "./github.js";
+  ForgeRepositoryStats,
+  ForgeRepoStatsAndPagePayload,
+  ForgeRepoCountsUpdatedPayload,
+  ForgeFirstPageCachePayload,
+  ForgeProjectHealthPayload,
+} from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
@@ -504,7 +514,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * owner/repo for remotes whose URL looks like a forge repo. Provider-
      * agnostic replacement for the legacy `github.listRemotes` (#8456).
      */
-    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
+    listRemotes(cwd: string): Promise<import("./forge.js").RemoteInfo[]>;
     /**
      * Close/background a project.
      * @param projectId - Project ID to close
@@ -735,11 +745,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getIssueTooltip(
       cwd: string,
       issueNumber: number
-    ): Promise<import("../github.js").IssueTooltipData | null>;
+    ): Promise<import("../forge.js").IssueTooltipData | null>;
     getPRTooltip(
       cwd: string,
       prNumber: number
-    ): Promise<import("../github.js").PRTooltipData | null>;
+    ): Promise<import("../forge.js").PRTooltipData | null>;
     getIssueUrl(cwd: string, issueNumber: number): Promise<string | null>;
     getIssueByNumber(
       cwd: string,
@@ -756,7 +766,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<Array<import("../github.js").GitHubPR | null>>;
     getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
     /** @deprecated Use `project.listRemotes` instead (#8456). */
-    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
+    listRemotes(cwd: string): Promise<import("./forge.js").RemoteInfo[]>;
     resolveAuthorAvatar(email: string): Promise<string | null>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
@@ -1396,6 +1406,77 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string;
       stderr: string;
     }): Promise<{ providerId: string; classification: PushErrorClassification | null } | null>;
+    /**
+     * Provider-agnostic repository stats roll-up (toolbar counts badge).
+     * Blends the host-computed local commit count with the resolved
+     * provider's forge counts. Throws when the provider doesn't implement
+     * the `repoStats` capability.
+     */
+    getRepoStats(payload: { cwd: string; bypassCache?: boolean }): Promise<ForgeRepositoryStats>;
+    /**
+     * Disk-persisted first page for cold-start toolbar hydration. `null`
+     * when the provider has no cache, doesn't implement the capability, or
+     * no provider resolves for `cwd` — never throws.
+     */
+    getFirstPageCache(payload: { cwd: string }): Promise<ForgeFirstPageCachePayload | null>;
+    /**
+     * Project-health roll-up for the project pulse card. Errors surface in
+     * the returned payload's `error` field, never as a rejection.
+     */
+    getProjectHealth(payload: {
+      cwd: string;
+      bypassCache?: boolean;
+    }): Promise<ForgeProjectHealthPayload>;
+    /** Hover-tooltip projection of an issue. Best-effort — `null` on any failure. */
+    getIssueTooltip(payload: {
+      cwd: string;
+      issueNumber: number;
+    }): Promise<import("../forge.js").IssueTooltipData | null>;
+    /** Hover-tooltip projection of a PR. Best-effort — `null` on any failure. */
+    getPRTooltip(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<import("../forge.js").PRTooltipData | null>;
+    /**
+     * Batch-fetch issues by number via the provider's `batchLookups`
+     * capability. Returns the found issues in input order; numbers that
+     * don't resolve are omitted. `[]` when the capability is absent.
+     */
+    getIssuesByNumbers(payload: { cwd: string; numbers: number[] }): Promise<Issue[]>;
+    /** Batch-fetch PRs by number. See {@link getIssuesByNumbers}. */
+    getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PR[]>;
+    /**
+     * Opaque review threads for a PR via the provider's `reviews`
+     * capability. `[]` when the capability is absent. Note this is the
+     * normalized contract shape ({@link ReviewThread}[]), not the legacy
+     * `github.getPRReviewThreads` per-path count record.
+     */
+    getPRReviewThreads(payload: { cwd: string; prNumber: number }): Promise<ReviewThread[]>;
+    /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
+    resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
+    /**
+     * Replay the current token-health state for a provider (canonical
+     * `{pluginId}.{contributionId}` id) so late-mounting windows can render
+     * the banner without waiting for the next push. `null` when the provider
+     * isn't activated or doesn't implement `healthEvents`.
+     */
+    getTokenHealth(payload: { providerId: string }): Promise<ForgeTokenHealthState | null>;
+    /** Detailed per-bucket rate-limit snapshot for diagnostics UI; `null` when not inspectable. */
+    getRateLimitDetails(payload: { cwd: string }): Promise<RateLimitDetails | null>;
+    /** Open a single PR in the system browser via the resolved forge provider. */
+    openPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Provider-keyed stats + first-page push after a fresh network poll. */
+    onRepoStatsAndPageUpdated(callback: (data: ForgeRepoStatsAndPagePayload) => void): () => void;
+    /** Provider-keyed count-only stats push (cheap background poll path). */
+    onRepoCountsUpdated(callback: (data: ForgeRepoCountsUpdatedPayload) => void): () => void;
+    /** Branch→PR detection push from the worktree monitor. */
+    onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
+    /** PR association cleared for a worktree. */
+    onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
+    /** Branch→issue detection push from the worktree monitor. */
+    onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
+    /** The forge confirmed an associated issue doesn't exist on the repo. */
+    onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
   };
   // forgeAudit comes from GeneratedElectronAPI
   voiceInput: {

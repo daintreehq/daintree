@@ -20,6 +20,7 @@ import {
   reviewThreadsCache,
   prRequiredStatusCache,
   truncateBody,
+  isoToEpochMs,
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
   type PRRequiredStatusEntry,
@@ -35,8 +36,13 @@ import type {
   GitHubPR,
   GitHubListOptions,
   GitHubListResponse,
-  PRTooltipData,
 } from "../../../../shared/types/github.js";
+import type {
+  ForgeLabel,
+  ForgeUser,
+  NormalizedPRState,
+  PRTooltipData,
+} from "../../../../shared/types/forge.js";
 import type { RepoContext, RepoStats } from "./types.js";
 
 export function buildListCacheKey(
@@ -172,93 +178,109 @@ export function mapPRStates(state?: string): string[] {
 
 const inFlightPRTooltips = new Map<string, Promise<PRTooltipData | null>>();
 
-export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
+/** GraphQL `{ login, avatarUrl }` actor node → forge {@link ForgeUser} tooltip projection. */
+function toTooltipUser(node: { login?: string; avatarUrl?: string } | null | undefined): ForgeUser {
+  return { login: node?.login ?? "unknown", avatarUrl: node?.avatarUrl ?? "", rawData: null };
+}
+
+function toTooltipLabels(
+  nodes: Array<{ name?: string; color?: string }> | undefined
+): ForgeLabel[] {
+  return (nodes ?? []).filter(Boolean).map((l) => ({ name: l.name ?? "", color: l.color ?? "" }));
+}
+
+function normalizeTooltipPRState(rawState: string, merged: boolean): NormalizedPRState {
+  if (merged) return "merged";
+  const upper = rawState.toUpperCase();
+  if (upper === "CLOSED") return "closed";
+  if (upper === "MERGED") return "merged";
+  return "open";
+}
+
+/**
+ * Context-variant core of {@link getPRTooltip}. Network errors propagate so
+ * the cwd wrapper's repo-context retry can classify them; capability callers
+ * (forge `tooltips`) catch and return `null` themselves.
+ */
+export async function getPRTooltipForContext(
+  context: RepoContext,
+  prNumber: number
+): Promise<PRTooltipData | null> {
   const client = GitHubAuth.createClient();
   if (!client) {
     return null;
   }
 
+  const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
+  const cached = prTooltipCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const inFlight = inFlightPRTooltips.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const requestedAt = Date.now();
+  const promise = (async () => {
+    const response = (await client(GET_PR_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: prNumber,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
+
+    const pr = response?.repository?.pullRequest;
+    if (!pr) {
+      return null;
+    }
+
+    const author = pr.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = pr.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const merged = (pr.merged as boolean) ?? false;
+    const rawState = (pr.state as string) ?? "OPEN";
+
+    const tooltipData: PRTooltipData = {
+      number: pr.number as number,
+      title: pr.title as string,
+      bodyExcerpt: truncateBody(pr.bodyText as string | null),
+      state: normalizeTooltipPRState(rawState, merged),
+      rawState,
+      isDraft: (pr.isDraft as boolean) ?? false,
+      createdAt: isoToEpochMs(pr.createdAt),
+      author: toTooltipUser(author),
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map(toTooltipUser),
+      labels: toTooltipLabels(labelsData?.nodes),
+    };
+
+    const existing = prTooltipWrittenAt.get(cacheKey);
+    if (existing === undefined || requestedAt >= existing) {
+      prTooltipCache.set(cacheKey, tooltipData);
+      prTooltipWrittenAt.set(cacheKey, requestedAt);
+    }
+    return tooltipData;
+  })();
+
+  inFlightPRTooltips.set(cacheKey, promise);
+  promise.then(
+    () => {
+      inFlightPRTooltips.delete(cacheKey);
+    },
+    () => {
+      inFlightPRTooltips.delete(cacheKey);
+    }
+  );
+
+  return promise;
+}
+
+export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
   try {
-    return await withRepoContextRetry(cwd, async (context) => {
-      const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
-      const cached = prTooltipCache.get(cacheKey);
-      if (cached) {
-        return cached;
-      }
-
-      const inFlight = inFlightPRTooltips.get(cacheKey);
-      if (inFlight) return inFlight;
-
-      const requestedAt = Date.now();
-      const promise = (async () => {
-        const response = (await client(GET_PR_QUERY, {
-          owner: context.owner,
-          repo: context.repo,
-          number: prNumber,
-          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-        })) as GraphQlQueryResponseData;
-
-        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
-
-        const pr = response?.repository?.pullRequest;
-        if (!pr) {
-          return null;
-        }
-
-        const author = pr.author as { login?: string; avatarUrl?: string } | null;
-        const assigneesData = pr.assignees as {
-          nodes?: Array<{ login?: string; avatarUrl?: string }>;
-        };
-        const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
-        const merged = pr.merged as boolean;
-        const rawState = pr.state as string;
-
-        let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-        if (merged) {
-          state = "MERGED";
-        }
-
-        const tooltipData: PRTooltipData = {
-          number: pr.number as number,
-          title: pr.title as string,
-          bodyExcerpt: truncateBody(pr.bodyText as string | null),
-          state,
-          isDraft: (pr.isDraft as boolean) ?? false,
-          createdAt: pr.createdAt as string,
-          author: {
-            login: author?.login ?? "unknown",
-            avatarUrl: author?.avatarUrl ?? "",
-          },
-          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-            login: a.login ?? "unknown",
-            avatarUrl: a.avatarUrl ?? "",
-          })),
-          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-            name: l.name ?? "",
-            color: l.color ?? "",
-          })),
-        };
-
-        const existing = prTooltipWrittenAt.get(cacheKey);
-        if (existing === undefined || requestedAt >= existing) {
-          prTooltipCache.set(cacheKey, tooltipData);
-          prTooltipWrittenAt.set(cacheKey, requestedAt);
-        }
-        return tooltipData;
-      })();
-
-      inFlightPRTooltips.set(cacheKey, promise);
-      promise.then(
-        () => {
-          inFlightPRTooltips.delete(cacheKey);
-        },
-        () => {
-          inFlightPRTooltips.delete(cacheKey);
-        }
-      );
-
-      return promise;
-    });
+    return await withRepoContextRetry(cwd, (context) => getPRTooltipForContext(context, prNumber));
   } catch {
     return null;
   }
@@ -373,29 +395,19 @@ function prewarmPRTooltips(
       nodes?: Array<{ login?: string; avatarUrl?: string }>;
     };
     const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
-    const merged = node.merged as boolean;
-    const rawState = node.state as string;
-    let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-    if (merged) state = "MERGED";
+    const merged = (node.merged as boolean) ?? false;
+    const rawState = (node.state as string) ?? "OPEN";
     prTooltipCache.set(cacheKey, {
       number: num,
       title: node.title as string,
       bodyExcerpt: truncateBody(node.bodyText as string | null),
-      state,
+      state: normalizeTooltipPRState(rawState, merged),
+      rawState,
       isDraft: (node.isDraft as boolean) ?? false,
-      createdAt: node.createdAt as string,
-      author: {
-        login: author?.login ?? "unknown",
-        avatarUrl: author?.avatarUrl ?? "",
-      },
-      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-        login: a.login ?? "unknown",
-        avatarUrl: a.avatarUrl ?? "",
-      })),
-      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-        name: l.name ?? "",
-        color: l.color ?? "",
-      })),
+      createdAt: isoToEpochMs(node.createdAt),
+      author: toTooltipUser(author),
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map(toTooltipUser),
+      labels: toTooltipLabels(labelsData?.nodes),
     });
     prTooltipWrittenAt.set(cacheKey, requestedAt);
   }
@@ -585,6 +597,47 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
   }
 }
 
+/**
+ * Context-variant core of {@link getPRsByNumbers}. Results align with the
+ * positive-integer-filtered input order; errors propagate so the cwd wrapper's
+ * repo-context retry and error classification stay in charge.
+ */
+export async function getPRsByNumbersForContext(
+  context: RepoContext,
+  numbers: number[]
+): Promise<Array<GitHubPR | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  const results: Array<GitHubPR | null> = [];
+
+  for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+    const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+    const query = buildBatchPRsQuery(context.owner, context.repo, chunk);
+    if (!query) continue;
+
+    const response = (await client(query, {
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(response);
+
+    const repo = response?.repository as Record<string, unknown> | undefined;
+    for (const num of chunk) {
+      const alias = `p${num}`;
+      const node = repo?.[alias] as Record<string, unknown> | null;
+      results.push(node ? parsePRNode(node) : null);
+    }
+  }
+
+  return results;
+}
+
 export async function getPRsByNumbers(
   cwd: string,
   numbers: number[]
@@ -598,30 +651,9 @@ export async function getPRsByNumbers(
   if (valid.length === 0) return [];
 
   try {
-    return await withRepoContextRetry(cwd, async (context) => {
-      const results: Array<GitHubPR | null> = [];
-
-      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
-        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
-        const query = buildBatchPRsQuery(context.owner, context.repo, chunk);
-        if (!query) continue;
-
-        const response = (await client(query, {
-          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-        })) as GraphQlQueryResponseData;
-
-        gitHubRateLimitService.updateFromGraphQL(response);
-
-        const repo = response?.repository as Record<string, unknown> | undefined;
-        for (const num of chunk) {
-          const alias = `p${num}`;
-          const node = repo?.[alias] as Record<string, unknown> | null;
-          results.push(node ? parsePRNode(node) : null);
-        }
-      }
-
-      return results;
-    });
+    return await withRepoContextRetry(cwd, (context) =>
+      getPRsByNumbersForContext(context, numbers)
+    );
   } catch (error) {
     const message = (error as Error).message || "";
     if (message === "Not a GitHub repository") {

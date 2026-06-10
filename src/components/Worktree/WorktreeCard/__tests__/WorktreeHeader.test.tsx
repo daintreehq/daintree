@@ -1061,7 +1061,7 @@ describe("WorktreeHeader collapsed alarm pill", () => {
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
       },
     });
     const pill = screen.getByTestId("collapsed-alarm-pill");
@@ -1075,7 +1075,7 @@ describe("WorktreeHeader collapsed alarm pill", () => {
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
-        isGitHubRemote: false,
+        matchedForgeProviderId: null,
       },
     });
     expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
@@ -1137,7 +1137,7 @@ describe("WorktreeHeader collapsed alarm pill", () => {
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
         behindCount: 5,
         ...ciFailureLinked(101),
       },
@@ -1342,7 +1342,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         aheadCount: 1,
         behindCount: 2,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
         linked: { providerId: "daintree.github.github" },
       },
     });
@@ -1364,7 +1364,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         aheadCount: 0,
         behindCount: 0,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
         linked: { providerId: "daintree.github.github" },
       },
     });
@@ -1374,8 +1374,8 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.textContent).toContain("—");
   });
 
-  it("renders the sign-in affordance when isGitHubRemote and no linked data (#9982)", () => {
-    // Reproduces the exact bug path: fetchAuthFailed + isGitHubRemote but no
+  it("renders the sign-in affordance when matchedForgeProviderId is set and no linked data (#9982)", () => {
+    // Reproduces the exact bug path: fetchAuthFailed + matchedForgeProviderId but no
     // linked data (e.g. the main worktree on develop, or a token-expired
     // worktree). The header's union predicate must still raise the alarm tier
     // and the badge must still render the sign-in branch — the badge used to
@@ -1386,7 +1386,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         aheadCount: 0,
         behindCount: 0,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
       },
     });
     const indicator = screen.getByRole("button", { name: /GitHub authentication failed/ });
@@ -1409,7 +1409,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         ...baseWorktree,
         aheadCount: 1,
         fetchAuthFailed: true,
-        isGitHubRemote: false,
+        matchedForgeProviderId: null,
       },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
@@ -1431,7 +1431,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         ...baseWorktree,
         aheadCount: 1,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
         linked: { providerId: "daintree.github.github" },
       },
     });
@@ -1488,7 +1488,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         aheadCount: 1,
         fetchAuthFailed: true,
         fetchNetworkFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
         linked: { providerId: "daintree.github.github" },
       },
     });

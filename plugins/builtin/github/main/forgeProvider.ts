@@ -3,28 +3,44 @@ import { createHash } from "node:crypto";
 import { configure } from "safe-stable-stringify";
 import type {
   AuthValidation,
+  AvatarCapability,
   CIStatus,
+  CIStatusState,
   CreateIssueInput,
   Credentials,
+  FirstPageSnapshot,
   ForgeProviderImpl,
+  ForgeRepoCounts,
+  ForgeTokenHealthState,
   ForgeUser,
   ForgeLabel,
+  HealthEventsCapability,
   IdentityCapability,
   Issue,
+  IssueTooltipData,
+  LinkedPRSummary,
   ListOptions,
   NormalizedIssueState,
   NormalizedPRState,
   NormalizedReviewDecision,
   PR,
+  PRTooltipData,
   Page,
   PRListProbeResult,
   PRSnapshot,
+  ProjectHealthCapability,
+  ProjectHealthSnapshot,
   PushErrorClassification,
+  RateLimitDetails,
   RateLimitInfo,
   RepoMetadata,
   RepoRef,
+  RepoStatsCapability,
+  RepoStatsSnapshot,
   ReviewCapability,
   ReviewThread,
+  StatsPage,
+  TooltipCapability,
 } from "../../../../shared/types/forge.js";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
 import { validateGitHubToken } from "./GitHubToken.js";
@@ -54,7 +70,19 @@ import { probeOpenPRList } from "./GitHubPRDiscovery.js";
 import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
 import { MAX_REVIEW_THREAD_PAGES } from "./GitHubCaches.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
-import { fetchActivityProbe } from "./GitHubStats.js";
+import {
+  fetchActivityProbe,
+  getFirstPageCacheForContext,
+  getRepoStatsAndPageForContext,
+} from "./GitHubStats.js";
+import type { RepoStatsAndPageResult } from "./GitHubStats.js";
+import { getProjectHealthForContext } from "./GitHubHealth.js";
+import { getIssueTooltipForContext, getIssuesByNumbersForContext } from "./GitHubIssues.js";
+import { getPRTooltipForContext } from "./GitHubPRs.js";
+import { resolveAuthorAvatar } from "./GitHubProfilePicture.js";
+import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
+import { fetchRateLimitDetails } from "./GitHubRateLimitApi.js";
+import { toRateLimitInfo } from "../../../../shared/utils/rateLimitUtils.js";
 import {
   forgeIssueListCache,
   forgePRListCache,
@@ -69,7 +97,13 @@ import {
   parseBatchRequiredChecksResponse,
   updateRepoStatsCount,
 } from "./GitHubPRs.js";
-import type { IssueTooltipData, PRTooltipData } from "../../../../shared/types/github.js";
+import type {
+  GitHubIssue,
+  GitHubPR,
+  GitHubPRCIStatus,
+  GitHubUser,
+} from "../../../../shared/types/github.js";
+import type { GitHubTokenHealthPayload } from "../../../../shared/types/ipc/github.js";
 
 const REPO_METADATA_QUERY = `
   query GetRepoMetadata($owner: String!, $repo: String!) {
@@ -292,6 +326,89 @@ function toForgePR(node: Record<string, unknown>): PR {
   };
 }
 
+/**
+ * GitHub list-shape CI roll-up → forge {@link CIStatusState}. `ERROR` folds
+ * into `failure` and `EXPECTED` into `pending` — the forge set is boolean-ish
+ * by design. `undefined` when the list shape carried no roll-up.
+ */
+function mapListCIStatus(raw: GitHubPRCIStatus | undefined): CIStatusState | undefined {
+  if (raw === "SUCCESS") return "success";
+  if (raw === "FAILURE" || raw === "ERROR") return "failure";
+  if (raw === "PENDING" || raw === "EXPECTED") return "pending";
+  return undefined;
+}
+
+function gitHubUserToForgeUser(user: GitHubUser): ForgeUser {
+  return { login: user.login, avatarUrl: user.avatarUrl, rawData: null };
+}
+
+/**
+ * Map a legacy {@link GitHubIssue} list item (the stats first-page shape) to
+ * the contract {@link Issue}. The list shape carries no `body`/`createdAt`, so
+ * `body` falls back to `""` and `createdAt` to the item's `updatedAt` —
+ * matching {@link toForgeIssue}'s `createdAt ?? updatedAt` fallback.
+ */
+export function gitHubIssueToForgeIssue(item: GitHubIssue): Issue {
+  const updatedAt = isoToMs(item.updatedAt);
+  const linkedCI = mapListCIStatus(item.linkedPR?.ciStatus);
+  const linkedPR: LinkedPRSummary | undefined = item.linkedPR
+    ? {
+        number: item.linkedPR.number,
+        state: normalizePRState(item.linkedPR.state, item.linkedPR.state === "MERGED"),
+        url: item.linkedPR.url,
+        ...(linkedCI ? { ciStatus: linkedCI } : {}),
+      }
+    : undefined;
+  return {
+    number: item.number,
+    title: item.title,
+    body: "",
+    state: normalizeIssueState(item.state),
+    rawState: item.state,
+    url: item.url,
+    author: gitHubUserToForgeUser(item.author),
+    assignees: item.assignees.map(gitHubUserToForgeUser),
+    labels: (item.labels ?? []).map((l) => ({ name: l.name, color: l.color })),
+    commentCount: item.commentCount,
+    ...(linkedPR ? { linkedPR } : {}),
+    createdAt: updatedAt,
+    updatedAt,
+    rawData: item,
+  };
+}
+
+/**
+ * Map a legacy {@link GitHubPR} list item (the stats first-page shape) to the
+ * contract {@link PR}. Same `body`/`createdAt` fallbacks as
+ * {@link gitHubIssueToForgeIssue}; `baseRef` is absent from the list shape and
+ * falls back to `""`.
+ */
+export function gitHubPRToForgePR(item: GitHubPR): PR {
+  const updatedAt = isoToMs(item.updatedAt);
+  const merged = item.state === "MERGED";
+  const ciStatus = mapListCIStatus(item.ciStatus);
+  return {
+    number: item.number,
+    title: item.title,
+    body: item.bodyText ?? "",
+    state: normalizePRState(item.state, merged),
+    rawState: item.state,
+    isDraft: item.isDraft,
+    merged,
+    url: item.url,
+    author: gitHubUserToForgeUser(item.author),
+    baseRef: "",
+    headRef: item.headRefName ?? "",
+    mergeable: undefined,
+    reviewDecision: item.reviewDecision,
+    ...(item.commentCount !== undefined ? { commentCount: item.commentCount } : {}),
+    ...(ciStatus ? { ciStatus } : {}),
+    createdAt: updatedAt,
+    updatedAt,
+    rawData: item,
+  };
+}
+
 function mapIssueGraphQLStates(state: ListOptions["state"]): string[] {
   if (state === "closed") return ["CLOSED"];
   if (state === "all") return ["OPEN", "CLOSED"];
@@ -453,10 +570,19 @@ function issueToTooltipData(issue: Issue): IssueTooltipData {
     number: issue.number,
     title: issue.title,
     bodyExcerpt: truncateBody(issue.body),
-    state: issue.state === "closed" ? "CLOSED" : "OPEN",
-    createdAt: new Date(issue.createdAt).toISOString(),
-    author: { login: issue.author?.login ?? "unknown", avatarUrl: issue.author?.avatarUrl ?? "" },
-    assignees: issue.assignees.map((a) => ({ login: a.login, avatarUrl: a.avatarUrl ?? "" })),
+    state: issue.state,
+    rawState: issue.rawState,
+    createdAt: issue.createdAt,
+    author: {
+      login: issue.author?.login ?? "unknown",
+      avatarUrl: issue.author?.avatarUrl ?? "",
+      rawData: null,
+    },
+    assignees: issue.assignees.map((a) => ({
+      login: a.login,
+      avatarUrl: a.avatarUrl ?? "",
+      rawData: null,
+    })),
     labels: issue.labels.map((l) => ({ name: l.name, color: l.color ?? "" })),
   };
 }
@@ -476,23 +602,22 @@ function prToTooltipData(pr: PR): PRTooltipData | null {
       ?.nodes ?? [];
   const labelNodes =
     (raw.labels as { nodes?: Array<{ name?: string; color?: string }> } | undefined)?.nodes ?? [];
-  const state: "OPEN" | "CLOSED" | "MERGED" =
-    pr.merged || pr.state === "merged"
-      ? "MERGED"
-      : pr.state === "closed" || pr.state === "declined"
-        ? "CLOSED"
-        : "OPEN";
   return {
     number: pr.number,
     title: pr.title,
     bodyExcerpt: truncateBody(pr.body),
-    state,
+    state: pr.merged ? "merged" : pr.state,
+    rawState: pr.rawState,
     isDraft: pr.isDraft,
-    createdAt: new Date(pr.createdAt).toISOString(),
-    author: { login: pr.author?.login ?? "unknown", avatarUrl: pr.author?.avatarUrl ?? "" },
+    createdAt: pr.createdAt,
+    author: {
+      login: pr.author?.login ?? "unknown",
+      avatarUrl: pr.author?.avatarUrl ?? "",
+      rawData: null,
+    },
     assignees: assigneeNodes
       .filter(Boolean)
-      .map((a) => ({ login: a.login ?? "unknown", avatarUrl: a.avatarUrl ?? "" })),
+      .map((a) => ({ login: a.login ?? "unknown", avatarUrl: a.avatarUrl ?? "", rawData: null })),
     labels: labelNodes.filter(Boolean).map((l) => ({ name: l.name ?? "", color: l.color ?? "" })),
   };
 }
@@ -1200,6 +1325,184 @@ const identityCapability: IdentityCapability = {
   },
 };
 
+// Tooltip lookups route through the context-variant cores (dedicated
+// short-TTL tooltip caches + per-number singleflight). Tooltips are
+// best-effort by contract, so every failure collapses to `null` here.
+const tooltipCapability: TooltipCapability = {
+  async getIssueTooltip(repo: RepoRef, issueNumber: number): Promise<IssueTooltipData | null> {
+    try {
+      return await getIssueTooltipForContext({ owner: repo.owner, repo: repo.repo }, issueNumber);
+    } catch {
+      return null;
+    }
+  },
+  async getPRTooltip(repo: RepoRef, prNumber: number): Promise<PRTooltipData | null> {
+    try {
+      return await getPRTooltipForContext({ owner: repo.owner, repo: repo.repo }, prNumber);
+    } catch {
+      return null;
+    }
+  },
+};
+
+/**
+ * Project a {@link RepoStatsAndPageResult} onto the contract counts shape.
+ * The rate-limit fields mirror `getRepoStatsComplete`: populated only while a
+ * block is active. Local-git facts (commit count) are deliberately absent —
+ * the host computes those itself.
+ */
+function toForgeRepoCounts(result: RepoStatsAndPageResult): ForgeRepoCounts {
+  const rateLimitState = gitHubRateLimitService.getState();
+  return {
+    issueCount: result.stats?.issueCount ?? null,
+    prCount: result.stats?.prCount ?? null,
+    stale: result.stats?.stale,
+    lastUpdated: result.stats?.lastUpdated,
+    error: result.error,
+    rateLimitResetAt:
+      rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,
+    rateLimitKind: rateLimitState.blocked ? (rateLimitState.kind ?? undefined) : undefined,
+    nextPollIntervalMs: result.nextPollIntervalMs,
+  };
+}
+
+function toStatsPage<TIn, TOut>(
+  page: { items: TIn[]; endCursor: string | null; hasNextPage: boolean; totalCount?: number },
+  mapItem: (item: TIn) => TOut
+): StatsPage<TOut> {
+  return {
+    items: page.items.map(mapItem),
+    endCursor: page.endCursor,
+    hasNextPage: page.hasNextPage,
+    ...(typeof page.totalCount === "number" ? { totalCount: page.totalCount } : {}),
+  };
+}
+
+const repoStatsCapability: RepoStatsCapability = {
+  async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
+    const result = await getRepoStatsAndPageForContext(
+      { owner: repo.owner, repo: repo.repo },
+      { bypassCache: opts?.bypassCache === true }
+    );
+    return {
+      counts: toForgeRepoCounts(result),
+      issues: result.issues ? toStatsPage(result.issues, gitHubIssueToForgeIssue) : null,
+      prs: result.prs ? toStatsPage(result.prs, gitHubPRToForgePR) : null,
+      source: result.source,
+    };
+  },
+
+  async getFirstPageCache(repo: RepoRef): Promise<FirstPageSnapshot | null> {
+    const payload = await getFirstPageCacheForContext({ owner: repo.owner, repo: repo.repo });
+    if (!payload) return null;
+    return {
+      issues: toStatsPage(payload.issues, gitHubIssueToForgeIssue),
+      prs: toStatsPage(payload.prs, gitHubPRToForgePR),
+      lastUpdated: payload.lastUpdated,
+      ...(payload.stats ? { counts: payload.stats } : {}),
+    };
+  },
+};
+
+const projectHealthCapability: ProjectHealthCapability = {
+  async getProjectHealth(
+    repo: RepoRef,
+    opts?: { bypassCache?: boolean }
+  ): Promise<{ health: ProjectHealthSnapshot | null; error?: string }> {
+    const result = await getProjectHealthForContext(
+      { owner: repo.owner, repo: repo.repo },
+      { bypassCache: opts?.bypassCache === true }
+    );
+    if (!result.health) {
+      return { health: null, ...(result.error ? { error: result.error } : {}) };
+    }
+    const health = result.health;
+    return {
+      health: {
+        ciStatus: health.ciStatus,
+        issueCount: health.issueCount,
+        prCount: health.prCount,
+        latestRelease: health.latestRelease,
+        securityAlerts: health.securityAlerts,
+        mergeVelocity: health.mergeVelocity,
+        repoUrl: health.repoUrl,
+        ...(health.lastUpdated !== undefined ? { lastUpdated: health.lastUpdated } : {}),
+      },
+      ...(result.error ? { error: result.error } : {}),
+    };
+  },
+};
+
+const avatarCapability: AvatarCapability = {
+  resolveAuthorAvatar: (email: string) => resolveAuthorAvatar(email),
+};
+
+function toForgeTokenHealthState(state: GitHubTokenHealthPayload): ForgeTokenHealthState {
+  return {
+    status: state.status,
+    tokenVersion: state.tokenVersion,
+    checkedAt: state.checkedAt,
+    ...(state.ssoUrl ? { reauthUrl: state.ssoUrl } : {}),
+  };
+}
+
+// Health events project the plugin-internal service states onto the contract
+// shapes. The rate-limit projection reuses `toRateLimitInfo` — the same
+// canonical mapping the main-process renderer broadcast applies — so the rule
+// can't drift between the capability and the legacy transport.
+const healthEventsCapability: HealthEventsCapability = {
+  getTokenHealth(): ForgeTokenHealthState {
+    return toForgeTokenHealthState(gitHubTokenHealthService.getState());
+  },
+
+  onTokenHealthChanged(callback: (state: ForgeTokenHealthState) => void): () => void {
+    return gitHubTokenHealthService.onStateChange((state) => {
+      callback(toForgeTokenHealthState(state));
+    });
+  },
+
+  onRateLimitChanged(callback: (info: RateLimitInfo) => void): () => void {
+    return gitHubRateLimitService.onStateChange((state) => {
+      callback(toRateLimitInfo(state));
+    });
+  },
+
+  async getRateLimitDetails(): Promise<RateLimitDetails | null> {
+    const details = await fetchRateLimitDetails();
+    if (!details) return null;
+    return {
+      buckets: [
+        { name: "core", ...details.core },
+        { name: "graphql", ...details.graphql },
+        { name: "search", ...details.search },
+      ],
+      fetchedAt: details.fetchedAt,
+    };
+  },
+};
+
+async function findIssuesByNumbersImpl(
+  repo: RepoRef,
+  issueNumbers: number[]
+): Promise<Map<number, Issue | null>> {
+  const items = await getIssuesByNumbersForContext(
+    { owner: repo.owner, repo: repo.repo },
+    issueNumbers
+  );
+  const result = new Map<number, Issue | null>();
+  for (const num of issueNumbers) {
+    result.set(num, null);
+  }
+  // The core's results align with its positive-integer-filtered input order;
+  // replay the same filter to pair numbers with items.
+  const valid = issueNumbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  valid.forEach((num, i) => {
+    const item = items[i];
+    result.set(num, item ? gitHubIssueToForgeIssue(item) : null);
+  });
+  return result;
+}
+
 export const githubForgeProvider: ForgeProviderImpl = {
   async getCredentials(): Promise<Credentials | null> {
     const token = GitHubAuth.getToken();
@@ -1250,6 +1553,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   getCIStatus: getCIStatusImpl,
   batchLookups: {
     findPRsByNumbers: findPRsByNumbersImpl,
+    findIssuesByNumbers: findIssuesByNumbersImpl,
     getCIStatuses: getCIStatusesImpl,
     probeOpenPRList: probeOpenPRListImpl,
   },
@@ -1438,4 +1742,9 @@ export const githubForgeProvider: ForgeProviderImpl = {
 
   reviews: reviewCapability,
   identity: identityCapability,
+  tooltips: tooltipCapability,
+  repoStats: repoStatsCapability,
+  projectHealth: projectHealthCapability,
+  avatars: avatarCapability,
+  healthEvents: healthEventsCapability,
 };

@@ -7,6 +7,7 @@ import {
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { GitHubPR, GitHubPRCIStatus } from "@shared/types/github";
+import type { CIStatusState } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -47,7 +48,7 @@ interface PRDetectedEvent {
   prNumber: number;
   prUrl: string;
   prState: "open" | "merged" | "closed";
-  prCiStatus?: GitHubPRCIStatus;
+  prCiStatus?: CIStatusState;
   prTitle?: string;
   issueNumber?: number;
   issueTitle?: string;
@@ -484,6 +485,18 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // a project switch (#4670).
         const projectPath = useProjectStore.getState().currentProject?.path;
         if (!projectPath) return;
+        // The dropdown cache stores GitHub-shaped rows whose ciStatus uses the
+        // provider's uppercase enum; the detection wire is the neutral
+        // CIStatusState, so map at this boundary until the cache itself is
+        // neutralized.
+        const cacheCiStatus: GitHubPRCIStatus | undefined =
+          event.prCiStatus === "success"
+            ? "SUCCESS"
+            : event.prCiStatus === "failure"
+              ? "FAILURE"
+              : event.prCiStatus === "pending"
+                ? "PENDING"
+                : undefined;
         mutateCacheEntries(projectPath, "pr", (entry, keyRemainder) => {
           // keyRemainder is `${filterState}:${sortOrder}`; filterState values
           // ("open" | "closed" | "merged" | "all") contain no colons. Unknown
@@ -512,12 +525,12 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
               changed = true;
               continue;
             }
-            if (pr.ciStatus === event.prCiStatus) {
+            if (pr.ciStatus === cacheCiStatus) {
               items.push(item);
               continue;
             }
             changed = true;
-            items.push({ ...pr, ciStatus: event.prCiStatus });
+            items.push({ ...pr, ciStatus: cacheCiStatus });
           }
           if (!changed) return null;
           return { ...entry, items };

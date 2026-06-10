@@ -311,6 +311,54 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: { enabled: boolean; maxRecords: number };
   };
+  "forge:get-first-page-cache": {
+    args: [payload: { cwd: string }];
+    result: import("./forge.js").ForgeFirstPageCachePayload | null;
+  };
+  "forge:get-issue-tooltip": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: import("../forge.js").IssueTooltipData | null;
+  };
+  "forge:get-issues-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: import("../forge.js").Issue[];
+  };
+  "forge:get-pr-review-threads": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../forge.js").ReviewThread[];
+  };
+  "forge:get-pr-tooltip": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../forge.js").PRTooltipData | null;
+  };
+  "forge:get-project-health": {
+    args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
+    result: import("./forge.js").ForgeProjectHealthPayload;
+  };
+  "forge:get-prs-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: import("../forge.js").PR[];
+  };
+  "forge:get-rate-limit-details": {
+    args: [payload: { cwd: string }];
+    result: import("../forge.js").RateLimitDetails | null;
+  };
+  "forge:get-repo-stats": {
+    args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
+    result: import("./forge.js").ForgeRepositoryStats;
+  };
+  "forge:get-token-health": {
+    args: [payload: { providerId: string }];
+    result: import("../forge.js").ForgeTokenHealthState | null;
+  };
+  "forge:open-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:resolve-author-avatar": {
+    args: [payload: { cwd: string; email: string }];
+    result: string | null;
+  };
   "forge:unassign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: void;

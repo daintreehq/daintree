@@ -10,11 +10,16 @@ import {
   repoPRListETagCache,
   openPRListETagCache,
   truncateBody,
+  isoToEpochMs,
   getETagCacheVersion,
   writePRTooltip,
 } from "./GitHubCaches.js";
-import type { GitHubPRCIStatus, PRTooltipData } from "../../../../shared/types/github.js";
-import type { PRListProbeResult, PRSnapshot } from "../../../../shared/types/forge.js";
+import type { GitHubPRCIStatus } from "../../../../shared/types/github.js";
+import type {
+  PRListProbeResult,
+  PRSnapshot,
+  PRTooltipData,
+} from "../../../../shared/types/forge.js";
 import type { PRCheckCandidate, PRCheckResult, BatchPRCheckResult, LinkedPR } from "./types.js";
 
 interface BatchPRTooltipFields {
@@ -79,27 +84,33 @@ function buildTooltipDataFromBatchNode(node: BatchPRRawNode): PRTooltipData | un
   }
 
   const merged = node.merged ?? false;
-  const rawState = (node.state ?? "OPEN").toUpperCase();
-  const state: "OPEN" | "CLOSED" | "MERGED" = merged
-    ? "MERGED"
-    : rawState === "CLOSED"
-      ? "CLOSED"
-      : "OPEN";
+  const rawState = node.state ?? "OPEN";
+  const upper = rawState.toUpperCase();
+  const state: PRTooltipData["state"] = merged
+    ? "merged"
+    : upper === "MERGED"
+      ? "merged"
+      : upper === "CLOSED"
+        ? "closed"
+        : "open";
 
   return {
     number: node.number,
     title: node.title,
     bodyExcerpt: truncateBody(node.bodyText ?? null),
     state,
+    rawState,
     isDraft: node.isDraft ?? false,
-    createdAt: node.createdAt,
+    createdAt: isoToEpochMs(node.createdAt),
     author: {
       login: node.author?.login ?? "unknown",
       avatarUrl: node.author?.avatarUrl ?? "",
+      rawData: null,
     },
     assignees: (node.assignees?.nodes ?? []).filter(Boolean).map((a) => ({
       login: a.login ?? "unknown",
       avatarUrl: a.avatarUrl ?? "",
+      rawData: null,
     })),
     labels: (node.labels?.nodes ?? []).filter(Boolean).map((l) => ({
       name: l.name ?? "",

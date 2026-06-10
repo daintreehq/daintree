@@ -1,12 +1,12 @@
-import type { GitHubUser, IssueTooltipData, PRTooltipData } from "@shared/types/github";
+import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 import { Calendar, KeyRound, PenLine, UserCheck, Clock, CirclePause } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
+function formatDate(epochMs: number): string {
+  const date = new Date(epochMs);
   return date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -31,7 +31,7 @@ function GitHubAvatar({
   sizeClass,
   urlSize,
 }: {
-  user: GitHubUser;
+  user: ForgeUser;
   sizeClass: string;
   urlSize: number;
 }) {
@@ -50,7 +50,7 @@ function GitHubAvatar({
 // 3 with a `+N` overflow; the stack is aria-hidden (each avatar exposes its
 // login on hover via a native `title`, which survives the app-level
 // `disableHoverableContent` provider) and an sr-only sentence names everyone.
-function AssigneeMeta({ assignees }: { assignees: GitHubUser[] }) {
+function AssigneeMeta({ assignees }: { assignees: ForgeUser[] }) {
   if (assignees.length === 1) {
     return (
       <span className="flex items-center gap-1">
@@ -205,7 +205,7 @@ interface IssueTooltipContentProps {
 }
 
 export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProps) {
-  const stateColor = data.state === "OPEN" ? "text-pr-open" : "text-pr-merged";
+  const stateColor = data.state === "open" ? "text-pr-open" : "text-pr-merged";
 
   return (
     <div className="space-y-2 max-w-[280px]">
@@ -219,12 +219,14 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
       )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
-        <span className="flex items-center gap-1">
-          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
-          <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
-          <span className="sr-only">Created by </span>
-          {data.author.login}
-        </span>
+        {data.author && (
+          <span className="flex items-center gap-1">
+            <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+            <span className="sr-only">Created by </span>
+            {data.author.login}
+          </span>
+        )}
 
         {data.assignees.length > 0 && <AssigneeMeta assignees={data.assignees} />}
 
@@ -239,7 +241,7 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
       {data.labels.length > 0 && (
         <div className="flex flex-wrap gap-1 pt-1">
           {data.labels.slice(0, 4).map((label) => (
-            <LabelBadge key={label.name} name={label.name} color={label.color} />
+            <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
           ))}
           {data.labels.length > 4 && (
             <span className="text-[10px] text-daintree-text/40">
@@ -259,13 +261,13 @@ interface PRTooltipContentProps {
 
 export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
   const stateColor =
-    data.state === "MERGED"
+    data.state === "merged"
       ? "text-pr-merged"
-      : data.state === "CLOSED"
+      : data.state === "closed" || data.state === "declined"
         ? "text-pr-closed"
         : "text-pr-open";
 
-  const stateLabel = data.isDraft ? "Draft" : data.state.toLowerCase();
+  const stateLabel = data.isDraft ? "Draft" : data.state;
 
   return (
     <div className="space-y-2 max-w-[280px]">
@@ -275,9 +277,9 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
         <span
           className={cn(
             "text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize",
-            data.state === "MERGED"
+            data.state === "merged"
               ? "bg-pr-merged/20 text-pr-merged"
-              : data.state === "CLOSED"
+              : data.state === "closed" || data.state === "declined"
                 ? "bg-pr-closed/20 text-pr-closed"
                 : "bg-pr-open/20 text-pr-open"
           )}
@@ -291,12 +293,14 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
       )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
-        <span className="flex items-center gap-1">
-          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
-          <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
-          <span className="sr-only">Created by </span>
-          {data.author.login}
-        </span>
+        {data.author && (
+          <span className="flex items-center gap-1">
+            <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <GitHubAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+            <span className="sr-only">Created by </span>
+            {data.author.login}
+          </span>
+        )}
 
         {data.assignees.length > 0 && <AssigneeMeta assignees={data.assignees} />}
 
@@ -311,7 +315,7 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
       {data.labels.length > 0 && (
         <div className="flex flex-wrap gap-1 pt-1">
           {data.labels.slice(0, 4).map((label) => (
-            <LabelBadge key={label.name} name={label.name} color={label.color} />
+            <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
           ))}
           {data.labels.length > 4 && (
             <span className="text-[10px] text-daintree-text/40">

@@ -11,7 +11,7 @@ import type {
   ForgeProviderResolutionVia,
 } from "@shared/types";
 import type { Project } from "@shared/types/project";
-import type { RemoteInfo } from "@shared/types/ipc/github";
+import type { RemoteInfo } from "@shared/types/ipc/forge";
 
 vi.stubGlobal(
   "ResizeObserver",

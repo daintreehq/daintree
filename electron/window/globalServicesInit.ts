@@ -627,6 +627,18 @@ export async function initGlobalServices(
     },
   });
 
+  // Forge matcher relay — pushes the provider hostname-matcher table into
+  // workspace hosts on every registry change so worktree monitors can resolve
+  // remote URLs to provider ids; the initial push covers providers registered
+  // before this task ran.
+  registerDeferredTask({
+    name: "forge-matcher-relay",
+    run: async () => {
+      const { initForgeMatcherRelay } = await import("../services/forgeMatcherRelay.js");
+      initForgeMatcherRelay();
+    },
+  });
+
   // Auto-updater
   registerDeferredTask({
     name: "auto-updater",

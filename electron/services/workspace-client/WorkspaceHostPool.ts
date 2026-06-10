@@ -7,6 +7,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { isValidLogOverrideLevel } from "../../utils/logger.js";
 import { type ProcessEntry, sendToEntryWindows } from "./types.js";
 import type { WorkspaceClientConfig } from "../../../shared/types/workspace-host.js";
+import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.js";
 import { projectStore } from "../ProjectStore.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
@@ -80,6 +81,10 @@ export class WorkspaceHostPool {
   /** Last GitHub fetch-throttle multiplier relayed from main — seeded into
    * hosts created after the rate-limit state last changed. */
   private fetchThrottleMultiplierCache = 1;
+
+  /** Last forge provider-matcher table relayed from main — seeded into hosts
+   * created after the registry last changed. `null` until the first relay. */
+  private forgeProviderMatchersCache: ForgeProviderMatcher[] | null = null;
 
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
@@ -194,6 +199,9 @@ export class WorkspaceHostPool {
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    if (this.forgeProviderMatchersCache !== null) {
+      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
+    }
 
     const initPromise = (async () => {
       const [, forgeSettings] = await Promise.all([
@@ -255,6 +263,9 @@ export class WorkspaceHostPool {
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    if (this.forgeProviderMatchersCache !== null) {
+      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
+    }
 
     const initPromise = (async () => {
       const [, forgeSettings] = await Promise.all([
@@ -531,6 +542,15 @@ export class WorkspaceHostPool {
     this.fetchThrottleMultiplierCache = multiplier;
     for (const entry of this.entries.values()) {
       entry.host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    }
+  }
+
+  // ── Forge provider matchers ──
+
+  relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeProviderMatchersCache = matchers;
+    for (const entry of this.entries.values()) {
+      entry.host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
     }
   }
 

@@ -22,7 +22,7 @@ import {
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
 import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import type { RepoStats, RestCountsSnapshot } from "./types.js";
+import type { RepoContext, RepoStats, RestCountsSnapshot } from "./types.js";
 import type { GitHubIssue, GitHubPR } from "../../../../shared/types/github.js";
 import { parseIssueNode } from "./GitHubIssues.js";
 import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
@@ -328,16 +328,29 @@ export async function fetchRestCounts(
   }
 }
 
-export async function getRepoStatsAndPage(
-  cwd: string,
-  bypassCache = false,
+export interface RepoStatsForContextOptions {
+  bypassCache?: boolean;
+  /**
+   * Absolute project path recorded as metadata in the disk caches
+   * (`GitHubStatsCache` / `GitHubFirstPageCache`); empty when the caller has
+   * no local checkout (the forge `repoStats` capability).
+   */
+  projectPath?: string;
+  /**
+   * Re-resolve the repo context after a repo-not-found error. Supplied by the
+   * cwd wrapper to preserve its remote-changed retry; context-only callers
+   * omit it and get no retry.
+   */
+  refreshContext?: () => Promise<RepoContext | null>;
+}
+
+export async function getRepoStatsAndPageForContext(
+  context: RepoContext,
+  options: RepoStatsForContextOptions = {},
   _retried = false
 ): Promise<RepoStatsAndPageResult> {
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    return { stats: null, issues: null, prs: null, error: "Not a GitHub repository" };
-  }
-
+  const bypassCache = options.bypassCache === true;
+  const projectPath = options.projectPath ?? "";
   const cacheKey = `${context.owner}/${context.repo}`;
   const persistentCache = GitHubStatsCache.getInstance();
   const client = GitHubAuth.createClient();
@@ -488,7 +501,7 @@ export async function getRepoStatsAndPage(
         // 10-min TTL so list content can't go stale indefinitely behind a
         // continuously-matching probe; aging out just forces a full refresh,
         // which the disk re-stamp keeps safe.
-        persistentCache.set(cacheKey, freshStats, cwd);
+        persistentCache.set(cacheKey, freshStats, projectPath);
         return {
           stats: freshStats,
           issues: { ...snapshot.issues },
@@ -511,7 +524,7 @@ export async function getRepoStatsAndPage(
           lastUpdated: Date.now(),
         };
         repoStatsCache.set(cacheKey, freshStats);
-        persistentCache.set(cacheKey, freshStats, cwd);
+        persistentCache.set(cacheKey, freshStats, projectPath);
         return {
           stats: freshStats,
           issues: null,
@@ -537,7 +550,7 @@ export async function getRepoStatsAndPage(
     const restStats = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
     if (restStats) {
       repoStatsCache.set(cacheKey, restStats);
-      persistentCache.set(cacheKey, restStats, cwd);
+      persistentCache.set(cacheKey, restStats, projectPath);
       // Commit the changed-probe's events ETag in lockstep with the counts it
       // describes — same deferred-commit discipline as the GraphQL path: a
       // failed count fetch leaves the old ETag so the next probe re-detects
@@ -652,7 +665,7 @@ export async function getRepoStatsAndPage(
     };
 
     repoStatsCache.set(cacheKey, stats);
-    persistentCache.set(cacheKey, stats, cwd);
+    persistentCache.set(cacheKey, stats, projectPath);
 
     const parsedIssues = (issuesData?.nodes ?? []).filter(Boolean).map(parseIssueNode);
     const parsedPRs = (prsData?.nodes ?? []).filter(Boolean).map(parsePRNode);
@@ -671,7 +684,7 @@ export async function getRepoStatsAndPage(
           hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
         },
       },
-      cwd
+      projectPath
     );
 
     const issuesPage = {
@@ -714,14 +727,13 @@ export async function getRepoStatsAndPage(
       nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
     };
   } catch (error) {
-    if (!_retried && isRepoNotFoundError(error)) {
-      repoContextCache.invalidate(cwd);
-      const freshContext = await getRepoContext(cwd);
+    if (!_retried && isRepoNotFoundError(error) && options.refreshContext) {
+      const freshContext = await options.refreshContext();
       if (
         freshContext &&
         (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
       ) {
-        return getRepoStatsAndPage(cwd, bypassCache, true);
+        return getRepoStatsAndPageForContext(freshContext, options, true);
       }
     }
     const diskCached = persistentCache.get(cacheKey);
@@ -742,6 +754,71 @@ export async function getRepoStatsAndPage(
   }
 }
 
+export async function getRepoStatsAndPage(
+  cwd: string,
+  bypassCache = false
+): Promise<RepoStatsAndPageResult> {
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return { stats: null, issues: null, prs: null, error: "Not a GitHub repository" };
+  }
+
+  return getRepoStatsAndPageForContext(context, {
+    bypassCache,
+    projectPath: cwd,
+    refreshContext: async () => {
+      repoContextCache.invalidate(cwd);
+      return getRepoContext(cwd);
+    },
+  });
+}
+
+/**
+ * Context-variant core of {@link getFirstPageCache} — pure disk-cache reads.
+ * `projectPath` is echoed into the payload for cwd callers; context-only
+ * callers (the forge `repoStats` capability) leave it empty.
+ */
+export async function getFirstPageCacheForContext(
+  context: RepoContext,
+  projectPath = ""
+): Promise<GitHubFirstPageCachePayload | null> {
+  const repoKey = `${context.owner}/${context.repo}`;
+  const entry = GitHubFirstPageCache.getInstance().get(repoKey);
+  const cachedStats = GitHubStatsCache.getInstance().getForBootstrap(repoKey);
+
+  if (!entry && !cachedStats) return null;
+
+  if (entry) {
+    const payload: GitHubFirstPageCachePayload = {
+      projectPath,
+      issues: entry.issues,
+      prs: entry.prs,
+      lastUpdated: entry.lastUpdated,
+    };
+    if (cachedStats) {
+      payload.stats = {
+        issueCount: cachedStats.issueCount,
+        prCount: cachedStats.prCount,
+        lastUpdated: cachedStats.lastUpdated,
+      };
+    }
+    return payload;
+  }
+
+  if (!cachedStats) return null;
+  return {
+    projectPath,
+    issues: { items: [], endCursor: null, hasNextPage: false },
+    prs: { items: [], endCursor: null, hasNextPage: false },
+    lastUpdated: cachedStats.lastUpdated,
+    stats: {
+      issueCount: cachedStats.issueCount,
+      prCount: cachedStats.prCount,
+      lastUpdated: cachedStats.lastUpdated,
+    },
+  };
+}
+
 export async function getFirstPageCache(cwd: string): Promise<GitHubFirstPageCachePayload | null> {
   if (!path.isAbsolute(cwd)) return null;
 
@@ -753,41 +830,7 @@ export async function getFirstPageCache(cwd: string): Promise<GitHubFirstPageCac
     const context = await getRepoContext(resolved);
     if (!context) return null;
 
-    const repoKey = `${context.owner}/${context.repo}`;
-    const entry = GitHubFirstPageCache.getInstance().get(repoKey);
-    const cachedStats = GitHubStatsCache.getInstance().getForBootstrap(repoKey);
-
-    if (!entry && !cachedStats) return null;
-
-    if (entry) {
-      const payload: GitHubFirstPageCachePayload = {
-        projectPath: resolved,
-        issues: entry.issues,
-        prs: entry.prs,
-        lastUpdated: entry.lastUpdated,
-      };
-      if (cachedStats) {
-        payload.stats = {
-          issueCount: cachedStats.issueCount,
-          prCount: cachedStats.prCount,
-          lastUpdated: cachedStats.lastUpdated,
-        };
-      }
-      return payload;
-    }
-
-    if (!cachedStats) return null;
-    return {
-      projectPath: resolved,
-      issues: { items: [], endCursor: null, hasNextPage: false },
-      prs: { items: [], endCursor: null, hasNextPage: false },
-      lastUpdated: cachedStats.lastUpdated,
-      stats: {
-        issueCount: cachedStats.issueCount,
-        prCount: cachedStats.prCount,
-        lastUpdated: cachedStats.lastUpdated,
-      },
-    };
+    return await getFirstPageCacheForContext(context, resolved);
   } catch {
     return null;
   }

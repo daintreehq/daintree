@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
+import type { IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 import { TtlCache } from "@/utils/ttlCache";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";

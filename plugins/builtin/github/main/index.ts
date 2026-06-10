@@ -136,11 +136,21 @@ export {
 export { clearGitHubCaches, clearPRCaches } from "./GitHubCaches.js";
 
 // Stats
-export { getRepoStatsAndPage, getFirstPageCache, getRepoStatsComplete } from "./GitHubStats.js";
+export {
+  getRepoStatsAndPage,
+  getRepoStatsAndPageForContext,
+  getFirstPageCache,
+  getFirstPageCacheForContext,
+  getRepoStatsComplete,
+} from "./GitHubStats.js";
 export type { RepoStatsAndPageResult, RepoStatsCompleteResult } from "./GitHubStats.js";
 
 // Project health
-export { getProjectHealth, buildEmptyProjectHealthData } from "./GitHubHealth.js";
+export {
+  getProjectHealth,
+  getProjectHealthForContext,
+  buildEmptyProjectHealthData,
+} from "./GitHubHealth.js";
 
 // PR discovery
 export { batchCheckLinkedPRs } from "./GitHubPRDiscovery.js";
@@ -153,7 +163,9 @@ export {
   listPullRequests,
   getPRByNumber,
   getPRsByNumbers,
+  getPRsByNumbersForContext,
   getPRTooltip,
+  getPRTooltipForContext,
   getPRReviewThreads,
 } from "./GitHubPRs.js";
 
@@ -162,7 +174,9 @@ export {
   listIssues,
   getIssueByNumber,
   getIssuesByNumbers,
+  getIssuesByNumbersForContext,
   getIssueTooltip,
+  getIssueTooltipForContext,
   assignIssue,
   unassignIssue,
 } from "./GitHubIssues.js";

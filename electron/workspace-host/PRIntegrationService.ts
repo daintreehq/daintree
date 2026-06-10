@@ -1,5 +1,4 @@
 import type { TypedEventBus } from "../services/events.js";
-import type { GitHubPRCIStatus } from "../../shared/types/github.js";
 import type { PRServiceStatus, WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import {
@@ -30,7 +29,7 @@ export interface PRIntegrationCallbacks {
       prNumber: number;
       prUrl: string;
       prState: import("../../shared/types/forge.js").NormalizedPRState;
-      prCiStatus?: GitHubPRCIStatus;
+      prCiStatus?: import("../../shared/types/forge.js").CIStatusState;
       /** Phase-1 detection: CI status is still being fetched. The receiver preserves the prior rollup so the dot doesn't blink. */
       isCiStatusLoading?: boolean;
       prTitle?: string;

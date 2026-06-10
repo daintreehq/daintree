@@ -459,11 +459,11 @@ describe("WorktreeMonitor", () => {
       prNumber: 42,
       prUrl: "https://github.com/test/pr/42",
       prState: "open",
-      prCiStatus: "SUCCESS",
+      prCiStatus: "success",
     });
 
     const snapshot = monitor.getSnapshot();
-    expect(snapshot.prCiStatus).toBe("SUCCESS");
+    expect(snapshot.prCiStatus).toBe("success");
   });
 
   it("setPRInfo with no prCiStatus clears any prior CI value (full-replace semantics)", () => {
@@ -473,9 +473,9 @@ describe("WorktreeMonitor", () => {
       prNumber: 42,
       prUrl: "url",
       prState: "open",
-      prCiStatus: "FAILURE",
+      prCiStatus: "failure",
     });
-    expect(monitor.getSnapshot().prCiStatus).toBe("FAILURE");
+    expect(monitor.getSnapshot().prCiStatus).toBe("failure");
 
     monitor.setPRInfo({ prNumber: 42, prUrl: "url", prState: "open" });
     expect(monitor.getSnapshot().prCiStatus).toBeUndefined();
@@ -488,7 +488,7 @@ describe("WorktreeMonitor", () => {
       prNumber: 42,
       prUrl: "url",
       prState: "open",
-      prCiStatus: "PENDING",
+      prCiStatus: "pending",
     });
     monitor.clearPRInfo();
 
@@ -588,7 +588,7 @@ describe("WorktreeMonitor", () => {
       );
       expect(snapshot.prState).toBe("open");
       expect(snapshot.prTitle).toBe("Add widget");
-      expect(snapshot.prCiStatus).toBe("FAILURE");
+      expect(snapshot.prCiStatus).toBe("failure");
       expect(snapshot.issueNumber).toBe(88);
       expect(snapshot.issueTitle).toBe("Widget request");
       // The canonical owner/repo survive on the linked projection itself.
@@ -2813,29 +2813,29 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
-    it("setIsGitHubRemote mirrors into the snapshot and is idempotent", async () => {
+    it("setMatchedForgeProviderId mirrors into the snapshot and is idempotent", async () => {
       const onUpdate = vi.fn();
       const callbacks = makeCallbacks({ onUpdate });
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
       await monitor.start();
       await flushInitialStatus();
 
-      // Default is false (undefined-on-the-wire) until set.
-      expect(monitor.getSnapshot().isGitHubRemote).toBeFalsy();
+      // Default is null (undefined-on-the-wire) until set.
+      expect(monitor.getSnapshot().matchedForgeProviderId).toBeUndefined();
 
       onUpdate.mockClear();
-      monitor.setIsGitHubRemote(true);
-      expect(monitor.getSnapshot().isGitHubRemote).toBe(true);
+      monitor.setMatchedForgeProviderId("daintree.github.github");
+      expect(monitor.getSnapshot().matchedForgeProviderId).toBe("daintree.github.github");
       expect(onUpdate).toHaveBeenCalled();
 
       onUpdate.mockClear();
-      monitor.setIsGitHubRemote(true);
+      monitor.setMatchedForgeProviderId("daintree.github.github");
       expect(onUpdate).not.toHaveBeenCalled();
 
       monitor.stop();
     });
 
-    it("setIsGitHubRemote / setFetchState do not emit after stop()", async () => {
+    it("setMatchedForgeProviderId / setFetchState do not emit after stop()", async () => {
       const onUpdate = vi.fn();
       const callbacks = makeCallbacks({ onUpdate });
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
@@ -2845,7 +2845,7 @@ describe("WorktreeMonitor", () => {
       onUpdate.mockClear();
       // Late-resolving probe / coordinator fan-out must not re-add a ghost
       // card to the renderer after the monitor has been torn down.
-      monitor.setIsGitHubRemote(true);
+      monitor.setMatchedForgeProviderId("daintree.github.github");
       monitor.setFetchState(1700000000000, false, false);
       monitor.setFetchState(1700000000000, true, false);
 

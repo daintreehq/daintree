@@ -18,6 +18,7 @@ import { createLogger } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
+import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -96,6 +97,13 @@ export class WorkspaceHostProcess extends EventEmitter {
    * every `ready` (initial + restarts) so a host restart doesn't silently
    * revert monitor fetch cadence to the unthrottled default. */
   private fetchThrottleMultiplierCache = 1;
+
+  /** Last forge provider-matcher table relayed from main. Replayed on every
+   * `ready` (initial + restarts) so a restarted host can still resolve remote
+   * URLs to provider ids. `null` until the first relay — nothing is pushed
+   * before the registry has reported, keeping monitors at their unmatched
+   * initial state. */
+  private forgeProviderMatchersCache: ForgeProviderMatcher[] | null = null;
 
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
@@ -244,6 +252,17 @@ export class WorkspaceHostProcess extends EventEmitter {
     this.fetchThrottleMultiplierCache = multiplier;
     if (this.isInitialized && this.child) {
       this.send({ type: "apply-fetch-throttle", multiplier: this.fetchThrottleMultiplierCache });
+    }
+  }
+
+  /**
+   * Update the cached forge provider-matcher table and push immediately if
+   * initialized. On restart, `ready` replays the cached table automatically.
+   */
+  relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeProviderMatchersCache = matchers;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "forge-provider-matchers", matchers: this.forgeProviderMatchersCache });
     }
   }
 
@@ -800,6 +819,15 @@ export class WorkspaceHostProcess extends EventEmitter {
           type: "apply-fetch-throttle",
           multiplier: this.fetchThrottleMultiplierCache,
         });
+
+        // Replay the cached provider-matcher table so a restarted host can
+        // resolve remote URLs without waiting for the next registry change.
+        if (this.forgeProviderMatchersCache !== null) {
+          this.send({
+            type: "forge-provider-matchers",
+            matchers: this.forgeProviderMatchersCache,
+          });
+        }
 
         if (this.readyResolve) {
           this.readyResolve();

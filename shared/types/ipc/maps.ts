@@ -89,10 +89,6 @@ import type {
   RepoStatsAndPagePayload,
   RepoCountsUpdatedPayload,
   GitHubFirstPageCachePayload,
-  PRDetectedPayload,
-  PRClearedPayload,
-  IssueDetectedPayload,
-  IssueNotFoundPayload,
 } from "./github.js";
 import type {
   GitGetFileDiffPayload,
@@ -111,12 +107,8 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
-import type {
-  GitCommitListOptions,
-  GitCommitListResponse,
-  IssueTooltipData,
-  PRTooltipData,
-} from "../github.js";
+import type { GitCommitListOptions, GitCommitListResponse } from "../github.js";
+import type { IssueTooltipData, PRTooltipData } from "../forge.js";
 import type {
   SpawnResult,
   TerminalReliabilityMetricPayload,
@@ -159,7 +151,16 @@ import type {
   ListOptions,
   ForgeUser,
 } from "../forge.js";
-import type { ForgeRateLimitChangedPayload, ForgeTokenHealthChangedPayload } from "./forge.js";
+import type {
+  ForgeRateLimitChangedPayload,
+  ForgeTokenHealthChangedPayload,
+  ForgeRepoStatsAndPagePayload,
+  ForgeRepoCountsUpdatedPayload,
+  PRDetectedPayload,
+  PRClearedPayload,
+  IssueDetectedPayload,
+  IssueNotFoundPayload,
+} from "./forge.js";
 
 export type ChecklistItemId =
   | "openedProject"
@@ -1590,6 +1591,12 @@ export interface IpcEventMap {
   // any additional forge provider share these channels without cross-talk.
   "forge:rate-limit-changed": ForgeRateLimitChangedPayload;
   "forge:token-health-changed": ForgeTokenHealthChangedPayload;
+
+  // Provider-keyed stats pushes — the forge-neutral successors of the
+  // `github:repo-*` pushes below. Broadcast by the forge repo-stats handler
+  // after a fresh network poll.
+  "forge:repo-stats-and-page-updated": ForgeRepoStatsAndPagePayload;
+  "forge:repo-counts-updated": ForgeRepoCountsUpdatedPayload;
 
   // Combined repo stats + first page of open issues + open PRs push, emitted
   // after every successful poll. Lets renderers prime githubResourceCache

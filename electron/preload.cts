@@ -2443,6 +2443,44 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, callback),
     classifyPushError: (payload: { cwd: string; stderr: string }) =>
       _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
+    getRepoStats: (payload: { cwd: string; bypassCache?: boolean }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_STATS, payload),
+    getFirstPageCache: (payload: { cwd: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, payload),
+    getProjectHealth: (payload: { cwd: string; bypassCache?: boolean }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_PROJECT_HEALTH, payload),
+    getIssueTooltip: (payload: { cwd: string; issueNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, payload),
+    getPRTooltip: (payload: { cwd: string; prNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_PR_TOOLTIP, payload),
+    getIssuesByNumbers: (payload: { cwd: string; numbers: number[] }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, payload),
+    getPRsByNumbers: (payload: { cwd: string; numbers: number[] }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, payload),
+    getPRReviewThreads: (payload: { cwd: string; prNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
+    resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
+    getTokenHealth: (payload: { providerId: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_TOKEN_HEALTH, payload),
+    getRateLimitDetails: (payload: { cwd: string }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS, payload),
+    openPR: (payload: { cwd: string; prNumber: number }) =>
+      _unwrappingInvoke(CHANNELS.FORGE_OPEN_PR, payload),
+    onRepoStatsAndPageUpdated: (
+      callback: (data: import("../shared/types/ipc/forge.js").ForgeRepoStatsAndPagePayload) => void
+    ) => _typedOn(CHANNELS.FORGE_REPO_STATS_AND_PAGE_UPDATED, callback),
+    onRepoCountsUpdated: (
+      callback: (data: import("../shared/types/ipc/forge.js").ForgeRepoCountsUpdatedPayload) => void
+    ) => _typedOn(CHANNELS.FORGE_REPO_COUNTS_UPDATED, callback),
+    onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
+      _typedOn(CHANNELS.PR_DETECTED, callback),
+    onPRCleared: (callback: (data: PRClearedPayload) => void) =>
+      _typedOn(CHANNELS.PR_CLEARED, callback),
+    onIssueDetected: (callback: (data: IssueDetectedPayload) => void) =>
+      _typedOn(CHANNELS.ISSUE_DETECTED, callback),
+    onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
+      _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
   },
 
   forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),

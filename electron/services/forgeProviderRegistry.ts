@@ -5,8 +5,40 @@ import type {
   RepoRef,
 } from "../../shared/types/forge.js";
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
+import {
+  extractHostname,
+  hostnameMatchesAny,
+  normalizeHostname,
+  type ForgeProviderMatcher,
+} from "../../shared/utils/forgeHostnames.js";
 
 export type { RegisteredForgeProvider } from "../../shared/types/forge.js";
+export type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
+
+/**
+ * Listeners notified whenever the registry's descriptor or impl tables
+ * change. Drives the provider-health relay (subscribe/unsubscribe a
+ * provider's `healthEvents`) and the workspace-host matcher relay (re-push
+ * the hostname table) without those services polling the registry.
+ */
+const REGISTRY_CHANGE_LISTENERS = new Set<() => void>();
+
+export function onForgeProviderRegistryChanged(listener: () => void): () => void {
+  REGISTRY_CHANGE_LISTENERS.add(listener);
+  return () => {
+    REGISTRY_CHANGE_LISTENERS.delete(listener);
+  };
+}
+
+function notifyRegistryChanged(): void {
+  for (const listener of [...REGISTRY_CHANGE_LISTENERS]) {
+    try {
+      listener();
+    } catch {
+      // A throwing listener must not break registration or other listeners.
+    }
+  }
+}
 
 /**
  * Host-side registry of `forgeProviders` contributions, keyed by pluginId.
@@ -40,9 +72,11 @@ export function registerForgeProviders(
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (!Array.isArray(contributions) || contributions.length === 0) {
     PLUGIN_FORGE_PROVIDERS.delete(pluginId);
+    notifyRegistryChanged();
     return;
   }
   PLUGIN_FORGE_PROVIDERS.set(pluginId, contributions.map(freezeContribution));
+  notifyRegistryChanged();
 }
 
 function freezeContribution(c: ForgeProviderContribution): ForgeProviderContribution {
@@ -64,10 +98,12 @@ function freezeContribution(c: ForgeProviderContribution): ForgeProviderContribu
 export function unregisterForgeProviders(pluginId: string): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   PLUGIN_FORGE_PROVIDERS.delete(pluginId);
+  notifyRegistryChanged();
 }
 
 export function clearForgeProviderRegistry(): void {
   PLUGIN_FORGE_PROVIDERS.clear();
+  notifyRegistryChanged();
 }
 
 /**
@@ -86,6 +122,7 @@ export function registerForgeProviderImpl(
   if (typeof contributionId !== "string" || contributionId.length === 0) return;
   if (impl === null || typeof impl !== "object") return;
   PLUGIN_FORGE_PROVIDER_IMPLS.set(buildImplKey(pluginId, contributionId), impl);
+  notifyRegistryChanged();
 }
 
 /**
@@ -111,6 +148,7 @@ export function unregisterForgeProviderImpl(
     if (current !== expected) return;
   }
   PLUGIN_FORGE_PROVIDER_IMPLS.delete(key);
+  notifyRegistryChanged();
 }
 
 /**
@@ -121,11 +159,14 @@ export function unregisterForgeProviderImpl(
 export function unregisterForgeProviderImpls(pluginId: string): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   const prefix = `${pluginId}.`;
+  let removed = false;
   for (const key of [...PLUGIN_FORGE_PROVIDER_IMPLS.keys()]) {
     if (key.startsWith(prefix)) {
       PLUGIN_FORGE_PROVIDER_IMPLS.delete(key);
+      removed = true;
     }
   }
+  if (removed) notifyRegistryChanged();
 }
 
 /**
@@ -154,6 +195,34 @@ export function hasActivatedForgeProvider(): boolean {
 /** Test-isolation helper paralleling {@link clearForgeProviderRegistry}. */
 export function clearForgeProviderImplRegistry(): void {
   PLUGIN_FORGE_PROVIDER_IMPLS.clear();
+  notifyRegistryChanged();
+}
+
+/**
+ * Snapshot of every bound impl keyed by canonical provider id. Used by the
+ * provider-health relay to diff subscriptions on registry changes.
+ */
+export function getForgeProviderImplEntries(): Array<[string, ForgeProviderImpl]> {
+  return [...PLUGIN_FORGE_PROVIDER_IMPLS.entries()];
+}
+
+/**
+ * Hostname-matcher table for every registered contribution (manifest-driven,
+ * present even before `activate()` binds an impl). Relayed into workspace
+ * hosts so monitors resolve remote URLs to provider ids without registry
+ * access.
+ */
+export function listForgeProviderMatchers(): ForgeProviderMatcher[] {
+  const matchers: ForgeProviderMatcher[] = [];
+  for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
+    for (const contribution of contributions) {
+      matchers.push({
+        providerId: makeForgeProviderId(pluginId, contribution.id),
+        hostnames: [...contribution.matches],
+      });
+    }
+  }
+  return matchers;
 }
 
 function buildImplKey(pluginId: string, contributionId: string): string {
@@ -202,44 +271,3 @@ function listProvidersByHostname(hostname: string): RegisteredForgeProvider[] {
   return matches;
 }
 
-function hostnameMatchesAny(hostname: string, patterns: string[]): boolean {
-  for (const pattern of patterns) {
-    const normalized = normalizeHostname(pattern);
-    if (normalized !== null && normalized === hostname) return true;
-  }
-  return false;
-}
-
-function normalizeHostname(host: string): string | null {
-  if (typeof host !== "string") return null;
-  const trimmed = host.trim().toLowerCase();
-  if (trimmed.length === 0) return null;
-  return trimmed.startsWith("www.") ? trimmed.slice(4) : trimmed;
-}
-
-/**
- * Extract a normalized hostname from a git remote URL. Handles SCP form
- * (`user@host:path`), HTTPS, and SSH (`ssh://...`). Returns `null` for
- * malformed input — callers treat that as "no match".
- */
-function extractHostname(url: string): string | null {
-  if (typeof url !== "string") return null;
-  const trimmed = url.trim();
-  if (trimmed.length === 0) return null;
-
-  // SCP form: `user@host:path` — no scheme, host terminated by the first colon.
-  // The `!includes("://")` discriminator distinguishes this from URLs that
-  // carry a port (`https://host:443/...`), which never have an SCP shape.
-  if (!trimmed.includes("://") && trimmed.includes(":")) {
-    const match = /^(?:[^@/:]+@)?([^:/]+):/.exec(trimmed);
-    if (match) return normalizeHostname(match[1]);
-    return null;
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    return normalizeHostname(parsed.hostname);
-  } catch {
-    return null;
-  }
-}
