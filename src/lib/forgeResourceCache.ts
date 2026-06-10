@@ -19,6 +19,29 @@ export interface ForgeResourceCacheEntry {
   nextCursor: string | null;
   hasMore: boolean;
   timestamp: number;
+  /**
+   * Wall-clock ms of the last write that came from a request which actually
+   * sent `bypassCache: true` (hover prefetch, SWR bypass revalidate). Distinct
+   * from `timestamp`: broadcast-seeded entries carry a fresh `timestamp` over
+   * content that may be a re-stamped main-process snapshot, so only this field
+   * may gate "skip the open-time revalidate, the data just came from the forge".
+   */
+  freshBypassAt?: number;
+  /**
+   * The server-reported open total for this entry's resource type at write
+   * time. The cheap REST count poll compares its fresh counts against this to
+   * mark the entry stale (`markCountStale`) — the count-as-cache-buster signal.
+   * Only meaningful on `open`-filter slots; undefined when the write had no
+   * authoritative total.
+   */
+  countAtWrite?: number;
+  /**
+   * Set when a fresh count poll observed a different open count than
+   * `countAtWrite` — rows are still shown (SWR), but the open-time revalidate
+   * must not be downgraded to a cached read. Cleared implicitly by the next
+   * full entry write.
+   */
+  stale?: boolean;
 }
 
 const CACHE_MAX_SIZE = 20;
@@ -88,6 +111,28 @@ export function mutateCacheEntries(
     setCache(key, next);
     nextGeneration(key);
   }
+}
+
+/**
+ * Count-as-cache-buster: called whenever a fresh (non-stale, non-errored)
+ * count for `type` lands from the cheap REST poll or a stats push. Marks every
+ * `open`-filter slot whose `countAtWrite` no longer matches as stale and bumps
+ * its generation so an in-flight downgraded (non-bypass) revalidate can't
+ * commit a page the count delta just disproved. Rows are never removed — the
+ * dropdown keeps showing them and the next open revalidates with
+ * `bypassCache: true`.
+ *
+ * Zero network: this only flips metadata. Equal counts do NOT prove freshness
+ * (close-one-open-one, edits), which is why only `open`-slot reads get
+ * downgraded — and only behind the SWR open-time revalidate that remains the
+ * correctness backstop for closed/merged/search views.
+ */
+export function markCountStale(projectPath: string, type: "issue" | "pr", openCount: number): void {
+  mutateCacheEntries(projectPath, type, (entry, keyRemainder) => {
+    if (!keyRemainder.startsWith("open:")) return null;
+    if (entry.stale || entry.countAtWrite == null || entry.countAtWrite === openCount) return null;
+    return { ...entry, stale: true };
+  });
 }
 
 export function _resetForTests(): void {

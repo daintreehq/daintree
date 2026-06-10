@@ -19,6 +19,8 @@ import {
   repoEventsNoChangeCount,
   repoEventsLastProbeAt,
   getETagCacheVersion,
+  getRepoListEpoch,
+  invalidateRepoListCachesForCountChange,
 } from "./GitHubCaches.js";
 import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
@@ -236,8 +238,32 @@ export async function fetchRestCounts(
   owner: string,
   repo: string
 ): Promise<RepoStats | null> {
+  // Per-repo singleflight: concurrent polls (multi-window — each
+  // `WebContentsView` runs its own poll loop) must not interleave. Two
+  // overlapping fetches read the same `prior` baseline, so the slower one can
+  // commit a stale `304` replay over the faster one's fresh counts and
+  // double-fire the count-buster (the second epoch bump would discard a list
+  // fetch that started after the first, forcing a redundant GraphQL refetch).
   const cacheKey = `${owner}/${repo}`;
+  const pending = restCountsInflight.get(cacheKey);
+  if (pending) return pending;
+  const promise = fetchRestCountsImpl(token, owner, repo, cacheKey);
+  restCountsInflight.set(cacheKey, promise);
+  const cleanup = () => {
+    if (restCountsInflight.get(cacheKey) === promise) restCountsInflight.delete(cacheKey);
+  };
+  promise.then(cleanup, cleanup);
+  return promise;
+}
 
+const restCountsInflight = new Map<string, Promise<RepoStats | null>>();
+
+async function fetchRestCountsImpl(
+  token: string,
+  owner: string,
+  repo: string,
+  cacheKey: string
+): Promise<RepoStats | null> {
   const block = gitHubRateLimitService.shouldBlockRequest("core");
   if (block.blocked) return null;
 
@@ -323,6 +349,25 @@ export async function fetchRestCounts(
     const lastUpdated = Date.now();
     const snapshot: RestCountsSnapshot = { combinedCount, prCount, repoEtag, prEtag, lastUpdated };
     restCountsCache.set(cacheKey, snapshot);
+
+    // Count-as-cache-buster: a committed count that differs from the prior
+    // committed pair means cached list pages for the changed type are provably
+    // stale — drop them (zero network) so no path can serve a pre-change page
+    // for the rest of its 60s TTL. Per-type comparison: the derived issue
+    // count and the PR count move independently, and busting the unchanged
+    // type would just multiply refetch volume. First-ever commit (`!prior`)
+    // busts nothing — there is no baseline to have diverged from. Note the
+    // inverse does NOT hold: equal counts don't prove the pages are fresh
+    // (close-one-open-one), which is why the dropdown's own revalidation
+    // stays the correctness backstop.
+    if (prior) {
+      const priorIssueCount = prior.combinedCount - prior.prCount;
+      invalidateRepoListCachesForCountChange(owner, repo, {
+        issues: priorIssueCount !== issueCount,
+        prs: prior.prCount !== prCount,
+      });
+    }
+
     return { issueCount, prCount, lastUpdated };
   } catch {
     return null;
@@ -443,15 +488,14 @@ export async function getRepoStatsAndPageForContext(
   } else {
     const token = GitHubAuth.getToken();
     if (token) {
-      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
-      const restCounts = restCountsCache.get(cacheKey);
+      const preProbeSnapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
       // Skip the network probe entirely while inside the adaptive window: never
       // poll `/events` faster than the server-advertised `X-Poll-Interval`, and
       // back off further on an idle repo. The cached snapshot (or, on the
       // background-only path, the last REST counts) stands in for the
       // "unchanged" result we'd otherwise pay a request to confirm.
       const withinBackoff =
-        (snapshot !== undefined || restCounts !== undefined) &&
+        (preProbeSnapshot !== undefined || restCountsCache.get(cacheKey) !== undefined) &&
         Date.now() - (repoEventsLastProbeAt.get(cacheKey) ?? 0) < eventsProbeDelayMs(cacheKey);
       const probe: ActivityProbeResult = withinBackoff
         ? { status: "unchanged" }
@@ -460,6 +504,12 @@ export async function getRepoStatsAndPageForContext(
       if (probe.status === "changed") {
         pendingEventsEtag = probe.etag;
       }
+
+      // Re-read AFTER the probe await: a concurrent poll's count-buster can
+      // drop the snapshot mid-probe, and re-warming the list caches from the
+      // pre-await reference would resurrect the exact pages the bust removed.
+      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      const restCounts = restCountsCache.get(cacheKey);
 
       if (probe.status === "unchanged" && snapshot) {
         // The cheap REST poll may have observed fresher counts after this
@@ -614,6 +664,15 @@ export async function getRepoStatsAndPageForContext(
     return { stats: null, issues: null, prs: null, error: message };
   }
 
+  // Mid-flight count-buster guard for the page-cache writes below — same
+  // discipline as the list fetchers: a concurrent background poll can commit
+  // a count change (and bust the list caches) while the heavy query is in
+  // flight, and server-side ordering between the two reads is unknowable.
+  // On an epoch move the page/snapshot writes are skipped (the next read
+  // refetches); the response is still returned and broadcast for display.
+  const issueEpochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
+  const prEpochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+
   try {
     const result = (await client(REPO_STATS_AND_PAGE_QUERY, {
       owner: context.owner,
@@ -700,25 +759,35 @@ export async function getRepoStatsAndPageForContext(
       hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
       totalCount: prCount,
     };
-    issueListCache.set(issuesListCacheKey, {
-      items: issuesPage.items,
-      pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
-      totalCount: issuesPage.totalCount,
-    });
-    prListCache.set(prsListCacheKey, {
-      items: prsPage.items,
-      pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
-      totalCount: prsPage.totalCount,
-    });
+    const issueEpochUnchanged =
+      getRepoListEpoch("issue", context.owner, context.repo) === issueEpochAtStart;
+    const prEpochUnchanged = getRepoListEpoch("pr", context.owner, context.repo) === prEpochAtStart;
+    if (issueEpochUnchanged) {
+      issueListCache.set(issuesListCacheKey, {
+        items: issuesPage.items,
+        pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
+        totalCount: issuesPage.totalCount,
+      });
+    }
+    if (prEpochUnchanged) {
+      prListCache.set(prsListCacheKey, {
+        items: prsPage.items,
+        pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
+        totalCount: prsPage.totalCount,
+      });
+    }
 
     // Record the snapshot so the next poll can skip the heavy query when the
     // activity probe reports no change. Written only on a successful network
-    // fetch — a failed fetch must not advance it.
-    repoStatsAndPageSnapshotCache.set(cacheKey, {
-      stats,
-      issues: issuesPage,
-      prs: prsPage,
-    });
+    // fetch — a failed fetch must not advance it — and only when neither
+    // type's epoch moved mid-query (the snapshot embeds both first pages).
+    if (issueEpochUnchanged && prEpochUnchanged) {
+      repoStatsAndPageSnapshotCache.set(cacheKey, {
+        stats,
+        issues: issuesPage,
+        prs: prsPage,
+      });
+    }
 
     return {
       stats,

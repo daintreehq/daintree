@@ -5,6 +5,7 @@ import {
   setCache,
   nextGeneration,
   getGeneration,
+  markCountStale,
   mutateCacheEntries,
   _resetForTests,
 } from "../forgeResourceCache";
@@ -226,6 +227,99 @@ describe("forgeResourceCache", () => {
       expect(() =>
         mutateCacheEntries("/proj", "issue", (e) => ({ ...e, items: [] }))
       ).not.toThrow();
+    });
+  });
+
+  describe("markCountStale (count-as-cache-buster)", () => {
+    function seedOpenSlot(countAtWrite?: number, stale?: boolean): string {
+      const key = buildCacheKey("/proj", "issue", "open", "created");
+      setCache(key, {
+        items: [makeIssue(1), makeIssue(2)],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+        ...(countAtWrite != null ? { countAtWrite } : {}),
+        ...(stale ? { stale } : {}),
+      });
+      return key;
+    }
+
+    it("marks a diverged open slot stale without removing its rows, and bumps its generation", () => {
+      const key = seedOpenSlot(2);
+      const genBefore = getGeneration(key);
+
+      markCountStale("/proj", "issue", 3);
+
+      const cached = getCache(key);
+      expect(cached?.stale).toBe(true);
+      expect(cached?.items.map((i) => i.number)).toEqual([1, 2]);
+      expect(getGeneration(key)).toBe(genBefore + 1);
+    });
+
+    it("leaves a slot alone when the count still matches", () => {
+      const key = seedOpenSlot(2);
+      const genBefore = getGeneration(key);
+
+      markCountStale("/proj", "issue", 2);
+
+      expect(getCache(key)?.stale).toBeUndefined();
+      expect(getGeneration(key)).toBe(genBefore);
+    });
+
+    it("leaves a slot alone when it has no count fingerprint", () => {
+      const key = seedOpenSlot(undefined);
+      const genBefore = getGeneration(key);
+
+      markCountStale("/proj", "issue", 3);
+
+      expect(getCache(key)?.stale).toBeUndefined();
+      expect(getGeneration(key)).toBe(genBefore);
+    });
+
+    it("does not re-bump the generation of an already-stale slot", () => {
+      const key = seedOpenSlot(2, true);
+      const genBefore = getGeneration(key);
+
+      markCountStale("/proj", "issue", 5);
+
+      expect(getCache(key)?.stale).toBe(true);
+      expect(getGeneration(key)).toBe(genBefore);
+    });
+
+    it("only touches open-filter slots — closed/merged views have no count signal", () => {
+      const closedKey = buildCacheKey("/proj", "issue", "closed", "created");
+      setCache(closedKey, {
+        items: [makeIssue(9)],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+        countAtWrite: 2,
+      });
+
+      markCountStale("/proj", "issue", 7);
+
+      expect(getCache(closedKey)?.stale).toBeUndefined();
+    });
+
+    it("is scoped to the given project and type", () => {
+      const issueKey = seedOpenSlot(2);
+      const prKey = buildCacheKey("/proj", "pr", "open", "created");
+      const otherProjectKey = buildCacheKey("/other", "issue", "open", "created");
+      const base = {
+        items: [makeIssue(1)],
+        nextCursor: null,
+        hasMore: false,
+        timestamp: Date.now(),
+        countAtWrite: 2,
+      };
+      setCache(prKey, base);
+      setCache(otherProjectKey, base);
+
+      markCountStale("/proj", "issue", 4);
+
+      expect(getCache(issueKey)?.stale).toBe(true);
+      expect(getCache(prKey)?.stale).toBeUndefined();
+      expect(getCache(otherProjectKey)?.stale).toBeUndefined();
     });
   });
 

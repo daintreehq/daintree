@@ -65,17 +65,20 @@ vi.mock("../GitHubFirstPageCache.js", () => ({
   GitHubFirstPageCache: { getInstance: () => mockFirstPageCache },
 }));
 
-import { getRepoStatsAndPage, parseLinkLastPage } from "../GitHubStats.js";
+import { fetchRestCounts, getRepoStatsAndPage, parseLinkLastPage } from "../GitHubStats.js";
 import {
   repoStatsCache,
   issueListCache,
   prListCache,
+  forgeIssueListCache,
+  forgePRListCache,
   repoStatsAndPageSnapshotCache,
   restCountsCache,
   repoEventsETagCache,
   repoEventsPollIntervalCache,
   repoEventsNoChangeCount,
   repoEventsLastProbeAt,
+  getRepoListEpoch,
   clearPRCaches,
 } from "../GitHubCaches.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
@@ -830,5 +833,124 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     await getRepoStatsAndPage("/test", false); // 200 without etag -> invalidate
 
     expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
+  });
+
+  describe("count-as-cache-buster on the background poll", () => {
+    const forgePage = { items: [], nextCursor: null, hasMore: false };
+    const legacyPage = { items: [], pageInfo: { hasNextPage: false, endCursor: null } };
+
+    function seedListPages(): void {
+      forgeIssueListCache.set("issue:testowner/testrepo:open::created:", forgePage as never);
+      issueListCache.set("issue:testowner/testrepo:open::created:", legacyPage as never);
+      forgePRListCache.set("pr:testowner/testrepo:open::created:", forgePage as never);
+      prListCache.set("pr:testowner/testrepo:open::created:", legacyPage as never);
+      repoStatsAndPageSnapshotCache.set(CACHE_KEY, {
+        stats: { issueCount: 5, prCount: 3, lastUpdated: 1 },
+        issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 5 },
+        prs: { items: [], endCursor: null, hasNextPage: false, totalCount: 3 },
+      });
+    }
+
+    it("busts only the changed type's pages when a poll commits a moved count", async () => {
+      // Poll 1 establishes the baseline: combined 8, PRs 3 → issues 5.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(8, '"r1"')],
+        pulls: [pullsOk(3, '"p1"')],
+      });
+      await getRepoStatsAndPage("/test", false);
+
+      // Expire first — `expireMemoryCaches` clears the legacy list caches, so
+      // the warm pages under test are seeded after it. `repoStatsCache` stays
+      // cleared, so the memory-cache fast path still misses.
+      expireMemoryCaches();
+      expireBackoffWindow();
+      seedListPages();
+      const issueEpochBefore = getRepoListEpoch("issue", "testowner", "testrepo");
+      const prEpochBefore = getRepoListEpoch("pr", "testowner", "testrepo");
+
+      // Poll 2: a new issue opened — combined 9 (200), PR leg replays via 304.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(9, '"r2"')],
+        pulls: [restResponse(304)],
+      });
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.issueCount).toBe(6);
+      expect(result.stats?.prCount).toBe(3);
+
+      // Issue pages (both cache families) dropped; PR pages untouched.
+      expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+      expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+      expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+      expect(prListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+      // The combined snapshot embeds both first pages — dropped on any delta.
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
+      // Only the issue epoch moved, so in-flight PR writes stay valid.
+      expect(getRepoListEpoch("issue", "testowner", "testrepo")).toBe(issueEpochBefore + 1);
+      expect(getRepoListEpoch("pr", "testowner", "testrepo")).toBe(prEpochBefore);
+    });
+
+    it("does not bust anything when both legs replay unchanged counts via 304", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(8, '"r1"')],
+        pulls: [pullsOk(3, '"p1"')],
+      });
+      await getRepoStatsAndPage("/test", false);
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      seedListPages();
+      const issueEpochBefore = getRepoListEpoch("issue", "testowner", "testrepo");
+
+      // Probe sees activity (e.g. a push), but the counts themselves replay.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [restResponse(304)],
+        pulls: [restResponse(304)],
+      });
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.issueCount).toBe(5);
+
+      expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+      expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+      expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeDefined();
+      expect(getRepoListEpoch("issue", "testowner", "testrepo")).toBe(issueEpochBefore);
+    });
+
+    it("concurrent count polls singleflight — one REST pair, one shared result", async () => {
+      routeFetch({
+        repo: [repoOk(8, '"r1"')],
+        pulls: [pullsOk(3, '"p1"')],
+      });
+
+      const [a, b] = await Promise.all([
+        fetchRestCounts("test-token", "testowner", "testrepo"),
+        fetchRestCounts("test-token", "testowner", "testrepo"),
+      ]);
+
+      expect(a).toEqual(b);
+      expect(a?.issueCount).toBe(5);
+      // One request per endpoint — the second caller joined the first's
+      // in-flight promise instead of racing it (a racing pair could commit a
+      // stale 304 replay over fresh counts and double-fire the count buster).
+      expect(repoCallCount()).toBe(1);
+      expect(pullsCallCount()).toBe(1);
+    });
+
+    it("the first-ever commit (no prior baseline) busts nothing", async () => {
+      seedListPages();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(8)],
+        pulls: [pullsOk(3)],
+      });
+      await getRepoStatsAndPage("/test", false);
+
+      expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+      expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+    });
   });
 });

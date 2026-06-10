@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
 import React, { Activity, type ReactNode } from "react";
 import type { Issue, ListOptions, Page } from "@shared/types/forge";
-import { setCache, buildCacheKey, _resetForTests } from "@/lib/forgeResourceCache";
+import { setCache, getCache, buildCacheKey, _resetForTests } from "@/lib/forgeResourceCache";
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
 import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
@@ -245,6 +245,211 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+describe("open-time fetch policy (count-as-cache-buster, #10122 family)", () => {
+  const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+
+  it("skips the mount revalidate when the entry was written by a bypass fetch <10s ago", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 1,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    expect(screen.getByTestId("item-10")).toBeTruthy();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(mockListIssues).not.toHaveBeenCalled();
+  });
+
+  it("stale wins over the skip window — a count delta after a hover prefetch still bypasses", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 1,
+      stale: true,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: true }));
+  });
+
+  it("a fresh `timestamp` alone does NOT skip — broadcast-seeded entries still revalidate", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+  });
+
+  it("downgrades the issues revalidate to bypassCache:false while the count fingerprint holds", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10), makeIssue(11)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+      countAtWrite: 2,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10), makeIssue(11)], 2));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: false }));
+  });
+
+  it("keeps bypassCache:true when the count buster marked the entry stale", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+      countAtWrite: 2,
+      stale: true,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: true }));
+  });
+
+  it("keeps bypassCache:true for entries with no count fingerprint (disk hydration, old writers)", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: true }));
+  });
+
+  it("the PR list never downgrades — CI rollup flips are invisible to the count signal", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+      countAtWrite: 1,
+    });
+    mockListPRs.mockResolvedValue(makeResponse([makeIssue(40)]));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+    expect(mockListPRs).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: true }));
+  });
+
+  it("manual refresh still bypasses even when the entry is inside the skip window", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 1,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(mockListIssues).not.toHaveBeenCalled();
+
+    screen.getByRole("button", { name: /refresh issues/i }).click();
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ bypassCache: true }));
+  });
+
+  it("does not fire onFreshFetch for a downgraded (non-bypass) revalidate", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+      countAtWrite: 1,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)], 1));
+    const onFreshFetch = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onFreshFetch={onFreshFetch} />
+    );
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(onFreshFetch).not.toHaveBeenCalled();
+  });
+
+  it("fires onFreshFetch when the revalidate actually bypassed", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+      countAtWrite: 1,
+      stale: true,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)], 1));
+    const onFreshFetch = vi.fn();
+
+    render(
+      <GitHubResourceList type="issue" projectPath="/test/proj" onFreshFetch={onFreshFetch} />
+    );
+
+    await waitFor(() => expect(onFreshFetch).toHaveBeenCalled());
+  });
+
+  it("a downgraded revalidate re-stamps the count fingerprint from the response", async () => {
+    setCache(cacheKey, {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+      countAtWrite: 1,
+    });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10), makeIssue(11)], 2));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(screen.getByTestId("item-11")).toBeTruthy());
+    const entry = (await import("@/lib/forgeResourceCache")).getCache(cacheKey);
+    expect(entry?.countAtWrite).toBe(2);
+    // Non-bypass responses may come from the backend cache — they must not
+    // arm the skip-revalidate gate.
+    expect(entry?.freshBypassAt).toBeUndefined();
+  });
 });
 
 describe("GitHubResourceList SWR behavior", () => {
@@ -1666,6 +1871,12 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
 
     // Hide via Activity — effects clean up but state + refs survive.
     rerender(<Harness mode="hidden" />);
+    // The mount revalidate stamped `freshBypassAt`, and a reveal inside the
+    // 10s window deliberately skips the refetch (hide/reveal must not
+    // double-spend GraphQL). Age the stamp past the window so this test keeps
+    // pinning the reveal-time revalidate itself.
+    const entry = getCache(cacheKey)!;
+    setCache(cacheKey, { ...entry, freshBypassAt: Date.now() - 11_000 });
     // Re-reveal — the load effect re-fires with the same effectKey, hitting
     // the isActivityRevealOfSameInputs branch: no skeleton, no row clear,
     // background revalidate runs.

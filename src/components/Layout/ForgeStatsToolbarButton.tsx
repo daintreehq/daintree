@@ -50,12 +50,17 @@ const HOVER_PREFETCH_DELAY_MS = 150;
 const PREFETCH_FRESHNESS_MS = 10_000;
 
 // When the user opens the dropdown and the polled stats are older than this,
-// fire a click-time forced refresh — cache may still be valid in the strict
+// fire a click-time count refresh — cache may still be valid in the strict
 // TTL sense, but the user opening the dropdown is a strong signal that they
-// want fresh-enough data, and 2 minutes is the threshold beyond which CI
-// status / PR state could be visibly out of date. Within this window, trust
-// the cache and let the existing 30s poll keep things fresh in background.
-const OPEN_FORCE_REFRESH_STALENESS_MS = 2 * 60 * 1000;
+// want fresh-enough data, and 2 minutes is the threshold beyond which counts
+// could be visibly out of date. Deliberately NOT a forced refresh: `force`
+// maps to `bypassCache: true` in main, which runs the ~6-point welded
+// `REPO_STATS_AND_PAGE_QUERY` on top of the list query the open itself
+// fires — a hidden double-spend on every stale-open (#10122 family). The
+// non-forced path is the probe-gated REST count pair (often free via 304),
+// and the dropdown's own list revalidate reconciles the badge through
+// `onCountUpdate`/`onFreshFetch`, so the heavy query buys nothing here.
+const OPEN_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 
 // Lifetime of the corner activity chip after the most recent count increase,
 // measured in visible time. The chip is a glanceable "something new arrived"
@@ -567,9 +572,10 @@ export const ForgeStatsToolbarButton = memo(
         if (cached && Date.now() - cached.timestamp < PREFETCH_FRESHNESS_MS) return;
 
         // Hover prefetch primes the list cache silently. The count badge stays
-        // fresh via the 30s background poll and the click-time forced refresh
-        // — refreshing stats here would flicker the toolbar status indicator.
+        // fresh via the 30s background poll and the click-time refresh —
+        // refreshing stats here would flicker the toolbar status indicator.
         inFlightRef.current = true;
+        const startedAt = Date.now();
         const fetchOptions = {
           state: "open" as const,
           sort: "created",
@@ -581,11 +587,27 @@ export const ForgeStatsToolbarButton = memo(
             : forgeClient.listPRs(currentProject.path, fetchOptions);
         void request
           .then((result) => {
+            // Ownership guard: the dropdown may have opened mid-flight and
+            // committed a fresher page (its own bypass revalidate). A slower
+            // hover response must not clobber it — `timestamp` is the write
+            // time of the competing entry, so anything written after this
+            // request started wins.
+            const existing = getCache(cacheKey);
+            if (existing && existing.timestamp > startedAt) return;
+            const now = Date.now();
             setCache(cacheKey, {
               items: result.items,
               nextCursor: result.nextCursor,
               hasMore: result.hasMore,
-              timestamp: Date.now(),
+              timestamp: now,
+              // This request bypassed the backend cache, so the entry
+              // qualifies for the SWR hook's skip-revalidate window — the
+              // whole point of the prefetch: hover→click costs one GraphQL
+              // query, not two.
+              freshBypassAt: now,
+              // The prefetch always targets the `open` slot (see `cacheKey`),
+              // so the count fingerprint arms the count-as-cache-buster.
+              ...(result.totalCount != null ? { countAtWrite: result.totalCount } : {}),
             });
           })
           .catch(() => {
@@ -856,10 +878,9 @@ export const ForgeStatsToolbarButton = memo(
                 if (willOpen) setIssuesPulseAt(null);
                 if (
                   willOpen &&
-                  (lastUpdated == null ||
-                    Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
+                  (lastUpdated == null || Date.now() - lastUpdated > OPEN_REFRESH_STALENESS_MS)
                 ) {
-                  refreshStats({ force: true });
+                  refreshStats();
                 }
               }}
               onOpenChange={(open) => {
@@ -938,10 +959,9 @@ export const ForgeStatsToolbarButton = memo(
                 if (willOpen) setPrsPulseAt(null);
                 if (
                   willOpen &&
-                  (lastUpdated == null ||
-                    Date.now() - lastUpdated > OPEN_FORCE_REFRESH_STALENESS_MS)
+                  (lastUpdated == null || Date.now() - lastUpdated > OPEN_REFRESH_STALENESS_MS)
                 ) {
-                  refreshStats({ force: true });
+                  refreshStats();
                 }
               }}
               onOpenChange={(open) => {

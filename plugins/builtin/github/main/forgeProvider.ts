@@ -88,6 +88,7 @@ import { toRateLimitInfo } from "./rateLimitUtils.js";
 import {
   forgeIssueListCache,
   forgePRListCache,
+  getRepoListEpoch,
   issueTooltipCache,
   prRequiredStatusCache,
   truncateBody,
@@ -751,6 +752,10 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
   return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
     const limit = opts.perPage ?? 20;
     const orderBy = buildOrderBy(opts);
+    // Captured before the network call: if the count-as-cache-buster bumps
+    // the epoch mid-flight, this page predates the observed change and must
+    // not repopulate the just-busted cache.
+    const epochAtStart = getRepoListEpoch("issue", repo.owner, repo.repo);
 
     const response = await runQuery(
       LIST_ISSUES_QUERY,
@@ -785,9 +790,13 @@ async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<Page<Is
       ...(typeof issues?.totalCount === "number" ? { totalCount: issues.totalCount } : {}),
     };
 
-    // Skip the shared-cache write when a newer bypass call has superseded us,
-    // so a slow stale fetch can't clobber the fresher committed result.
-    if (isCurrent()) {
+    // Skip the shared-cache write when a newer bypass call has superseded us
+    // or the count buster invalidated this repo's issue pages mid-flight, so
+    // a slow stale fetch can't clobber the fresher committed result. The
+    // stats-count update sits behind the same epoch guard: a response too old
+    // to repopulate the list cache is also too old to roll `repoStatsCache`
+    // back to its pre-change total under a fresh `lastUpdated`.
+    if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
       if (state === "open" && !opts.cursor && typeof issues?.totalCount === "number") {
         updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
@@ -822,6 +831,8 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
     const limit = opts.perPage ?? 20;
     const orderBy = buildOrderBy(opts);
+    // Same mid-flight count-buster guard as the issues list above.
+    const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
 
     const response = await runQuery(
       LIST_PRS_QUERY,
@@ -856,7 +867,7 @@ async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> 
       ...(typeof prs?.totalCount === "number" ? { totalCount: prs.totalCount } : {}),
     };
 
-    if (isCurrent()) {
+    if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
       if (state === "open" && !opts.cursor && typeof prs?.totalCount === "number") {
         updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
