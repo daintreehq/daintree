@@ -69,6 +69,8 @@ function buildForgeRepositoryStats(
     error: counts.error,
     stale: counts.stale,
     lastUpdated: counts.lastUpdated,
+    issueCountRefreshedAt: counts.issueCountRefreshedAt,
+    prCountRefreshedAt: counts.prCountRefreshedAt,
     rateLimitResetAt: counts.rateLimitResetAt,
     rateLimitKind: counts.rateLimitKind,
     nextPollIntervalMs: counts.nextPollIntervalMs,

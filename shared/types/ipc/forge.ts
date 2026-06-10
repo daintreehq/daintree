@@ -113,6 +113,17 @@ export interface ForgeRepositoryStats {
   stale?: boolean;
   /** Epoch ms when stats were last successfully fetched from the forge. */
   lastUpdated?: number;
+  /**
+   * Epoch ms when the issue/PR counts were last read from a forge count
+   * endpoint. `lastUpdated` is re-stamped when the main process confirms
+   * "nothing changed" and re-serves cached counts; these are not — consumers
+   * that need true count recency (badge arbitration, dropdown-open refresh)
+   * read them, treating absence on a `stale: true` payload as unknown rather
+   * than fresh. Per-count because a list query's write-back refreshes only its
+   * own kind.
+   */
+  issueCountRefreshedAt?: number;
+  prCountRefreshedAt?: number;
   /** Epoch ms when an active rate-limit block resumes. */
   rateLimitResetAt?: number;
   /** Kind of active rate limit (primary quota vs secondary abuse throttle). */

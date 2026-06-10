@@ -49,17 +49,21 @@ import { ForgeStatPill } from "./ForgeStatPill";
 const HOVER_PREFETCH_DELAY_MS = 150;
 const PREFETCH_FRESHNESS_MS = 10_000;
 
-// When the user opens the dropdown and the polled stats are older than this,
-// fire a click-time count refresh — cache may still be valid in the strict
-// TTL sense, but the user opening the dropdown is a strong signal that they
-// want fresh-enough data, and 2 minutes is the threshold beyond which counts
-// could be visibly out of date. Deliberately NOT a forced refresh: `force`
-// maps to `bypassCache: true` in main, which runs the ~6-point welded
-// `REPO_STATS_AND_PAGE_QUERY` on top of the list query the open itself
-// fires — a hidden double-spend on every stale-open (#10122 family). The
-// non-forced path is the probe-gated REST count pair (often free via 304),
-// and the dropdown's own list revalidate reconciles the badge through
-// `onCountUpdate`/`onFreshFetch`, so the heavy query buys nothing here.
+// When the user opens a dropdown and its count hasn't been read from the forge
+// within this window, fire a click-time count refresh — cache may still be
+// valid in the strict TTL sense, but the user opening the dropdown is a strong
+// signal that they want fresh-enough data, and 2 minutes is the threshold
+// beyond which counts could be visibly out of date. The gate keys off the
+// per-count refreshed-at stamp (when the forge was actually asked about that
+// count), NOT the probe-re-stamped `lastUpdated` — re-stamped staleness let a
+// stale poll count permanently suppress this open-time refresh. Deliberately
+// NOT a forced refresh: `force` maps to `bypassCache: true` in main, which
+// runs the ~6-point welded `REPO_STATS_AND_PAGE_QUERY` on top of the list
+// query the open itself fires — a hidden double-spend on every stale-open
+// (#10122 family). The non-forced path is the probe-gated REST count pair
+// (often free via 304), and the dropdown's own list revalidate reconciles the
+// badge through `onCountUpdate`/`onFreshFetch`, so the heavy query buys
+// nothing here.
 const OPEN_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 
 // Lifetime of the corner activity chip after the most recent count increase,
@@ -167,6 +171,21 @@ export const ForgeStatsToolbarButton = memo(
     const prCount = stats?.prCount ?? null;
     const commitCount = stats?.commitCount ?? null;
 
+    // True per-count recency. `lastUpdated` is re-stamped by the main process
+    // when the activity probe confirms "nothing changed" and re-serves cached
+    // counts; the refreshed-at stamps only advance when the forge was actually
+    // asked about that count. The badge arbitration and the dropdown-open
+    // force refresh below must use the honest signal — re-stamped staleness
+    // was how a stale poll count kept outranking the dropdown's real total
+    // and rolled the badge back on every poll. Per-count because a PR list
+    // write-back says nothing about the issue count (and vice versa). Stale
+    // disk fallbacks carry a re-stamped `lastUpdated` with no honest stamp —
+    // treat those as unknown recency (null) rather than fresh, so a direct
+    // list observation always outranks them and an open retries the fetch.
+    const statsRecencyFallback = stats?.stale ? null : lastUpdated;
+    const issueCountRefreshedAt = stats?.issueCountRefreshedAt ?? statsRecencyFallback;
+    const prCountRefreshedAt = stats?.prCountRefreshedAt ?? statsRecencyFallback;
+
     // List-loaded counts reported by each dropdown's `onCountUpdate`. These
     // track what the dropdown actually lists (loaded first-page length +
     // whether more pages exist) so the badge can bind to the visible count
@@ -227,14 +246,14 @@ export const ForgeStatsToolbarButton = memo(
     // in render is fine — they're only written from event callbacks).
     const issueDisplayCount: number | string | null = resolveForgeDisplayCount(
       issueCount,
-      lastUpdated,
+      issueCountRefreshedAt,
       issueListCount,
       issueListHasMore,
       issueListTimestampRef.current
     );
     const prDisplayCount: number | string | null = resolveForgeDisplayCount(
       prCount,
-      lastUpdated,
+      prCountRefreshedAt,
       prListCount,
       prListHasMore,
       prListTimestampRef.current
@@ -878,7 +897,8 @@ export const ForgeStatsToolbarButton = memo(
                 if (willOpen) setIssuesPulseAt(null);
                 if (
                   willOpen &&
-                  (lastUpdated == null || Date.now() - lastUpdated > OPEN_REFRESH_STALENESS_MS)
+                  (issueCountRefreshedAt == null ||
+                    Date.now() - issueCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
                 ) {
                   refreshStats();
                 }
@@ -959,7 +979,8 @@ export const ForgeStatsToolbarButton = memo(
                 if (willOpen) setPrsPulseAt(null);
                 if (
                   willOpen &&
-                  (lastUpdated == null || Date.now() - lastUpdated > OPEN_REFRESH_STALENESS_MS)
+                  (prCountRefreshedAt == null ||
+                    Date.now() - prCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
                 ) {
                   refreshStats();
                 }

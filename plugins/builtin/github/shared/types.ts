@@ -198,6 +198,17 @@ export interface RepositoryStats {
   stale?: boolean;
   /** Timestamp when stats were last successfully fetched from API */
   lastUpdated?: number;
+  /**
+   * Timestamps when the issue/PR counts were last read from a GitHub count
+   * endpoint. `lastUpdated` is re-stamped when the main-process activity
+   * probe confirms "nothing changed" and re-serves cached counts; these are
+   * not — consumers that need true count recency (badge arbitration,
+   * dropdown-open force refresh) read them, treating absence on a
+   * `stale: true` payload as unknown rather than fresh. Per-count because a
+   * list query's write-back refreshes only its own kind.
+   */
+  issueCountRefreshedAt?: number;
+  prCountRefreshedAt?: number;
   /** Unix epoch milliseconds when a GitHub rate limit resumes */
   rateLimitResetAt?: number;
   /** Kind of active GitHub rate limit (primary quota vs secondary abuse) */

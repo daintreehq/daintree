@@ -368,7 +368,16 @@ async function fetchRestCountsImpl(
       });
     }
 
-    return { issueCount, prCount, lastUpdated };
+    // The refreshed-at stamps match `lastUpdated` here even on a 304 replay:
+    // a 304 is a direct GitHub confirmation that the count endpoint's content
+    // is unchanged, so the counts were genuinely re-verified now.
+    return {
+      issueCount,
+      prCount,
+      lastUpdated,
+      issueCountRefreshedAt: lastUpdated,
+      prCountRefreshedAt: lastUpdated,
+    };
   } catch {
     return null;
   }
@@ -488,28 +497,34 @@ export async function getRepoStatsAndPageForContext(
   } else {
     const token = GitHubAuth.getToken();
     if (token) {
-      const preProbeSnapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      const hadCountBaseline =
+        repoStatsAndPageSnapshotCache.get(cacheKey) !== undefined ||
+        restCountsCache.get(cacheKey) !== undefined;
       // Skip the network probe entirely while inside the adaptive window: never
       // poll `/events` faster than the server-advertised `X-Poll-Interval`, and
       // back off further on an idle repo. The cached snapshot (or, on the
       // background-only path, the last REST counts) stands in for the
       // "unchanged" result we'd otherwise pay a request to confirm.
       const withinBackoff =
-        (preProbeSnapshot !== undefined || restCountsCache.get(cacheKey) !== undefined) &&
+        hadCountBaseline &&
         Date.now() - (repoEventsLastProbeAt.get(cacheKey) ?? 0) < eventsProbeDelayMs(cacheKey);
       const probe: ActivityProbeResult = withinBackoff
         ? { status: "unchanged" }
         : await fetchActivityProbe(token, context.owner, context.repo);
 
+      // Read the count baselines only AFTER the probe await — two independent
+      // concurrent mutations can land during it: (1) a list query's write-back
+      // (`updateRepoStatsCount`) may have reconciled a stale snapshot/REST
+      // entry away, and (2) a concurrent poll's count-buster can drop the
+      // snapshot mid-probe. Serving a pre-await capture would resurrect the
+      // just-invalidated counts or re-warm the list caches from pages the bust
+      // already removed.
+      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      const restCounts = restCountsCache.get(cacheKey);
+
       if (probe.status === "changed") {
         pendingEventsEtag = probe.etag;
       }
-
-      // Re-read AFTER the probe await: a concurrent poll's count-buster can
-      // drop the snapshot mid-probe, and re-warming the list caches from the
-      // pre-await reference would resurrect the exact pages the bust removed.
-      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
-      const restCounts = restCountsCache.get(cacheKey);
 
       if (probe.status === "unchanged" && snapshot) {
         // The cheap REST poll may have observed fresher counts after this
@@ -518,13 +533,28 @@ export async function getRepoStatsAndPageForContext(
         // so an unchanged probe can't roll the pill back to pre-REST counts.
         const restCountsFresher =
           restCounts !== undefined && restCounts.lastUpdated >= (snapshot.stats.lastUpdated ?? 0);
+        // `lastUpdated` is re-stamped to now — the probe just confirmed the
+        // data is still current, and the freshness pill keys off it. The
+        // per-count refreshed-at stamps are NOT: the counts themselves were
+        // last read at the source's commit time, and claiming otherwise lets
+        // a stale cached count outrank a fresher dropdown-observed total in
+        // the renderer's recency arbitration (and permanently suppress the
+        // dropdown-open force refresh).
         const freshStats: RepoStats = restCountsFresher
           ? {
               issueCount: restCounts.combinedCount - restCounts.prCount,
               prCount: restCounts.prCount,
               lastUpdated: Date.now(),
+              issueCountRefreshedAt: restCounts.lastUpdated,
+              prCountRefreshedAt: restCounts.lastUpdated,
             }
-          : { ...snapshot.stats, lastUpdated: Date.now() };
+          : {
+              ...snapshot.stats,
+              lastUpdated: Date.now(),
+              issueCountRefreshedAt:
+                snapshot.stats.issueCountRefreshedAt ?? snapshot.stats.lastUpdated,
+              prCountRefreshedAt: snapshot.stats.prCountRefreshedAt ?? snapshot.stats.lastUpdated,
+            };
         repoStatsCache.set(cacheKey, freshStats);
         issueListCache.set(issuesListCacheKey, {
           items: snapshot.issues.items,
@@ -573,6 +603,8 @@ export async function getRepoStatsAndPageForContext(
           issueCount: restCounts.combinedCount - restCounts.prCount,
           prCount: restCounts.prCount,
           lastUpdated: Date.now(),
+          issueCountRefreshedAt: restCounts.lastUpdated,
+          prCountRefreshedAt: restCounts.lastUpdated,
         };
         repoStatsCache.set(cacheKey, freshStats);
         persistentCache.set(cacheKey, freshStats, projectPath);
@@ -718,10 +750,13 @@ export async function getRepoStatsAndPageForContext(
 
     const issueCount = issuesData?.totalCount ?? 0;
     const prCount = prsData?.totalCount ?? 0;
+    const fetchedAt = Date.now();
     const stats: RepoStats = {
       issueCount,
       prCount,
-      lastUpdated: Date.now(),
+      lastUpdated: fetchedAt,
+      issueCountRefreshedAt: fetchedAt,
+      prCountRefreshedAt: fetchedAt,
     };
 
     repoStatsCache.set(cacheKey, stats);
@@ -947,6 +982,8 @@ export async function getRepoStatsComplete(
       ghError: statsResult.error,
       stale: statsResult.stats?.stale,
       lastUpdated: statsResult.stats?.lastUpdated,
+      issueCountRefreshedAt: statsResult.stats?.issueCountRefreshedAt,
+      prCountRefreshedAt: statsResult.stats?.prCountRefreshedAt,
       rateLimitResetAt:
         rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,
       rateLimitKind: rateLimitState.blocked ? (rateLimitState.kind ?? undefined) : undefined,

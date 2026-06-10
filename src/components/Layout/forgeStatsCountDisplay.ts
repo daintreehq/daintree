@@ -12,11 +12,17 @@
  * still wins immediately after a fresh dropdown fetch (its timestamp is newer);
  * it just yields once a later stats poll lands. Both timestamps are epoch ms
  * from the same `Date.now()` clock — the toolbar stamps the list timestamp when
- * `onCountUpdate` fires, and `lastUpdated` is set by the stats fetch.
+ * `onCountUpdate` fires, and the stats timestamp is the per-count
+ * `issueCountRefreshedAt` / `prCountRefreshedAt`: the last time that count was
+ * actually read from a forge count endpoint. NOT `lastUpdated`, which the main
+ * process re-stamps when its activity probe re-serves cached counts —
+ * arbitrating on that let a stale cached count outrank a fresher
+ * dropdown-observed total on every background poll.
  *
  * @param statsCount       Total from the stats poll, or null when unavailable.
- * @param statsLastUpdated Epoch ms of the last stats fetch, or null before the
- *                         first poll resolves (no stats baseline yet).
+ * @param statsLastUpdated Epoch ms when this count was last read from the forge
+ *                         (the per-count refreshed-at stamp), or null when
+ *                         there is no honest stats baseline yet.
  * @param listCount        Count reported by the dropdown list, or null before
  *                         the dropdown has loaded.
  * @param listApproximate  Whether the list count is approximate (cache hit

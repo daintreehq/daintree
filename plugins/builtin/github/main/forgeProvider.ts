@@ -1367,6 +1367,8 @@ function toForgeRepoCounts(result: RepoStatsAndPageResult): ForgeRepoCounts {
     prCount: result.stats?.prCount ?? null,
     stale: result.stats?.stale,
     lastUpdated: result.stats?.lastUpdated,
+    issueCountRefreshedAt: result.stats?.issueCountRefreshedAt,
+    prCountRefreshedAt: result.stats?.prCountRefreshedAt,
     error: result.error,
     rateLimitResetAt:
       rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,

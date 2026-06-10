@@ -542,6 +542,15 @@ export interface ForgeRepoCounts {
   stale?: boolean;
   /** Epoch milliseconds of the last successful forge fetch. */
   lastUpdated?: number;
+  /**
+   * Epoch ms when each count was last read from a forge count endpoint. Unlike
+   * `lastUpdated`, these are NOT re-stamped when an "unchanged" probe re-serves
+   * cached counts — the host uses them for true count recency (badge
+   * arbitration, dropdown-open refresh). Per-count because a list write-back
+   * refreshes only its own kind.
+   */
+  issueCountRefreshedAt?: number;
+  prCountRefreshedAt?: number;
   /** Human-readable error when the forge fetch failed (counts may be cached). */
   error?: string;
   /** Epoch milliseconds when an active rate-limit block resumes. */

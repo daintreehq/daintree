@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 
 // `getRepoStatsAndPage` is an orchestration boundary — mock the
@@ -716,6 +716,106 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
         .filter((c) => /\/repos\/testowner\/testrepo$/.test(String(c[0])))
         .map((c) => c[1] as { headers: Record<string, string> });
       expect(repoInits[1].headers["If-None-Match"]).toBeUndefined();
+    });
+  });
+
+  describe("count refreshed-at stamps — honest count recency on probe re-serves", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("preserves the refreshed-at stamps when an unchanged probe re-serves the last REST counts", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(304)],
+        repo: [repoOk(8)],
+        pulls: [pullsOk(3)],
+      });
+
+      const first = await getRepoStatsAndPage("/test", false);
+      const baseline = first.stats?.prCountRefreshedAt;
+      expect(baseline).toBe(first.stats?.lastUpdated);
+      expect(first.stats?.issueCountRefreshedAt).toBe(baseline);
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 60_000);
+      const second = await getRepoStatsAndPage("/test", false);
+      // `lastUpdated` re-stamps (the probe confirmed freshness) but the
+      // count-recency signals must keep the original count fetch time —
+      // re-stamping them is what let stale cached counts outrank a fresher
+      // dropdown-observed total in the renderer arbitration.
+      expect(second.stats?.prCountRefreshedAt).toBe(baseline);
+      expect(second.stats?.issueCountRefreshedAt).toBe(baseline);
+      expect(second.stats?.lastUpdated).toBeGreaterThan(baseline!);
+    });
+
+    it("preserves the refreshed-at stamps when an unchanged probe re-serves the snapshot", async () => {
+      mockClient.mockResolvedValue(statsResponse(5, 3));
+      routeFetch({ events: [eventsResponse(304)] });
+
+      const first = await getRepoStatsAndPage("/test", true);
+      const baseline = first.stats?.prCountRefreshedAt;
+      expect(baseline).toBe(first.stats?.lastUpdated);
+
+      expireMemoryCaches();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 60_000);
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.prCountRefreshedAt).toBe(baseline);
+      expect(result.stats?.issueCountRefreshedAt).toBe(baseline);
+      expect(result.stats?.lastUpdated).toBeGreaterThan(baseline!);
+    });
+
+    it("advances the refreshed-at stamps on a 304 count replay — the endpoints were re-verified", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(8, '"r1"'), restResponse(304)],
+        pulls: [pullsOk(3, '"p1"'), restResponse(304)],
+      });
+
+      const first = await getRepoStatsAndPage("/test", false);
+      const baseline = first.stats?.prCountRefreshedAt;
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 60_000);
+      const second = await getRepoStatsAndPage("/test", false);
+      // A 304 is a direct GitHub confirmation that the count endpoint's
+      // content is unchanged — unlike a probe re-serve, the counts were
+      // genuinely re-checked, so recency advances.
+      expect(second.stats?.prCountRefreshedAt).toBeGreaterThan(baseline!);
+      expect(second.stats?.issueCountRefreshedAt).toBeGreaterThan(baseline!);
+    });
+
+    it("re-reads the count baselines after the probe await so a concurrent reconciliation sticks", async () => {
+      // Seed the snapshot (1 PR) via an explicit refresh.
+      mockClient.mockResolvedValue(statsResponse(5, 1));
+      routeFetch({});
+      await getRepoStatsAndPage("/test", true);
+      expireMemoryCaches();
+      expireBackoffWindow();
+
+      // While the /events probe is in flight, a dropdown list write-back
+      // reconciles the stale snapshot away (updateRepoStatsCount's drop).
+      // The poll must not serve its pre-await capture of that snapshot.
+      mockFetch.mockImplementation((input: unknown) => {
+        const url = String(input);
+        if (url.includes("/events")) {
+          repoStatsAndPageSnapshotCache.invalidate(CACHE_KEY);
+          return Promise.resolve(eventsResponse(304));
+        }
+        if (url.includes("/pulls")) return Promise.resolve(pullsOk(2));
+        return Promise.resolve(repoOk(7));
+      });
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      // Fell through to a fresh REST count read instead of resurrecting the
+      // captured snapshot's stale PR count.
+      expect(result.stats?.prCount).toBe(2);
+      expect(result.stats?.issueCount).toBe(5);
     });
   });
 
