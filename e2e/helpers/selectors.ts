@@ -377,8 +377,8 @@ export const SEL = {
     saveButton: '[aria-label="Save token"]',
     connectedBadge: 'text="GitHub connected"',
     // Toolbar stat pills (open the issue/PR dropdowns)
-    statPillIssues: '[data-testid="github-stat-pill-issues"]',
-    statPillPrs: '[data-testid="github-stat-pill-prs"]',
+    statPillIssues: '[data-testid="forge-stat-pill-issues"]',
+    statPillPrs: '[data-testid="forge-stat-pill-prs"]',
     // Resource dropdown (issues / pull requests)
     searchIssues: '[aria-label="Search issues"]',
     searchPrs: '[aria-label="Search pull requests"]',
@@ -394,7 +394,7 @@ export const SEL = {
     bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
     bulkClearButton: '[aria-label="Clear selection"]',
     bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',
-    // Token-health banner (GlobalBannerCoordinator slot github-token)
+    // Token-health banner (GlobalBannerCoordinator slot forge-token)
     tokenExpiredBanner: 'text="GitHub token expired"',
   },
   plugin: {

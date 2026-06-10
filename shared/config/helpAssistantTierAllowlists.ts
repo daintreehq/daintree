@@ -46,11 +46,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "git.snapshotGet",
   "git.snapshotList",
 
-  "github.checkCli",
-  "github.getRepoStats",
-  "github.listIssues",
-  "github.listPullRequests",
-  "github.getIssueByNumber",
+  "forge.getRepoStats",
+  "forge.listIssues",
+  "forge.listPRs",
+  "forge.getIssue",
 
   "workflow.prepBranchForReview",
 
@@ -124,9 +123,9 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
+  "forge.openPR",
   "forge.assignIssue",
   "forge.validateToken",
-  "github.openPR",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

@@ -35,6 +35,14 @@ describe("GitHubSettingsTab accessibility", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     setupStore();
+    // Save routes through the forge credential surface; a never-resolving
+    // promise pins the loading state for the aria-busy assertions.
+    window.electron = {
+      forge: {
+        setCredential: vi.fn(() => new Promise(() => {})),
+        clearCredential: vi.fn(() => new Promise(() => {})),
+      },
+    } as unknown as typeof window.electron;
   });
 
   afterEach(() => {

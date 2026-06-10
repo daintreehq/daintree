@@ -5,20 +5,13 @@ import {
   detectPrefixFromIssue,
   buildBranchName,
 } from "../branchPrefixUtils";
-import type { GitHubIssue, GitHubLabel } from "@shared/types/github";
+import type { ForgeLabel, Issue } from "@shared/types/forge";
 
-function createTestIssue(title: string, labels: GitHubLabel[] = []): GitHubIssue {
-  return {
-    number: 123,
-    title,
-    url: "https://github.com/test/test/issues/123",
-    state: "OPEN",
-    updatedAt: "2024-01-01",
-    author: { login: "testuser", avatarUrl: "" },
-    assignees: [],
-    commentCount: 0,
-    labels,
-  };
+function createTestIssue(
+  title: string,
+  labels: ForgeLabel[] = []
+): Pick<Issue, "title" | "labels"> {
+  return { title, labels };
 }
 
 describe("parseBranchInput", () => {

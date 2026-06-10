@@ -1,0 +1,377 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import fs from "fs/promises";
+import path from "path";
+
+/**
+ * ForgeStatsToolbarButton — onFreshFetch wiring (issue #6390).
+ *
+ * When the plugin-contributed dropdown view lands fresh first-page data on a
+ * SWR revalidation, it calls the `onFreshFetch` callback. The toolbar wires
+ * this to `refreshStats()` so the dropdown's just-updated count converges into
+ * the badge in the same user interaction (no waiting for the 30s poll).
+ *
+ * These are source-code assertions rather than render tests because the
+ * toolbar's eager dynamic-import effect resolves on a microtask, and rendering
+ * the full toolbar in jsdom triggers `EnvironmentTeardownError`s when
+ * `import()` resolutions race the test-runner shutdown. Static checks of the
+ * wiring are sufficient — `onFreshFetch` itself is exercised end-to-end by
+ * `GitHubResourceList.swr.test.tsx` and `useRepositoryStats.test.tsx`.
+ */
+const TOOLBAR_PATH = path.resolve(__dirname, "../ForgeStatsToolbarButton.tsx");
+
+describe("ForgeStatsToolbarButton onFreshFetch wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("declares a stable handleListFreshFetch callback that calls refreshStats()", () => {
+    expect(source).toMatch(/const\s+handleListFreshFetch\s*=\s*useCallback/);
+    const handlerStart = source.indexOf("const handleListFreshFetch");
+    const handlerSlice = source.slice(handlerStart, handlerStart + 400);
+    expect(handlerSlice).toContain("refreshStats()");
+    expect(handlerSlice).not.toMatch(/refreshStats\s*\(\s*\{\s*force/);
+    expect(handlerSlice).toMatch(/\[\s*refreshStats\s*\]/);
+  });
+
+  it("passes onFreshFetch={handleListFreshFetch} to issue and PR dropdown contents", () => {
+    // The onFreshFetch prop is inside each dropdownContent's slot view JSX —
+    // one per pill (issues + PRs).
+    const matches = source.match(/onFreshFetch=\{handleListFreshFetch\}/g);
+    expect(matches).not.toBeNull();
+    expect(matches?.length).toBe(2);
+  });
+
+  it("wires onFreshFetch in both the issue and PR dropdowns", () => {
+    // Anchor on the icon prop for PRs to split the file, checking each block
+    // contains its own onFreshFetch wiring.
+    const prAnchor = source.indexOf("icon={GitPullRequest}");
+    expect(prAnchor).toBeGreaterThan(0);
+    const issuesBlock = source.slice(0, prAnchor);
+    const prsBlock = source.slice(prAnchor);
+    expect(issuesBlock).toContain("onFreshFetch={handleListFreshFetch}");
+    expect(prsBlock).toContain("onFreshFetch={handleListFreshFetch}");
+  });
+});
+
+/**
+ * Digit pulse on rising count (issues #6529 + #6536).
+ */
+describe("ForgeStatsToolbarButton digit pulse", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("imports useEffectEvent for stale-closure-safe suppression checks", () => {
+    expect(source).toMatch(/import\s*\{[^}]*useEffectEvent[^}]*\}\s*from\s*"react"/);
+  });
+
+  it("declares per-digit anim counters and per-count refs", () => {
+    expect(source).toMatch(/\[issueAnimKey,\s*setIssueAnimKey\]\s*=\s*useState\(0\)/);
+    expect(source).toMatch(/\[prAnimKey,\s*setPrAnimKey\]\s*=\s*useState\(0\)/);
+    expect(source).toMatch(/\[commitAnimKey,\s*setCommitAnimKey\]\s*=\s*useState\(0\)/);
+    expect(source).toMatch(/issueCountRef\s*=\s*useRef</);
+    expect(source).toMatch(/prCountRef\s*=\s*useRef</);
+    expect(source).toMatch(/commitCountRef\s*=\s*useRef</);
+  });
+
+  it("uses useEffectEvent for the count-increase check", () => {
+    expect(source).toMatch(/checkForCountIncrease\s*=\s*useEffectEvent/);
+  });
+
+  it("reads document.hidden and all three open-state values inside the check", () => {
+    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
+    expect(eventStart).toBeGreaterThan(0);
+    const closeBrace = source.indexOf("});", eventStart);
+    expect(closeBrace).toBeGreaterThan(eventStart);
+    const slice = source.slice(eventStart, closeBrace);
+    expect(slice).toContain("document.hidden");
+    expect(slice).toContain("issuesOpen");
+    expect(slice).toContain("prsOpen");
+    expect(slice).toContain("commitsOpen");
+  });
+
+  it("only pulses on a strict positive delta, never on first mount", () => {
+    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
+    const closeBrace = source.indexOf("});", eventStart);
+    const slice = source.slice(eventStart, closeBrace);
+    expect(slice).toMatch(/issueCount\s*>\s*issueCountRef\.current/);
+    expect(slice).toMatch(/prCount\s*>\s*prCountRef\.current/);
+    expect(slice).toMatch(/commitCount\s*>\s*commitCountRef\.current/);
+    expect(slice).toContain("issueCountRef.current === undefined");
+    expect(slice).toContain("prCountRef.current === undefined");
+    expect(slice).toContain("commitCountRef.current === undefined");
+  });
+
+  it("passes animKey={issueAnimKey} to the issues ForgeStatPill", () => {
+    expect(source).toContain("animKey={issueAnimKey}");
+  });
+
+  it("passes animKey={prAnimKey} to the PRs ForgeStatPill", () => {
+    expect(source).toContain("animKey={prAnimKey}");
+  });
+
+  it("passes animKey={commitAnimKey} to the commits ForgeStatPill", () => {
+    expect(source).toContain("animKey={commitAnimKey}");
+  });
+
+  it("re-seeds the count refs to undefined when lastUpdated transitions to null (project switch)", () => {
+    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    expect(effectStart).toBeGreaterThan(0);
+    const slice = source.slice(effectStart, effectStart + 1500);
+    expect(slice).toMatch(/lastUpdated\s*==\s*null/);
+    expect(slice).toMatch(/issueCountRef\.current\s*=\s*undefined/);
+    expect(slice).toMatch(/prCountRef\.current\s*=\s*undefined/);
+    expect(slice).toMatch(/commitCountRef\.current\s*=\s*undefined/);
+    expect(slice).toMatch(/prevLastUpdatedRef\.current\s*=\s*null/);
+  });
+});
+
+/**
+ * Corner activity chip wiring.
+ */
+describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("declares per-category pulseAt state with a 3-minute TTL constant", () => {
+    expect(source).toMatch(
+      /\[issuesPulseAt,\s*setIssuesPulseAt\]\s*=\s*useState<number\s*\|\s*null>/
+    );
+    expect(source).toMatch(/\[prsPulseAt,\s*setPrsPulseAt\]\s*=\s*useState<number\s*\|\s*null>/);
+    expect(source).toMatch(/ACTIVITY_CHIP_TTL_MS\s*=\s*3\s*\*\s*60\s*\*\s*1000/);
+  });
+
+  it("does not import the deprecated seen-anchors store or its helper", () => {
+    expect(source).not.toContain("githubSeenAnchorsStore");
+    expect(source).not.toContain("deriveBadgeLabel");
+    expect(source).not.toContain("recordOpen");
+  });
+
+  it("sets pulseAt alongside the digit-pulse increment for issues and PRs only", () => {
+    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
+    const closeBrace = source.indexOf("});", eventStart);
+    const slice = source.slice(eventStart, closeBrace);
+    expect(slice).toMatch(/setIssueAnimKey\([\s\S]{0,80}?setIssuesPulseAt\(Date\.now\(\)\)/);
+    expect(slice).toMatch(/setPrAnimKey\([\s\S]{0,80}?setPrsPulseAt\(Date\.now\(\)\)/);
+    expect(slice).not.toContain("setCommitsPulseAt");
+  });
+
+  it("clears pulseAt on the open transition for both onClick and imperative paths", () => {
+    expect(source).toMatch(/willOpen\s*\)\s*setIssuesPulseAt\(null\)/);
+    expect(source).toMatch(/willOpen\s*\)\s*setPrsPulseAt\(null\)/);
+    expect(source).toMatch(/!issuesOpenRef\.current\)\s*setIssuesPulseAt\(null\)/);
+    expect(source).toMatch(/!prsOpenRef\.current\)\s*setPrsPulseAt\(null\)/);
+  });
+
+  it("schedules an auto-clear timer per pulseAt with ACTIVITY_CHIP_TTL_MS", () => {
+    expect(source).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?issuesPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setIssuesPulseAt\(null\)/
+    );
+    expect(source).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]{0,1500}?prsPulseAt[\s\S]{0,1500}?ACTIVITY_CHIP_TTL_MS[\s\S]{0,1500}?setPrsPulseAt\(null\)/
+    );
+  });
+
+  it("anchors the chip TTL to visible time via a per-chip hiddenAtRef + pulseAt shift — issue #9822", () => {
+    // The visibility handler must (a) record the wall-clock anchor when the
+    // document goes hidden, and (b) shift `pulseAt` forward by the hidden
+    // duration on restore so the next `remaining` math reflects elapsed
+    // visible time only. A bare wall-clock subtraction would let a chip
+    // expire unseen if the user hides for longer than the remaining TTL.
+    expect(source).toContain("issuesHiddenAtRef");
+    expect(source).toContain("prsHiddenAtRef");
+    // The shift must be `prev + hiddenMs` (anchor moves forward in time), not
+    // a subtract, no-op, or null/clear. Tightened to catch the exact shape.
+    expect(source).toMatch(
+      /setIssuesPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    expect(source).toMatch(
+      /setPrsPulseAt\(\(prev\)\s*=>\s*\(prev\s*===\s*null\s*\?\s*null\s*:\s*prev\s*\+\s*hiddenMs\)/
+    );
+    // Subscribe-before-sample: the effect must call addEventListener before
+    // the first tick() so a hide between sample and schedule is caught.
+    // Easier to check as a positional invariant: addEventListener appears
+    // earlier in the effect body than the bare `tick();` call.
+    const issuesEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?issuesPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[issuesPulseAt\]\)/
+    );
+    expect(issuesEffect).not.toBeNull();
+    const prsEffect = source.match(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?prsPulseAt[\s\S]*?addEventListener\("visibilitychange"[\s\S]*?tick\(\);[\s\S]*?\},\s*\[prsPulseAt\]\)/
+    );
+    expect(prsEffect).not.toBeNull();
+    // tick() must early-return while the document is hidden to avoid a
+    // race between a scheduled timer firing and the visibility event.
+    const tickGuardCount = (
+      source.match(/if\s*\(\s*document\.hidden\s*\)\s*\{[\s\S]{0,200}?return;/g) ?? []
+    ).length;
+    expect(tickGuardCount).toBeGreaterThanOrEqual(2);
+    // The effect body's post-listener sample must use an if/else (not an
+    // early `return`) so the cleanup at the bottom always registers and
+    // the visibilitychange listener is paired with a removeEventListener
+    // on unmount / dep change. A bare `if (document.hidden) { ...; return; }`
+    // here leaks the listener on every subsequent effect run that commits
+    // while hidden (round-3 review finding).
+    const issuesSample = source.match(
+      /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+    );
+    expect(issuesSample).not.toBeNull();
+    const prsSample = source
+      .slice(issuesSample!.index! + issuesSample![0].length)
+      .match(
+        /addEventListener\("visibilitychange",\s*onVisibility\);[\s\S]*?\}\s*else\s*\{[\s\S]*?tick\(\);/
+      );
+    expect(prsSample).not.toBeNull();
+  });
+
+  it("derives showIssuesChip / showPrsChip with open-state and count guards", () => {
+    expect(source).toMatch(
+      /showIssuesChip\s*=[\s\S]{0,200}?issuesPulseAt\s*!==\s*null[\s\S]{0,200}?!issuesOpen[\s\S]{0,200}?\(issueCount\s*\?\?\s*0\)\s*>\s*0/
+    );
+    expect(source).toMatch(
+      /showPrsChip\s*=[\s\S]{0,200}?prsPulseAt\s*!==\s*null[\s\S]{0,200}?!prsOpen[\s\S]{0,200}?\(prCount\s*\?\?\s*0\)\s*>\s*0/
+    );
+  });
+
+  it("renders activity chips with the matching state color via activityChip prop", () => {
+    // Issues chip uses bg-pr-open (green); PRs chip uses bg-pr-merged (purple).
+    // Both are now passed as the activityChip ReactNode prop to ForgeStatPill.
+    expect(source).toContain("showIssuesChip");
+    expect(source).toContain("bg-pr-open");
+    expect(source).toContain("polygon(0 0, 100% 0, 100% 100%)");
+    expect(source).toContain("pointer-events-none");
+    expect(source).toContain('aria-hidden="true"');
+
+    expect(source).toContain("showPrsChip");
+    expect(source).toContain("bg-pr-merged");
+  });
+
+  it("does not render a chip on the commits button", () => {
+    const commitsAnchor = source.indexOf("buttonRef={commitsButtonRef}");
+    const commitsSlice = source.slice(commitsAnchor, commitsAnchor + 3000);
+    expect(commitsSlice).not.toContain("showCommitsChip");
+    expect(commitsSlice).not.toContain("activityChip=");
+  });
+
+  it('folds "new since last view" into the issues + PRs aria-labels', () => {
+    expect(source).toMatch(/showIssuesChip\s*\?\s*" \(new since last view\)"\s*:\s*""/);
+    expect(source).toMatch(/showPrsChip\s*\?\s*" \(new since last view\)"\s*:\s*""/);
+  });
+
+  it("clears both chip pulses on project switch alongside the count refs", () => {
+    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    const slice = source.slice(effectStart, effectStart + 2000);
+    expect(slice).toContain("setIssuesPulseAt(null)");
+    expect(slice).toContain("setPrsPulseAt(null)");
+  });
+});
+
+/**
+ * Badge count bound to the dropdown's loaded items (issue #9693).
+ *
+ * The toolbar badge used to render the stats query's `totalCount`, which can
+ * exceed the first page the dropdown actually lists. The fix threads an
+ * `onCountUpdate(count, hasMore)` callback from each dropdown list view and
+ * derives a display value (`20+` when paginated) that binds the badge to what
+ * the dropdown shows. The numeric `count` prop stays on the stats path so the
+ * digit-pulse delta detection is unaffected.
+ */
+describe("ForgeStatsToolbarButton list-count badge wiring", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("declares list-count + has-more state for issues and PRs", () => {
+    expect(source).toMatch(
+      /\[issueListCount,\s*setIssueListCount\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(/\[issueListHasMore,\s*setIssueListHasMore\]\s*=\s*useState\(false\)/);
+    expect(source).toMatch(
+      /\[prListCount,\s*setPrListCount\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(/\[prListHasMore,\s*setPrListHasMore\]\s*=\s*useState\(false\)/);
+  });
+
+  it("derives the display count via the recency resolver (issue #9741)", () => {
+    // The badge no longer prefers the list count unconditionally — it defers to
+    // `resolveForgeDisplayCount`, which arbitrates the list count against the
+    // stats poll's `lastUpdated` so a fresher poll wins.
+    expect(source).toContain('from "./forgeStatsCountDisplay"');
+    expect(source).toMatch(
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*lastUpdated,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
+    );
+    expect(source).toMatch(
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*lastUpdated,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
+    );
+  });
+
+  it("stamps a recency timestamp when each list count updates (issue #9741)", () => {
+    expect(source).toMatch(/issueListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    expect(source).toMatch(/prListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    // Each handler must record Date.now() so the resolver can compare it to the
+    // stats poll's lastUpdated.
+    const issueHandler = source.slice(
+      source.indexOf("handleIssueListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback")
+    );
+    expect(issueHandler).toContain("issueListTimestampRef.current = Date.now()");
+    const prHandler = source.slice(
+      source.indexOf("handlePrListCountUpdate = useCallback"),
+      source.indexOf("handlePrListCountUpdate = useCallback") + 300
+    );
+    expect(prHandler).toContain("prListTimestampRef.current = Date.now()");
+  });
+
+  it("passes displayCount to the issue and PR pills", () => {
+    expect(source).toContain("displayCount={issueDisplayCount}");
+    expect(source).toContain("displayCount={prDisplayCount}");
+  });
+
+  it("threads onCountUpdate to both list slot instances (issue + PR)", () => {
+    const issueMatches = source.match(/onCountUpdate=\{handleIssueListCountUpdate\}/g);
+    const prMatches = source.match(/onCountUpdate=\{handlePrListCountUpdate\}/g);
+    expect(issueMatches?.length).toBe(1);
+    expect(prMatches?.length).toBe(1);
+  });
+
+  it("keeps the numeric count prop on the stats path for animation deltas", () => {
+    // The digit-pulse compares raw stats counts, so the pill's `count` prop
+    // must stay numeric (issueCount/prCount), not the display string.
+    expect(source).toContain("count={issueCount}");
+    expect(source).toContain("count={prCount}");
+  });
+
+  it("uses the display count in the issue + PR aria-labels and tooltips", () => {
+    expect(source).toContain('${issueDisplayCount ?? "—"} open issues');
+    expect(source).toContain('${prDisplayCount ?? "—"} open pull requests');
+    expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
+  });
+
+  it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
+    // The reset is keyed on currentProject?.path, not the stats `lastUpdated`
+    // reset effect — a fast project switch can leave statsLoading true while
+    // lastUpdated is null, masking that effect's guarded reset.
+    const depIdx = source.lastIndexOf("[currentProject?.path]");
+    expect(depIdx).toBeGreaterThan(-1);
+    // The effect body precedes its dependency array — scan the window just
+    // above the dep marker for the resets.
+    const slice = source.slice(Math.max(0, depIdx - 600), depIdx);
+    expect(slice).toContain("setIssueListCount(null)");
+    expect(slice).toContain("setIssueListHasMore(false)");
+    expect(slice).toContain("setPrListCount(null)");
+    expect(slice).toContain("setPrListHasMore(false)");
+    // Recency timestamps must clear too or project A's timestamp would suppress
+    // project B's first stats poll.
+    expect(slice).toContain("issueListTimestampRef.current = null");
+    expect(slice).toContain("prListTimestampRef.current = null");
+  });
+});

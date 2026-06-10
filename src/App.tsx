@@ -52,7 +52,7 @@ import {
   useGettingStartedChecklist,
   useOrchestrationMilestones,
   useAgentWaitingNudge,
-  useGitHubEnableRecommendation,
+  useForgeEnableRecommendation,
   useFocusOnActivateIntent,
   usePluginDeepLink,
   useNotificationHistoryPruning,
@@ -321,7 +321,6 @@ import {
   usePerformanceModeStore,
 } from "./store";
 import { usePerfMetricsStore } from "./store/perfMetricsStore";
-import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useRecipeConflictStore } from "./store/recipeConflictStore";
 import { useGitPushConfirmStore } from "./store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "./store/gitPullRebaseConfirmStore";
@@ -390,11 +389,6 @@ function AppInner() {
       window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
         useErrorStore.getState().reset();
       };
-      // Refreshes the GitHub config store from the main process. Used by
-      // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
-      // so the no-token empty state doesn't short-circuit IPC fault paths.
-      window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () =>
-        useGitHubConfigStore.getState().refresh();
       // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
       // the RecipeConflictDialog without racing a real on-disk file mutation. The
       // returned promise resolves with the user's choice; tests don't await it —
@@ -441,7 +435,6 @@ function AppInner() {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
-      delete window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
       delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
       delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
       delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
@@ -690,7 +683,7 @@ function AppInner() {
     return () => unsubscribe?.();
   }, []);
   // Defers the post-hydration housekeeping IPC reads (shortcut-hint counts,
-  // milestones, GitHub-recommendation plugin/remotes probes) out of the
+  // milestones, forge-recommendation plugin/remotes probes) out of the
   // synchronous isStateLoaded effect flush: their sends would otherwise land
   // on main ahead of the loaded-frame paint and compete with the
   // deferred-services drain. The flag flips from the background-priority task
@@ -703,7 +696,7 @@ function AppInner() {
   useUpdateListener(onboardingOverlayActive);
   useOrchestrationMilestones(isStateLoaded && idleHousekeepingReady);
   useAgentWaitingNudge(isStateLoaded);
-  useGitHubEnableRecommendation(isStateLoaded && idleHousekeepingReady);
+  useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
 
   useEffect(() => {

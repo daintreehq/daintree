@@ -1,7 +1,8 @@
 import { useEffect, useCallback, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { PulseRangeDays, ProjectPulse, ProjectHealthData } from "@shared/types";
+import type { PulseRangeDays, ProjectPulse } from "@shared/types";
+import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { usePulseStore, useProjectStore, PULSE_MAX_RETRIES } from "@/store";
 import { cn } from "@/lib/utils";
 import {
@@ -21,7 +22,6 @@ import {
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Activity } from "@/components/icons";
-import { GitHubIcon } from "@/components/icons/brands";
 import { PulseHeatmap, getPulseHeatmapRowWidth, getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
@@ -66,7 +66,7 @@ function getCoachLine(pulse: ProjectPulse): string {
   return "Make a tiny win: ship one small change today.";
 }
 
-function CIStatusIcon({ status }: { status: ProjectHealthData["ciStatus"] }) {
+function CIStatusIcon({ status }: { status: ForgeProjectHealthPayload["ciStatus"] }) {
   switch (status) {
     case "success":
       return <CheckCircle2 className="w-3.5 h-3.5 text-status-success" />;
@@ -81,7 +81,7 @@ function CIStatusIcon({ status }: { status: ProjectHealthData["ciStatus"] }) {
   }
 }
 
-function ciStatusLabel(status: ProjectHealthData["ciStatus"]): string {
+function ciStatusLabel(status: ForgeProjectHealthPayload["ciStatus"]): string {
   switch (status) {
     case "success":
       return "passing";
@@ -164,7 +164,7 @@ function HealthSignals({
   health,
   rangeDays,
 }: {
-  health: ProjectHealthData;
+  health: ForgeProjectHealthPayload;
   rangeDays: PulseRangeDays;
 }) {
   const openUrl = (path: string) => {
@@ -305,8 +305,8 @@ function HealthSectionSkeleton() {
 function NoRemoteHint() {
   return (
     <div className="flex items-center gap-2 text-xs text-daintree-text/75">
-      <GitHubIcon className="w-3.5 h-3.5" />
-      <span>Connect a GitHub remote for CI status, issues, and PRs</span>
+      <GitBranch className="w-3.5 h-3.5" />
+      <span>Connect a git remote for CI status, issues, and PRs</span>
     </div>
   );
 }
@@ -315,7 +315,7 @@ function OfflineHint() {
   return (
     <div className="flex items-center gap-2 text-xs text-daintree-text/75">
       <WifiOff className="w-3.5 h-3.5" />
-      <span>Offline — GitHub status unavailable</span>
+      <span>Offline — repository status unavailable</span>
     </div>
   );
 }
@@ -323,7 +323,7 @@ function OfflineHint() {
 const HEATMAP_LEGEND_GAP_PX = 3;
 
 // Legend swatches: the empty (0) cell plus the four heat levels, matching the
-// GitHub contribution legend. Backgrounds come from getPulseHeatLevelBackground
+// familiar contribution-graph legend. Backgrounds come from getPulseHeatLevelBackground
 // so the swatches share the exact fill the cells use — including the opacity
 // ramp themes fall back to when they omit the opaque pulse-heat-1..4 stops.
 const LEGEND_LEVELS = [0, 1, 2, 3, 4] as const;

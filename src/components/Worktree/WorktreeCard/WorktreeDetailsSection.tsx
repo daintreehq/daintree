@@ -100,12 +100,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
 
-  // Forge-resolved committer avatar (#8514). Resolves to a real GitHub
+  // Forge-resolved committer avatar (#8514). Resolves to the provider's
   // profile picture when the email is public; `undefined` while loading or on
   // miss, so the existing Gravatar tier transparently takes over.
   const forgeAuthorAvatarUrl = useForgeAuthorAvatar({
     email: worktree.worktreeChanges?.lastCommitAuthor?.email,
-    linkedProviderId: worktree.linked?.providerId,
+    cwd: worktree.path,
   });
 
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;

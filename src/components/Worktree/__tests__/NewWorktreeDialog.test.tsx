@@ -314,12 +314,18 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       initialPR: {
         number: 42,
         title: "Test PR",
-        headRefName: "feature/test",
-        state: "OPEN",
+        body: "",
+        headRef: "feature/test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
         url: "https://github.com/test/repo/pull/42",
-        author: { login: "user", avatarUrl: "" },
+        author: { login: "user", avatarUrl: "", rawData: null },
         isDraft: false,
-        updatedAt: new Date().toISOString(),
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
       },
     });
     await advanceTimersGradually(500);

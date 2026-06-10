@@ -75,15 +75,16 @@ import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings, AgentState, RepositoryStats } from "@shared/types";
+import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
+import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
-import { GitHubStatsToolbarButton, type GitHubStatsHandle } from "./GitHubStatsToolbarButton";
-import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
+import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -121,7 +122,7 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 // short enough that re-clicks don't feel stuck.
 const COPY_TREE_FEEDBACK_RESET_MS = 2000;
 
-function GitHubStatsPlaceholder() {
+function ForgeStatsPlaceholder() {
   return (
     <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
       <div className="h-8 flex-1" />
@@ -203,7 +204,11 @@ interface OverflowMenuProps {
   notificationUnreadCount: number;
   agentDominantStates: Map<string, AgentState | null>;
   hasActiveWorktree: boolean;
-  githubStatsRef: React.RefObject<GitHubStatsHandle | null>;
+  forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
+  // Display name of the resolved forge provider, or null when none resolves
+  // (no matching plugin / owning plugin disabled) — the stats group is
+  // skipped entirely in that case.
+  forgeProviderName: string | null;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
   pluginOverflowMeta: Record<string, OverflowMenuMeta>;
   // Shortcut display strings keyed by toolbar button id, so each overflow item
@@ -225,23 +230,21 @@ function OverflowMenu({
   notificationUnreadCount,
   agentDominantStates,
   hasActiveWorktree,
-  githubStatsRef,
+  forgeStatsRef,
+  forgeProviderName,
   overflowActions,
   pluginOverflowMeta,
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
-  // The hard-coded GitHub group below has no data source while the GitHub
-  // plugin is disabled — skip it entirely instead of showing dead items.
-  const githubEnabled = useGitHubPluginEnabled();
-  // Snapshot of the GitHub stats taken when the menu opens. The stats live in
-  // GitHubStatsToolbarButton's hook and are exposed through its imperative
+  // Snapshot of the repo stats taken when the menu opens. The stats live in
+  // ForgeStatsToolbarButton's hook and are exposed through its imperative
   // handle, so they can't be read during render (refs aren't reactive — the
   // menu wouldn't re-render on updates anyway). Reading in the open handler
   // captures them at the only moment they're about to become visible.
-  const [ghStats, setGhStats] = useState<RepositoryStats | null>(null);
+  const [repoStats, setRepoStats] = useState<ForgeRepositoryStats | null>(null);
   const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) setGhStats(githubStatsRef.current?.stats ?? null);
+    if (nextOpen) setRepoStats(forgeStatsRef.current?.stats ?? null);
     setOpen(nextOpen);
   };
   const isEmpty = overflowIds.length === 0;
@@ -327,31 +330,31 @@ function OverflowMenu({
       >
         {overflowIds.flatMap((id, idx) => {
           if (id === "github-stats") {
-            if (!githubEnabled) return [];
+            if (!forgeProviderName) return [];
             const isLast = idx === overflowIds.length - 1;
             return [
-              <DropdownMenuGroup key="gh-group">
-                <DropdownMenuLabel>GitHub</DropdownMenuLabel>
+              <DropdownMenuGroup key="forge-group">
+                <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
                 <DropdownMenuItem
-                  key="gh-issues"
-                  onClick={() => githubStatsRef.current?.openIssues()}
+                  key="forge-issues"
+                  onClick={() => forgeStatsRef.current?.openIssues()}
                 >
                   <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
-                  Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
+                  Issues {repoStats?.issueCount != null ? `(${repoStats.issueCount})` : ""}
                 </DropdownMenuItem>
-                <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
+                <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
                   <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
-                  Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
+                  Pull Requests {repoStats?.prCount != null ? `(${repoStats.prCount})` : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  key="gh-commits"
-                  onClick={() => githubStatsRef.current?.openCommits()}
+                  key="forge-commits"
+                  onClick={() => forgeStatsRef.current?.openCommits()}
                 >
                   <GitCommit className="mr-2 h-4 w-4" />
-                  Commits {ghStats?.commitCount != null ? `(${ghStats.commitCount})` : ""}
+                  Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
-              ...(isLast ? [] : [<DropdownMenuSeparator key="gh-sep" />]),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
@@ -459,7 +462,8 @@ export function Toolbar({
   const currentProject = useProjectStore((state) => state.currentProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
-  const githubEnabled = useGitHubPluginEnabled();
+  const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const forgeProviderName = forgeProviderEntry?.contribution.name ?? null;
   const projectSwitcher = projectSwitcherPalette;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -534,7 +538,7 @@ export function Toolbar({
   // focus to document.body, and we redirect it to the overflow trigger or
   // nearest visible item to preserve keyboard navigation (WCAG 2.4.3).
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
-  const githubStatsRef = useRef<GitHubStatsHandle>(null);
+  const forgeStatsRef = useRef<ForgeStatsHandle>(null);
 
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
@@ -897,20 +901,20 @@ export function Toolbar({
         isAvailable: true,
       },
       "github-stats": {
-        // Placeholder (not removal) when the GitHub plugin is disabled: the
+        // Placeholder (not removal) when no forge provider resolves: the
         // slot's no-drag rectangle must exist on first paint regardless
         // (PROJECT_SCOPED_TOOLBAR_IDS), and the placeholder keeps the
         // footprint stable across a live enable.
         render: () =>
-          currentProject && githubEnabled ? (
-            <GitHubStatsToolbarButton
+          currentProject && forgeProviderEntry ? (
+            <ForgeStatsToolbarButton
               key="github-stats"
-              ref={githubStatsRef}
+              ref={forgeStatsRef}
               currentProject={currentProject}
               data-toolbar-item=""
             />
           ) : (
-            <GitHubStatsPlaceholder />
+            <ForgeStatsPlaceholder />
           ),
         isAvailable: true,
       },
@@ -1050,7 +1054,7 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
-      githubEnabled,
+      forgeProviderEntry,
       pluginButtonIds,
       pluginConfigs,
       devServerShortcut,
@@ -1143,7 +1147,7 @@ export function Toolbar({
   useEffect(() => {
     const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
     if (overflowSet.has("github-stats")) {
-      githubStatsRef.current?.closeAll();
+      forgeStatsRef.current?.closeAll();
     }
     if (overflowSet.has("notification-center")) {
       useUIStore.getState().closeNotificationCenter();
@@ -1308,7 +1312,8 @@ export function Toolbar({
       notificationUnreadCount={notificationUnreadCount}
       agentDominantStates={agentDominantStates}
       hasActiveWorktree={!!activeWorktree}
-      githubStatsRef={githubStatsRef}
+      forgeStatsRef={forgeStatsRef}
+      forgeProviderName={forgeProviderName}
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
       shortcutById={overflowShortcutById}

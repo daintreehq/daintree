@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 import { parseBranchInput } from "../branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { detectPrefixFromIssue } from "../branchPrefixUtils";
@@ -8,14 +8,14 @@ export interface UseBranchInputResult {
   branchInput: string;
   setBranchInput: React.Dispatch<React.SetStateAction<string>>;
   branchInputTouchedRef: React.MutableRefObject<boolean>;
-  selectedIssue: GitHubIssue | null;
-  setSelectedIssue: React.Dispatch<React.SetStateAction<GitHubIssue | null>>;
+  selectedIssue: Issue | null;
+  setSelectedIssue: React.Dispatch<React.SetStateAction<Issue | null>>;
   issueTouchedRef: React.MutableRefObject<boolean>;
   fromRemote: boolean;
   setFromRemote: React.Dispatch<React.SetStateAction<boolean>>;
   newBranchInputRef: React.RefObject<HTMLInputElement | null>;
   parsedBranch: ReturnType<typeof parseBranchInput>;
-  handleIssueSelect: (issue: GitHubIssue | null) => void;
+  handleIssueSelect: (issue: Issue | null) => void;
   markBranchInputTouched: () => void;
 }
 
@@ -26,12 +26,12 @@ export function useBranchInput({
   configuredBranchPrefix,
 }: {
   isOpen: boolean;
-  initialIssue?: GitHubIssue | null;
-  initialPR?: GitHubPR | null;
+  initialIssue?: Issue | null;
+  initialPR?: PR | null;
   configuredBranchPrefix: string;
 }): UseBranchInputResult {
   const [branchInput, setBranchInput] = useState("");
-  const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
+  const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [fromRemote, setFromRemote] = useState(false);
   const branchInputTouchedRef = useRef(false);
   const issueTouchedRef = useRef(false);
@@ -46,8 +46,8 @@ export function useBranchInput({
     setFromRemote(false);
     setSelectedIssue(initialIssue ?? null);
 
-    if (initialPR?.headRefName) {
-      setBranchInput(initialPR.headRefName);
+    if (initialPR?.headRef) {
+      setBranchInput(initialPR.headRef);
     } else {
       setBranchInput("");
     }
@@ -82,7 +82,7 @@ export function useBranchInput({
     }
   }, [selectedIssue, configuredBranchPrefix]);
 
-  const handleIssueSelect = useCallback((issue: GitHubIssue | null) => {
+  const handleIssueSelect = useCallback((issue: Issue | null) => {
     setSelectedIssue(issue);
     if (issue !== null) issueTouchedRef.current = true;
   }, []);

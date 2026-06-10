@@ -2,7 +2,7 @@ import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 import type { FleetScopeToken } from "@shared/types/worktree";
 import { useFocusStore } from "@/store/focusStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -14,8 +14,8 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface CreateDialogState {
   isOpen: boolean;
-  initialIssue: GitHubIssue | null;
-  initialPR: GitHubPR | null;
+  initialIssue: Issue | null;
+  initialPR: PR | null;
   initialRecipeId: string | null;
   initialBranchInput: string | null;
   onCreated?: (worktreeId: string) => void;
@@ -31,15 +31,15 @@ export interface PendingCreation {
 
 interface QuickCreateState {
   isOpen: boolean;
-  issue: GitHubIssue | null;
-  pr: GitHubPR | null;
+  issue: Issue | null;
+  pr: PR | null;
 }
 
 interface BulkCreateDialogState {
   isOpen: boolean;
   mode: "issue" | "pr";
-  selectedIssues: GitHubIssue[];
-  selectedPRs: GitHubPR[];
+  selectedIssues: Issue[];
+  selectedPRs: PR[];
   onComplete?: () => void;
 }
 
@@ -93,19 +93,19 @@ interface WorktreeSelectionState {
   toggleTerminalsExpanded: (id: string) => void;
   setTerminalsExpanded: (id: string, expanded: boolean) => void;
   openCreateDialog: (
-    initialIssue?: GitHubIssue | null,
+    initialIssue?: Issue | null,
     options?: {
       initialRecipeId?: string | null;
       initialBranchInput?: string | null;
       onCreated?: (worktreeId: string) => void;
     }
   ) => void;
-  openCreateDialogForPR: (pr: GitHubPR) => void;
+  openCreateDialogForPR: (pr: PR) => void;
   closeCreateDialog: () => void;
-  openBulkCreateDialog: (selectedIssues: GitHubIssue[], onComplete?: () => void) => void;
-  openBulkCreateDialogForPRs: (selectedPRs: GitHubPR[], onComplete?: () => void) => void;
+  openBulkCreateDialog: (selectedIssues: Issue[], onComplete?: () => void) => void;
+  openBulkCreateDialogForPRs: (selectedPRs: PR[], onComplete?: () => void) => void;
   closeBulkCreateDialog: () => void;
-  openQuickCreate: (context?: { issue?: GitHubIssue | null; pr?: GitHubPR | null }) => void;
+  openQuickCreate: (context?: { issue?: Issue | null; pr?: PR | null }) => void;
   closeQuickCreate: () => void;
   openCrossWorktreeDiff: (initialWorktreeId?: string | null) => void;
   closeCrossWorktreeDiff: () => void;

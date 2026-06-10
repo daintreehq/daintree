@@ -3,12 +3,12 @@ import { X } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 
 interface BulkActionBarProps {
   mode: "issue" | "pr";
-  selectedIssues: GitHubIssue[];
-  selectedPRs: GitHubPR[];
+  selectedIssues: Issue[];
+  selectedPRs: PR[];
   selectedCount: number;
   onClear: () => void;
   onCloseDropdown?: () => void;

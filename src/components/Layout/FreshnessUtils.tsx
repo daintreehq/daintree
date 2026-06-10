@@ -41,7 +41,7 @@ export function freshnessSuffix(
     case "stale-disk":
       return " · cached from previous session";
     case "errored":
-      return " · couldn't reach GitHub";
+      return " · couldn't refresh";
     case "fresh":
     default:
       return "";

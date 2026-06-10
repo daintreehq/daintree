@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import React from "react";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -34,8 +34,9 @@ vi.mock("@/clients", () => ({
     listBranches: (...args: unknown[]) => mockListBranches(...args),
     fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
   },
-  githubClient: {
+  forgeClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
+    getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
   },
   agentSettingsClient: {
     get: (...args: unknown[]) => mockAgentSettingsGet(...args),
@@ -84,7 +85,8 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 const prefsHolder: { assignWorktreeToSelf: boolean } = { assignWorktreeToSelf: false };
-const githubConfigHolder: { config: { username?: string } | null } = { config: null };
+const viewerHolder: { user: { login: string; avatarUrl?: string } | null } = { user: null };
+const mockGetCurrentUser = vi.fn(async () => viewerHolder.user);
 
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -94,21 +96,6 @@ vi.mock("@/store/preferencesStore", () => ({
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: vi.fn(),
     }),
-}));
-
-vi.mock("../stores/githubConfigStore", () => ({
-  useGitHubConfigStore: Object.assign(
-    (selector: (s: Record<string, unknown>) => unknown) =>
-      selector({
-        config: githubConfigHolder.config,
-        initialize: vi.fn(),
-      }),
-    {
-      getState: () => ({
-        config: githubConfigHolder.config,
-      }),
-    }
-  ),
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -260,15 +247,20 @@ async function advanceTimersGradually(totalMs: number, stepMs = 100) {
   }
 }
 
-const makeIssue = (n: number, title?: string): GitHubIssue => ({
+const makeIssue = (n: number, title?: string): Issue => ({
   number: n,
   title: title ?? `Issue ${n}`,
+  body: "",
   url: `https://github.com/test/repo/issues/${n}`,
-  state: "OPEN",
-  updatedAt: "2026-01-01",
-  author: { login: "user", avatarUrl: "" },
+  state: "open",
+  rawState: "OPEN",
+  author: { login: "user", avatarUrl: "", rawData: null },
   assignees: [],
+  labels: [],
   commentCount: 0,
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
 });
 
 function setupWorktreeCreateMocks() {
@@ -289,15 +281,21 @@ function setupWorktreeCreateMocks() {
   ]);
 }
 
-const makePR = (n: number, title?: string, headRefName?: string): GitHubPR => ({
+const makePR = (n: number, title?: string, headRef?: string): PR => ({
   number: n,
   title: title ?? `PR ${n}`,
+  body: "",
   url: `https://github.com/test/repo/pull/${n}`,
-  state: "OPEN",
+  state: "open",
+  rawState: "OPEN",
   isDraft: false,
-  updatedAt: "2026-01-01",
-  author: { login: "user", avatarUrl: "" },
-  headRefName: headRefName ?? `feature/pr-${n}`,
+  merged: false,
+  author: { login: "user", avatarUrl: "", rawData: null },
+  baseRef: "main",
+  headRef: headRef ?? `feature/pr-${n}`,
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
 });
 
 beforeEach(() => {
@@ -314,7 +312,7 @@ beforeEach(() => {
   mockGenerateAgentCommand.mockReturnValue("claude --fresh");
   mockGenerateRecipeFromActiveTerminals.mockReturnValue([]);
   prefsHolder.assignWorktreeToSelf = false;
-  githubConfigHolder.config = null;
+  viewerHolder.user = null;
 });
 
 afterEach(() => {
@@ -328,7 +326,7 @@ describe("BulkCreateWorktreeDialog", () => {
     onClose: vi.fn(),
     mode: "issue" as const,
     selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3)],
-    selectedPRs: [] as GitHubPR[],
+    selectedPRs: [] as PR[],
     onComplete: vi.fn(),
   };
 
@@ -1687,13 +1685,13 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     onClose: vi.fn(),
     mode: "issue" as const,
     selectedIssues: [makeIssue(1)],
-    selectedPRs: [] as GitHubPR[],
+    selectedPRs: [] as PR[],
     onComplete: vi.fn(),
   };
 
   it("retries transient assignment failure with backoff then succeeds", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     let assignCallCount = 0;
     mockAssignIssue.mockImplementation(() => {
@@ -1720,7 +1718,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
   it("succeeds when assignment recovers after two transient failures", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     let assignCallCount = 0;
     mockAssignIssue.mockImplementation(() => {
@@ -1748,7 +1746,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
   it("keeps retrying transient assignment failures past the old 3-attempt cap", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     // Six consecutive transient failures — more than the old MAX_AUTO_RETRIES
     // cap of 3 total attempts — then recovery. Proves the count-based ceiling is
@@ -1779,7 +1777,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
   it("surfaces non-transient assignment failures as item failures", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     mockAssignIssue.mockRejectedValue(new Error("Forbidden"));
 
@@ -1801,7 +1799,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
   it("surfaces a silent-drop assignment (token lacks push access) as a failure", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     // POST /assignees returns 201 with an empty assignees[] when the token
     // lacks push access. assignIssue() in the main process detects this and
@@ -1827,7 +1825,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
   it("gives up on a transient assignment failure only after the wall-clock ceiling", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     mockAssignIssue.mockRejectedValue(
       new Error("GitHub is temporarily unavailable. Please retry.")
@@ -1853,7 +1851,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
   it("stops assignment retries when the run is cancelled mid-backoff", async () => {
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     mockAssignIssue.mockRejectedValue(
       new Error("GitHub is temporarily unavailable. Please retry.")
@@ -1890,7 +1888,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     // describe block uses a single-item batch. This test guards the regression
     // that prompted #8975: 2 of 3 must NOT be reported as 3 of 3.
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
 
     mockAssignIssue.mockImplementation((_root: string, issueNumber: number, _username: string) => {
       if (issueNumber === 2) return Promise.reject(new Error("Forbidden"));
@@ -1918,7 +1916,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     // Pre-fix, handleRetryFailed cleared all terminal tracking, causing the
     // recipe to re-spawn every terminal on retry of an assignment failure.
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ terminalId: "t-1" }],
@@ -1962,7 +1960,7 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     // must skip items already in failedItems, or it overwrites
     // failedStep:"assignment" with failedStep:"verification".
     prefsHolder.assignWorktreeToSelf = true;
-    githubConfigHolder.config = { username: "me" };
+    viewerHolder.user = { login: "me" };
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ terminalId: "t-crash" }],
@@ -1990,7 +1988,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     isOpen: true,
     onClose: vi.fn(),
     mode: "pr" as const,
-    selectedIssues: [] as GitHubIssue[],
+    selectedIssues: [] as Issue[],
     selectedPRs: [makePR(10), makePR(20), makePR(30)],
     onComplete: vi.fn(),
   };
@@ -2061,9 +2059,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
   });
 
   it("includes fork PRs in plan", () => {
-    const forkPR: GitHubPR = {
+    const forkPR: PR = {
       ...makePR(99),
-      isFork: true,
+      rawData: { isFork: true },
     };
     const props = { ...prProps, selectedPRs: [forkPR] };
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -2073,9 +2071,10 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
   });
 
   it("skips merged PRs with reason", () => {
-    const mergedPR: GitHubPR = {
+    const mergedPR: PR = {
       ...makePR(99),
-      state: "MERGED",
+      state: "merged",
+      merged: true,
     };
     const props = { ...prProps, selectedPRs: [mergedPR] };
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -2083,10 +2082,10 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(screen.getByText("Merged")).toBeTruthy();
   });
 
-  it("skips PRs without headRefName", () => {
-    const noRefPR: GitHubPR = {
+  it("skips PRs without headRef", () => {
+    const noRefPR: PR = {
       ...makePR(99),
-      headRefName: undefined,
+      headRef: undefined as unknown as string,
     };
     const props = { ...prProps, selectedPRs: [noRefPR] };
     render(<BulkCreateWorktreeDialog {...props} />);

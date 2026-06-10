@@ -68,8 +68,8 @@ describe("createActionDefinitions", () => {
     expect(actions.has("errors.openLogs")).toBe(true);
     expect(actions.has("eventInspector.getEvents")).toBe(true);
     expect(actions.has("eventInspector.subscribe")).toBe(true);
-    expect(actions.has("github.setToken")).toBe(true);
-    expect(actions.has("github.listIssues")).toBe(true);
+    expect(actions.has("forge.openPR")).toBe(true);
+    expect(actions.has("forge.listIssues")).toBe(true);
   });
 
   it("registers all BUILT_IN_ACTION_IDS entries", async () => {
@@ -82,21 +82,32 @@ describe("createActionDefinitions", () => {
     expect(missing).toEqual([]);
   });
 
-  it("does not register the removed github.* one-release aliases", async () => {
+  it("does not register removed github.* action ids", async () => {
     const actions = await createRegistry();
 
-    // These forwarded to forge.* for one release and have since been removed.
-    // Guards against accidental re-registration (which the round-trip test above,
-    // driven by BUILT_IN_ACTION_IDS, would not catch on its own).
-    const removedAliases = [
+    // The first batch forwarded to forge.* for one release before removal; the
+    // second batch was the GitHub-specific host action surface retired by the
+    // forge-neutral migration. Guards against accidental re-registration
+    // (which the round-trip test above, driven by BUILT_IN_ACTION_IDS, would
+    // not catch on its own).
+    const removedIds = [
       "github.openIssues",
       "github.openPRs",
       "github.openCommits",
       "github.openIssue",
       "github.assignIssue",
       "github.validateToken",
+      "github.openPR",
+      "github.getRepoStats",
+      "github.listIssues",
+      "github.listPullRequests",
+      "github.getIssueByNumber",
+      "github.checkCli",
+      "github.getConfig",
+      "github.setToken",
+      "github.clearToken",
     ];
-    const stillRegistered = removedAliases.filter((id) => actions.has(id as any));
+    const stillRegistered = removedIds.filter((id) => actions.has(id as any));
     expect(stillRegistered).toEqual([]);
   });
 

@@ -10,8 +10,9 @@ import type { GitHubIssue, GitHubListResponse } from "../../shared/types/github"
  * - `__daintreeSeedGitHubToken` / `__daintreeClearGitHubToken` (main process,
  *   `electron/window/globalServicesInit.ts`) seed an in-memory token, skipping
  *   validation by pre-populating cached user info.
- * - `window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__` (renderer, `src/App.tsx`)
- *   re-hydrates the renderer's GitHub config store so `hasToken: true` lands.
+ * - `window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__` (renderer,
+ *   `plugins/builtin/github/renderer/index.tsx`) re-hydrates the renderer's
+ *   GitHub config store so `hasToken: true` lands.
  * - `forge:rate-limit-changed` / `github:token-health-changed` pushes mirror
  *   the real `broadcastToRenderer` transport so the rate-limit and token-health
  *   surfaces light up exactly as in production.

@@ -167,7 +167,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("renders inert placeholders before a project is available", () => {
-      expect(source).toContain("GitHubStatsPlaceholder");
+      expect(source).toContain("ForgeStatsPlaceholder");
       expect(source).toContain("DevServerPlaceholder");
       expect(source).toContain("data-toolbar-placeholder");
       expect(source).toContain("!currentProject && PROJECT_SCOPED_TOOLBAR_IDS.has(id)");

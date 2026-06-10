@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
 import type {
@@ -1079,13 +1078,23 @@ export const SETTINGS_REGISTRY = [
     ],
     sections: [
       {
-        id: "github-token",
-        subtab: BUILTIN_GITHUB_PROVIDER_ID,
-        subtabLabel: "GitHub",
-        section: "Personal access token",
-        title: "GitHub personal access token",
-        description: "Configure GitHub authentication token. Required scopes: repo, read:org",
-        keywords: ["github", "token", "authentication", "auth", "PAT", "access", "scopes", "API"],
+        id: "forge-access-token",
+        section: "Authentication",
+        title: "Code forge access token",
+        description: "Configure access tokens and credentials for your code forge providers",
+        keywords: [
+          "token",
+          "forge",
+          "authentication",
+          "auth",
+          "PAT",
+          "access",
+          "credentials",
+          "github",
+          "gitlab",
+          "gitea",
+          "API",
+        ],
       },
       {
         id: "forge-default-provider",

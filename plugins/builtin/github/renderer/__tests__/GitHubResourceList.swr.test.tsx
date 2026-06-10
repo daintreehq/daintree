@@ -4,11 +4,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
 import React, { Activity, type ReactNode } from "react";
-import type { GitHubIssue, GitHubListResponse, GitHubListOptions } from "@shared/types/github";
-import { setCache, buildCacheKey, _resetForTests } from "@/lib/githubResourceCache";
+import type { Issue, ListOptions, Page } from "@shared/types/forge";
+import { setCache, buildCacheKey, _resetForTests } from "@/lib/forgeResourceCache";
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
 import { useIssueSelectionStore } from "@/store/issueSelectionStore";
-import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 
@@ -17,16 +18,16 @@ const mockListPRs = vi.fn();
 const mockGetIssueByNumber = vi.fn();
 const mockGetPRByNumber = vi.fn();
 
-vi.mock("@/clients/githubClient", () => ({
-  githubClient: {
-    listIssues: (
-      options: Omit<GitHubListOptions, "state"> & { state?: "open" | "closed" | "all" }
-    ) => mockListIssues(options),
-    listPullRequests: (
-      options: Omit<GitHubListOptions, "state"> & { state?: "open" | "closed" | "merged" | "all" }
-    ) => mockListPRs(options),
-    getIssueByNumber: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
-    getPRByNumber: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
+// The shim merges `cwd` into the options object so assertions can keep
+// matching a single flat shape.
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: {
+    listIssues: (cwd: string, opts?: ListOptions) => mockListIssues({ cwd, ...opts }),
+    listPRs: (cwd: string, opts?: ListOptions) => mockListPRs({ cwd, ...opts }),
+    getIssue: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
+    getPR: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
+    getIssuesByNumbers: vi.fn().mockResolvedValue([]),
+    getPRsByNumbers: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -106,7 +107,7 @@ vi.mock("react-dom", async () => {
 });
 
 vi.mock("../components/GitHubListItem", () => ({
-  GitHubListItem: ({ item }: { item: GitHubIssue }) => (
+  GitHubListItem: ({ item }: { item: Issue }) => (
     <div data-testid={`item-${item.number}`}>{item.title}</div>
   ),
 }));
@@ -181,25 +182,40 @@ vi.mock("@/components/Worktree/LiveTimeAgo", () => ({
 
 import { GitHubResourceList } from "../components/GitHubResourceList";
 
-const makeIssue = (n: number): GitHubIssue => ({
+const makeIssue = (n: number): Issue => ({
   number: n,
   title: `Issue #${n}`,
+  body: "",
   url: `https://github.com/test/repo/issues/${n}`,
-  state: "OPEN",
-  updatedAt: "2026-01-01",
-  author: { login: "user", avatarUrl: "" },
+  state: "open",
+  rawState: "OPEN",
+  updatedAt: 0,
+  createdAt: 0,
+  author: { login: "user", avatarUrl: "", rawData: null },
   assignees: [],
+  labels: [],
   commentCount: 0,
+  rawData: null,
 });
 
-const makeResponse = (
-  items: GitHubIssue[],
-  totalCount?: number
-): GitHubListResponse<GitHubIssue> => ({
+const makeResponse = (items: Issue[], totalCount?: number): Page<Issue> => ({
   items,
-  pageInfo: { hasNextPage: false, endCursor: null },
+  nextCursor: null,
+  hasMore: false,
   ...(totalCount === undefined ? {} : { totalCount }),
 });
+
+const setRateLimit = (
+  blocked: boolean,
+  kind: "primary" | "secondary" | null,
+  resetAt: number | null
+) => {
+  useForgeProviderHealthStore.getState().applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, {
+    blocked,
+    kind,
+    resetAt,
+  });
+};
 
 beforeEach(() => {
   _resetForTests();
@@ -213,7 +229,7 @@ beforeEach(() => {
   initializeMock.mockClear();
   mockSelectionClear.mockReset();
   useIssueSelectionStore.setState({ selections: new Map() });
-  useGitHubRateLimitStore.setState({ blocked: false, kind: null, resetAt: null });
+  setRateLimit(false, null, null);
   mockIsSelectionActive = false;
   mockGitHubConfig = { hasToken: true };
   mockGitHubConfigInitialized = true;
@@ -246,8 +262,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(10), makeIssue(11)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -266,8 +282,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(10)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -291,8 +307,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const seededTimestamp = Date.now() - 5 * 60 * 1000;
     setCache(cacheKey, {
       items: [makeIssue(20)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: seededTimestamp,
     });
 
@@ -319,8 +335,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(30)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now() - 60_000,
     });
 
@@ -351,8 +367,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(50)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -380,14 +396,15 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1), makeIssue(2)],
-      endCursor: "cursor-1",
-      hasNextPage: true,
+      nextCursor: "cursor-1",
+      hasMore: true,
       timestamp: Date.now(),
     });
 
     mockListIssues.mockResolvedValue({
       items: [makeIssue(1), makeIssue(2)],
-      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      nextCursor: "cursor-1",
+      hasMore: true,
     });
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
@@ -401,8 +418,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -417,8 +434,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(10)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -460,8 +477,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(20)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now() - 5_000,
     });
 
@@ -503,7 +520,8 @@ describe("GitHubResourceList SWR behavior", () => {
     // with the loaded length and the real hasNextPage flag, yielding "2+".
     mockListIssues.mockResolvedValue({
       items: [makeIssue(1), makeIssue(2)],
-      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      nextCursor: "cursor-1",
+      hasMore: true,
     });
     const onCountUpdate = vi.fn();
 
@@ -524,7 +542,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const items = Array.from({ length: 20 }, (_, i) => makeIssue(i + 1));
     mockListIssues.mockResolvedValue({
       items,
-      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      nextCursor: "cursor-1",
+      hasMore: true,
       totalCount: 47,
     });
     const onCountUpdate = vi.fn();
@@ -566,7 +585,8 @@ describe("GitHubResourceList SWR behavior", () => {
     }));
     mockListPRs.mockResolvedValue({
       items: prs,
-      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      nextCursor: "cursor-1",
+      hasMore: true,
       totalCount: 61,
     });
     const onCountUpdate = vi.fn();
@@ -586,8 +606,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(10)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -608,7 +628,8 @@ describe("GitHubResourceList SWR behavior", () => {
   it("does not call onCountUpdate when loading more (append) pages", async () => {
     mockListIssues.mockResolvedValueOnce({
       items: [makeIssue(1), makeIssue(2)],
-      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+      nextCursor: "cursor-1",
+      hasMore: true,
     });
     const onCountUpdate = vi.fn();
 
@@ -623,7 +644,8 @@ describe("GitHubResourceList SWR behavior", () => {
     // Second page (append) — must not move the badge count.
     mockListIssues.mockResolvedValueOnce({
       items: [makeIssue(3), makeIssue(4)],
-      pageInfo: { hasNextPage: false, endCursor: null },
+      nextCursor: null,
+      hasMore: false,
     });
     const loadMore = await screen.findByRole("button", { name: /load more/i });
     act(() => {
@@ -691,8 +713,8 @@ describe("GitHubResourceList SWR behavior", () => {
     const keyA = buildCacheKey("/proj-a", "issue", "open", "created");
     setCache(keyA, {
       items: [makeIssue(50)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -719,8 +741,8 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -752,8 +774,8 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -777,8 +799,8 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -813,19 +835,21 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     const updatedPR = { ...stalePR, ciStatus: "PENDING" as const };
     setCache(cacheKey, {
       items: [stalePR],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
     mockListPRs
       .mockResolvedValueOnce({
         items: [stalePR],
-        pageInfo: { hasNextPage: false, endCursor: null },
+        nextCursor: null,
+        hasMore: false,
       })
       .mockResolvedValueOnce({
         items: [updatedPR],
-        pageInfo: { hasNextPage: false, endCursor: null },
+        nextCursor: null,
+        hasMore: false,
       });
 
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
@@ -848,8 +872,8 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -874,8 +898,8 @@ describe("GitHubResourceList focus/visibility revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -932,8 +956,8 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -972,8 +996,8 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -994,8 +1018,8 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1049,8 +1073,8 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1105,17 +1129,17 @@ describe("GitHubResourceList wake-coordinator revalidation", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
     // Mount-time revalidate resolves immediately. Wake revalidate hangs so we
     // can observe the `refreshing` flag set, then get aborted by the search.
-    let resolveWakeRevalidate: ((value: GitHubListResponse<GitHubIssue>) => void) | undefined;
+    let resolveWakeRevalidate: ((value: Page<Issue>) => void) | undefined;
     mockListIssues.mockResolvedValueOnce(makeResponse([makeIssue(1)])).mockImplementationOnce(
       () =>
-        new Promise<GitHubListResponse<GitHubIssue>>((resolve) => {
+        new Promise<Page<Issue>>((resolve) => {
           resolveWakeRevalidate = resolve;
         })
     );
@@ -1398,12 +1422,12 @@ describe("GitHubResourceList retry behavior", () => {
   });
 
   it("does not flash an error during the retry window", async () => {
-    let resolveSecond: (v: GitHubListResponse<GitHubIssue>) => void = () => {};
+    let resolveSecond: (v: Page<Issue>) => void = () => {};
     mockListIssues
       .mockRejectedValueOnce(new Error("Cannot reach GitHub. Check your internet connection."))
       .mockImplementationOnce(
         () =>
-          new Promise<GitHubListResponse<GitHubIssue>>((resolve) => {
+          new Promise<Page<Issue>>((resolve) => {
             resolveSecond = resolve;
           })
       );
@@ -1494,11 +1518,7 @@ describe("GitHubResourceList retry behavior", () => {
   });
 
   it("skips fetches entirely when the rate-limit store reports blocked", async () => {
-    useGitHubRateLimitStore.setState({
-      blocked: true,
-      kind: "primary",
-      resetAt: Date.now() + 60_000,
-    });
+    setRateLimit(true, "primary", Date.now() + 60_000);
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
@@ -1528,11 +1548,7 @@ describe("GitHubResourceList retry behavior", () => {
 
     // Push arrives, confirming the block at the store level.
     act(() => {
-      useGitHubRateLimitStore.setState({
-        blocked: true,
-        kind: "primary",
-        resetAt: Date.now() + 60_000,
-      });
+      setRateLimit(true, "primary", Date.now() + 60_000);
     });
     expect(screen.getByText(/GitHub requests are paused/)).toBeTruthy();
 
@@ -1540,7 +1556,7 @@ describe("GitHubResourceList retry behavior", () => {
     // auto-clear so `isRateLimited` returns to false.
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
     act(() => {
-      useGitHubRateLimitStore.setState({ blocked: false, kind: null, resetAt: null });
+      setRateLimit(false, null, null);
     });
 
     await waitFor(() => {
@@ -1552,16 +1568,12 @@ describe("GitHubResourceList retry behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(60)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
-    useGitHubRateLimitStore.setState({
-      blocked: true,
-      kind: "primary",
-      resetAt: Date.now() + 60_000,
-    });
+    setRateLimit(true, "primary", Date.now() + 60_000);
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(60)]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
@@ -1599,8 +1611,8 @@ describe("GitHubResourceList retry behavior", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(20)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1629,8 +1641,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(40), makeIssue(41)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(40), makeIssue(41)]));
@@ -1675,8 +1687,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     // Prime with one issue so the initial mount renders rows.
     setCache(cacheKey, {
       items: [makeIssue(70)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now() - 30_000,
     });
     // Mount-time revalidate returns the same single row; later reveal-time
@@ -1705,8 +1717,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     rerender(<Harness mode="hidden" />);
     setCache(cacheKey, {
       items: [],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1724,8 +1736,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(openKey, {
       items: [makeIssue(80)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues
@@ -1768,14 +1780,14 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const closedKey = buildCacheKey("/test/proj", "issue", "closed", "created");
     setCache(openKey, {
       items: [makeIssue(60)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     setCache(closedKey, {
       items: [makeIssue(61), makeIssue(62)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1816,14 +1828,14 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const closedKey = buildCacheKey("/test/proj", "issue", "closed", "created");
     setCache(openKey, {
       items: [makeIssue(70)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     setCache(closedKey, {
       items: [makeIssue(71)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1857,8 +1869,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(81), makeIssue(82), makeIssue(83)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1892,8 +1904,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const closedKey = buildCacheKey("/test/proj", "issue", "closed", "created");
     setCache(closedKey, {
       items: [],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
 
@@ -1926,8 +1938,8 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     const openKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(openKey, {
       items: [makeIssue(60)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues
@@ -1966,8 +1978,8 @@ describe("GitHubResourceList aria-busy placement (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     // Hang the revalidation so refreshing stays true.
@@ -1990,8 +2002,8 @@ describe("GitHubResourceList success-path freshness (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
@@ -2007,8 +2019,8 @@ describe("GitHubResourceList success-path freshness (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(42)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockGetIssueByNumber.mockResolvedValue(makeIssue(42));
@@ -2027,8 +2039,8 @@ describe("GitHubResourceList success-path freshness (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockRejectedValue(new Error("Boom"));
@@ -2048,8 +2060,8 @@ describe("GitHubResourceList stale-while-error banner copy (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(20)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockRejectedValue(
@@ -2068,8 +2080,8 @@ describe("GitHubResourceList stale-while-error banner copy (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(20)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockRejectedValue(new Error("Repository not found or token lacks access."));
@@ -2208,8 +2220,8 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     // Hang revalidation so refreshing stays true.
@@ -2227,8 +2239,8 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockImplementation(() => new Promise(() => {}));
@@ -2245,8 +2257,8 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
@@ -2264,8 +2276,8 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
     // Mount-time revalidate succeeds so loading clears before the click.
@@ -2306,14 +2318,14 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
-      endCursor: null,
-      hasNextPage: false,
+      nextCursor: null,
+      hasMore: false,
       timestamp: Date.now(),
     });
-    let resolveFetch: (v: GitHubListResponse<GitHubIssue>) => void = () => {};
+    let resolveFetch: (v: Page<Issue>) => void = () => {};
     mockListIssues.mockImplementationOnce(
       () =>
-        new Promise<GitHubListResponse<GitHubIssue>>((resolve) => {
+        new Promise<Page<Issue>>((resolve) => {
           resolveFetch = resolve;
         })
     );
@@ -2459,8 +2471,8 @@ describe("GitHubResourceList polish (#7202)", () => {
       const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
       setCache(cacheKey, {
         items: [makeIssue(1)],
-        endCursor: null,
-        hasNextPage: false,
+        nextCursor: null,
+        hasMore: false,
         timestamp: Date.now(),
       });
       mockListIssues.mockImplementation(() => new Promise(() => {}));

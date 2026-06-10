@@ -1162,7 +1162,7 @@ async function readResourceContents(
     return { uri, mimeType: "application/json", text };
   }
   if (parsed.kind === "issues") {
-    const envelope = await dispatchAction("github.listIssues", {});
+    const envelope = await dispatchAction("forge.listIssues", {});
     const text = serializeResourcePayload(unwrapDispatchResult(envelope));
     return { uri, mimeType: "application/json", text: truncateText(text) };
   }

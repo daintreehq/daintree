@@ -8,7 +8,7 @@ import { registerDevPreviewActions } from "./definitions/devPreviewActions";
 import { registerDevServerActions } from "./definitions/devServerActions";
 import { registerDiagnosticsActions } from "./definitions/diagnosticsActions";
 import { registerEnvActions } from "./definitions/envActions";
-import { registerGithubActions } from "./definitions/githubActions";
+import { registerForgeActions } from "./definitions/forgeActions";
 import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
 import { registerLogActions } from "./definitions/logActions";
@@ -58,7 +58,7 @@ export function createActionDefinitions(
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
   registerEnvActions(actions, callbacks);
-  registerGithubActions(actions, callbacks);
+  registerForgeActions(actions, callbacks);
   registerGitActions(actions, callbacks);
   registerSystemActions(actions, callbacks);
   registerWatchdogActions(actions);

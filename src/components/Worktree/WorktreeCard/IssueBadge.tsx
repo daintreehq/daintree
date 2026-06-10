@@ -3,9 +3,9 @@ import { cn } from "@/lib/utils";
 import { CircleDot, CloudOff } from "lucide-react";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
-import { useIssueTooltip } from "@/hooks/useGitHubTooltip";
-import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
-import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
+import { useIssueTooltip } from "@/hooks/useForgeTooltip";
+import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
+import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import { freshnessClass } from "@/components/Layout/FreshnessUtils";
 import {
   IssueTooltipContent,
@@ -13,7 +13,7 @@ import {
   TokenMissingTooltip,
   FreshnessMetaItem,
   type TooltipFreshness,
-} from "./GitHubTooltipContent";
+} from "./ForgeTooltipContent";
 
 interface IssueBadgeProps {
   issueNumber: number;
@@ -40,21 +40,20 @@ export function IssueBadge({
   // the ref with state breaks that lag and flashes the #NNN fallback.
   "use no memo";
 
-  const { data, loading, error, missingToken, fetchTooltip, reset } = useIssueTooltip(
-    worktreePath,
-    issueNumber
-  );
+  const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } =
+    useIssueTooltip(worktreePath, issueNumber);
 
-  const { isOpen, handleOpenChange, handleClick } = useGitHubBadgeTooltip({
+  const { isOpen, handleOpenChange, handleClick } = useForgeBadgeTooltip({
     fetchTooltip,
     reset,
-    missingToken,
+    missingCredential,
+    providerId,
     isActive: isActive ?? false,
     onOpen,
   });
 
   // Suppress the raw "#NNN" monospace fallback during the brief window where
-  // a *freshly-set* issue number has no title yet (the GitHub title fetch is
+  // a *freshly-set* issue number has no title yet (the forge title fetch is
   // in-flight, ~100–500ms). Per the Doherty Threshold, show nothing for the
   // first 400ms rather than flashing the number, then fall through (#8079).
   // Title preservation for *unchanged* issue numbers is handled upstream in
@@ -67,12 +66,11 @@ export function IssueBadge({
     prevIssueNumber.current = issueNumber;
   }, [issueNumber]);
 
-  const { freshnessLevel, freshnessCause, rateLimitResetAt, now } =
-    useGitHubBadgeFreshness("issue");
+  const { freshnessLevel, freshnessCause, rateLimitResetAt, now } = useForgeBadgeFreshness("issue");
 
   const freshness: TooltipFreshness = { cause: freshnessCause, now, rateLimitResetAt };
 
-  const showPausedGlyph = freshnessCause === "rate-limit" && !missingToken;
+  const showPausedGlyph = freshnessCause === "rate-limit" && !missingCredential;
 
   return (
     <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300} autoDismiss={false}>
@@ -88,18 +86,18 @@ export function IssueBadge({
           )}
           aria-disabled={!isActive || undefined}
           aria-label={
-            missingToken
-              ? "Configure GitHub token to see issue details"
+            missingCredential
+              ? "Add a forge access token to see issue details"
               : issueTitle
                 ? `Open issue #${issueNumber}: ${issueTitle}`
-                : `Open issue #${issueNumber} on GitHub`
+                : `Open issue #${issueNumber}`
           }
         >
           <CircleDot
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingToken ? "grayscale opacity-50" : "text-pr-open"
+              missingCredential ? "grayscale opacity-50" : "text-pr-open"
             )}
             aria-hidden="true"
           />
@@ -107,7 +105,7 @@ export function IssueBadge({
             className={cn(
               "truncate flex-1 min-w-0",
               underlineOnHover && "hover:underline",
-              missingToken
+              missingCredential
                 ? "text-text-muted"
                 : isHeadline
                   ? isActive
@@ -119,7 +117,10 @@ export function IssueBadge({
             {issueTitle ||
               (isColdTitleGap && !showColdFallback ? null : (
                 <span
-                  className={cn("font-mono", missingToken ? "text-text-muted" : "text-pr-open")}
+                  className={cn(
+                    "font-mono",
+                    missingCredential ? "text-text-muted" : "text-pr-open"
+                  )}
                 >
                   #{issueNumber}
                 </span>
@@ -131,7 +132,7 @@ export function IssueBadge({
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
-        {missingToken ? (
+        {missingCredential ? (
           <TokenMissingTooltip type="issue" />
         ) : showTooltipLoading ? (
           <TooltipLoading />

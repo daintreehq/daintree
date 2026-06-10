@@ -184,25 +184,19 @@ export const BUILT_IN_ACTION_IDS = [
   "window.zoomReset",
   "window.close",
 
-  // -- forgeActions (provider-routed; GitHub-only today) --
+  // -- forgeActions (provider-routed) --
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
+  "forge.openPR",
   "forge.assignIssue",
   "forge.unassignIssue",
   "forge.validateToken",
-
-  // -- githubActions (GitHub-specific host actions) --
-  "github.openPR",
-  "github.getRepoStats",
-  "github.listIssues",
-  "github.listPullRequests",
-  "github.getIssueByNumber",
-  "github.checkCli",
-  "github.getConfig",
-  "github.setToken",
-  "github.clearToken",
+  "forge.getRepoStats",
+  "forge.listIssues",
+  "forge.listPRs",
+  "forge.getIssue",
 
   // -- projectActions --
   "project.getAll",

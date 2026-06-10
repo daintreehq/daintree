@@ -15,14 +15,15 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-let mockMissingToken = false;
+let mockMissingCredential = false;
 
-vi.mock("@/hooks/useGitHubTooltip", () => ({
+vi.mock("@/hooks/useForgeTooltip", () => ({
   useIssueTooltip: () => ({
     data: null,
     loading: false,
     error: null,
-    missingToken: mockMissingToken,
+    missingCredential: mockMissingCredential,
+    providerId: "daintree.github.github",
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
@@ -30,7 +31,8 @@ vi.mock("@/hooks/useGitHubTooltip", () => ({
     data: null,
     loading: false,
     error: null,
-    missingToken: mockMissingToken,
+    missingCredential: mockMissingCredential,
+    providerId: "daintree.github.github",
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
@@ -335,7 +337,7 @@ describe("WorktreeHeader issue title headline", () => {
     // Branch name should be the primary headline (no headline-level issue button)
     expect(screen.getByText(/something/)).toBeDefined();
     // Issue badge should still appear in secondary row with #100 fallback
-    const issueButton = screen.getByRole("button", { name: /Open issue #100 on GitHub/ });
+    const issueButton = screen.getByRole("button", { name: /Open issue #100/ });
     expect(issueButton).toBeDefined();
   });
 
@@ -1164,12 +1166,12 @@ const mockRetryAuthFetch = vi.fn().mockResolvedValue(undefined);
 
 describe("WorktreeHeader token-missing badge behavior", () => {
   beforeEach(() => {
-    mockMissingToken = false;
+    mockMissingCredential = false;
     vi.mocked(actionService.dispatch).mockClear();
   });
 
   it("issue badge shows token-missing aria-label when no token configured", () => {
-    mockMissingToken = true;
+    mockMissingCredential = true;
     renderHeader({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
       badges: { onOpenIssue: noop },
@@ -1177,7 +1179,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     });
 
     const issueButton = screen.getByRole("button", {
-      name: /Configure GitHub token to see issue details/,
+      name: /Add a forge access token to see issue details/,
     });
     expect(issueButton).toBeDefined();
     // Button stays full-opacity for focus-ring contrast; icon is dimmed.
@@ -1188,7 +1190,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
   });
 
   it("issue badge dispatches settings action on click when no token configured", () => {
-    mockMissingToken = true;
+    mockMissingCredential = true;
     const onOpenIssue = vi.fn();
     renderHeader({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
@@ -1197,19 +1199,19 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     });
 
     const issueButton = screen.getByRole("button", {
-      name: /Configure GitHub token to see issue details/,
+      name: /Add a forge access token to see issue details/,
     });
     fireEvent.click(issueButton);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github" },
       { source: "user" }
     );
     expect(onOpenIssue).not.toHaveBeenCalled();
   });
 
   it("PR badge shows token-missing aria-label when no token configured", () => {
-    mockMissingToken = true;
+    mockMissingCredential = true;
     renderHeader({
       worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
       badges: { onOpenPR: noop },
@@ -1217,7 +1219,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     });
 
     const prButton = screen.getByRole("button", {
-      name: /Configure GitHub token to see PR details/,
+      name: /Add a forge access token to see PR details/,
     });
     expect(prButton).toBeDefined();
     expect(prButton.className).not.toContain("opacity-60");
@@ -1227,7 +1229,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
   });
 
   it("PR badge dispatches settings action on click when no token configured", () => {
-    mockMissingToken = true;
+    mockMissingCredential = true;
     const onOpenPR = vi.fn();
     renderHeader({
       worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
@@ -1236,19 +1238,19 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     });
 
     const prButton = screen.getByRole("button", {
-      name: /Configure GitHub token to see PR details/,
+      name: /Add a forge access token to see PR details/,
     });
     fireEvent.click(prButton);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github" },
       { source: "user" }
     );
     expect(onOpenPR).not.toHaveBeenCalled();
   });
 
   it("issue badge calls onOpenIssue normally when token is present", () => {
-    mockMissingToken = false;
+    mockMissingCredential = false;
     const onOpenIssue = vi.fn();
     renderHeader({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
@@ -1265,7 +1267,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
   });
 
   it("token-missing badge click does nothing on inactive card", () => {
-    mockMissingToken = true;
+    mockMissingCredential = true;
     renderHeader({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
       badges: { onOpenIssue: noop },
@@ -1273,7 +1275,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     });
 
     const issueButton = screen.getByRole("button", {
-      name: /Configure GitHub token/,
+      name: /Add a forge access token/,
     });
     fireEvent.click(issueButton);
     expect(actionService.dispatch).not.toHaveBeenCalled();
@@ -1282,7 +1284,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
 
 describe("WorktreeHeader upstream sync indicator", () => {
   beforeEach(() => {
-    mockMissingToken = false;
+    mockMissingCredential = false;
     vi.clearAllMocks();
     // The auth-failed sync badge calls window.electron.worktree.retryAuthFetch();
     // stub just that path so the click handler doesn't throw on the bare global.
@@ -1398,7 +1400,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github" },
       { source: "user" }
     );
   });
@@ -1442,7 +1444,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github" },
       { source: "user" }
     );
   });

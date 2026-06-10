@@ -34,7 +34,7 @@ Terminal action definitions were split out of the old monolithic `terminalAction
 12. `src/services/actions/definitions/systemActions.ts`
 13. `src/services/actions/definitions/projectActions.ts`
 14. `src/services/actions/definitions/agentActions.ts`
-15. `src/services/actions/definitions/githubActions.ts`
+15. `src/services/actions/definitions/forgeActions.ts`
 16. `src/services/actions/definitions/logActions.ts`
 17. `src/services/actions/definitions/workflowActions.ts`
 

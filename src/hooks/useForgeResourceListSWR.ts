@@ -12,21 +12,16 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
  * Provider-agnostic stale-while-revalidate list hook. Consumes the normalized
- * `forge:list-issues` / `forge:list-prs` IPC path via {@link forgeClient} — it
- * never touches `window.electron.github`, so any forge provider can drive an
- * issue/PR list with it.
+ * `forge:list-issues` / `forge:list-prs` IPC path via {@link forgeClient}, so
+ * any forge provider can drive an issue/PR list with it.
  *
- * The GitHub plugin's `useGitHubResourceListSWR` stays as-is: it carries
- * GitHub-shaped types and GitHub-specific retry/rate-limit/wake machinery that
- * does not generalize. This hook is the lean, normalized counterpart — cache
- * read, revalidate, generation-guarded stale-response discard.
+ * The plugin-side dropdown list hook carries the dropdown-specific
+ * retry/rate-limit/wake machinery that does not generalize. This hook is the
+ * lean counterpart — cache read, revalidate, generation-guarded
+ * stale-response discard. Both share {@link buildCacheKey} slots.
  */
 export interface UseForgeResourceListParams {
   cwd: string;
-  /** Forge identity for the provider-scoped cache key. */
-  providerId: string;
-  owner: string;
-  repo: string;
   type: "issue" | "pr";
   filterState: string;
   sortOrder: string;
@@ -45,17 +40,14 @@ export interface UseForgeResourceListReturn {
 
 export function useForgeResourceListSWR({
   cwd,
-  providerId,
-  owner,
-  repo,
   type,
   filterState,
   sortOrder,
   opts,
 }: UseForgeResourceListParams): UseForgeResourceListReturn {
   const cacheKey = useMemo(
-    () => buildCacheKey(providerId, owner, repo, type, filterState, sortOrder),
-    [providerId, owner, repo, type, filterState, sortOrder]
+    () => buildCacheKey(cwd, type, filterState, sortOrder),
+    [cwd, type, filterState, sortOrder]
   );
 
   const cachedEntry = useMemo(() => getCache(cacheKey), [cacheKey]);

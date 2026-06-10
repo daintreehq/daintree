@@ -4,7 +4,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderGit2, Check, AlertCircle } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 
 import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -20,6 +20,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
@@ -45,12 +46,13 @@ import {
 
 type BranchMode = "new" | "existing";
 
-/** Map the GitHub uppercase PR state to the workspace-host lowercase form. */
-function normalizeSourcePrState(state: GitHubPR["state"]): "open" | "closed" | "merged" {
+/** Collapse the normalized forge PR state to the workspace-host form (declined folds into closed). */
+function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged" {
   switch (state) {
-    case "MERGED":
+    case "merged":
       return "merged";
-    case "CLOSED":
+    case "closed":
+    case "declined":
       return "closed";
     default:
       return "open";
@@ -62,8 +64,8 @@ interface NewWorktreeDialogProps {
   onClose: () => void;
   rootPath: string;
   onWorktreeCreated?: (worktreeId: string) => void;
-  initialIssue?: GitHubIssue | null;
-  initialPR?: GitHubPR | null;
+  initialIssue?: Issue | null;
+  initialPR?: PR | null;
   initialRecipeId?: string | null;
   initialBranchInput?: string | null;
 }
@@ -107,12 +109,12 @@ export function NewWorktreeDialog({
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
+  const { entry: forgeEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const forgeName = forgeEntry?.contribution.name ?? "the forge";
 
-  // Forge-agnostic viewer identity. Resolved per-cwd via the active forge
-  // provider's `identity` capability (GitHub today; GitLab/Gitea tomorrow)
-  // instead of the GitHub-specific `useGitHubConfigStore` so a non-GitHub
-  // project mirrors through the right identity. `null` means "no token /
-  // unsupported" — mirrors the old `!githubConfig?.username` path.
+  // Forge-agnostic viewer identity, resolved per-cwd via the active forge
+  // provider's `identity` capability so every project mirrors through the
+  // right identity. `null` means "no token / unsupported".
   const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
@@ -342,10 +344,10 @@ export function NewWorktreeDialog({
 
         setBranches(branchList);
 
-        if (initialPR?.headRefName) {
-          const remoteBranchName = `origin/${initialPR.headRefName}`;
+        if (initialPR?.headRef) {
+          const remoteBranchName = `origin/${initialPR.headRef}`;
           const remoteBranch = branchList.find((b) => b.name === remoteBranchName);
-          const localBranch = branchList.find((b) => b.name === initialPR.headRefName && !b.remote);
+          const localBranch = branchList.find((b) => b.name === initialPR.headRef && !b.remote);
           if (remoteBranch) {
             setBaseBranch(remoteBranchName);
             setFromRemote(true);
@@ -356,13 +358,13 @@ export function NewWorktreeDialog({
             setPrBranchResolved(true);
           } else {
             try {
-              await worktreeClient.fetchPRBranch(rootPath, initialPR.number, initialPR.headRefName);
+              await worktreeClient.fetchPRBranch(rootPath, initialPR.number, initialPR.headRef);
               if (!isCurrent) return;
               const updatedBranches = await worktreeClient.listBranches(rootPath);
               if (!isCurrent) return;
               setBranches(updatedBranches);
               const fetchedLocal = updatedBranches.find(
-                (b) => b.name === initialPR.headRefName && !b.remote
+                (b) => b.name === initialPR.headRef && !b.remote
               );
               if (fetchedLocal) {
                 setBaseBranch(fetchedLocal.name);
@@ -569,7 +571,7 @@ export function NewWorktreeDialog({
                 sourcePrTitle: snapInitialPR.title,
                 sourcePrUrl: snapInitialPR.url,
                 sourcePrState: normalizeSourcePrState(snapInitialPR.state),
-                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.bodyText),
+                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.body),
               }
             : {}),
         };
@@ -603,7 +605,7 @@ export function NewWorktreeDialog({
                   notify({
                     type: "warning",
                     title: "Couldn't undo assignment",
-                    message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                    message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on ${forgeName}`,
                   });
                 });
             };
@@ -625,11 +627,11 @@ export function NewWorktreeDialog({
             notify({
               type: "warning",
               title: "Could not assign issue",
-              message: `${message} — you can assign it manually on GitHub`,
+              message: `${message} — you can assign it manually on ${forgeName}`,
               actions: issueUrl
                 ? [
                     {
-                      label: "Assign on GitHub",
+                      label: "Open issue",
                       onClick: () => systemClient.openExternal(issueUrl),
                     },
                   ]
@@ -802,7 +804,7 @@ export function NewWorktreeDialog({
   );
 
   const handleIssueSelectWrapper = useCallback(
-    (issue: GitHubIssue | null) => {
+    (issue: Issue | null) => {
       handleIssueSelect(issue);
       if (issue) markTouched("issue");
       clearErrors();
@@ -965,7 +967,7 @@ export function NewWorktreeDialog({
                 <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
                 <p className="text-sm text-status-warning">
                   Could not fetch branch{" "}
-                  <span className="font-mono">{initialPR.headRefName ?? "unknown"}</span> from the
+                  <span className="font-mono">{initialPR.headRef ?? "unknown"}</span> from the
                   remote. The worktree will be created from the fallback branch instead. You can try
                   running <span className="font-mono">git fetch origin</span> manually and reopening
                   this dialog.

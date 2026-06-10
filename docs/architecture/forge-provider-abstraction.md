@@ -300,7 +300,7 @@ The migration rehomes today's GitHub integration into a built-in plugin at `plug
 - `electron/services/github/*` → `plugins/builtin/github/main/`
 - `shared/types/github.ts` → `plugins/builtin/github/shared/types.ts`
 - `src/components/GitHub/*` → `plugins/builtin/github/renderer/views/`
-- `src/services/actions/definitions/githubActions.ts` → plugin-contributed commands
+- `src/services/actions/definitions/githubActions.ts` → retired; the provider-routed `forge.*` surface lives in `src/services/actions/definitions/forgeActions.ts`
 - `src/store/githubConfigStore.ts`, `githubFilterStore.ts`, `githubTokenHealthStore.ts` → plugin-internal state
 
 Built-in plugins are bundled inside the Daintree app (no install step), but otherwise load through `PluginService` like any other plugin — same activation lifecycle, same disposal cascade, same capability disclosure. They are conceptually identical to third-party plugins; the only difference is location.

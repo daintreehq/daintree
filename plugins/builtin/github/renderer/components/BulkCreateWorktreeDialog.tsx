@@ -1,4 +1,12 @@
-import { useCallback, useReducer, useRef, useMemo, useEffect, useLayoutEffect } from "react";
+import {
+  useCallback,
+  useReducer,
+  useRef,
+  useMemo,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from "react";
 import PQueue from "p-queue";
 import { Check, AlertTriangle, UserPlus, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -6,11 +14,10 @@ import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
-import { worktreeClient, githubClient, agentSettingsClient, systemClient } from "@/clients";
+import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "@/clients";
 import { resolveIssuePrequeries } from "./bulkCreatePrequery";
 import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -38,19 +45,11 @@ import {
   VERIFICATION_SETTLE_MS,
 } from "./bulkCreateUtils";
 import type { PlannedWorktree } from "./bulkCreateUtils";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import type { BranchInfo } from "@shared/types";
 
-type BulkCreateMode = "issue" | "pr";
-
-export interface BulkCreateWorktreeDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
-  mode: BulkCreateMode;
-  selectedIssues: GitHubIssue[];
-  selectedPRs: GitHubPR[];
-  onComplete: () => void;
-}
+/** Conforms to the host's bulk-create slot contract (forge-normalized shapes). */
+export type BulkCreateWorktreeDialogProps = ForgeBulkCreateWorktreeDialogProps;
 
 export function BulkCreateWorktreeDialog({
   isOpen,
@@ -80,15 +79,17 @@ export function BulkCreateWorktreeDialog({
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
 
-  const githubConfig = useGitHubConfigStore((s) => s.config);
-  const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
   const { recipes } = useRecipeStore();
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
 
-  const currentUser = githubConfig?.username;
-  const currentUserAvatar = githubConfig?.avatarUrl;
+  // Viewer identity through the forge identity capability — drives the
+  // "assign to me" affordance and the run-loop assignment below.
+  const [viewer, setViewer] = useState<{ login: string; avatarUrl?: string } | null>(null);
+  const viewerRef = useRef<{ login: string } | null>(null);
+  const currentUser = viewer?.login;
+  const currentUserAvatar = viewer?.avatarUrl;
 
   const { projectSettings } = useNewWorktreeProjectSettings({ isOpen });
   const defaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
@@ -111,9 +112,28 @@ export function BulkCreateWorktreeDialog({
     setLastSelectedWorktreeRecipeIdByProject,
   });
 
+  const projectPath = currentProject?.path;
   useEffect(() => {
-    initializeGitHubConfig();
-  }, [initializeGitHubConfig]);
+    if (!isOpen || !projectPath) return;
+    let cancelled = false;
+    void forgeClient
+      .getCurrentUser(projectPath)
+      .then((user) => {
+        if (cancelled) return;
+        const next = user ? { login: user.login, avatarUrl: user.avatarUrl } : null;
+        setViewer(next);
+        viewerRef.current = next;
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setViewer(null);
+          viewerRef.current = null;
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, projectPath]);
 
   // Plan worktrees
   const worktreeMap = useWorktreeStore((s) => s.worktrees);
@@ -371,11 +391,10 @@ export function BulkCreateWorktreeDialog({
                     createUseExisting = true;
                     createBaseBranch = localBranch.name;
                   } else {
-                    // Branch not found — fetch from GitHub's PR refs
-                    const prItem = planned.item as GitHubPR;
+                    // Branch not found — fetch from the provider's PR refs
                     await worktreeClient.fetchPRBranch(
                       rootPath,
-                      prItem.number,
+                      planned.item.number,
                       planned.headRefName
                     );
                     // Re-check after fetch
@@ -619,7 +638,7 @@ export function BulkCreateWorktreeDialog({
               // with an isolated 60s backoff cap so the assignment endpoint's secondary
               // rate limit (~60s) doesn't widen worktree/terminal retry delays.
               if (planned.mode === "issue" && assignWorktreeToSelf && itemNumber) {
-                const username = useGitHubConfigStore.getState().config?.username;
+                const username = viewerRef.current?.login;
                 if (username) {
                   dispatchProgress({
                     type: "ITEM_ASSIGNING",
@@ -631,7 +650,7 @@ export function BulkCreateWorktreeDialog({
                     if (runIdRef.current !== currentRunId) return;
                     assignAttempt++;
                     try {
-                      await githubClient.assignIssue(rootPath, itemNumber, username);
+                      await forgeClient.assignIssue(rootPath, itemNumber, username);
                       break;
                     } catch (err) {
                       const assignErr = normalizeError(err);

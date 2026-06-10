@@ -4,8 +4,8 @@ import { markRendererPerformance } from "../utils/performance";
 import { useHibernationNotifications } from "../hooks/useHibernationNotifications";
 import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotifications";
 import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
-import { useGitHubTokenHealth } from "../hooks/useGitHubTokenHealth";
-import { useGitHubRateLimit } from "../hooks/useGitHubRateLimit";
+import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
+import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
 import { useStoreUpdateListener } from "../hooks/useStoreUpdateListener";
 import { useSoundPlaybackListener } from "../hooks/useSoundPlaybackListener";
 import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/app";
@@ -17,7 +17,7 @@ import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/ap
  * effect flush — keeping early input responsive (#9769).
  *
  * Every hook here was audited to tolerate a late mount: the notification hooks
- * carry module-scope re-attach guards, the GitHub/store hooks pull current
+ * carry module-scope re-attach guards, the forge/store hooks pull current
  * state on mount, and the rest are poll-backed or react to events that cannot
  * fire before the window is interactive. Hooks that must subscribe before first
  * paint (focus-intent, OS DND, plugin deep-link, keybindings, action registry,
@@ -27,8 +27,8 @@ export function PostHydrationListeners() {
   useHibernationNotifications();
   useIdleTerminalNotifications();
   useDiskSpaceWarnings();
-  useGitHubTokenHealth();
-  useGitHubRateLimit();
+  useForgeTokenHealth();
+  useForgeRateLimit();
   useRecipeFocusReload();
   useWorktreeDevServerStateSync();
   useSoundPlaybackListener();

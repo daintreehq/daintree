@@ -4,7 +4,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 interface UpstreamSyncBadgeProps {
   aheadCount: number | undefined;
@@ -14,6 +13,8 @@ interface UpstreamSyncBadgeProps {
   fetchAuthFailed: boolean;
   fetchNetworkFailed: boolean;
   hasAuthFailedSignIn: boolean;
+  /** Provider whose settings the sign-in affordance routes to; null hides nothing but routes to the tab root. */
+  authProviderId?: string | null;
   containerGapClass: string;
   baseBranchName?: string | null;
   baseAheadCount?: number | null;
@@ -32,6 +33,7 @@ export function UpstreamSyncBadge({
   fetchAuthFailed,
   fetchNetworkFailed,
   hasAuthFailedSignIn,
+  authProviderId,
   containerGapClass,
   baseBranchName,
   baseAheadCount,
@@ -90,21 +92,24 @@ export function UpstreamSyncBadge({
     return Date.now() - lastFetchedAt > fetchIntervalMs * STALENESS_MULTIPLIER;
   }, [lastFetchedAt, fetchIntervalMs]);
 
-  const handleSignInClick = useCallback((event: React.MouseEvent) => {
-    event.stopPropagation();
-    // Auth failures suspend background fetches indefinitely (#9736). Clearing the
-    // suspension and re-fetching only happens on an explicit user action, so kick
-    // it off here — fire-and-forget, the settings tab below is the recovery path
-    // if the token still needs fixing.
-    safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
-      context: "Retry auth-suspended fetch from sync badge",
-    });
-    void actionService.dispatch(
-      "app.settings.openTab",
-      { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID, sectionId: "github-token" },
-      { source: "user" }
-    );
-  }, []);
+  const handleSignInClick = useCallback(
+    (event: React.MouseEvent) => {
+      event.stopPropagation();
+      // Auth failures suspend background fetches indefinitely (#9736). Clearing the
+      // suspension and re-fetching only happens on an explicit user action, so kick
+      // it off here — fire-and-forget, the settings tab below is the recovery path
+      // if the token still needs fixing.
+      safeFireAndForget(window.electron.worktree.retryAuthFetch(), {
+        context: "Retry auth-suspended fetch from sync badge",
+      });
+      void actionService.dispatch(
+        "app.settings.openTab",
+        authProviderId ? { tab: "code-forge", subtab: authProviderId } : { tab: "code-forge" },
+        { source: "user" }
+      );
+    },
+    [authProviderId]
+  );
 
   if (fetchAuthFailed && hasAuthFailedSignIn) {
     return (

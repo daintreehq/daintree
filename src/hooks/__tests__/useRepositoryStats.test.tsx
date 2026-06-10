@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RepositoryStats } from "@/types";
+import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
+
+const PROVIDER_ID = "test.forge.provider";
 
 const {
   getCurrentMock,
@@ -28,7 +30,10 @@ vi.mock("@/clients", () => ({
     getCurrent: getCurrentMock,
     onSwitch: onSwitchMock,
   },
-  githubClient: {
+}));
+
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: {
     getRepoStats: getRepoStatsMock,
     getFirstPageCache: getFirstPageCacheMock,
     onRateLimitChanged: onRateLimitChangedMock,
@@ -37,16 +42,31 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
+    selector({ currentProject: { id: "test-project" } }),
+}));
+
+vi.mock("@/hooks/useResolvedForgeProvider", () => ({
+  useResolvedForgeProvider: () => ({
+    entry: { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } },
+    providerId: "test.forge.provider",
+    resolvedVia: "hostname",
+    loading: false,
+    refresh: () => {},
+  }),
+}));
+
 import { useRepositoryStats } from "../useRepositoryStats";
 import { _resetPollingLifecycleForTests } from "../usePollingLifecycle";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import {
-  _resetForTests as resetGithubResourceCache,
+  _resetForTests as resetForgeResourceCache,
   buildCacheKey,
   getCache,
   setCache,
-} from "@/lib/githubResourceCache";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+} from "@/lib/forgeResourceCache";
+import type { Issue, PR } from "@shared/types/forge";
 
 function createDeferred<T>() {
   let resolve: (value: T) => void;
@@ -74,7 +94,7 @@ describe("useRepositoryStats", () => {
     getCurrentMock.mockResolvedValue(project);
     onSwitchMock.mockReturnValue(() => {});
 
-    const stats: RepositoryStats = {
+    const stats: ForgeRepositoryStats = {
       commitCount: 5,
       issueCount: 2,
       prCount: 1,
@@ -109,7 +129,7 @@ describe("useRepositoryStats", () => {
       "SSO authorization required for this organization",
     ];
 
-    it.each(tokenErrorMessages)("returns isTokenError=true for ghError: %s", async (errorMsg) => {
+    it.each(tokenErrorMessages)("returns isTokenError=true for error: %s", async (errorMsg) => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
       onSwitchMock.mockReturnValue(() => {});
       getRepoStatsMock.mockResolvedValue({
@@ -119,7 +139,7 @@ describe("useRepositoryStats", () => {
         loading: false,
         stale: false,
         lastUpdated: null,
-        ghError: errorMsg,
+        error: errorMsg,
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -140,7 +160,7 @@ describe("useRepositoryStats", () => {
         loading: false,
         stale: false,
         lastUpdated: null,
-        ghError: "Network timeout",
+        error: "Network timeout",
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -161,7 +181,7 @@ describe("useRepositoryStats", () => {
         loading: false,
         stale: false,
         lastUpdated: null,
-        ghError: "GitHub token not configured. Set it in Settings.",
+        error: "GitHub token not configured. Set it in Settings.",
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -199,7 +219,7 @@ describe("useRepositoryStats", () => {
         loading: false,
         stale: false,
         lastUpdated: null,
-        ghError: "GitHub token not configured. Set it in Settings.",
+        error: "GitHub token not configured. Set it in Settings.",
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -242,8 +262,8 @@ describe("useRepositoryStats", () => {
       return () => {};
     });
 
-    const slowA = createDeferred<RepositoryStats>();
-    const statsA: RepositoryStats = {
+    const slowA = createDeferred<ForgeRepositoryStats>();
+    const statsA: ForgeRepositoryStats = {
       commitCount: 10,
       issueCount: 1,
       prCount: 1,
@@ -251,7 +271,7 @@ describe("useRepositoryStats", () => {
       stale: false,
       lastUpdated: 1000,
     };
-    const statsB: RepositoryStats = {
+    const statsB: ForgeRepositoryStats = {
       commitCount: 77,
       issueCount: 2,
       prCount: 3,
@@ -287,8 +307,12 @@ describe("useRepositoryStats", () => {
   });
 
   describe("onRepoCountsUpdated push (issue #10122)", () => {
-    function countsPayload(projectPath: string, stats: RepositoryStats, fetchedAt = Date.now()) {
-      return { projectPath, stats, fetchedAt };
+    function countsPayload(
+      projectPath: string,
+      stats: ForgeRepositoryStats,
+      fetchedAt = Date.now()
+    ) {
+      return { providerId: PROVIDER_ID, projectPath, stats, fetchedAt };
     }
 
     it("applies count-only pushed stats for the current project", async () => {
@@ -316,7 +340,7 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.issueCount).toBe(2);
       });
 
-      const pushedStats: RepositoryStats = {
+      const pushedStats: ForgeRepositoryStats = {
         commitCount: 5,
         issueCount: 7,
         prCount: 3,
@@ -428,15 +452,16 @@ describe("useRepositoryStats", () => {
 
   describe("onRepoStatsAndPageUpdated push", () => {
     beforeEach(() => {
-      resetGithubResourceCache();
+      resetForgeResourceCache();
     });
 
     function makePushPayload(
       projectPath: string,
-      stats: RepositoryStats,
+      stats: ForgeRepositoryStats,
       fetchedAt: number = Date.now()
     ) {
       return {
+        providerId: PROVIDER_ID,
         projectPath,
         stats,
         issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 0 },
@@ -472,7 +497,7 @@ describe("useRepositoryStats", () => {
       });
 
       // Push a fresher payload — count drops to 0 (e.g. PR was merged).
-      const pushedStats: RepositoryStats = {
+      const pushedStats: ForgeRepositoryStats = {
         commitCount: 6,
         issueCount: 0,
         prCount: 0,
@@ -520,7 +545,7 @@ describe("useRepositoryStats", () => {
       });
 
       // Older push must be ignored.
-      const olderStats: RepositoryStats = {
+      const olderStats: ForgeRepositoryStats = {
         commitCount: 1,
         issueCount: 0,
         prCount: 0,
@@ -567,7 +592,7 @@ describe("useRepositoryStats", () => {
 
       // A fresher push lands but it's marked stale with 0 counts — should
       // preserve the last good prCount=2 instead of flashing 0.
-      const stalePush: RepositoryStats = {
+      const stalePush: ForgeRepositoryStats = {
         commitCount: 7,
         issueCount: 0,
         prCount: 0,
@@ -618,13 +643,13 @@ describe("useRepositoryStats", () => {
 
       // A failed poll surfaces null counts with an error — preserve the last
       // good counts instead of flashing a `—` dash in the toolbar badge.
-      const failedPush: RepositoryStats = {
+      const failedPush: ForgeRepositoryStats = {
         commitCount: 7,
         issueCount: null,
         prCount: null,
         loading: false,
         stale: true,
-        ghError: "rate limited",
+        error: "rate limited",
         lastUpdated: 2000,
       };
       await act(async () => {
@@ -671,13 +696,13 @@ describe("useRepositoryStats", () => {
 
       // A failed poll surfaces null counts — the confirmed 0 must be preserved,
       // not replaced with a `—` dash.
-      const failedPush: RepositoryStats = {
+      const failedPush: ForgeRepositoryStats = {
         commitCount: 7,
         issueCount: null,
         prCount: null,
         loading: false,
         stale: true,
-        ghError: "timeout",
+        error: "timeout",
         lastUpdated: 2000,
       };
       await act(async () => {
@@ -723,7 +748,7 @@ describe("useRepositoryStats", () => {
 
       // A fresh (non-stale) fetch confirms the repo now has 0 open issues/PRs —
       // this is real data and must show 0, not the previously preserved counts.
-      const freshZero: RepositoryStats = {
+      const freshZero: ForgeRepositoryStats = {
         commitCount: 7,
         issueCount: 0,
         prCount: 0,
@@ -768,7 +793,7 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.prCount).toBe(1);
       });
 
-      const otherStats: RepositoryStats = {
+      const otherStats: ForgeRepositoryStats = {
         commitCount: 99,
         issueCount: 99,
         prCount: 99,
@@ -790,27 +815,35 @@ describe("useRepositoryStats", () => {
 
   describe("disk-cache hydration on mount", () => {
     beforeEach(() => {
-      resetGithubResourceCache();
+      resetForgeResourceCache();
     });
 
-    function makeIssue(n: number): GitHubIssue {
+    function makeIssue(n: number): Issue {
       return {
         number: n,
         title: `Issue #${n}`,
-        url: `https://github.com/test/repo/issues/${n}`,
-        state: "OPEN",
-        updatedAt: "2026-04-30",
-        author: { login: "user", avatarUrl: "" },
+        body: "",
+        url: `https://forge.test/repo/issues/${n}`,
+        state: "open",
+        rawState: "OPEN",
+        author: { login: "user", avatarUrl: "", rawData: null },
         assignees: [],
+        labels: [],
         commentCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
       };
     }
 
-    function makePR(n: number): GitHubPR {
+    function makePR(n: number): PR {
       return {
         ...makeIssue(n),
         isDraft: false,
-      } as GitHubPR;
+        merged: false,
+        baseRef: "main",
+        headRef: `pr-${n}`,
+      } as unknown as PR;
     }
 
     it("seeds the renderer cache from the disk-persisted first page on cold start", async () => {
@@ -825,6 +858,7 @@ describe("useRepositoryStats", () => {
       const prItems = [makePR(3)];
       const lastUpdated = Date.now() - 5_000;
       getFirstPageCacheMock.mockResolvedValueOnce({
+        providerId: PROVIDER_ID,
         projectPath: project.path,
         lastUpdated,
         issues: { items: issueItems, endCursor: "issue-cursor", hasNextPage: true },
@@ -839,8 +873,8 @@ describe("useRepositoryStats", () => {
       await waitFor(() => {
         expect(getCache(issuesKey)?.items).toEqual(issueItems);
       });
-      expect(getCache(issuesKey)?.endCursor).toBe("issue-cursor");
-      expect(getCache(issuesKey)?.hasNextPage).toBe(true);
+      expect(getCache(issuesKey)?.nextCursor).toBe("issue-cursor");
+      expect(getCache(issuesKey)?.hasMore).toBe(true);
       expect(getCache(issuesKey)?.timestamp).toBe(lastUpdated);
       expect(getCache(prsKey)?.items).toEqual(prItems);
       expect(getCache(prsKey)?.timestamp).toBe(lastUpdated);
@@ -860,12 +894,13 @@ describe("useRepositoryStats", () => {
       // async disk read resolves.
       setCache(issuesKey, {
         items: [fresherIssue],
-        endCursor: null,
-        hasNextPage: false,
+        nextCursor: null,
+        hasMore: false,
         timestamp: freshTimestamp,
       });
 
       getFirstPageCacheMock.mockResolvedValueOnce({
+        providerId: PROVIDER_ID,
         projectPath: project.path,
         lastUpdated: freshTimestamp - 60_000,
         issues: {
@@ -952,6 +987,7 @@ describe("useRepositoryStats", () => {
 
       const lastUpdated = Date.now() - 5_000;
       getFirstPageCacheMock.mockResolvedValueOnce({
+        providerId: PROVIDER_ID,
         projectPath: project.path,
         lastUpdated,
         issues: { items: [], endCursor: null, hasNextPage: false },
@@ -989,6 +1025,7 @@ describe("useRepositoryStats", () => {
 
       const cachedLastUpdated = networkLastUpdated - 60_000;
       getFirstPageCacheMock.mockResolvedValueOnce({
+        providerId: PROVIDER_ID,
         projectPath: project.path,
         lastUpdated: cachedLastUpdated,
         issues: { items: [], endCursor: null, hasNextPage: false },
@@ -1026,6 +1063,7 @@ describe("useRepositoryStats", () => {
       // Stats-only: empty items arrays + valid stats (simulates first-page
       // cache expired but stats still within 60-min bootstrap TTL).
       getFirstPageCacheMock.mockResolvedValueOnce({
+        providerId: PROVIDER_ID,
         projectPath: project.path,
         lastUpdated,
         issues: { items: [], endCursor: null, hasNextPage: false },
@@ -1065,10 +1103,11 @@ describe("useRepositoryStats", () => {
 
       // Defer the hydration IPC response so we can switch projects mid-flight.
       const deferred = createDeferred<{
+        providerId: string;
         projectPath: string;
         lastUpdated: number;
-        issues: { items: GitHubIssue[]; endCursor: null; hasNextPage: false };
-        prs: { items: GitHubPR[]; endCursor: null; hasNextPage: false };
+        issues: { items: Issue[]; endCursor: null; hasNextPage: false };
+        prs: { items: PR[]; endCursor: null; hasNextPage: false };
         stats: { issueCount: number; prCount: number; lastUpdated: number };
       }>();
       getFirstPageCacheMock.mockReturnValueOnce(deferred.promise);
@@ -1095,6 +1134,7 @@ describe("useRepositoryStats", () => {
         // check inside the effect must detect the path mismatch against
         // the current project (B) and bail.
         deferred.resolve({
+          providerId: PROVIDER_ID,
           projectPath: "/repo/a",
           lastUpdated: 1000,
           issues: { items: [], endCursor: null, hasNextPage: false },
@@ -1121,13 +1161,14 @@ describe("useRepositoryStats", () => {
         issueCount: null,
         prCount: null,
         loading: false,
-        ghError: "Network timeout",
+        error: "Network timeout",
         // No lastUpdated field — simulates error payload from main process.
       });
 
       const cacheLastUpdated = Date.now() - 5_000;
       // Hydration resolves after the error with valid cached stats.
       getFirstPageCacheMock.mockResolvedValue({
+        providerId: PROVIDER_ID,
         projectPath: project.path,
         lastUpdated: cacheLastUpdated,
         issues: { items: [], endCursor: null, hasNextPage: false },
@@ -1235,7 +1276,7 @@ describe("useRepositoryStats", () => {
         loading: false,
         stale: true,
         lastUpdated: now - 10_000,
-        ghError: "Network unreachable",
+        error: "Network unreachable",
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -1275,7 +1316,7 @@ describe("useRepositoryStats", () => {
         prCount: null,
         loading: false,
         stale: false,
-        ghError: "Network timeout",
+        error: "Network timeout",
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -1306,7 +1347,7 @@ describe("useRepositoryStats", () => {
         prCount: null,
         loading: false,
         stale: false,
-        ghError: "Network timeout on project A",
+        error: "Network timeout on project A",
       });
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -1319,7 +1360,7 @@ describe("useRepositoryStats", () => {
       // Project B's fetch is held pending so we observe the post-switch
       // pre-fetch state — error must already be cleared.
       currentProject = { id: "b", path: "/repo/b" };
-      const slowB = createDeferred<RepositoryStats>();
+      const slowB = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockImplementationOnce(() => slowB.promise);
 
       act(() => {
@@ -1352,7 +1393,7 @@ describe("useRepositoryStats", () => {
         issueCount: 0,
         prCount: 0,
         loading: false,
-        ghError: "GitHub rate limit exceeded. Resets in 1m.",
+        error: "GitHub rate limit exceeded. Resets in 1m.",
         rateLimitResetAt: resetAt,
         rateLimitKind: "primary",
       });
@@ -1368,9 +1409,7 @@ describe("useRepositoryStats", () => {
     it("applies rate-limit state pushed via onRateLimitChanged and clears on unblock", async () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
       onSwitchMock.mockReturnValue(() => {});
-      let pushHandler:
-        | ((p: { blocked: boolean; kind: unknown; resetAt?: number }) => void)
-        | undefined;
+      let pushHandler: ((p: unknown) => void) | undefined;
       onRateLimitChangedMock.mockImplementation((cb: (p: unknown) => void) => {
         pushHandler = cb as typeof pushHandler;
         return () => {};
@@ -1390,7 +1429,10 @@ describe("useRepositoryStats", () => {
 
       const resetAt = Date.now() + 30_000;
       act(() => {
-        pushHandler?.({ blocked: true, kind: "secondary", resetAt });
+        pushHandler?.({
+          providerId: PROVIDER_ID,
+          state: { limit: 5000, remaining: 0, resetAt, secondaryThrottled: true },
+        });
       });
 
       await waitFor(() => {
@@ -1399,7 +1441,10 @@ describe("useRepositoryStats", () => {
       });
 
       act(() => {
-        pushHandler?.({ blocked: false, kind: null });
+        pushHandler?.({
+          providerId: PROVIDER_ID,
+          state: { limit: 5000, remaining: 4000, resetAt: null },
+        });
       });
 
       await waitFor(() => {
@@ -1514,7 +1559,7 @@ describe("useRepositoryStats", () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
       onSwitchMock.mockReturnValue(() => {});
 
-      const firstFetch = createDeferred<RepositoryStats>();
+      const firstFetch = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockImplementationOnce(() => firstFetch.promise);
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -1547,7 +1592,7 @@ describe("useRepositoryStats", () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
       onSwitchMock.mockReturnValue(() => {});
 
-      const stats: RepositoryStats = {
+      const stats: ForgeRepositoryStats = {
         commitCount: 5,
         issueCount: 2,
         prCount: 1,
@@ -1556,7 +1601,7 @@ describe("useRepositoryStats", () => {
         lastUpdated: 1000,
       };
 
-      const slow = createDeferred<RepositoryStats>();
+      const slow = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockResolvedValueOnce(stats).mockImplementationOnce(() => slow.promise);
 
       const { result } = renderHook(() => useRepositoryStats());
@@ -1654,7 +1699,10 @@ describe("useRepositoryStats", () => {
       });
 
       await act(async () => {
-        rateLimitCb?.({ blocked: false, kind: null, resetAt: null });
+        rateLimitCb?.({
+          providerId: PROVIDER_ID,
+          state: { limit: 5000, remaining: 4000, resetAt: null },
+        });
         await Promise.resolve();
       });
 

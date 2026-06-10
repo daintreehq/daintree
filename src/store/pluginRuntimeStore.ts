@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { create } from "zustand";
 import { logError } from "@/utils/logger";
 
@@ -61,22 +60,6 @@ export const usePluginRuntimeStore = create<PluginRuntimeState>((set) => ({
     void pullDisabledSet(set);
   },
 }));
-
-export const GITHUB_PLUGIN_ID = "daintree.github";
-
-/**
- * Live GitHub plugin enable state for gating GitHub-shaped UI (stats pills,
- * health cards, token banner, tooltips). Initializes the mirror on first
- * mount; until the snapshot lands the plugin reads as enabled, matching the
- * registry-side optimism — main independently rejects gated IPC if it's
- * actually off.
- */
-export function useGitHubPluginEnabled(): boolean {
-  const disabledPluginIds = usePluginRuntimeStore((s) => s.disabledPluginIds);
-  const init = usePluginRuntimeStore((s) => s.init);
-  useEffect(() => init(), [init]);
-  return !disabledPluginIds.has(GITHUB_PLUGIN_ID);
-}
 
 /** Test-only: reset the module-level init guard between cases. */
 export function _resetPluginRuntimeStoreForTest(): void {

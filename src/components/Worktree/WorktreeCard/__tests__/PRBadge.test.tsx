@@ -11,30 +11,31 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-let mockMissingToken = false;
+let mockMissingCredential = false;
 let mockFreshnessCause: "rate-limit" | "circuit-breaker" | undefined = undefined;
 
-vi.mock("@/hooks/useGitHubTooltip", () => ({
+vi.mock("@/hooks/useForgeTooltip", () => ({
   usePRTooltip: () => ({
     data: null,
     loading: false,
     error: null,
-    missingToken: mockMissingToken,
+    missingCredential: mockMissingCredential,
+    providerId: "daintree.github.github",
     fetchTooltip: vi.fn(),
     reset: vi.fn(),
   }),
 }));
 
-vi.mock("../hooks/useGitHubBadgeTooltip", () => ({
-  useGitHubBadgeTooltip: () => ({
+vi.mock("../hooks/useForgeBadgeTooltip", () => ({
+  useForgeBadgeTooltip: () => ({
     isOpen: true,
     handleOpenChange: vi.fn(),
     handleClick: vi.fn(),
   }),
 }));
 
-vi.mock("../hooks/useGitHubBadgeFreshness", () => ({
-  useGitHubBadgeFreshness: () => ({
+vi.mock("../hooks/useForgeBadgeFreshness", () => ({
+  useForgeBadgeFreshness: () => ({
     freshnessLevel: mockFreshnessCause ? "aging" : "fresh",
     freshnessCause: mockFreshnessCause,
     rateLimitResetAt: null,
@@ -61,7 +62,7 @@ function renderBadge(extra: Partial<Parameters<typeof PRBadge>[0]> = {}) {
 
 describe("PRBadge freshness glyphs", () => {
   beforeEach(() => {
-    mockMissingToken = false;
+    mockMissingCredential = false;
     mockFreshnessCause = undefined;
   });
 
@@ -96,8 +97,8 @@ describe("PRBadge freshness glyphs", () => {
     expect(button.className).not.toMatch(/opacity-/);
   });
 
-  it("suppresses the paused signal when the GitHub token is missing", () => {
-    mockMissingToken = true;
+  it("suppresses the paused signal when the forge credential is missing", () => {
+    mockMissingCredential = true;
     renderBadge({ prDetectionPaused: true });
 
     const button = screen.getByRole("button");
@@ -159,7 +160,7 @@ describe("PRBadge freshness glyphs", () => {
     renderBadge();
 
     const button = screen.getByRole("button");
-    expect(button.getAttribute("aria-label")).toContain("GitHub rate limited");
+    expect(button.getAttribute("aria-label")).toContain("forge rate limited");
     expect(button.getAttribute("aria-label")).not.toContain("PR detection paused");
   });
 

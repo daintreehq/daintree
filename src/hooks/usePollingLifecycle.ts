@@ -30,7 +30,7 @@ export interface PollingLifecycleConfig {
    * no global-trigger subscription — the consumer never registers in the
    * module-level fan-out Set. Explicit `refresh()` calls still fetch (the
    * on-demand path stays functional) but never arm the polling timer. Used by
-   * worker instances to suppress automatic background GitHub polling (#10123).
+   * worker instances to suppress automatic background forge polling (#10123).
    * Defaults to true.
    */
   enabled?: boolean;

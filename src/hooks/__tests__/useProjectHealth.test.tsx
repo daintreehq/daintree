@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectHealthData } from "@shared/types/ipc/github";
+import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 
 const { getCurrentMock, onSwitchMock, getProjectHealthMock } = vi.hoisted(() => ({
   getCurrentMock: vi.fn(),
@@ -14,16 +14,34 @@ vi.mock("@/clients", () => ({
     getCurrent: getCurrentMock,
     onSwitch: onSwitchMock,
   },
-  githubClient: {
+}));
+
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: {
     getProjectHealth: getProjectHealthMock,
   },
+}));
+
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
+    selector({ currentProject: { id: "test-project" } }),
+}));
+
+vi.mock("@/hooks/useResolvedForgeProvider", () => ({
+  useResolvedForgeProvider: () => ({
+    entry: { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } },
+    providerId: "test.forge.provider",
+    resolvedVia: "hostname",
+    loading: false,
+    refresh: () => {},
+  }),
 }));
 
 import { useProjectHealth } from "../useProjectHealth";
 import { _resetPollingLifecycleForTests } from "../usePollingLifecycle";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 
-function makeHealth(overrides: Partial<ProjectHealthData> = {}): ProjectHealthData {
+function makeHealth(overrides: Partial<ForgeProjectHealthPayload> = {}): ForgeProjectHealthPayload {
   return {
     ciStatus: "success",
     issueCount: 3,
@@ -31,7 +49,7 @@ function makeHealth(overrides: Partial<ProjectHealthData> = {}): ProjectHealthDa
     latestRelease: null,
     securityAlerts: { visible: false, count: 0 },
     mergeVelocity: { mergedCounts: { 60: 0, 120: 0, 180: 0 } },
-    repoUrl: "https://github.com/owner/repo",
+    repoUrl: "https://forge.test/owner/repo",
     hasRemote: true,
     loading: false,
     lastUpdated: 1000,
@@ -289,10 +307,10 @@ describe("useProjectHealth", () => {
     it("keeps loading true only during the cold first fetch", async () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
 
-      let resolveFirst: ((v: ProjectHealthData) => void) | undefined;
+      let resolveFirst: ((v: ForgeProjectHealthPayload) => void) | undefined;
       getProjectHealthMock.mockImplementationOnce(
         () =>
-          new Promise<ProjectHealthData>((resolve) => {
+          new Promise<ForgeProjectHealthPayload>((resolve) => {
             resolveFirst = resolve;
           })
       );
@@ -319,12 +337,12 @@ describe("useProjectHealth", () => {
     it("flips isValidating without flipping loading on a wake-triggered refetch", async () => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
 
-      let resolveSecond: ((v: ProjectHealthData) => void) | undefined;
+      let resolveSecond: ((v: ForgeProjectHealthPayload) => void) | undefined;
       getProjectHealthMock
         .mockResolvedValueOnce(makeHealth({ issueCount: 1 }))
         .mockImplementationOnce(
           () =>
-            new Promise<ProjectHealthData>((resolve) => {
+            new Promise<ForgeProjectHealthPayload>((resolve) => {
               resolveSecond = resolve;
             })
         );

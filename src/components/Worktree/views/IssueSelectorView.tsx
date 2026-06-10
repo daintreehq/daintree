@@ -1,14 +1,16 @@
-import type { GitHubIssue } from "@shared/types/github";
+import type { Issue } from "@shared/types/forge";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
-import type { IssueSelectorProps } from "@github-renderer/components/IssueSelector";
+import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
+import { useProjectStore } from "@/store/projectStore";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface IssueLinkerViewProps {
   projectPath: string;
-  selectedIssue: GitHubIssue | null;
-  onSelectIssue: (issue: GitHubIssue | null) => void;
+  selectedIssue: Issue | null;
+  onSelectIssue: (issue: Issue | null) => void;
   canAssignIssue: boolean;
   assignWorktreeToSelf: boolean;
   onSetAssignWorktreeToSelf: (assign: boolean) => void;
@@ -28,7 +30,13 @@ export function IssueLinkerView({
   currentUserAvatar,
   disabled,
 }: IssueLinkerViewProps) {
-  const IssueSelector = useBuiltinView<IssueSelectorProps>("github.issueSelector");
+  // Resolve the issue-selector view from the active provider's slot so any
+  // registered forge provider can contribute it.
+  const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const { entry } = useResolvedForgeProvider(projectId);
+  const IssueSelector = useBuiltinView<ForgeIssueSelectorProps>(
+    entry?.contribution.slots?.issueSelector ?? ""
+  );
   return (
     <>
       <div className="space-y-2">
