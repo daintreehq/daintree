@@ -1500,7 +1500,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List repository pull requests via the active forge provider (paginated). Args (all optional): \`cwd\` (repo dir, defaults to the active worktree path); \`search\`; \`state\` ('open'|'closed'|'all', default 'open'); \`cursor\` from a previous response's \`nextCursor\`. Returns { items, nextCursor, hasMore }. Errors when \`cwd\` is omitted and no worktree is active. Do NOT use this for issues — call \`forge.listIssues\`.",
+    "description": "List repository pull requests via the active forge provider (paginated). Args (all optional): \`cwd\` (repo dir, defaults to the active worktree path); \`search\`; \`state\` ('open'|'closed'|'merged'|'all', default 'open'); \`cursor\` from a previous response's \`nextCursor\`. Returns { items, nextCursor, hasMore }. Errors when \`cwd\` is omitted and no worktree is active. Do NOT use this for issues — call \`forge.listIssues\`.",
     "examples": undefined,
     "id": "forge.listPRs",
     "keywords": undefined,
