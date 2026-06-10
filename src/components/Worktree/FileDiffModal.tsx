@@ -4,6 +4,27 @@ import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { actionService } from "@/services/ActionService";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
+import { usePreferencesStore } from "@/store/preferencesStore";
+
+// Session-scoped LRU so stepping back and forth through a change set doesn't
+// re-pay git spawn + IPC + parse for files already viewed (and doesn't burn
+// the shared gitOps rate-limit budget). Cleared whenever a diff modal closes,
+// which bounds staleness to a single review session.
+const DIFF_CACHE_MAX = 20;
+const diffCache = new Map<string, string>();
+
+export function _resetDiffCacheForTests(): void {
+  diffCache.clear();
+}
+
+function cacheDiff(key: string, value: string): void {
+  diffCache.delete(key);
+  diffCache.set(key, value);
+  if (diffCache.size > DIFF_CACHE_MAX) {
+    const oldest = diffCache.keys().next().value;
+    if (oldest !== undefined) diffCache.delete(oldest);
+  }
+}
 
 // Lazy boundary cutting the static edge to `react-diff-view` + `refractor`
 // (vendor-editor chunk). `FileChangeList` mounts `FileDiffModal` on the
@@ -61,36 +82,55 @@ export function FileDiffModal({
   const [diff, setDiff] = useState<string | undefined>(undefined);
   const requestRef = useRef(0);
   const branch = useBranchForPath(worktreePath);
+  const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
 
   const absoluteFilePath = worktreePath.endsWith("/")
     ? worktreePath + filePath
     : worktreePath + "/" + filePath;
 
-  const fetchDiff = useCallback(async () => {
-    const requestId = ++requestRef.current;
-    setDiff(undefined);
-    try {
-      const result = await actionService.dispatch<{ content: string }>(
-        "git.getFileDiff",
-        { cwd: worktreePath, filePath, status },
-        { source: "user" }
-      );
-      if (requestRef.current !== requestId) return;
-      if (!result.ok) {
-        setDiff("ERROR");
-        return;
+  const fetchDiff = useCallback(
+    async (bypassCache = false) => {
+      const cacheKey = `${worktreePath}\u0000${filePath}\u0000${status}\u0000${ignoreWhitespace}`;
+      const requestId = ++requestRef.current;
+      if (!bypassCache) {
+        const cached = diffCache.get(cacheKey);
+        if (cached !== undefined) {
+          setDiff(cached);
+          return;
+        }
       }
-      setDiff(result.result.content || "NO_CHANGES");
-    } catch {
-      if (requestRef.current !== requestId) return;
-      setDiff("ERROR");
-    }
-  }, [worktreePath, filePath, status]);
+      setDiff(undefined);
+      try {
+        const result = await actionService.dispatch<{ content: string }>(
+          "git.getFileDiff",
+          { cwd: worktreePath, filePath, status, ignoreWhitespace },
+          { source: "user" }
+        );
+        if (requestRef.current !== requestId) return;
+        if (!result.ok) {
+          setDiff("ERROR");
+          return;
+        }
+        const content = result.result.content || "NO_CHANGES";
+        cacheDiff(cacheKey, content);
+        setDiff(content);
+      } catch {
+        if (requestRef.current !== requestId) return;
+        setDiff("ERROR");
+      }
+    },
+    [worktreePath, filePath, status, ignoreWhitespace]
+  );
+
+  const handleRetry = useCallback(() => {
+    void fetchDiff(true);
+  }, [fetchDiff]);
 
   useEffect(() => {
     if (!isOpen) {
       setDiff(undefined);
       requestRef.current++;
+      diffCache.clear();
       return;
     }
 
@@ -106,7 +146,8 @@ export function FileDiffModal({
         branch={branch}
         diff={diff}
         defaultMode="diff"
-        onRetryDiff={fetchDiff}
+        diffMatchesFile
+        onRetryDiff={handleRetry}
         onClose={onClose}
         restoreFocusTo={restoreFocusTo}
         currentFileIndex={currentFileIndex}

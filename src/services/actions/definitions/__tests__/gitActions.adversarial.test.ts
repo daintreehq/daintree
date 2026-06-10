@@ -184,7 +184,12 @@ describe("gitActions adversarial", () => {
       filePath: "src/file with spaces.ts",
       status: "renamed",
     });
-    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "src/file with spaces.ts", "renamed");
+    expect(git.getFileDiff).toHaveBeenCalledWith(
+      "/repo",
+      "src/file with spaces.ts",
+      "renamed",
+      undefined
+    );
   });
 
   it("git.snapshotRevert is worktree-based — never touches cwd", async () => {
@@ -232,7 +237,7 @@ describe("gitActions adversarial", () => {
       { filePath: "x.ts", status: "modified" },
       { activeWorktreePath: "/repo" }
     );
-    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified");
+    expect(git.getFileDiff).toHaveBeenCalledWith("/repo", "x.ts", "modified", undefined);
   });
 
   it("git.listCommits falls back to ctx.activeWorktreePath and forwards filters", async () => {

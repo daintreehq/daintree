@@ -2926,7 +2926,8 @@ export class WorkspaceService {
     requestId: string,
     cwd: string,
     filePath: string,
-    status: string
+    status: string,
+    ignoreWhitespace?: boolean
   ): Promise<void> {
     try {
       const { resolve, normalize, sep, isAbsolute } = await import("path");
@@ -2944,11 +2945,23 @@ export class WorkspaceService {
       // Git always uses forward slashes in diff output, even on Windows
       const gitPath = normalizedPath.replaceAll("\\", "/");
 
+      const absolutePath = resolve(cwd, normalizedPath);
+
+      try {
+        const { stat } = await import("fs/promises");
+        const stats = await stat(absolutePath);
+        if (stats.size > 1024 * 1024) {
+          this.sendEvent({ type: "get-file-diff-result", requestId, diff: "FILE_TOO_LARGE" });
+          return;
+        }
+      } catch {
+        // ignore
+      }
+
       const git = createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
         const { readFile } = await import("fs/promises");
-        const absolutePath = resolve(cwd, normalizedPath);
         const buffer = await readFile(absolutePath);
 
         let isBinary = false;
@@ -2986,6 +2999,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
+        ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
         "--",
         normalizedPath,
       ]);
@@ -2997,6 +3011,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
       if (!diff.trim()) {
         this.sendEvent({ type: "get-file-diff-result", requestId, diff: "NO_CHANGES" });
+        return;
+      }
+
+      if (diff.length > 1024 * 1024) {
+        this.sendEvent({ type: "get-file-diff-result", requestId, diff: "FILE_TOO_LARGE" });
         return;
       }
 

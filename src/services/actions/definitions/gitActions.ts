@@ -69,7 +69,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getFileDiff",
     title: "Get File Diff",
     description:
-      "Get the git diff for a single file. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path; `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry). Returns { content } — the unified diff text. Errors when `cwd` is omitted and no worktree is active.",
+      "Get the git diff for a single file. Args: `cwd` (optional) — repo working directory, defaults to the active worktree path; `filePath` (required) — repo-relative path; `status` (required) — the file's git status (from a `git.getStagingStatus` entry); `ignoreWhitespace` (optional) — omit whitespace-only changes. Returns { content } — the unified diff text. Errors when `cwd` is omitted and no worktree is active.",
     category: "git",
     kind: "query",
     danger: "safe",
@@ -85,6 +85,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       status: GitStatusSchema.describe(
         "The file's git status — the `status` value from a `git.getStagingStatus` entry."
       ),
+      ignoreWhitespace: z
+        .boolean()
+        .optional()
+        .describe("When true, whitespace-only changes are omitted from the diff."),
     }),
     examples: [
       {
@@ -94,14 +98,20 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     ],
     resultSchema: z.object({ content: z.string() }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { cwd, filePath, status } = args as {
+      const { cwd, filePath, status, ignoreWhitespace } = args as {
         cwd?: string;
         filePath: string;
         status: z.infer<typeof GitStatusSchema>;
+        ignoreWhitespace?: boolean;
       };
       const resolvedCwd = cwd ?? ctx.activeWorktreePath;
       if (!resolvedCwd) throw new Error("No active worktree");
-      const diff = await window.electron.git.getFileDiff(resolvedCwd, filePath, status as any);
+      const diff = await window.electron.git.getFileDiff(
+        resolvedCwd,
+        filePath,
+        status as any,
+        ignoreWhitespace
+      );
       return { content: diff };
     },
   }));

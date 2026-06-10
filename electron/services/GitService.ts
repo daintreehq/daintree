@@ -315,7 +315,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     branch1: string,
     branch2: string,
     filePath?: string,
-    useMergeBase?: boolean
+    useMergeBase?: boolean,
+    ignoreWhitespace?: boolean
   ): Promise<CrossWorktreeDiffResult | string> {
     // Validate before the equality fast-path so an invalid argv-shaped name
     // is rejected unconditionally — not silently accepted when both inputs
@@ -351,6 +352,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           "--no-ext-diff",
           "--no-textconv",
           "--no-color",
+          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,
           "--",
@@ -389,6 +391,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           "--no-ext-diff",
           "--no-textconv",
           "--name-status",
+          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,
         ]),
@@ -399,6 +402,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
             "--no-textconv",
             "--no-renames",
             "--numstat",
+            ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
             "--end-of-options",
             range,
           ])

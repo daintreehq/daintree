@@ -116,7 +116,7 @@ export interface ReviewHubContentProps {
 
 interface BaseBranchFileRowProps {
   file: CrossWorktreeFile;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   unresolvedDecoration?: FileDecoration;
   onBadgeClick?: () => void;
 }
@@ -264,6 +264,7 @@ export function ReviewHubContent({
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
     status: GitStatus;
+    section: FileStageRowSection;
   } | null>(null);
   // Session-scoped per-file Viewed indicator. Keys are `staged:{path}` or
   // `unstaged:{path}` so that the same path appearing in both sections (valid
@@ -299,6 +300,9 @@ export function ReviewHubContent({
   const conflictSectionRef = useRef<HTMLDivElement>(null);
   const unstagedSectionRef = useRef<HTMLDivElement>(null);
   const selectionAnchorRef = useRef<string | null>(null);
+  // Row element that opened a diff modal; AppDialog falls back to it when the
+  // trigger unmounted (e.g. the file left the list while the modal was open).
+  const diffTriggerRef = useRef<HTMLElement | null>(null);
   const isBulkStagingRef = useRef(false);
   // One-shot guard for the auto-stage-on-open behavior. Resets in the close
   // branch of the isOpen effect so reopening re-arms the check.
@@ -459,6 +463,68 @@ export function ReviewHubContent({
         { ins: 0, del: 0 }
       ) ?? { ins: 0, del: 0 },
     [sortedBaseBranchFiles]
+  );
+
+  // Position of the open working-tree diff within `navigableItems` (the flat
+  // staged-then-unstaged render order). Path-only fallback keeps the index
+  // alive when the open file moves between sections (stage/unstage) while the
+  // modal is up; null when the file left the list entirely.
+  const selectedFileIndex = useMemo(() => {
+    if (!selectedFile) return null;
+    const exact = navigableItems.findIndex(
+      (item) => item.section === selectedFile.section && item.file.path === selectedFile.path
+    );
+    if (exact !== -1) return exact;
+    const byPath = navigableItems.findIndex((item) => item.file.path === selectedFile.path);
+    return byPath === -1 ? null : byPath;
+  }, [selectedFile, navigableItems]);
+
+  const lastSelectedFileIndexRef = useRef(0);
+  useEffect(() => {
+    if (selectedFileIndex !== null) lastSelectedFileIndexRef.current = selectedFileIndex;
+  }, [selectedFileIndex]);
+
+  const navigateWorkingTreeFile = useCallback(
+    (delta: -1 | 1) => {
+      if (navigableItems.length === 0) return;
+      // Clamp against the live length — a refresh can shrink the list (or drop
+      // the open file) while the modal is open, leaving the index stale.
+      const current = Math.min(
+        selectedFileIndex ?? lastSelectedFileIndexRef.current,
+        navigableItems.length - 1
+      );
+      const next = Math.min(Math.max(current + delta, 0), navigableItems.length - 1);
+      const item = navigableItems[next];
+      if (item) {
+        setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
+      }
+    },
+    [navigableItems, selectedFileIndex]
+  );
+
+  const selectedBaseBranchIndex = useMemo(() => {
+    if (!selectedBaseBranchFile || !sortedBaseBranchFiles) return null;
+    const idx = sortedBaseBranchFiles.findIndex((f) => f.path === selectedBaseBranchFile.path);
+    return idx === -1 ? null : idx;
+  }, [selectedBaseBranchFile, sortedBaseBranchFiles]);
+
+  const lastBaseBranchIndexRef = useRef(0);
+  useEffect(() => {
+    if (selectedBaseBranchIndex !== null) lastBaseBranchIndexRef.current = selectedBaseBranchIndex;
+  }, [selectedBaseBranchIndex]);
+
+  const navigateBaseBranchFile = useCallback(
+    (delta: -1 | 1) => {
+      if (!sortedBaseBranchFiles || sortedBaseBranchFiles.length === 0) return;
+      const current = Math.min(
+        selectedBaseBranchIndex ?? lastBaseBranchIndexRef.current,
+        sortedBaseBranchFiles.length - 1
+      );
+      const next = Math.min(Math.max(current + delta, 0), sortedBaseBranchFiles.length - 1);
+      const file = sortedBaseBranchFiles[next];
+      if (file) setSelectedBaseBranchFile(file);
+    },
+    [sortedBaseBranchFiles, selectedBaseBranchIndex]
   );
 
   const mainBranch = useWorktreeStore(
@@ -1194,7 +1260,8 @@ export function ReviewHubContent({
       setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
       setSelectionSection((prev) => (prev === null ? prev : null));
       selectionAnchorRef.current = filePath;
-      setSelectedFile({ path: filePath, status: fileStatus });
+      diffTriggerRef.current = e.currentTarget instanceof HTMLElement ? e.currentTarget : null;
+      setSelectedFile({ path: filePath, status: fileStatus, section });
     },
     [status, selectionSection]
   );
@@ -1291,7 +1358,10 @@ export function ReviewHubContent({
         setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
         setSelectionSection((prev) => (prev === null ? prev : null));
         selectionAnchorRef.current = item.file.path;
-        setSelectedFile({ path: item.file.path, status: item.file.status });
+        diffTriggerRef.current =
+          fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`) ??
+          fileListRef.current;
+        setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
         return;
       }
       case " ": {
@@ -1753,7 +1823,10 @@ export function ReviewHubContent({
                       <BaseBranchFileRow
                         key={`${file.status}:${file.path}`}
                         file={file}
-                        onClick={() => setSelectedBaseBranchFile(file)}
+                        onClick={(e) => {
+                          diffTriggerRef.current = e.currentTarget;
+                          setSelectedBaseBranchFile(file);
+                        }}
                         unresolvedDecoration={decoration}
                         onBadgeClick={
                           decoration?.url
@@ -2402,6 +2475,10 @@ export function ReviewHubContent({
         status={selectedFile?.status ?? "modified"}
         worktreePath={worktreePath}
         onClose={() => setSelectedFile(null)}
+        restoreFocusTo={diffTriggerRef}
+        currentFileIndex={selectedFileIndex ?? undefined}
+        totalFileCount={navigableItems.length}
+        onNavigateFile={navigateWorkingTreeFile}
       />
 
       {/* File diff modal — base-branch mode */}
@@ -2412,6 +2489,10 @@ export function ReviewHubContent({
         mainBranch={mainBranch}
         currentBranch={status?.currentBranch ?? "HEAD"}
         onClose={() => setSelectedBaseBranchFile(null)}
+        restoreFocusTo={diffTriggerRef}
+        currentFileIndex={selectedBaseBranchIndex ?? undefined}
+        totalFileCount={sortedBaseBranchFiles?.length ?? 0}
+        onNavigateFile={navigateBaseBranchFile}
       />
 
       {pushError?.leaseSha && pushError.branchName && (

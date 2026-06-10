@@ -205,4 +205,53 @@ describe("WorkspaceService.getFileDiff", () => {
 
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--no-textconv"]));
   });
+
+  it("returns FILE_TOO_LARGE without reading when the file exceeds 1MB", async () => {
+    const { stat, readFile } = await import("fs/promises");
+    vi.mocked(stat).mockResolvedValueOnce({ size: 1024 * 1024 + 1 } as never);
+
+    await service.getFileDiff("req-7", "/test/repo", "huge.txt", "untracked");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "get-file-diff-result",
+        requestId: "req-7",
+        diff: "FILE_TOO_LARGE",
+      })
+    );
+    expect(readFile).not.toHaveBeenCalled();
+    expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
+  it("returns FILE_TOO_LARGE when the tracked-file diff output exceeds 1MB", async () => {
+    mockSimpleGit.diff.mockResolvedValueOnce(
+      "diff --git a/foo.ts b/foo.ts\n" + "+x".repeat(1024 * 1024)
+    );
+
+    await service.getFileDiff("req-8", "/test/repo", "foo.ts", "modified");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "get-file-diff-result",
+        requestId: "req-8",
+        diff: "FILE_TOO_LARGE",
+      })
+    );
+  });
+
+  it("passes --ignore-all-space when ignoreWhitespace is true", async () => {
+    mockSimpleGit.diff.mockResolvedValueOnce("diff --git a/foo.ts b/foo.ts\n+change");
+    await service.getFileDiff("req-9", "/test/repo", "foo.ts", "modified", true);
+
+    expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--ignore-all-space"]));
+  });
+
+  it("omits --ignore-all-space when ignoreWhitespace is not set", async () => {
+    mockSimpleGit.diff.mockResolvedValueOnce("diff --git a/foo.ts b/foo.ts\n+change");
+    await service.getFileDiff("req-10", "/test/repo", "foo.ts", "modified");
+
+    expect(mockSimpleGit.diff).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["--ignore-all-space"])
+    );
+  });
 });

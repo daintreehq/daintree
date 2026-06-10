@@ -366,6 +366,7 @@ export type WorkspaceHostRequest =
       cwd: string;
       filePath: string;
       status: string;
+      ignoreWhitespace?: boolean;
     }
   // Polling control
   | { type: "set-polling-enabled"; enabled: boolean }

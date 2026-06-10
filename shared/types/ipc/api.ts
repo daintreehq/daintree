@@ -711,7 +711,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
   git: {
-    getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
+    getFileDiff(
+      cwd: string,
+      filePath: string,
+      status: GitStatus,
+      ignoreWhitespace?: boolean
+    ): Promise<string>;
     getProjectPulse(options: {
       worktreeId: string;
       rangeDays: import("../pulse.js").PulseRangeDays;
@@ -755,7 +760,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch1: string,
       branch2: string,
       filePath?: string,
-      useMergeBase?: boolean
+      useMergeBase?: boolean,
+      ignoreWhitespace?: boolean
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
