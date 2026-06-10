@@ -49,6 +49,13 @@ class GitHubTokenHealthServiceImpl {
   private tokenVersionAtLastCheck = -1;
   private pendingCheck: Promise<void> | null = null;
   private readonly listeners = new Set<StateChangeListener>();
+  /**
+   * Lifecycle gate owned by GitHub plugin activation (#9304 follow-up).
+   * Probes only run between start() and stop(): powerMonitor focus/wake
+   * refresh() calls arrive unconditionally from core, and without this gate
+   * a disabled plugin would keep probing GitHub in the background.
+   */
+  private started = false;
 
   private fetchImpl: FetchFn;
   private now: () => number;
@@ -90,16 +97,20 @@ class GitHubTokenHealthServiceImpl {
    * GitHub guidance is to use response headers rather than polling `/rate_limit`.
    */
   start(): void {
+    this.started = true;
     void this.runCheck({ reason: "start" });
   }
 
-  /** Stop polling and tear down listeners. Safe to call multiple times. */
+  /**
+   * Stop probing. Safe to call multiple times. Listeners are kept — they
+   * belong to host transports (renderer broadcast relays) that outlive a
+   * plugin disable/enable cycle; only `dispose()` clears them at shutdown.
+   */
   stop(): void {
-    // No recurring timer to clear; kept for API compatibility. The `dispose()`
-    // alias still clears listeners and resets state.
+    this.started = false;
   }
 
-  /** Alias for {@link stop} — matches the lifecycle naming used elsewhere. */
+  /** Full teardown for app shutdown — also clears host transport listeners. */
   dispose(): void {
     this.stop();
     this.listeners.clear();
@@ -112,6 +123,10 @@ class GitHubTokenHealthServiceImpl {
    * without hammering the API when the user is toggling windows rapidly.
    */
   refresh(options: { force?: boolean } = {}): Promise<void> {
+    if (!this.started) {
+      logDebug("GitHub token health: skipping refresh while stopped");
+      return Promise.resolve();
+    }
     const force = options.force === true;
     if (!force) {
       const elapsed = this.now() - this.lastCheckedAt;
@@ -138,12 +153,14 @@ class GitHubTokenHealthServiceImpl {
 
   /** Test-only helper. */
   _resetForTests(): void {
-    this.stop();
     this.listeners.clear();
     this.status = "unknown";
     this.lastCheckedAt = 0;
     this.tokenVersionAtLastCheck = -1;
     this.pendingCheck = null;
+    // Reset into the operational (started) posture: probe-behavior tests
+    // exercise a running service; the lifecycle gate has its own tests.
+    this.started = true;
   }
 
   /** Test-only helper. */
@@ -198,6 +215,16 @@ class GitHubTokenHealthServiceImpl {
           },
           signal: AbortSignal.timeout(HEALTH_CHECK_FETCH_TIMEOUT_MS),
         });
+
+        // Probe completed after stop() (plugin disabled mid-flight): discard
+        // so a late result can't re-publish healthy/unhealthy state over the
+        // disabled reset and resurrect a banner for an off integration.
+        if (!this.started) {
+          logDebug("GitHub token health: probe result discarded after stop", {
+            reason: context.reason,
+          });
+          return;
+        }
 
         // Late-arriving probe from a previous token: discard so it can't
         // clobber state — including `lastAuthMetadata` — set by the

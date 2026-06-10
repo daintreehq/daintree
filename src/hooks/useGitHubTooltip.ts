@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
 import { TtlCache } from "@/utils/ttlCache";
 import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 
 type TooltipState<T> = {
   data: T | null;
@@ -26,6 +27,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
   const mountedRef = useRef(true);
   const hasToken = useGitHubConfigStore((s) => s.config?.hasToken);
   const storeInitialized = useGitHubConfigStore((s) => s.isInitialized);
+  const githubEnabled = useGitHubPluginEnabled();
 
   const missingToken = useMemo(() => storeInitialized && !hasToken, [storeInitialized, hasToken]);
 
@@ -40,7 +42,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
   }, [storeInitialized]);
 
   const fetchTooltip = useCallback(async () => {
-    if (!cwd || !issueNumber || missingToken) return;
+    if (!cwd || !issueNumber || missingToken || !githubEnabled) return;
 
     const cacheKey = `${cwd}:${issueNumber}`;
     const cached = issueCache.get(cacheKey);
@@ -99,7 +101,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
       if (!mountedRef.current) return;
       setState({ data: null, loading: false, error: true });
     }
-  }, [cwd, issueNumber, missingToken]);
+  }, [cwd, issueNumber, missingToken, githubEnabled]);
 
   const reset = useCallback(() => {
     setState({ data: null, loading: false, error: false });
@@ -119,6 +121,7 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
   const mountedRef = useRef(true);
   const hasToken = useGitHubConfigStore((s) => s.config?.hasToken);
   const storeInitialized = useGitHubConfigStore((s) => s.isInitialized);
+  const githubEnabled = useGitHubPluginEnabled();
 
   const missingToken = useMemo(() => storeInitialized && !hasToken, [storeInitialized, hasToken]);
 
@@ -133,7 +136,7 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
   }, [storeInitialized]);
 
   const fetchTooltip = useCallback(async () => {
-    if (!cwd || !prNumber || missingToken) return;
+    if (!cwd || !prNumber || missingToken || !githubEnabled) return;
 
     const cacheKey = `${cwd}:${prNumber}`;
     const cached = prCache.get(cacheKey);
@@ -192,7 +195,7 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
       if (!mountedRef.current) return;
       setState({ data: null, loading: false, error: true });
     }
-  }, [cwd, prNumber, missingToken]);
+  }, [cwd, prNumber, missingToken, githubEnabled]);
 
   const reset = useCallback(() => {
     setState({ data: null, loading: false, error: false });

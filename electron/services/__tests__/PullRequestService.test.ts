@@ -1837,7 +1837,11 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("leaves an already-resolved provider untouched on forge:provider-registry-updated", async () => {
+    it("re-resolves an already-resolved provider on forge:provider-registry-updated", async () => {
+      // Registry updates now also signal provider REMOVAL (live built-in
+      // disable, #9304 follow-up), so a cached resolution can't be trusted —
+      // it must be dropped and re-resolved. In the still-registered case the
+      // re-resolution lands on the same provider.
       vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
       const bridge = lastMockBridge!;
@@ -1853,12 +1857,21 @@ describe("PullRequestService", () => {
 
       await pullRequestService.refresh();
       const callsAfterRefresh = bridge.resolveProvider.mock.calls.length;
+      expect(pullRequestService.getProviderContext()).not.toBeNull();
 
       pullRequestService.notifyForgeProviderRegistryUpdated();
-      await vi.advanceTimersByTimeAsync(1_000);
+      // Invalidation is immediate — the stale resolution must not survive
+      // even before any re-check fires. (When the provider was removed, this
+      // is what stops further RPCs against an unregistered provider.)
+      expect(pullRequestService.getProviderContext()).toBeNull();
 
-      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterRefresh);
-      expect(pullRequestService.getProviderContext()).not.toBeNull();
+      // Next check re-resolves; with the provider still registered it lands
+      // back on the same provider.
+      await pullRequestService.refresh();
+      expect(bridge.resolveProvider.mock.calls.length).toBeGreaterThan(callsAfterRefresh);
+      expect(pullRequestService.getProviderContext()).toMatchObject({
+        providerId: "daintree.github.github",
+      });
 
       pullRequestService.destroy();
     });

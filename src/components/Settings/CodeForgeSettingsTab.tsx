@@ -19,7 +19,7 @@ import {
   ForgeProviderSelectorDropdown,
   type ForgeProviderOption,
 } from "./ForgeProviderSelectorDropdown";
-import { GitHubSettingsTab } from "./GitHubSettingsTab";
+import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
@@ -48,11 +48,15 @@ interface CodeForgeSettingsTabProps {
 
 export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForgeSettingsTabProps) {
   const [providers, setProviders] = useState<ForgeProviderEntry[]>([]);
+  // Sequence overlapping fetches (initial load + provenance refetches) so a
+  // slow older response can't overwrite a newer provider list.
+  const providersSeqRef = useRef(0);
 
   const loadProviders = useCallback(async () => {
+    const seq = ++providersSeqRef.current;
     try {
       const loaded = await window.electron.forge.getProviders();
-      setProviders(loaded);
+      if (seq === providersSeqRef.current) setProviders(loaded);
     } catch (err) {
       logError("Failed to load forge providers for CodeForgeSettingsTab", err);
       throw err;
@@ -64,6 +68,24 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     errorMessage: "Couldn't load forge providers",
     timeoutMessage: "Forge providers took too long to load.",
   });
+
+  // Refetch on plugin enable/disable so the provider dropdown (and the
+  // GitHub subtab below) track the live forge registry, not a mount-time
+  // snapshot — same broadcast PluginsTab follows.
+  useEffect(() => {
+    return window.electron.plugin.onProvenanceChanged(() => {
+      void loadProviders().catch(() => {
+        // useTabLoad owns initial-load errors; a failed live refresh keeps
+        // the previous list rather than tearing down the tab.
+      });
+    });
+  }, [loadProviders]);
+
+  // The GitHub settings panel is contributed by the daintree.github plugin
+  // (slot resolves null while the plugin is disabled), so disabling the
+  // plugin genuinely removes its settings interface instead of the host
+  // rendering a panel for a provider that no longer exists.
+  const GitHubSettingsView = useBuiltinView<Record<string, never>>("github.forgeSettingsTab");
 
   const [auditRecords, setAuditRecords] = useState<ForgeAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
@@ -198,11 +220,18 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     [providers]
   );
 
+  // Fall back to the GitHub subtab only while its provider is actually
+  // registered — with the GitHub plugin disabled the provider list omits it,
+  // and defaulting to a panel for an absent provider is exactly the "disable
+  // does nothing" bug (#9304 follow-up). General settings always exist.
+  const githubAvailable = providerOptions.some((p) => p.id === GITHUB_ID);
   const effectiveSubtab =
     activeSubtab &&
     (activeSubtab === GENERAL_ID || providerOptions.some((p) => p.id === activeSubtab))
       ? activeSubtab
-      : GITHUB_ID;
+      : githubAvailable
+        ? GITHUB_ID
+        : GENERAL_ID;
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
@@ -266,9 +295,9 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           </>
         )}
 
-        {isGitHub && (
+        {isGitHub && GitHubSettingsView && (
           <ForgeProviderCard name="GitHub" Icon={GitHubIcon}>
-            <GitHubSettingsTab />
+            <GitHubSettingsView />
           </ForgeProviderCard>
         )}
 

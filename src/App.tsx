@@ -52,6 +52,7 @@ import {
   useGettingStartedChecklist,
   useOrchestrationMilestones,
   useAgentWaitingNudge,
+  useGitHubEnableRecommendation,
   useFocusOnActivateIntent,
   usePluginDeepLink,
   useNotificationHistoryPruning,
@@ -684,6 +685,7 @@ function AppInner() {
   useUpdateListener(onboardingOverlayActive);
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
+  useGitHubEnableRecommendation(isStateLoaded);
   useNotificationHistoryPruning();
 
   useEffect(() => {

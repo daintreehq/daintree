@@ -1,7 +1,8 @@
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { githubForgeProvider } from "./forgeProvider.js";
 import { registerReviewDecorationProvider } from "./reviewDecorationProvider.js";
-import { startCacheSweep, stopCacheSweep } from "./GitHubCaches.js";
+import { startCacheSweep, stopCacheSweep, clearGitHubCaches } from "./GitHubCaches.js";
+import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
 
 /**
  * Plugin activation entry point — called by `PluginService` after manifest
@@ -21,10 +22,25 @@ export function activate(host: PluginHostApi): () => void {
   // Periodic sweep of the data caches' expired entries (lazy get()-time
   // eviction can pin entries that stop being read). Cleared on deactivation.
   startCacheSweep();
+  // Background token-health probing is plugin-owned (#9304 follow-up): it
+  // starts with activation (previously a core deferred task) and stops on
+  // deactivation, so a disabled plugin issues no GitHub network. Token
+  // STORAGE stays host-owned and eager (GitHubAuth.initializeStorage in
+  // globalServicesInit) — a stored token must survive disable/enable.
+  gitHubTokenHealthService.start();
   return () => {
     disposeForge();
     disposeDecorations();
     stopCacheSweep();
+    // stop(), not dispose(): the renderer-broadcast listeners registered by
+    // the host transport (registerGithubHandlers) must survive a disable →
+    // enable cycle. resetState() retires any visible unhealthy badge so a
+    // banner for a now-off integration can't linger.
+    gitHubTokenHealthService.stop();
+    gitHubTokenHealthService.resetState();
+    // Drop cached issue/PR/stat pages so a later re-enable (possibly under a
+    // different token) starts from the network, not stale data.
+    clearGitHubCaches();
   };
 }
 

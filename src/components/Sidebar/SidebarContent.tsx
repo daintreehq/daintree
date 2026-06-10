@@ -35,7 +35,7 @@ import {
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
-import { getBuiltinView } from "@/registry/builtinRendererRegistry";
+import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { BulkCreateWorktreeDialogProps } from "@github-renderer/components/BulkCreateWorktreeDialog";
 import { FleetPickerPalette } from "@/components/Fleet/FleetPickerPalette";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -501,6 +501,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       bulkCreateDialog: state.bulkCreateDialog,
       closeBulkCreateDialog: state.closeBulkCreateDialog,
     }))
+  );
+  // Resolved reactively so the dialog drops out (and back in) live with the
+  // GitHub plugin's enable state instead of holding a stale slot reference.
+  const BulkCreateWorktreeDialog = useBuiltinView<BulkCreateWorktreeDialogProps>(
+    "github.bulkCreateWorktreeDialog"
   );
   // Direct subscription (no useDeferredValue) so the skeleton renders the
   // moment the dialog submits — defer would make the placeholder lag the
@@ -1905,22 +1910,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         componentName="BulkCreateWorktreeDialog"
         resetKeys={[Number(bulkCreateDialog.isOpen)]}
       >
-        {(() => {
-          const BulkCreateWorktreeDialog = getBuiltinView<BulkCreateWorktreeDialogProps>(
-            "github.bulkCreateWorktreeDialog"
-          );
-          if (!BulkCreateWorktreeDialog) return null;
-          return (
-            <BulkCreateWorktreeDialog
-              isOpen={bulkCreateDialog.isOpen}
-              onClose={closeBulkCreateDialog}
-              mode={bulkCreateDialog.mode}
-              selectedIssues={bulkCreateDialog.selectedIssues}
-              selectedPRs={bulkCreateDialog.selectedPRs}
-              onComplete={closeBulkCreateDialog}
-            />
-          );
-        })()}
+        {BulkCreateWorktreeDialog && (
+          <BulkCreateWorktreeDialog
+            isOpen={bulkCreateDialog.isOpen}
+            onClose={closeBulkCreateDialog}
+            mode={bulkCreateDialog.mode}
+            selectedIssues={bulkCreateDialog.selectedIssues}
+            selectedPRs={bulkCreateDialog.selectedPRs}
+            onComplete={closeBulkCreateDialog}
+          />
+        )}
       </ErrorBoundary>
 
       <ErrorBoundary

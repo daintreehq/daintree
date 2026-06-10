@@ -1,6 +1,7 @@
 import type { DaintreeCommand, CommandResult } from "../../../shared/types/commands.js";
 import type { CreateIssueInput } from "../../../shared/types/forge.js";
 import { getGitHubToken, clearGitHubCaches } from "../GitHubService.js";
+import { hasActivatedForgeProvider } from "../forgeProviderRegistry.js";
 import { resolveForCwd } from "../../ipc/handlers/forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../forge/forgeAuditService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -94,12 +95,18 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
   },
 
   isEnabled: () => {
-    return !!getGitHubToken();
+    // Mirrors githubWorkIssue: a stored token alone isn't enough — the forge
+    // provider must be activated (GitHub plugin enabled), or execute() dies
+    // in resolveForCwd with a misleading not-a-git-repo classification.
+    return !!getGitHubToken() && hasActivatedForgeProvider();
   },
 
   disabledReason: () => {
     if (!getGitHubToken()) {
       return "GitHub token not configured. Set it in Settings.";
+    }
+    if (!hasActivatedForgeProvider()) {
+      return "GitHub plugin is disabled. Enable it in Settings to create issues.";
     }
     return undefined;
   },

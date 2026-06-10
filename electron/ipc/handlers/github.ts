@@ -27,6 +27,10 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import { toRateLimitInfo } from "../../../shared/utils/rateLimitUtils.js";
+import {
+  assertGitHubProviderActive,
+  isGitHubProviderActive,
+} from "../../services/github/availability.js";
 
 // Relay the fetch-throttle multiplier into every workspace host so worktree
 // monitor polling backs off as the shared GraphQL budget depletes. The hosts
@@ -47,6 +51,9 @@ async function handleGitHubUnassignIssue(payload: {
   issueNumber: number;
   username: string;
 }): Promise<void> {
+  // Same gate as the `gated()` wrapper in registerGithubHandlers — this
+  // handler lives outside that scope because it registers via the namespace.
+  assertGitHubProviderActive();
   checkRateLimit(CHANNELS.GITHUB_UNASSIGN_ISSUE, 5, 10_000);
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid payload");
@@ -82,6 +89,19 @@ export const githubUnassignIssueNamespace = defineIpcNamespace({
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
+  // Gate a data/network handler on the GitHub plugin being active. Channels
+  // stay registered unconditionally (the renderer must be able to call and get
+  // a clean "disabled" rejection), but when the plugin is off these fail fast
+  // before reaching plugin code — making the toggle authoritative. Purely-local
+  // handlers (URL builders, token-state reads, provider-agnostic list-remotes)
+  // are intentionally left unwrapped.
+  const gated =
+    <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      assertGitHubProviderActive();
+      return fn(...args);
+    };
+
   // Main-process transport: push rate-limit state changes to every renderer.
   // The provider-keyed forge channel is what `githubClient.onRateLimitChanged`
   // now subscribes to, so main-process-sourced GitHub blocks (REST 403/429,
@@ -114,14 +134,18 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     checkRateLimit(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, 30, 60_000);
     return fetchRateLimitDetails();
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, handleGetRateLimitDetails));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS, gated(handleGetRateLimitDetails))
+  );
 
   const handleResolveAuthorAvatar = async (email: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
     if (typeof email !== "string" || !email.trim()) return null;
     return resolveAuthorAvatar(email.trim().toLowerCase());
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, handleResolveAuthorAvatar));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, gated(handleResolveAuthorAvatar))
+  );
 
   const handleGitHubGetRepoStats = async (
     cwd: string,
@@ -161,7 +185,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
     return result.stats;
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_REPO_STATS, handleGitHubGetRepoStats));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_REPO_STATS, gated(handleGitHubGetRepoStats)));
 
   const handleGitHubGetFirstPageCache = async (
     cwd: string
@@ -173,7 +197,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getFirstPageCache } = await import("../../services/github/index.js");
     return getFirstPageCache(cwd);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, handleGitHubGetFirstPageCache));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, gated(handleGitHubGetFirstPageCache))
+  );
 
   const handleGitHubGetProjectHealth = async (
     cwd: string,
@@ -212,7 +238,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       return buildEmptyProjectHealthData({ error: message });
     }
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PROJECT_HEALTH, handleGitHubGetProjectHealth));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_PROJECT_HEALTH, gated(handleGitHubGetProjectHealth))
+  );
 
   const handleGitHubOpenIssues = async (cwd: string, query?: string, state?: string) => {
     checkRateLimit(CHANNELS.GITHUB_OPEN_ISSUES, 20, 10_000);
@@ -335,7 +363,15 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
   const handleGitHubGetConfig = async (): Promise<GitHubTokenConfig> => {
     checkRateLimit(CHANNELS.GITHUB_GET_CONFIG, 10, 10_000);
-    const { getGitHubConfigAsync } = await import("../../services/github/index.js");
+    const { getGitHubConfig, getGitHubConfigAsync } =
+      await import("../../services/github/index.js");
+    // getConfigAsync lazily validates against /user when a token exists but
+    // user info isn't cached — that's GitHub network. While the plugin is
+    // disabled, answer from local token state only (the channel stays
+    // ungated so Settings can still show token presence).
+    if (!isGitHubProviderActive()) {
+      return getGitHubConfig();
+    }
     return getGitHubConfigAsync();
   };
   handlers.push(typedHandle(CHANNELS.GITHUB_GET_CONFIG, handleGitHubGetConfig));
@@ -347,7 +383,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     }
     return setTokenAndSync(token);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_SET_TOKEN, handleGitHubSetToken));
+  handlers.push(typedHandle(CHANNELS.GITHUB_SET_TOKEN, gated(handleGitHubSetToken)));
 
   const handleGitHubClearToken = async (): Promise<void> => {
     checkRateLimit(CHANNELS.GITHUB_CLEAR_TOKEN, 5, 10_000);
@@ -363,7 +399,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { validateGitHubToken } = await import("../../services/github/index.js");
     return validateGitHubToken(token.trim());
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_VALIDATE_TOKEN, handleGitHubValidateToken));
+  handlers.push(typedHandle(CHANNELS.GITHUB_VALIDATE_TOKEN, gated(handleGitHubValidateToken)));
 
   const handleGitHubListIssues = async (options: {
     cwd: string;
@@ -383,7 +419,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { listIssues } = await import("../../services/github/index.js");
     return listIssues(options);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_ISSUES, handleGitHubListIssues));
+  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_ISSUES, gated(handleGitHubListIssues)));
 
   const handleGitHubListPRs = async (options: {
     cwd: string;
@@ -403,7 +439,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { listPullRequests } = await import("../../services/github/index.js");
     return listPullRequests(options);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_PRS, handleGitHubListPRs));
+  handlers.push(typedHandle(CHANNELS.GITHUB_LIST_PRS, gated(handleGitHubListPRs)));
 
   const handleGitHubAssignIssue = async (payload: {
     cwd: string;
@@ -434,7 +470,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { assignIssue } = await import("../../services/github/index.js");
     await assignIssue(payload.cwd.trim(), payload.issueNumber, trimmedUsername);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_ASSIGN_ISSUE, handleGitHubAssignIssue));
+  handlers.push(typedHandle(CHANNELS.GITHUB_ASSIGN_ISSUE, gated(handleGitHubAssignIssue)));
 
   handlers.push(githubUnassignIssueNamespace.register());
 
@@ -452,7 +488,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getIssueTooltip } = await import("../../services/github/index.js");
     return getIssueTooltip(payload.cwd.trim(), payload.issueNumber);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, handleGitHubGetIssueTooltip));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, gated(handleGitHubGetIssueTooltip)));
 
   const handleGitHubGetPRTooltip = async (payload: { cwd: string; prNumber: number }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_PR_TOOLTIP, 20, 10_000);
@@ -468,7 +504,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getPRTooltip } = await import("../../services/github/index.js");
     return getPRTooltip(payload.cwd.trim(), payload.prNumber);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_TOOLTIP, handleGitHubGetPRTooltip));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_TOOLTIP, gated(handleGitHubGetPRTooltip)));
 
   const handleGitHubGetIssueUrl = async (payload: {
     cwd: string;
@@ -503,7 +539,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getIssueByNumber } = await import("../../services/github/index.js");
     return getIssueByNumber(payload.cwd.trim(), payload.issueNumber);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, handleGitHubGetIssueByNumber));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, gated(handleGitHubGetIssueByNumber))
+  );
 
   const handleGitHubGetPRByNumber = async (payload: { cwd: string; prNumber: number }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_PR_BY_NUMBER, 25, 10_000);
@@ -519,7 +557,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getPRByNumber } = await import("../../services/github/index.js");
     return getPRByNumber(payload.cwd.trim(), payload.prNumber);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, handleGitHubGetPRByNumber));
+  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, gated(handleGitHubGetPRByNumber)));
 
   const handleGitHubGetIssuesByNumbers = async (payload: { cwd: string; numbers: number[] }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, 20, 10_000);
@@ -530,7 +568,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getIssuesByNumbers } = await import("../../services/github/index.js");
     return getIssuesByNumbers(payload.cwd.trim(), payload.numbers);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, handleGitHubGetIssuesByNumbers));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, gated(handleGitHubGetIssuesByNumbers))
+  );
 
   const handleGitHubGetPRsByNumbers = async (payload: { cwd: string; numbers: number[] }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, 20, 10_000);
@@ -541,7 +581,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getPRsByNumbers } = await import("../../services/github/index.js");
     return getPRsByNumbers(payload.cwd.trim(), payload.numbers);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, handleGitHubGetPRsByNumbers));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, gated(handleGitHubGetPRsByNumbers))
+  );
 
   const handleGitHubGetPRReviewThreads = async (payload: { cwd: string; prNumber: number }) => {
     checkRateLimit(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, 10, 10_000);
@@ -565,7 +607,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     const { getPRReviewThreads } = await import("../../services/github/index.js");
     return getPRReviewThreads(payload.cwd.trim(), payload.prNumber);
   };
-  handlers.push(typedHandle(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, handleGitHubGetPRReviewThreads));
+  handlers.push(
+    typedHandle(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, gated(handleGitHubGetPRReviewThreads))
+  );
 
   // Lists all git remotes (origin, upstream, …) with an optional parsed
   // owner/repo for remotes whose URL looks like a forge repo. The data is

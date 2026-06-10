@@ -2,6 +2,7 @@ import { useEffect } from "react";
 // eslint-disable-next-line no-restricted-imports
 import { githubClient } from "@/clients/githubClient";
 import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 import type { GitHubRateLimitDetails, GitHubRateLimitPayload } from "@shared/types/ipc/github";
 
 /**
@@ -12,6 +13,7 @@ import type { GitHubRateLimitDetails, GitHubRateLimitPayload } from "@shared/typ
  * desynchronize. Mirrors the `useGitHubTokenHealth` wiring pattern.
  */
 export function useGitHubRateLimit(): void {
+  const githubEnabled = useGitHubPluginEnabled();
   useEffect(() => {
     let cancelled = false;
     let pushApplied = false;
@@ -28,23 +30,27 @@ export function useGitHubRateLimit(): void {
     // Replay current state on mount so secondary windows / late mounts see the
     // blocked flag without waiting for the next transition. `/rate_limit` is
     // free, so we infer primary-block state from the `core` bucket; secondary
-    // blocks aren't visible in the snapshot but will arrive via push.
-    void githubClient
-      .getRateLimitDetails()
-      .then((details) => {
-        if (!details) return;
-        const payload = inferReplayPayload(details);
-        apply(payload, "replay");
-      })
-      .catch(() => {
-        // Best-effort replay; pushes still drive transitions.
-      });
+    // blocks aren't visible in the snapshot but will arrive via push. Skipped
+    // while the GitHub plugin is disabled — the gated IPC would only reject;
+    // the push subscription stays live so a re-enable flows through.
+    if (githubEnabled) {
+      void githubClient
+        .getRateLimitDetails()
+        .then((details) => {
+          if (!details) return;
+          const payload = inferReplayPayload(details);
+          apply(payload, "replay");
+        })
+        .catch(() => {
+          // Best-effort replay; pushes still drive transitions.
+        });
+    }
 
     return () => {
       cancelled = true;
       cleanup();
     };
-  }, []);
+  }, [githubEnabled]);
 }
 
 function inferReplayPayload(details: GitHubRateLimitDetails): GitHubRateLimitPayload {

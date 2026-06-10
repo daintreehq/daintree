@@ -3,13 +3,17 @@ import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
 import { actionService } from "@/services/ActionService";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { useGitHubPluginEnabled } from "@/store/pluginRuntimeStore";
 
 export function GitHubTokenBanner() {
   const isUnhealthy = useGitHubTokenHealthStore((s) => s.isUnhealthy);
   const isDismissed = useGitHubTokenHealthStore((s) => s.isDismissed);
   const dismiss = useGitHubTokenHealthStore((s) => s.dismiss);
+  const githubEnabled = useGitHubPluginEnabled();
 
-  if (!isUnhealthy || isDismissed) return null;
+  // A disabled GitHub plugin must not warn about its token expiring — the
+  // integration is off, so there's nothing to reconnect.
+  if (!githubEnabled || !isUnhealthy || isDismissed) return null;
 
   const handleReconnect = () => {
     // Route through the action service with `sectionId` so the user lands on
