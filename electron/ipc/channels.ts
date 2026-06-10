@@ -171,6 +171,7 @@ export const CHANNELS = {
   APP_FORCE_QUIT: "app:force-quit",
   APP_RESET_AND_RELAUNCH: "app:reset-and-relaunch",
   APP_CLEAR_QUARANTINED_PANEL: "app:clear-quarantined-panel",
+  APP_SKELETON_PARSED: "app:skeleton-parsed",
   APP_FIRST_INTERACTIVE: "app:first-interactive",
   APP_VIEW_PAINTED: "app:view-painted",
   APP_VIEW_WARM_PAINTED: "app:view-warm-painted",

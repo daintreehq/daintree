@@ -412,6 +412,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * re-hydrate the panel in the current session.
      */
     clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
+    /** Fire-and-forget skeleton-parsed reveal signal sent before module-graph eval. */
+    skeletonParsed(): void;
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
     notifyWarmViewPainted(): Promise<void>;

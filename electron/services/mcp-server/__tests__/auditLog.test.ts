@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuditService, type AuditOutcome } from "../auditLog.js";
+import { AuditService, type AuditOutcome, type McpAuditLogStore } from "../auditLog.js";
 import {
   type McpAuditResult,
   isAuditRecord,
   isGrantRecord,
 } from "../../../../shared/types/ipc/mcpServer.js";
 
-function makeFixture(initialConfig: Record<string, unknown> = {}) {
+function makeFixture(initialConfig: Record<string, unknown> = {}, initialLog: unknown[] = []) {
   const config: Record<string, unknown> = {
     auditEnabled: true,
     auditMaxRecords: 500,
@@ -15,8 +15,15 @@ function makeFixture(initialConfig: Record<string, unknown> = {}) {
   const saveConfig = vi.fn((patch: Record<string, unknown>) => {
     Object.assign(config, patch);
   });
-  const service = new AuditService(saveConfig, () => config);
-  return { service, saveConfig, config };
+  let persistedLog: unknown[] = [...initialLog];
+  const logStore = {
+    read: vi.fn(() => persistedLog),
+    write: vi.fn((records: unknown[]) => {
+      persistedLog = records;
+    }),
+  };
+  const service = new AuditService(saveConfig, () => config, logStore as McpAuditLogStore);
+  return { service, saveConfig, config, logStore, getPersistedLog: () => persistedLog };
 }
 
 const successOutcome: AuditOutcome = {
@@ -386,20 +393,18 @@ describe("AuditService.recordAuth401 pre-auth records", () => {
 
 describe("AuditService hydrate — backward compat", () => {
   it("tolerates persisted records missing schemaVersion and severity", () => {
-    const { service } = makeFixture({
-      auditLog: [
-        {
-          id: "old-1",
-          timestamp: 1000,
-          toolId: "agent.terminal",
-          sessionId: "sess-1",
-          tier: "action",
-          argsSummary: "{}",
-          result: "success",
-          durationMs: 5,
-        },
-      ],
-    });
+    const { service } = makeFixture({}, [
+      {
+        id: "old-1",
+        timestamp: 1000,
+        toolId: "agent.terminal",
+        sessionId: "sess-1",
+        tier: "action",
+        argsSummary: "{}",
+        result: "success",
+        durationMs: 5,
+      },
+    ]);
     const records = service.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.id).toBe("old-1");
@@ -417,7 +422,7 @@ describe("AuditService hydrate — backward compat", () => {
       errorCode: "EXECUTION_ERROR",
       durationMs: 50,
     };
-    const { service } = makeFixture({ auditLog: [oldRecord] });
+    const { service } = makeFixture({}, [oldRecord]);
     // hydrate() is called lazily — trigger it via getRecords.
     const records = service.getRecords();
     expect(records).toHaveLength(1);
@@ -439,7 +444,7 @@ describe("AuditService hydrate — backward compat", () => {
       schemaVersion: 1,
       severity: "info",
     };
-    const { service } = makeFixture({ auditLog: [currentRecord] });
+    const { service } = makeFixture({}, [currentRecord]);
     const records = service.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.schemaVersion).toBe(1);
@@ -462,7 +467,7 @@ describe("AuditService hydrate — backward compat", () => {
       durationMs: 50,
       type: "dispatch",
     };
-    const { service } = makeFixture({ auditLog: [malformed] });
+    const { service } = makeFixture({}, [malformed]);
     const records = service.getLogRecords();
     expect(records).toHaveLength(1);
     // The record survives hydrate (the string `type` field is preserved),
@@ -471,6 +476,34 @@ describe("AuditService hydrate — backward compat", () => {
     // "type" stays in the persisted shape for round-trip safety; the
     // union consumer narrows by isGrantRecord at read time.
     expect((records[0] as { type?: unknown }).type).toBe("dispatch");
+  });
+});
+
+describe("AuditService persistence routing", () => {
+  it("flushes the ring to the audit-logs store, never into the config patch", () => {
+    const { service, saveConfig, logStore, getPersistedLog } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    service.flushNow();
+    expect(logStore.write).toHaveBeenCalledTimes(1);
+    expect(getPersistedLog()).toHaveLength(1);
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it("setEnabled/setMaxRecords still persist config flags via saveConfig", () => {
+    const { service, saveConfig, config } = makeFixture();
+    service.setEnabled(false);
+    expect(saveConfig).toHaveBeenCalledWith({ auditEnabled: false });
+    service.setMaxRecords(250);
+    expect(saveConfig).toHaveBeenCalledWith({ auditMaxRecords: 250 });
+    expect("auditLog" in config).toBe(false);
   });
 });
 

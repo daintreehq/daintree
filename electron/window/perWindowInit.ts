@@ -6,10 +6,7 @@ import { distributePortsToView } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import { PtyClient } from "../services/PtyClient.js";
-import {
-  getMainProcessWatchdogClient,
-  type MainProcessWatchdogClient,
-} from "../services/MainProcessWatchdogClient.js";
+import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
@@ -22,7 +19,7 @@ import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { isDemoMode, isSmokeTest } from "../setup/environment.js";
+import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
 import { toDisposable } from "../utils/lifecycle.js";
@@ -31,8 +28,6 @@ import {
   setCliAvailabilityServiceRef,
   getPtyClient,
   setPtyClientRef,
-  getMainProcessWatchdogClientRef,
-  setMainProcessWatchdogClientRef,
   getAgentVersionService,
   setAgentVersionService,
   getAgentModelCatalogService,
@@ -44,9 +39,9 @@ import {
 
 /**
  * Run the per-window initialization steps that happen on every
- * `setupWindowServices` call: menu creation, the per-window CLI deferred task,
+ * `setupWindowServices` call: the per-window CLI deferred task,
  * deferred-queue arming, NotificationService wire-up, first-window-only
- * critical-services boot (PtyClient + watchdog), and per-window service
+ * critical-services boot (PtyClient), and per-window service
  * objects (EventBuffer, PortalManager, ProjectSwitchService, ctx.cleanup).
  *
  * Returns a partially-populated `HandlerDependencies` for the caller to extend
@@ -58,14 +53,11 @@ export async function initPerWindowServices(
   ctx: WindowContext,
   windowRegistry: WindowRegistry | undefined
 ): Promise<HandlerDependencies> {
-  // Menu & Notifications (per-window: menu references this window)
-  console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   let cliAvailabilityService = getCliAvailabilityServiceRef();
   if (!cliAvailabilityService) {
     cliAvailabilityService = new CliAvailabilityService();
     setCliAvailabilityServiceRef(cliAvailabilityService);
   }
-  createApplicationMenu(win, cliAvailabilityService);
 
   // Per-window deferred work. Menu is window-specific, so each window queues
   // its own CLI check + menu rebuild. Registered here (before any awaits that
@@ -87,8 +79,9 @@ export async function initPerWindowServices(
   });
 
   // Native View/Help menus include plugin-contributed menu items via
-  // `getPluginMenuItems()` at build time, but `createApplicationMenu` ran above
-  // before any plugin's `activate()` had finished — so its first menu would
+  // `getPluginMenuItems()` at build time, but the initial `createApplicationMenu`
+  // (now in setupWindowServices, after the renderer-load kick-off) runs before
+  // any plugin's `activate()` has finished — so the first menu would
   // show none of them. Lazy-import `pluginService` to avoid the cyclic edge
   // (`PluginService` depends on services that may eventually reach window
   // code), then await init and rebuild once. Dynamic plugin load/unload does
@@ -135,24 +128,10 @@ export async function initPerWindowServices(
     // user-local bin dirs in packaged builds) while no longer gating the first
     // renderer load on the refresh (#8827). Constructing the client here keeps
     // a live `ptyClient` reference available to IPC handlers at registration
-    // time — only the host fork is deferred, not the client object.
-
-    // Start the external main-process watchdog before PtyClient so a deadlock
-    // during PTY host fork (worst case: a synchronous spawn that hangs) is
-    // still recoverable. The watchdog is fail-open: if its own fork throws,
-    // PtyClient still starts normally.
-    if (!isSmokeTest && !getMainProcessWatchdogClientRef()) {
-      try {
-        // Use the singleton accessor so `disposeMainProcessWatchdog()` in
-        // shutdown.ts reaches the running instance instead of a no-op.
-        const watchdog = getMainProcessWatchdogClient();
-        setMainProcessWatchdogClientRef(watchdog);
-        wireWatchdogDisabledBroadcast(watchdog, windowRegistry);
-      } catch (err) {
-        console.error("[MAIN] Failed to start main-process watchdog:", err);
-        setMainProcessWatchdogClientRef(null);
-      }
-    }
+    // time — only the host fork is deferred, not the client object. The
+    // main-process watchdog start moved to windowServices.ts alongside the
+    // fork: its ordering invariant is watchdog-before-ptyClient.start(), not
+    // watchdog-before-renderer-load.
 
     ptyClient = new PtyClient({
       healthCheckIntervalMs: 5000,
@@ -426,7 +405,8 @@ export async function initPerWindowServices(
  * Register the broadcast listener that turns a watchdog cap-hit into a
  * `watchdog:disabled` push to every renderer. The watchdog client is Electron-
  * agnostic and has no reference to the window registry; this helper is the
- * single seam that bridges them. Called both at first-window startup (above)
+ * single seam that bridges them. Called both at first-window startup (the
+ * watchdog start block in windowServices.ts, before ptyClient.start())
  * and from the `watchdog:restart` IPC handler after a manual restart, so a
  * second cap-hit cycle reaches the renderer instead of dying silently.
  */

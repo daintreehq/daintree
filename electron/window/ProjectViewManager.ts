@@ -1152,7 +1152,9 @@ export class ProjectViewManager {
         sandbox: true,
         webviewTag: true,
         navigateOnDragDrop: false,
-        v8CacheOptions: "code",
+        // Matches createWindow.ts: write the V8 code cache on first load so
+        // post-install/update launches warm up one launch sooner.
+        v8CacheOptions: app.isPackaged ? "bypassHeatCheck" : "code",
         // Seed the renderer with the persisted theme so project-switch cold
         // starts and LRU-evicted views paint the saved scheme on first frame
         // instead of a prefers-color-scheme default (#9169). The project id is

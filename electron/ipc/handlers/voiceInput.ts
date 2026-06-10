@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
+import type { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -26,6 +26,7 @@ import {
 } from "../../schemas/ipc.js";
 
 let service: VoiceTranscriptionService | null = null;
+let servicePromise: Promise<VoiceTranscriptionService> | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
 let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
@@ -134,11 +135,18 @@ export function getVoiceSettings(): VoiceInputSettings {
   return merged;
 }
 
-function getService(): VoiceTranscriptionService {
-  if (!service) {
-    service = new VoiceTranscriptionService();
+async function getService(): Promise<VoiceTranscriptionService> {
+  if (service) return service;
+  if (!servicePromise) {
+    servicePromise = import("../../services/VoiceTranscriptionService.js").then((mod) => {
+      service = new mod.VoiceTranscriptionService();
+      return service;
+    });
+    servicePromise.catch(() => {
+      servicePromise = null;
+    });
   }
-  return service;
+  return servicePromise;
 }
 
 function cleanupActiveSubscription(): void {
@@ -303,7 +311,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleStart = async (ctx: IpcContext) => {
-    const svc = getService();
+    // Bump the start nonce for EVERY start so a later start of any provider
+    // (and the stop handler) supersedes a start still awaiting the service
+    // import or keyterm assembly. Captured before the first await so a stop
+    // landing during the dynamic import still wins.
+    const myNonce = ++voiceStartNonce;
+    const svc = await getService();
     // Snapshot transcription settings at session start (model, language, API key).
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
@@ -321,10 +334,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
     // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
-
-    // Bump the start nonce for EVERY start so a later start of any provider
-    // (and the stop handler) supersedes a start still awaiting keyterm assembly.
-    const myNonce = ++voiceStartNonce;
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -624,6 +633,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     cleanupActiveSubscription();
     service?.destroy();
     service = null;
+    servicePromise = null;
     correctionService = null;
     sessionController = null;
   };

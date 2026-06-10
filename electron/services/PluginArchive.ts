@@ -2,7 +2,6 @@ import { createHash } from "crypto";
 import fs from "fs/promises";
 import { createWriteStream } from "fs";
 import path from "path";
-import { ZipArchive } from "archiver";
 import yauzl from "yauzl";
 import { getPluginManifestSchema } from "../schemas/plugin.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
@@ -144,6 +143,7 @@ export async function packPluginArchiveFromFiles(
   outputPath: string,
   files: readonly string[]
 ): Promise<string> {
+  const { ZipArchive } = await import("archiver");
   const sorted = sortEntries([...files]);
 
   if (!sorted.includes("plugin.json")) {

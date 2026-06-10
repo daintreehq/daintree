@@ -186,4 +186,15 @@ export interface HydrateResult {
    * React 19 `use()` safe-boot fallback), the renderer falls back to the IPC call.
    */
   systemTmpDir?: string;
+  /**
+   * Per-project layout state folded into the hydrate payload so the renderer
+   * skips the standalone `getTabGroups`/`getTerminalSizes`/`getDraftInputs`
+   * round-trips on the panel-restore critical path. Populated (with the same
+   * null-state defaults as the standalone handlers) whenever a project is
+   * resolved; undefined on the no-project fallback branch and older payloads,
+   * where the renderer falls back to the standalone IPC calls.
+   */
+  tabGroups?: import("../panel.js").TabGroup[];
+  terminalSizes?: Record<string, { cols: number; rows: number }>;
+  draftInputs?: Record<string, string>;
 }

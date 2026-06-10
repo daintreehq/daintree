@@ -1278,6 +1278,8 @@ const api: ElectronAPI = {
     clearQuarantinedPanel: (panelId: string) =>
       _unwrappingInvoke(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, panelId),
 
+    skeletonParsed: () => ipcRenderer.send(CHANNELS.APP_SKELETON_PARSED),
+
     notifyFirstInteractive: () => _unwrappingInvoke(CHANNELS.APP_FIRST_INTERACTIVE),
 
     notifyViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_PAINTED),

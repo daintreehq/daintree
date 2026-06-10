@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { AgentSettings, AgentSettingsEntry, CliAvailability } from "@shared/types";
 import { agentSettingsClient } from "@/clients";
+import { getSafeBootPromise } from "@/lib/bootPromise";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds";
@@ -265,7 +266,21 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       try {
         set({ isLoading: true, error: null });
 
-        const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+        // Seed from the in-flight `app:boot` payload instead of firing a
+        // duplicate `agentSettings:get` round-trip — the payload carries the
+        // same `store.get("agentSettings")` snapshot. BootResult types
+        // `agentSettings` as non-optional, but `releaseBootPayload()` nulls it
+        // at runtime after hydration — treat it as possibly undefined. The
+        // live-IPC fallback intentionally covers three cases: boot failure
+        // ({ ok: false }), a re-initialize after `releaseBootPayload()`, and
+        // fresh installs where the persisted store has no `agentSettings` key
+        // (the payload field is undefined, so the fallback IPC fires — same
+        // cost as the old path, not a regression).
+        const boot = await getSafeBootPromise();
+        const fromBoot = boot.ok
+          ? (boot.result.agentSettings as AgentSettings | undefined)
+          : undefined;
+        const raw = fromBoot ?? (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
         if (myEpoch !== normalizeEpoch) {
           // A concurrent refresh/update bumped the epoch — its result is
           // authoritative. Flip `isInitialized` anyway so the store exits the

@@ -7,7 +7,8 @@ import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
 import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { handleDirectoryOpen } from "../menu.js";
+import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
+import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
@@ -39,7 +40,7 @@ import {
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
-import { initPerWindowServices } from "./perWindowInit.js";
+import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -47,6 +48,8 @@ import {
   getWorktreePortBrokerRef,
   setWorktreePortBrokerRef,
   getCliAvailabilityServiceRef,
+  getMainProcessWatchdogClientRef,
+  setMainProcessWatchdogClientRef,
   getCleanupErrorHandlers,
   setCleanupErrorHandlers,
   setCleanupIpcHandlers,
@@ -200,6 +203,37 @@ export async function setupWindowServices(
     startRendererLoad("early-renderer");
   } else if (deferRendererLoadForE2E) {
     console.log("[MAIN] E2E renderer-load deferral enabled — waiting for services");
+  }
+
+  // Initial menu build, unconditional and synchronous: after the renderer-load
+  // kick-off so the native Menu.buildFromTemplate/setApplicationMenu work no
+  // longer delays the load dispatch, but before the first await so it can
+  // never lose a race with the deferred cli-availability-check /
+  // plugin-menu-rebuild rebuilds and clobber the availability-aware menu. On
+  // already-drained queues (second windows) those rebuilds may run first and
+  // this build harmlessly rebuilds from the same cached availability/plugin
+  // state. The smoke and DAINTREE_E2E_DEFER_RENDERER_LOAD paths get the menu
+  // here too, before their serial startRendererLoad below.
+  console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
+  createApplicationMenu(win, cliAvailabilityService ?? undefined);
+
+  // Start the external main-process watchdog before ptyClient.start() so a
+  // deadlock during PTY host fork (worst case: a synchronous spawn that
+  // hangs) is still recoverable — that pre-fork ordering is the watchdog's
+  // only invariant, which is why it lives here with the fork rather than
+  // pre-renderer-load in initPerWindowServices. The watchdog is fail-open:
+  // if its own fork throws, PtyClient still starts normally.
+  if (!isSmokeTest && !getMainProcessWatchdogClientRef()) {
+    try {
+      // Use the singleton accessor so `disposeMainProcessWatchdog()` in
+      // shutdown.ts reaches the running instance instead of a no-op.
+      const watchdog = getMainProcessWatchdogClient();
+      setMainProcessWatchdogClientRef(watchdog);
+      wireWatchdogDisabledBroadcast(watchdog, windowRegistry);
+    } catch (err) {
+      console.error("[MAIN] Failed to start main-process watchdog:", err);
+      setMainProcessWatchdogClientRef(null);
+    }
   }
 
   // Fork the PTY host now — *after* startRendererLoad — so first paint is no

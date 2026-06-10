@@ -1,6 +1,6 @@
 {
   "entryName": "index",
-  "eagerChunkCount": 69,
+  "eagerChunkCount": 68,
   "eagerChunks": [
     "AccessibilityAnnouncer",
     "ActionService",
@@ -60,7 +60,6 @@
     "useEscapeStack",
     "utils",
     "vendor",
-    "vendor-editor",
     "vendor-icons",
     "vendor-motion~index",
     "vendor-motion~index~BrowserPane~DevPreviewPane~App~CelebrationConfetti~OnboardingFlow~Workt~d1asc0vi",
@@ -72,12 +71,12 @@
     "vendor-xterm",
     "vendor-zod"
   ],
-  "eagerRaw": 2844444,
-  "eagerGzip": 850171,
+  "eagerRaw": 2376764,
+  "eagerGzip": 699229,
   "chunkGzip": {
-    "vendor-radix-utils": 3261,
-    "vendor-react": 56453,
-    "vendor-xterm": 116331
+    "vendor-radix-utils": 3243,
+    "vendor-react": 58856,
+    "vendor-xterm": 116353
   },
   "chunkModules": {
     "vendor-radix-utils": [
@@ -107,7 +106,11 @@
       "node_modules/react-dom/client.js",
       "node_modules/react-dom/index.js",
       "node_modules/react/cjs/react-compiler-runtime.production.js",
+      "node_modules/react/cjs/react-jsx-runtime.production.js",
+      "node_modules/react/cjs/react.production.js",
       "node_modules/react/compiler-runtime.js",
+      "node_modules/react/index.js",
+      "node_modules/react/jsx-runtime.js",
       "node_modules/scheduler/cjs/scheduler.production.js",
       "node_modules/scheduler/index.js"
     ],

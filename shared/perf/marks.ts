@@ -50,6 +50,14 @@ export const PERF_MARKS = {
   WORKSPACE_HOST_READY_POSTED: "workspace_host_ready_posted",
 
   CRASH_RECOVERY_GATE: "crash_recovery_gate",
+  /**
+   * Emitted exactly once per `handleAppHydrate` (cold boot AND project-switch
+   * hydrates) with `hit`/`reason` metadata recording whether the prefetched
+   * HydrateResult cache serviced the request. Mirrors POOL_HIT/POOL_MISS so
+   * `perf:cold-start` can prove the whenReady boot-prime prefetch actually
+   * wins the race instead of inferring it from PROJECT_STATE_READ placement.
+   */
+  APP_HYDRATE_PREFETCH: "app_hydrate_prefetch",
   HYDRATE_START: "hydrate_start",
   HYDRATE_RESTORE_PANELS_START: "hydrate_restore_panels_start",
   HYDRATE_RESTORE_PANELS_END: "hydrate_restore_panels_end",

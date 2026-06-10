@@ -4,6 +4,7 @@ import { isElectronAvailable } from "../useElectron";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { getOnboardingState } from "@/clients/onboardingClient";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
@@ -136,7 +137,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     if (!isElectronAvailable() || !isStateLoaded) return;
     if (!window.electron?.onboarding) return;
 
-    Promise.all([window.electron.onboarding.get(), window.electron.onboarding.getChecklist()])
+    // getOnboardingState shares the same-tick onboarding fetch with
+    // useAgentWaitingNudge's effect in the same flush.
+    Promise.all([getOnboardingState(), window.electron.onboarding.getChecklist()])
       .then(([onboarding, checklistState]) => {
         setOnboardingCompleted(onboarding.completed);
         setChecklist(checklistState);

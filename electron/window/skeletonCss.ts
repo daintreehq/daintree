@@ -35,7 +35,7 @@ export const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id";
  * Command-line argument carrying the destination project id from the main
  * process into each project-switch `WebContentsView`. Replaces the former
  * `?projectId=` query string on `loadURL` so the document URL stays static
- * across projects, keeping the V8 bytecode cache (`v8CacheOptions: "code"`)
+ * across projects, keeping the V8 bytecode cache (`v8CacheOptions`)
  * keyed to a single URL instead of fragmenting one entry per project (#9162).
  * Read synchronously in preload.cts from `process.argv` and exposed as
  * `window.__DAINTREE_INITIAL_PROJECT__`.
@@ -117,13 +117,12 @@ export function resolveInitialCanvasBackgroundColor(): string {
 }
 
 /**
- * Inject the first-paint skeleton CSS custom properties. When a cold-start
- * project switch supplies the destination `project`, its accent color (when
- * set) overrides the theme's native accent tokens so the skeleton paints the
- * project's brand color before React mounts (#9162). Passing `null`/`undefined`
- * (the initial-window path) leaves the resolved scheme untouched.
+ * Builds the first-paint skeleton CSS custom-property block. Reads the
+ * persisted app state and theme config synchronously, so callers on the boot
+ * critical path can precompute the string once (before loadURL) instead of
+ * re-reading config.json inside the dom-ready handler that gates win.show().
  */
-export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "color"> | null): void {
+export function buildSkeletonCss(project?: Pick<Project, "color"> | null): string {
   const appState = store.get("appState");
   const sidebarWidth = appState?.sidebarWidth ?? 350;
   const focusMode = appState?.focusMode ?? false;
@@ -199,11 +198,29 @@ export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "colo
     lines.push("#startup-skeleton .skeleton-sidebar { display: none; }");
   }
 
-  void wc.insertCSS(lines.join("\n"), { cssOrigin: "user" }).catch(() => {
+  return lines.join("\n");
+}
+
+/**
+ * Insert a (possibly precomputed) skeleton CSS string into a WebContents.
+ */
+export function insertSkeletonCss(wc: WebContents, css: string): void {
+  void wc.insertCSS(css, { cssOrigin: "user" }).catch(() => {
     // Best-effort first-paint seed: a destroyed/navigated WebContents during
     // rapid project switching rejects here. Swallow — the index.html skeleton
     // styles carry hardcoded fallbacks, so the splash still paints.
   });
+}
+
+/**
+ * Inject the first-paint skeleton CSS custom properties. When a cold-start
+ * project switch supplies the destination `project`, its accent color (when
+ * set) overrides the theme's native accent tokens so the skeleton paints the
+ * project's brand color before React mounts (#9162). Passing `null`/`undefined`
+ * (the initial-window path) leaves the resolved scheme untouched.
+ */
+export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "color"> | null): void {
+  insertSkeletonCss(wc, buildSkeletonCss(project));
 }
 
 /**

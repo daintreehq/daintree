@@ -105,5 +105,11 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     // Folded into the payload so the renderer skips a standalone
     // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
     systemTmpDir: os.tmpdir(),
+    // Per-project layout state folded in so the renderer skips the standalone
+    // getTabGroups/getTerminalSizes/getDraftInputs round-trips during hydration.
+    // Defaults match the standalone handlers' null-state returns.
+    tabGroups: projectState?.tabGroups ?? [],
+    terminalSizes: projectState?.terminalSizes ?? {},
+    draftInputs: projectState?.draftInputs ?? {},
   };
 }

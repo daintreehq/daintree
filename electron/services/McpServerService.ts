@@ -312,12 +312,13 @@ export class McpServerService {
   }
 
   private persistConfig(patch: Record<string, unknown>): void {
+    // The deprecated auditLog/turnOutcomeLog config.json keys ride along via
+    // the spread only while migration 022 hasn't stripped them; never re-add
+    // them explicitly or settings writes resurrect the rings in config.json.
     const current = this.getConfig();
     store.set("mcpServer", {
       ...current,
       ...patch,
-      auditLog: "auditLog" in patch ? patch.auditLog : current.auditLog,
-      turnOutcomeLog: "turnOutcomeLog" in patch ? patch.turnOutcomeLog : current.turnOutcomeLog,
     });
   }
 

@@ -1,3 +1,4 @@
+// eager-import-allow: module-scope __dirname/__filename derivation only (fileURLToPath); no disk I/O at import
 import { utilityProcess, UtilityProcess, app } from "electron";
 import { EventEmitter } from "events";
 import { createHash } from "crypto";
