@@ -56,12 +56,12 @@ const mockStatsCache = {
     ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
   >(() => null),
 };
-vi.mock("../../../../../electron/services/GitHubStatsCache.js", () => ({
+vi.mock("../GitHubStatsCache.js", () => ({
   GitHubStatsCache: { getInstance: () => mockStatsCache },
 }));
 
 const mockFirstPageCache = { get: vi.fn(() => undefined), set: vi.fn(), clear: vi.fn() };
-vi.mock("../../../../../electron/services/GitHubFirstPageCache.js", () => ({
+vi.mock("../GitHubFirstPageCache.js", () => ({
   GitHubFirstPageCache: { getInstance: () => mockFirstPageCache },
 }));
 

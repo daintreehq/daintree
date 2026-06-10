@@ -13,7 +13,6 @@ import { registerGlobalRecipesHandlers } from "./handlers/globalRecipes.js";
 import { registerGlobalEnvHandlers } from "./handlers/globalEnv.js";
 import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
 import { registerProjectInRepoSettingsHandlers } from "./handlers/projectInRepoSettings.js";
-import { registerGithubHandlers } from "./handlers/github.js";
 import { registerAppHandlers } from "./handlers/app.js";
 import { registerPortalHandlers } from "./handlers/portal.js";
 import { registerHibernationHandlers } from "./handlers/hibernation.js";
@@ -126,7 +125,6 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerGlobalEnvHandlers());
     register(() => registerTerminalLayoutHandlers(deps));
     register(() => registerProjectInRepoSettingsHandlers(deps));
-    register(() => registerGithubHandlers(deps));
     register(() => registerAppHandlers(deps));
     register(() => registerPortalHandlers(deps));
     register(() => registerMenuHandlers(deps));

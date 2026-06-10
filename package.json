@@ -15,7 +15,9 @@
     "./src/config/terminalFont.ts",
     "./src/components/Fleet/fleetRawInputBroadcast.ts",
     "./src/clients/terminalClient.ts",
-    "./plugins/builtin/github/renderer/index.tsx"
+    "./src/registry/builtinPluginRenderers.ts",
+    "./plugins/builtin/*/renderer/index.ts",
+    "./plugins/builtin/*/renderer/index.tsx"
   ],
   "author": {
     "name": "Greg Priday",

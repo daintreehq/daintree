@@ -1391,7 +1391,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
         matchedForgeProviderId: "daintree.github.github",
       },
     });
-    const indicator = screen.getByRole("button", { name: /GitHub authentication failed/ });
+    const indicator = screen.getByRole("button", { name: /Forge authentication failed/ });
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(indicator.textContent).toContain("—");
     // Recovery path must be reachable on the no-linked-data path too — the

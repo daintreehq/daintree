@@ -79,18 +79,6 @@ import type {
   ProjectWorktreeLoadStatusPayload,
 } from "./project.js";
 import type {
-  RepositoryStats,
-  ProjectHealthData,
-  GitHubCliStatus,
-  GitHubTokenConfig,
-  GitHubTokenValidation,
-  GitHubRateLimitDetails,
-  GitHubTokenHealthPayload,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
-  GitHubFirstPageCachePayload,
-} from "./github.js";
-import type {
   GitGetFileDiffPayload,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
@@ -107,8 +95,7 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
-import type { GitCommitListOptions, GitCommitListResponse } from "../github.js";
-import type { IssueTooltipData, PRTooltipData } from "../forge.js";
+import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
 import type {
   SpawnResult,
   TerminalReliabilityMetricPayload,
@@ -702,93 +689,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: Project | null;
   };
 
-  // GitHub channels
-  "github:get-repo-stats": {
-    args: [cwd: string, bypassCache?: boolean];
-    result: RepositoryStats;
-  };
-  "github:get-first-page-cache": {
-    args: [cwd: string];
-    result: GitHubFirstPageCachePayload | null;
-  };
-  "github:get-project-health": {
-    args: [cwd: string, bypassCache?: boolean];
-    result: ProjectHealthData;
-  };
-  "github:open-issues": {
-    args: [cwd: string, query?: string, state?: string];
-    result: void;
-  };
-  "github:open-prs": {
-    args: [cwd: string, query?: string, state?: string];
-    result: void;
-  };
-  "github:open-commits": {
-    args: [cwd: string];
-    result: void;
-  };
-  "github:open-issue": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: void;
-  };
-  "github:open-pr": {
-    args: [prUrl: string];
-    result: void;
-  };
-  "github:check-cli": {
-    args: [];
-    result: GitHubCliStatus;
-  };
-  "github:get-config": {
-    args: [];
-    result: GitHubTokenConfig;
-  };
-  "github:set-token": {
-    args: [token: string];
-    result: GitHubTokenValidation;
-  };
-  "github:clear-token": {
-    args: [];
-    result: void;
-  };
-  "github:validate-token": {
-    args: [token: string];
-    result: GitHubTokenValidation;
-  };
-  "github:list-issues": {
-    args: [
-      options: { cwd: string; search?: string; state?: "open" | "closed" | "all"; cursor?: string },
-    ];
-    result: import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>;
-  };
-  "github:assign-issue": {
-    args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
-  };
-  "github:list-prs": {
-    args: [
-      options: {
-        cwd: string;
-        search?: string;
-        state?: "open" | "closed" | "merged" | "all";
-        cursor?: string;
-      },
-    ];
-    result: import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>;
-  };
-  "github:get-issue-url": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: string | null;
-  };
-  "github:get-issue-tooltip": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: IssueTooltipData | null;
-  };
-  "github:get-pr-tooltip": {
-    args: [payload: { cwd: string; prNumber: number }];
-    result: PRTooltipData | null;
-  };
-
   // Agent settings channels
   "agent-settings:get": {
     args: [];
@@ -1334,48 +1234,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Command system channels
-  // Additional GitHub channels
-  "github:get-issue-by-number": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: import("../github.js").GitHubIssue | null;
-  };
-  "github:get-pr-by-number": {
-    args: [payload: { cwd: string; prNumber: number }];
-    result: import("../github.js").GitHubPR | null;
-  };
-  "github:get-issues-by-numbers": {
-    args: [payload: { cwd: string; numbers: number[] }];
-    result: Array<import("../github.js").GitHubIssue | null>;
-  };
-  "github:get-prs-by-numbers": {
-    args: [payload: { cwd: string; numbers: number[] }];
-    result: Array<import("../github.js").GitHubPR | null>;
-  };
-  "github:get-pr-review-threads": {
-    args: [payload: { cwd: string; prNumber: number }];
-    result: Record<string, number>;
-  };
-  "github:list-remotes": {
-    args: [cwd: string];
-    result: Array<{
-      name: string;
-      fetchUrl: string;
-      parsedRepo: { owner: string; repo: string } | null;
-    }>;
-  };
-  "github:get-token-health": {
-    args: [];
-    result: GitHubTokenHealthPayload;
-  };
-  "github:get-rate-limit-details": {
-    args: [];
-    result: GitHubRateLimitDetails | null;
-  };
-  "github:resolve-author-avatar": {
-    args: [email: string];
-    result: string | null;
-  };
-
   // Scratch (throwaway one-off agent workspace) channels
   // Global env channels
   // Global recipe channels
@@ -1583,29 +1441,16 @@ export interface IpcEventMap {
   "issue:detected": IssueDetectedPayload;
   "issue:not-found": IssueNotFoundPayload;
 
-  // GitHub token health state push (expiry/revocation detection)
-  "github:token-health-changed": GitHubTokenHealthPayload;
-
   // Provider-keyed forge rate-limit / token-health state push. Carries the
   // canonical providerId so the renderer keys state per provider — GitHub and
   // any additional forge provider share these channels without cross-talk.
   "forge:rate-limit-changed": ForgeRateLimitChangedPayload;
   "forge:token-health-changed": ForgeTokenHealthChangedPayload;
 
-  // Provider-keyed stats pushes — the forge-neutral successors of the
-  // `github:repo-*` pushes below. Broadcast by the forge repo-stats handler
+  // Provider-keyed stats pushes, broadcast by the forge repo-stats handler
   // after a fresh network poll.
   "forge:repo-stats-and-page-updated": ForgeRepoStatsAndPagePayload;
   "forge:repo-counts-updated": ForgeRepoCountsUpdatedPayload;
-
-  // Combined repo stats + first page of open issues + open PRs push, emitted
-  // after every successful poll. Lets renderers prime githubResourceCache
-  // for the (open, created) default-filter cache key with no click-time fetch.
-  "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
-
-  // Count-only stats push from the cheap REST background poll (issue #10122).
-  // No page items — the dropdown loads its own first page on open.
-  "github:repo-counts-updated": RepoCountsUpdatedPayload;
 
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;

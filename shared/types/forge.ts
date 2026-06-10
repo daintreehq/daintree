@@ -695,6 +695,67 @@ export interface HealthEventsCapability {
   onRateLimitChanged?(callback: (info: RateLimitInfo) => void): () => void;
   /** Detailed per-bucket snapshot for diagnostics UI; omit when not inspectable. */
   getRateLimitDetails?(): Promise<RateLimitDetails | null>;
+  /**
+   * Optional. Re-probe credential health now. The host calls this on
+   * focus-regain (unforced — the provider applies its own cooldown) and on
+   * system wake (`force: true`, so a credential that expired during a long
+   * sleep is detected promptly). Results surface via
+   * {@link onTokenHealthChanged}; the host never awaits the result.
+   */
+  refreshTokenHealth?(options?: { force?: boolean }): Promise<void> | void;
+}
+
+/** Result of probing whether a provider can authenticate a clone. */
+export interface CloneAuthProbe {
+  authenticated: boolean;
+  /** Short human-readable explanation when `authenticated` is `false`. */
+  reason?: string;
+}
+
+/** Options for {@link CloneCapability.cloneRepository}. */
+export interface CloneRequestOptions {
+  /** Clone with `--depth 1` semantics when the provider's tooling supports it. */
+  shallow?: boolean;
+  /** Abort signal — the provider must kill its clone process tree on abort. */
+  signal?: AbortSignal;
+  /** Progress relay; `stage` is a stable lowercase dedup key, `message` is display text. */
+  onProgress?(stage: string, progress: number, message: string): void;
+}
+
+/**
+ * Optional authenticated-clone support, powering the host's clone-repository
+ * flow without it hardcoding any one forge's CLI. The host probes
+ * {@link probeAuth} first and only takes a capability path when it reports
+ * `authenticated: true`; otherwise — or when the provider omits the
+ * capability entirely — it falls back to a plain anonymous `git clone`.
+ * {@link cloneRepository} is preferred over {@link getAuthenticatedCloneUrl}
+ * when both are present. Errors thrown from `cloneRepository` surface to the
+ * user directly (no plain-git retry), so a provider whose tooling may be
+ * absent should report that through `probeAuth` rather than failing the
+ * clone. Authenticated URLs may embed credentials: the host never logs or
+ * persists them, and providers must not either.
+ */
+export interface CloneCapability {
+  /**
+   * Probe whether an authenticated clone path is currently available
+   * (tooling installed and signed in, or a valid stored credential). Drives
+   * the host's path selection; an unauthenticated probe also means the clone
+   * dialog shows no provider sign-in recovery affordance beyond the standard
+   * auth-failure banner.
+   */
+  probeAuth(signal?: AbortSignal): Promise<CloneAuthProbe>;
+  /**
+   * Rewrite a clone URL to carry the provider's credentials (e.g. an
+   * embedded token). Return `null` when no authenticated URL is available;
+   * the host then clones the original URL anonymously.
+   */
+  getAuthenticatedCloneUrl?(url: string): Promise<string | null>;
+  /**
+   * Clone using the provider's own tooling (e.g. `gh repo clone`).
+   * `targetDir` is the absolute directory the clone must create; its parent
+   * is validated to exist before the call.
+   */
+  cloneRepository?(url: string, targetDir: string, opts: CloneRequestOptions): Promise<void>;
 }
 
 /**
@@ -821,6 +882,7 @@ export interface ForgeProviderImpl {
   projectHealth?: ProjectHealthCapability;
   avatars?: AvatarCapability;
   healthEvents?: HealthEventsCapability;
+  clone?: CloneCapability;
 }
 
 /**
@@ -846,6 +908,7 @@ export type ForgeCapabilityHint =
   | "batch-branch-prs"
   | "identity"
   | "pr-files"
+  | "clone"
   | (string & {});
 
 /**

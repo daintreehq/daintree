@@ -10,10 +10,7 @@ import { actionService } from "@/services/ActionService";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
-import {
-  matchProviderForRemoteUrl,
-  type ForgeProviderMatcher,
-} from "@shared/utils/forgeHostnames";
+import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { CloneRepoProgressEvent } from "@shared/types/ipc/gitClone";
 import type { GitOperationReason } from "@shared/types/ipc/errors";
@@ -22,6 +19,12 @@ import { isClientGitError } from "@/utils/clientGitError";
 interface CloneError {
   message: string;
   gitReason?: GitOperationReason;
+}
+
+interface CloneForgeProvider {
+  providerId: string;
+  name: string;
+  hostnames: string[];
 }
 
 interface CloneRepoDialogProps {
@@ -48,16 +51,21 @@ function isOwnerRepoShorthand(input: string): boolean {
   return /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?\/[a-zA-Z0-9._-]{1,100}$/.test(input);
 }
 
-function normalizeCloneUrl(input: string): string {
+// `owner/repo` shorthand expands against the sole registered forge provider's
+// first hostname — unambiguous only when exactly one provider is installed.
+// With zero or multiple providers the shorthand has no well-defined host, so
+// it stays unexpanded (and fails URL validation) rather than silently
+// defaulting to any one forge.
+function normalizeCloneUrl(input: string, shorthandHost: string | null): string {
   const trimmed = input.trim();
-  if (isOwnerRepoShorthand(trimmed)) {
-    return `https://github.com/${trimmed}`;
+  if (shorthandHost && isOwnerRepoShorthand(trimmed)) {
+    return `https://${shorthandHost}/${trimmed}`;
   }
   return trimmed;
 }
 
-function isValidCloneUrl(url: string): boolean {
-  const normalized = normalizeCloneUrl(url);
+function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
+  const normalized = normalizeCloneUrl(url, shorthandHost);
   return /^https?:\/\//i.test(normalized) || /^git@/i.test(normalized);
 }
 
@@ -75,9 +83,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [isComplete, setIsComplete] = useState(false);
   const [clonedPath, setClonedPath] = useState<string | null>(null);
-  // Registered forge provider hostname matchers — gates the auth-failed
-  // recovery banner on the clone URL belonging to a registered provider.
-  const [forgeMatchers, setForgeMatchers] = useState<ForgeProviderMatcher[]>([]);
+  // Registered forge providers — gate the auth-failed recovery banner on the
+  // clone URL belonging to a registered provider, and derive that banner's
+  // sign-in label/route plus the owner/repo shorthand host.
+  const [forgeProviders, setForgeProviders] = useState<CloneForgeProvider[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
   const hasFinalizedRef = useRef(false);
 
@@ -123,8 +132,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     return cleanup;
   }, [isOpen]);
 
-  // Load the registered forge providers' hostname matchers per open —
-  // best-effort, the recovery banner simply stays generic on failure.
+  // Load the registered forge providers per open — best-effort, the recovery
+  // banner simply stays generic on failure.
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
@@ -132,20 +141,24 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       .getProviders()
       .then((entries) => {
         if (cancelled) return;
-        setForgeMatchers(
+        setForgeProviders(
           entries.map((entry) => ({
             providerId: makeForgeProviderId(entry.pluginId, entry.contribution.id),
+            name: entry.contribution.name,
             hostnames: entry.contribution.matches,
           }))
         );
       })
       .catch(() => {
-        if (!cancelled) setForgeMatchers([]);
+        if (!cancelled) setForgeProviders([]);
       });
     return () => {
       cancelled = true;
     };
   }, [isOpen]);
+
+  const shorthandHost =
+    forgeProviders.length === 1 ? (forgeProviders[0]?.hostnames[0] ?? null) : null;
 
   // Auto-scroll progress log
   useEffect(() => {
@@ -155,9 +168,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // Auto-derive folder name from URL
   useEffect(() => {
     if (!folderNameEdited) {
-      setFolderName(extractFolderName(normalizeCloneUrl(url)));
+      setFolderName(extractFolderName(normalizeCloneUrl(url, shorthandHost)));
     }
-  }, [url, folderNameEdited]);
+  }, [url, folderNameEdited, shorthandHost]);
 
   // Auto-close on success
   useEffect(() => {
@@ -187,7 +200,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
     try {
       const { clonedPath: resultPath } = await projectClient.cloneRepo({
-        url: normalizeCloneUrl(url),
+        url: normalizeCloneUrl(url, shorthandHost),
         parentPath,
         folderName: folderName.trim(),
         shallowClone,
@@ -230,7 +243,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const folderNameError =
     folderNameEdited || folderName.trim() !== "" ? validateFolderName(folderName) : null;
   const canClone =
-    isValidCloneUrl(url) &&
+    isValidCloneUrl(url, shorthandHost) &&
     parentPath.trim() !== "" &&
     folderName.trim() !== "" &&
     folderNameError === null;
@@ -267,7 +280,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="owner/repo or https://github.com/user/repo.git"
+            placeholder="owner/repo or repository URL"
             disabled={isCloning || isComplete}
             className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           />
@@ -396,24 +409,29 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             queued an "error" row in the log. */}
         {error &&
           (() => {
-            const showForgeAuth =
-              error.gitReason === "auth-failed" &&
-              matchProviderForRemoteUrl(normalizeCloneUrl(url), forgeMatchers) !== null;
-            if (showForgeAuth) {
+            const matchedProviderId =
+              error.gitReason === "auth-failed"
+                ? matchProviderForRemoteUrl(normalizeCloneUrl(url, shorthandHost), forgeProviders)
+                : null;
+            const matchedProvider =
+              matchedProviderId !== null
+                ? forgeProviders.find((p) => p.providerId === matchedProviderId)
+                : undefined;
+            if (matchedProvider) {
               const signInAction: BannerAction = {
-                id: "signin-github",
-                label: "Sign in with GitHub",
+                id: "signin-forge-provider",
+                label: `Sign in to ${matchedProvider.name}`,
                 icon: LogIn,
                 variant: "accent",
                 onClick: () => {
                   void actionService.dispatch(
                     "app.settings.openTab",
-                    { tab: "github" },
+                    { tab: "code-forge", subtab: matchedProvider.providerId },
                     { source: "user" }
                   );
                 },
-                title: "Open GitHub sign-in",
-                ariaLabel: "Sign in with GitHub",
+                title: `Open ${matchedProvider.name} sign-in`,
+                ariaLabel: `Sign in to ${matchedProvider.name}`,
               };
               return (
                 <InlineStatusBanner

@@ -1,5 +1,5 @@
 import type { CIStatusState } from "@shared/types/forge";
-import type { GitHubPRCIStatus } from "@shared/types/github";
+import type { GitHubPRCIStatus } from "../../shared/types.js";
 
 /**
  * Normalized forge CI roll-up → the GitHub-flavored enum the plugin's

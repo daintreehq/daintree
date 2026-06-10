@@ -1041,7 +1041,7 @@ export const ForgeStatsToolbarButton = memo(
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-          <ToolbarContextMenuItems buttonId="github-stats" side="right" />
+          <ToolbarContextMenuItems buttonId="forge-stats" side="right" />
         </ContextMenuContent>
       </ContextMenu>
     );

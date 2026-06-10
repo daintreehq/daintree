@@ -1,5 +1,5 @@
 import { Check, X } from "lucide-react";
-import type { GitHubPRCIStatus, GitHubPRCISummary } from "@shared/types/github";
+import type { GitHubPRCIStatus, GitHubPRCISummary } from "../../shared/types.js";
 
 export type PRCIStatusVisual =
   | { kind: "icon"; Icon: typeof Check; colorClass: string; shortLabel: string; ariaLabel: string }

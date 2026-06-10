@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseGitHubRepoUrl } from "../GitHubService.js";
+import { parseGitHubRepoUrl } from "../GitHubRepoContext.js";
 
 describe("parseGitHubRepoUrl", () => {
   describe("HTTPS URLs", () => {

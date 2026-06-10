@@ -43,6 +43,7 @@ import type {
   TooltipCapability,
 } from "../../../../shared/types/forge.js";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
+import { cloneCapability } from "./GitHubClone.js";
 import { validateGitHubToken } from "./GitHubToken.js";
 import { parseGitHubRepoUrl } from "./GitHubRepoContext.js";
 import {
@@ -60,6 +61,7 @@ import {
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import {
+  clearGitHubCaches,
   clearPRCaches,
   forgeQueryCache,
   forgeQueryInflight,
@@ -82,7 +84,7 @@ import { getPRTooltipForContext } from "./GitHubPRs.js";
 import { resolveAuthorAvatar } from "./GitHubProfilePicture.js";
 import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
 import { fetchRateLimitDetails } from "./GitHubRateLimitApi.js";
-import { toRateLimitInfo } from "../../../../shared/utils/rateLimitUtils.js";
+import { toRateLimitInfo } from "./rateLimitUtils.js";
 import {
   forgeIssueListCache,
   forgePRListCache,
@@ -97,13 +99,8 @@ import {
   parseBatchRequiredChecksResponse,
   updateRepoStatsCount,
 } from "./GitHubPRs.js";
-import type {
-  GitHubIssue,
-  GitHubPR,
-  GitHubPRCIStatus,
-  GitHubUser,
-} from "../../../../shared/types/github.js";
-import type { GitHubTokenHealthPayload } from "../../../../shared/types/ipc/github.js";
+import type { GitHubIssue, GitHubPR, GitHubPRCIStatus, GitHubUser } from "../shared/types.js";
+import type { GitHubTokenHealthPayload } from "../shared/types.js";
 
 const REPO_METADATA_QUERY = `
   query GetRepoMetadata($owner: String!, $repo: String!) {
@@ -1467,6 +1464,12 @@ const healthEventsCapability: HealthEventsCapability = {
     });
   },
 
+  refreshTokenHealth(options?: { force?: boolean }): Promise<void> {
+    // The service's own start()/stop() gate and 5-minute cooldown apply, so a
+    // disabled plugin never probes and rapid focus toggling can't hammer the API.
+    return gitHubTokenHealthService.refresh(options);
+  },
+
   async getRateLimitDetails(): Promise<RateLimitDetails | null> {
     const details = await fetchRateLimitDetails();
     if (!details) return null;
@@ -1645,6 +1648,9 @@ export const githubForgeProvider: ForgeProviderImpl = {
     if (typeof data.number !== "number" || typeof data.html_url !== "string") {
       throw new Error("Unexpected response from GitHub: missing issue number or URL.");
     }
+    // Provider-owned invalidation: drop list/stat caches so the new issue
+    // shows up in subsequent listIssues calls (callers no longer clear).
+    clearGitHubCaches();
     return restToForgeIssue(data);
   },
 
@@ -1747,4 +1753,5 @@ export const githubForgeProvider: ForgeProviderImpl = {
   projectHealth: projectHealthCapability,
   avatars: avatarCapability,
   healthEvents: healthEventsCapability,
+  clone: cloneCapability,
 };

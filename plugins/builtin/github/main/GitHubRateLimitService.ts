@@ -4,10 +4,7 @@ import { join } from "path";
 // are gated behind DAINTREE_DEBUG_GITHUB_GRAPHQL=1 — never executed at import
 // time. The imports resolve three symbols that are only dereferenced inside
 // _logGraphQLCost(), which returns immediately when the env var is absent.
-import type {
-  GitHubRateLimitKind,
-  GitHubRateLimitPayload,
-} from "../../../../shared/types/ipc/github.js";
+import type { GitHubRateLimitKind, GitHubRateLimitPayload } from "../shared/types.js";
 import { getLogDirectory, logDebug, logInfo, logWarn } from "../../../../electron/utils/logger.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 

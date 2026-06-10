@@ -97,9 +97,6 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
-  GitHubTokenHealthPayload,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
   ServiceConnectivityPayload,
   GitStatus,
   KeyAction,
@@ -1619,120 +1616,6 @@ const api: ElectronAPI = {
   agentHelp: {
     get: (request: import("../shared/types/ipc/agent.js").AgentHelpRequest) =>
       _unwrappingInvoke(CHANNELS.AGENT_HELP_GET, request),
-  },
-
-  // GitHub API
-  github: {
-    getRepoStats: (cwd: string, bypassCache?: boolean) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
-
-    getFirstPageCache: (cwd: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, cwd),
-
-    getProjectHealth: (cwd: string, bypassCache?: boolean) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PROJECT_HEALTH, cwd, bypassCache),
-
-    openIssues: (cwd: string, query?: string, state?: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
-
-    openPRs: (cwd: string, query?: string, state?: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd, query, state),
-
-    openCommits: (cwd: string, branch?: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd, branch),
-
-    openIssue: (cwd: string, issueNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_ISSUE, { cwd, issueNumber }),
-
-    openPR: (prUrl: string) => _unwrappingInvoke(CHANNELS.GITHUB_OPEN_PR, prUrl),
-
-    checkCli: () => _unwrappingInvoke(CHANNELS.GITHUB_CHECK_CLI),
-
-    getConfig: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_CONFIG),
-
-    setToken: (token: string) => _unwrappingInvoke(CHANNELS.GITHUB_SET_TOKEN, token),
-
-    clearToken: () => _unwrappingInvoke(CHANNELS.GITHUB_CLEAR_TOKEN),
-
-    validateToken: (token: string) => _unwrappingInvoke(CHANNELS.GITHUB_VALIDATE_TOKEN, token),
-
-    listIssues: (options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: "created" | "updated";
-    }) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_ISSUES, options),
-
-    listPullRequests: (options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "merged" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: "created" | "updated";
-    }) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_PRS, options),
-
-    assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
-
-    unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GITHUB_UNASSIGN_ISSUE, { cwd, issueNumber, username }),
-
-    getIssueTooltip: (cwd: string, issueNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
-
-    getPRTooltip: (cwd: string, prNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_TOOLTIP, { cwd, prNumber }),
-
-    getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_URL, { cwd, issueNumber }),
-
-    getIssueByNumber: (cwd: string, issueNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, { cwd, issueNumber }),
-
-    getPRByNumber: (cwd: string, prNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
-
-    getIssuesByNumbers: (cwd: string, numbers: number[]) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, { cwd, numbers }),
-
-    getPRsByNumbers: (cwd: string, numbers: number[]) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, { cwd, numbers }),
-
-    getPRReviewThreads: (cwd: string, prNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, { cwd, prNumber }),
-
-    listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_REMOTES, cwd),
-
-    resolveAuthorAvatar: (email: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, email),
-
-    onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
-      _typedOn(CHANNELS.PR_DETECTED, callback),
-
-    onPRCleared: (callback: (data: PRClearedPayload) => void) =>
-      _typedOn(CHANNELS.PR_CLEARED, callback),
-
-    onIssueDetected: (callback: (data: IssueDetectedPayload) => void) =>
-      _typedOn(CHANNELS.ISSUE_DETECTED, callback),
-
-    onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
-      _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
-
-    getRateLimitDetails: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS),
-
-    onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, callback),
-
-    onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, callback),
-
-    onRepoCountsUpdated: (callback: (data: RepoCountsUpdatedPayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_REPO_COUNTS_UPDATED, callback),
-
-    getTokenHealth: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_TOKEN_HEALTH),
   },
 
   // Per-service connectivity API

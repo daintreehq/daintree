@@ -329,11 +329,11 @@ import { useMcpConfirmStore } from "./store/mcpConfirmStore";
 import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
-// Eager side-effect import: registers the GitHub plugin's builtin view slots
-// (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
-// render. Must stay static — a deferred/idle import races the user, so
-// getBuiltinView returns null and the bulk-create dialog silently never opens.
-import "@github-renderer/index";
+// Eager side-effect import: auto-discovers every built-in plugin renderer and
+// registers its builtin view slots at module-eval time, before first render.
+// Must stay static — a deferred/idle import races the user, so getBuiltinView
+// returns null and plugin-contributed dialogs silently never open.
+import "@/registry/builtinPluginRenderers";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";

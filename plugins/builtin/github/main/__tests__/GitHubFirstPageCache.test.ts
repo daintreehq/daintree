@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import type { GitHubIssue, GitHubPR } from "../../../shared/types/github.js";
+import type { GitHubIssue, GitHubPR } from "../../shared/types.js";
 
 const STALE_MS = 11 * 60 * 1000;
 
@@ -46,7 +46,8 @@ describe("GitHubFirstPageCache", () => {
   afterEach(async () => {
     const { GitHubFirstPageCache } = await import("../GitHubFirstPageCache.js");
     GitHubFirstPageCache.resetInstance();
-    const { resetWritesSuppressedForTesting } = await import("../diskPressureState.js");
+    const { resetWritesSuppressedForTesting } =
+      await import("../../../../../electron/services/diskPressureState.js");
     resetWritesSuppressedForTesting();
     delete process.env.DAINTREE_USER_DATA;
     vi.useRealTimers();
@@ -232,7 +233,8 @@ describe("GitHubFirstPageCache", () => {
 
   it("does not write to disk when disk pressure suppresses writes", async () => {
     const { GitHubFirstPageCache } = await import("../GitHubFirstPageCache.js");
-    const { setWritesSuppressed } = await import("../diskPressureState.js");
+    const { setWritesSuppressed } =
+      await import("../../../../../electron/services/diskPressureState.js");
     GitHubFirstPageCache.resetInstance();
     const cache = GitHubFirstPageCache.getInstance();
 

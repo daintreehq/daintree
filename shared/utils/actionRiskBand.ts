@@ -3,7 +3,7 @@ import type { RiskBand } from "../types/actions.js";
 export const RISK_BAND_OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "browser",
   "devServer",
-  "github",
+  "forge",
   "portal",
   "voice",
   "system",

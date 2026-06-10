@@ -10,9 +10,9 @@ import {
   repoStatsCache,
   velocityCache,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type { CIStatus, ProjectHealth, ProjectHealthResult, RepoContext } from "./types.js";
-import type { ProjectHealthData } from "../../../../electron/types/index.js";
+import type { ProjectHealthData } from "../shared/types.js";
 
 type GraphQLClient = NonNullable<ReturnType<typeof GitHubAuth.createClient>>;
 

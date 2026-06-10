@@ -5,7 +5,7 @@ const mockGetRepositoryRoot = vi.fn();
 const mockListRemotes = vi.fn();
 const mockGraphqlClient = vi.fn();
 
-vi.mock("../GitService.js", () => {
+vi.mock("../../../../../electron/services/GitService.js", () => {
   class MockGitService {
     getRemoteUrl = mockGetRemoteUrl;
     getRepositoryRoot = mockGetRepositoryRoot;
@@ -14,16 +14,15 @@ vi.mock("../GitService.js", () => {
   return { GitService: MockGitService };
 });
 
-vi.mock("../ProjectStore.js", () => ({
+vi.mock("../../../../../electron/services/ProjectStore.js", () => ({
   projectStore: {
     getProjectByPath: vi.fn().mockResolvedValue(null),
     getProjectSettings: vi.fn().mockResolvedValue({}),
   },
 }));
 
-vi.mock("../../../plugins/builtin/github/main/GitHubAuth.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../plugins/builtin/github/main/GitHubAuth.js")>();
+vi.mock("../GitHubAuth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../GitHubAuth.js")>();
   return {
     ...actual,
     GitHubAuth: {
@@ -39,25 +38,19 @@ vi.mock("../../../plugins/builtin/github/main/GitHubAuth.js", async (importOrigi
   };
 });
 
-vi.mock(
-  "../../../plugins/builtin/github/main/GitHubRateLimitService.js",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../../plugins/builtin/github/main/GitHubRateLimitService.js")
-      >();
-    return {
-      ...actual,
-      gitHubRateLimitService: {
-        shouldBlockRequest: () => ({ blocked: false }),
-        update: () => {},
-        updateFromGraphQL: () => {},
-        getState: () => ({ blocked: false }),
-        onStateChange: () => () => {},
-      },
-    };
-  }
-);
+vi.mock("../GitHubRateLimitService.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../GitHubRateLimitService.js")>();
+  return {
+    ...actual,
+    gitHubRateLimitService: {
+      shouldBlockRequest: () => ({ blocked: false }),
+      update: () => {},
+      updateFromGraphQL: () => {},
+      getState: () => ({ blocked: false }),
+      onStateChange: () => () => {},
+    },
+  };
+});
 
 vi.mock("../GitHubStatsCache.js", () => ({
   GitHubStatsCache: {
@@ -70,9 +63,9 @@ vi.mock("../GitHubStatsCache.js", () => ({
   },
 }));
 
-import { getProjectHealth, clearGitHubCaches } from "../../../plugins/builtin/github/main/index.js";
-import { velocityCache } from "../../../plugins/builtin/github/main/GitHubCaches.js";
-import { buildVelocityCacheKey } from "../../../plugins/builtin/github/main/GitHubHealth.js";
+import { getProjectHealth, clearGitHubCaches } from "../index.js";
+import { velocityCache } from "../GitHubCaches.js";
+import { buildVelocityCacheKey } from "../GitHubHealth.js";
 
 beforeEach(() => {
   clearGitHubCaches();

@@ -20,16 +20,17 @@ import {
   repoEventsLastProbeAt,
   getETagCacheVersion,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
-import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
 import type { RepoContext, RepoStats, RestCountsSnapshot } from "./types.js";
-import type { GitHubIssue, GitHubPR } from "../../../../shared/types/github.js";
-import { parseIssueNode } from "./GitHubIssues.js";
-import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
 import type {
+  GitHubIssue,
+  GitHubPR,
   RepositoryStats,
   GitHubFirstPageCachePayload,
-} from "../../../../electron/types/index.js";
+} from "../shared/types.js";
+import { parseIssueNode } from "./GitHubIssues.js";
+import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
 
 export interface RepoStatsAndPageResult {
   stats: RepoStats | null;

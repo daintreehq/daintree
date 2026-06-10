@@ -162,7 +162,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
   describe("Titlebar drag regions — secondary window project hydration", () => {
     it("keeps project-scoped toolbar controls in the first-paint button set", () => {
       expect(source).toContain("PROJECT_SCOPED_TOOLBAR_IDS");
-      expect(source).toContain('"dev-server", "github-stats"');
+      expect(source).toContain('"dev-server", "forge-stats"');
       expect(source).not.toContain("isAvailable: !!currentProject");
     });
 

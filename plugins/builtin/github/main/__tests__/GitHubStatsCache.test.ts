@@ -20,7 +20,8 @@ describe("GitHubStatsCache", () => {
   afterEach(async () => {
     const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
     GitHubStatsCache.resetInstance();
-    const { resetWritesSuppressedForTesting } = await import("../diskPressureState.js");
+    const { resetWritesSuppressedForTesting } =
+      await import("../../../../../electron/services/diskPressureState.js");
     resetWritesSuppressedForTesting();
     delete process.env.DAINTREE_USER_DATA;
     vi.useRealTimers();
@@ -174,7 +175,8 @@ describe("GitHubStatsCache", () => {
 
   it("does not write to disk when disk pressure suppresses writes", async () => {
     const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
-    const { setWritesSuppressed } = await import("../diskPressureState.js");
+    const { setWritesSuppressed } =
+      await import("../../../../../electron/services/diskPressureState.js");
     GitHubStatsCache.resetInstance();
     const cache = GitHubStatsCache.getInstance();
 
@@ -193,7 +195,8 @@ describe("GitHubStatsCache", () => {
 
   it("resumes writing to disk after pressure clears", async () => {
     const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
-    const { setWritesSuppressed } = await import("../diskPressureState.js");
+    const { setWritesSuppressed } =
+      await import("../../../../../electron/services/diskPressureState.js");
     GitHubStatsCache.resetInstance();
     const cache = GitHubStatsCache.getInstance();
 

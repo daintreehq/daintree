@@ -371,10 +371,6 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
   };
-  "github:unassign-issue": {
-    args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
-  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;

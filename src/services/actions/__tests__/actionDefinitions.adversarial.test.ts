@@ -74,12 +74,6 @@ const mocks = vi.hoisted(() => {
     generateAndCopyFile: vi.fn(),
   };
 
-  const githubClient = {
-    openIssue: vi.fn(),
-    openPR: vi.fn(),
-    getIssueUrl: vi.fn(),
-  };
-
   const forgeClient = {
     openIssue: vi.fn(),
     getIssueUrl: vi.fn(),
@@ -188,7 +182,6 @@ const mocks = vi.hoisted(() => {
     systemClient,
     worktreeClient,
     copyTreeClient,
-    githubClient,
     forgeClient,
     actionService,
     terminalInstanceService,
@@ -209,7 +202,6 @@ vi.mock("@/clients", () => ({
   systemClient: mocks.systemClient,
   worktreeClient: mocks.worktreeClient,
   copyTreeClient: mocks.copyTreeClient,
-  githubClient: mocks.githubClient,
   forgeClient: mocks.forgeClient,
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),

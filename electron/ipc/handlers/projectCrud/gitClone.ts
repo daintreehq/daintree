@@ -1,17 +1,16 @@
 import path from "path";
-import {
-  spawn,
-  spawnSync,
-  execFile,
-  type ChildProcess,
-  type ChildProcessWithoutNullStreams,
-} from "child_process";
+import { spawnSync } from "child_process";
 import { CHANNELS } from "../../channels.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { broadcastToRenderer, sendToRenderer } from "../../utils.js";
 import { createAuthenticatedGit } from "../../../utils/hardenedGit.js";
-import { parseGitHubRepoUrl } from "../../../services/github/index.js";
+import {
+  getActiveProvider,
+  getForgeProviderImpl,
+} from "../../../services/forgeProviderRegistry.js";
+import { makeForgeProviderId } from "../../../../shared/utils/forgeProviderIds.js";
+import type { CloneAuthProbe, CloneCapability } from "../../../../shared/types/forge.js";
 import type {
   CloneRepoOptions,
   CloneRepoResult,
@@ -22,190 +21,18 @@ import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import { classifyGitError } from "../../../../shared/utils/gitOperationErrors.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
 
-const GH_AUTH_PROBE_TIMEOUT_MS = 3_000;
-const GH_CLONE_TIMEOUT_MS = 5 * 60 * 1_000;
-const GH_STDERR_TAIL_BYTES = 8 * 1024;
-
-// Belt-and-suspenders: prevent any interactive prompt in headless Electron main.
-const GH_NON_INTERACTIVE_ENV = {
-  GH_PROMPT_DISABLED: "1",
-  GH_TERMINAL_PROMPT: "0",
-} as const;
-
-type ProgressEmitter = (stage: string, progress: number, message: string) => void;
-
-function killProcessTree(child: ChildProcess): void {
-  if (child.pid === undefined) {
-    try {
-      child.kill();
-    } catch {
-      // Already exited.
-    }
-    return;
-  }
-
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/F", "/T", "/PID", child.pid.toString()], {
-      windowsHide: true,
-    });
-    return;
-  }
-
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    // Already exited.
-  }
-  const sigkillTimer = setTimeout(() => {
-    try {
-      if (child.pid !== undefined) {
-        process.kill(-child.pid, "SIGKILL");
-      }
-    } catch {
-      // Already exited.
-    }
-  }, 5_000);
-  // Don't keep the event loop alive solely for the SIGKILL escalation.
-  sigkillTimer.unref();
-}
-
-async function probeGhAuth(externalSignal?: AbortSignal): Promise<boolean> {
-  if (externalSignal?.aborted) return false;
-  return new Promise((resolve) => {
-    const controller = new AbortController();
-    const onExternalAbort = () => controller.abort();
-    if (externalSignal) {
-      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
-    }
-    const timer = setTimeout(() => controller.abort(), GH_AUTH_PROBE_TIMEOUT_MS);
-
-    execFile(
-      "gh",
-      ["auth", "status"],
-      {
-        env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
-        signal: controller.signal,
-        windowsHide: true,
-      },
-      (err) => {
-        clearTimeout(timer);
-        if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
-        resolve(!err);
-      }
-    );
-  });
-}
-
-const GH_STAGE_PATTERNS: Array<{ re: RegExp; stage: string }> = [
-  { re: /Counting objects:\s+(\d+)%/, stage: "counting" },
-  { re: /Compressing objects:\s+(\d+)%/, stage: "compressing" },
-  { re: /Receiving objects:\s+(\d+)%/, stage: "receiving" },
-  { re: /Resolving deltas:\s+(\d+)%/, stage: "resolving" },
-];
-
-function parseGhStderrLine(line: string): { stage: string; progress: number } | null {
-  for (const { re, stage } of GH_STAGE_PATTERNS) {
-    const match = line.match(re);
-    if (match) {
-      const progress = Number.parseInt(match[1], 10);
-      if (Number.isFinite(progress)) {
-        return { stage, progress };
-      }
-    }
-  }
-  return null;
-}
-
-async function cloneWithGh(
-  owner: string,
-  repo: string,
-  parentPath: string,
-  targetFolder: string,
-  shallowClone: boolean,
-  signal: AbortSignal,
-  emitProgress: ProgressEmitter
-): Promise<void> {
-  if (signal.aborted) {
-    throw new AppError({ code: "CANCELLED", message: "Clone cancelled" });
-  }
-
-  const args = [
-    "repo",
-    "clone",
-    `${owner}/${repo}`,
-    targetFolder,
-    ...(shallowClone ? ["--", "--depth", "1"] : []),
-  ];
-
-  const isWin = process.platform === "win32";
-  const child: ChildProcessWithoutNullStreams = spawn("gh", args, {
-    cwd: parentPath,
-    env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
-    detached: !isWin,
-    windowsHide: true,
-  });
-
-  let stderrTail = "";
-  let lastStage: string | null = null;
-  let lastProgress = -1;
-  let finalized = false;
-  let timedOut = false;
-
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
-    stderrTail = (stderrTail + chunk).slice(-GH_STDERR_TAIL_BYTES);
-    for (const line of chunk.split(/[\r\n]+/)) {
-      if (!line) continue;
-      const parsed = parseGhStderrLine(line);
-      if (!parsed) continue;
-      if (parsed.stage === lastStage && parsed.progress === lastProgress) continue;
-      lastStage = parsed.stage;
-      lastProgress = parsed.progress;
-      emitProgress(parsed.stage, parsed.progress, `${parsed.stage}: ${parsed.progress}%`);
-    }
-  });
-
-  const timeoutHandle = setTimeout(() => {
-    timedOut = true;
-    killProcessTree(child);
-  }, GH_CLONE_TIMEOUT_MS);
-
-  const onAbort = () => {
-    killProcessTree(child);
-  };
-  signal.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      child.once("error", (err) => {
-        if (finalized) return;
-        finalized = true;
-        reject(err);
-      });
-      child.once("close", (code) => {
-        if (finalized) return;
-        finalized = true;
-        if (signal.aborted) {
-          reject(new AppError({ code: "CANCELLED", message: "Clone cancelled" }));
-          return;
-        }
-        if (timedOut) {
-          reject(new Error(`gh repo clone timed out after ${GH_CLONE_TIMEOUT_MS / 1000}s`));
-          return;
-        }
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        const tail = stderrTail.trim();
-        const detail = tail ? `: ${tail.split(/\r?\n/).slice(-3).join(" ")}` : "";
-        reject(new Error(`gh repo clone exited with code ${code}${detail}`));
-      });
-    });
-  } finally {
-    clearTimeout(timeoutHandle);
-    signal.removeEventListener("abort", onAbort);
-  }
+/**
+ * Resolve the clone capability of the forge provider matching the URL's
+ * hostname. `undefined` when no provider matches, the matching plugin hasn't
+ * bound an impl yet, or the impl doesn't implement `clone`.
+ */
+function resolveCloneCapability(url: string): CloneCapability | undefined {
+  const provider = getActiveProvider(url);
+  if (!provider) return undefined;
+  const impl = getForgeProviderImpl(
+    makeForgeProviderId(provider.pluginId, provider.contribution.id)
+  );
+  return impl?.clone;
 }
 
 /** Minimal shape of simple-git's internal PluginStore (`_plugins`). */
@@ -324,9 +151,18 @@ export function registerGitCloneHandlers(): () => void {
     const localController = new AbortController();
     activeControllers.add(localController);
 
-    // Detect github.com URL and probe `gh` auth — non-null + authed picks the gh path.
-    const ghTarget = parseGitHubRepoUrl(url);
-    const useGhPath = ghTarget !== null && (await probeGhAuth(localController.signal));
+    // Resolve the URL's forge provider and probe its clone auth — an
+    // authenticated probe picks the provider's clone path below. Probe
+    // failures mean "no authenticated path", never a clone failure.
+    const cloneCapability = resolveCloneCapability(url);
+    let authProbe: CloneAuthProbe = { authenticated: false };
+    if (cloneCapability) {
+      try {
+        authProbe = await cloneCapability.probeAuth(localController.signal);
+      } catch {
+        // Fall back to plain git.
+      }
+    }
 
     // PID of the spawned `git clone` child process, captured via simple-git's
     // internal `spawn.after` plugin hook. Needed on Windows because aborting
@@ -347,17 +183,21 @@ export function registerGitCloneHandlers(): () => void {
       // suppresses the connecting placeholder for sub-400ms clones. The
       // renderer owns that phase via `isCloning` + `useDohertyGate`.
 
-      if (useGhPath && ghTarget) {
-        await cloneWithGh(
-          ghTarget.owner,
-          ghTarget.repo,
-          parentPath,
-          trimmedFolder,
-          Boolean(shallowClone),
-          localController.signal,
-          emitProgress
-        );
+      if (authProbe.authenticated && cloneCapability?.cloneRepository) {
+        // Provider-owned clone (e.g. `gh repo clone`). Failures surface
+        // directly — no plain-git retry, matching the historical gh path.
+        await cloneCapability.cloneRepository(url, targetPath, {
+          shallow: Boolean(shallowClone),
+          signal: localController.signal,
+          onProgress: emitProgress,
+        });
       } else {
+        let cloneUrl = url;
+        if (authProbe.authenticated && cloneCapability?.getAuthenticatedCloneUrl) {
+          // May embed credentials — never log it; error context below already
+          // omits the URL for the same reason.
+          cloneUrl = (await cloneCapability.getAuthenticatedCloneUrl(url).catch(() => null)) ?? url;
+        }
         const git = createAuthenticatedGit(parentPath, {
           signal: localController.signal,
           progress({ stage, progress }) {
@@ -383,7 +223,7 @@ export function registerGitCloneHandlers(): () => void {
           return data;
         });
 
-        await git.clone(url, trimmedFolder, shallowClone ? ["--depth", "1"] : []);
+        await git.clone(cloneUrl, trimmedFolder, shallowClone ? ["--depth", "1"] : []);
       }
 
       emitProgress("complete", 100, "Clone complete");
@@ -398,8 +238,8 @@ export function registerGitCloneHandlers(): () => void {
 
       // Clean up partial clone. On Windows the spawned process tree must be
       // terminated before fs.rm or the orphaned children (git-remote-https,
-      // index-pack) keep `.git/` files locked. The gh-path abort listener
-      // tears its own tree down synchronously; the simple-git path needs
+      // index-pack) keep `.git/` files locked. A provider's `cloneRepository`
+      // owns its own process-tree teardown on abort; the simple-git path needs
       // `killCloneProcessTree(cloneChildPid)` here because simple-git owns the
       // child and only the captured pid is reachable from this scope.
       killCloneProcessTree(cloneChildPid);

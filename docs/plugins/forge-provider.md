@@ -27,6 +27,12 @@ plugins/builtin/gitea/
 
 Keep transport, auth, and normalization in their own modules. `forgeProvider.ts` should read as a thin adapter from your transport to the typed surface — the GitHub provider's `forgeProvider.ts` is ~1200 lines and almost entirely shape-mapping helpers.
 
+## Builtin plugin wiring
+
+A built-in plugin at `plugins/builtin/<name>/{plugin.json,main/index.ts,renderer/index.tsx}` is fully auto-discovered — adding one requires zero build-config edits. `scripts/build-main.mjs` discovers every `plugins/builtin/*/main/index.ts` as an esbuild entry and copies each `plugin.json` next to the compiled output; `src/registry/builtinPluginRenderers.ts` eagerly imports every `plugins/builtin/*/renderer/index.{ts,tsx}` via `import.meta.glob` so renderer view slots register before first render; `tsconfig.json` includes `plugins/builtin/*/renderer` for typechecking. The renderer entry is optional — main-only plugins simply have no `renderer/` directory.
+
+Plugin renderer code must use only relative, `@/` (host `src/`), and `@shared` imports — there is no per-plugin path alias.
+
 ## Declare the manifest entry
 
 Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerly at startup, before any plugin code runs, so the provider shows up in Preferences and the remote-routing table even if its `activate()` never fires.

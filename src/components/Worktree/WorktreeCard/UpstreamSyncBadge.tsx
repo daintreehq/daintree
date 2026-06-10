@@ -125,7 +125,7 @@ export function UpstreamSyncBadge({
             )}
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
-            aria-label="GitHub authentication failed — click to reconnect"
+            aria-label="Forge authentication failed — click to reconnect"
           >
             <span className="flex items-center gap-1.5 grayscale opacity-50 text-text-primary/50">
               {hasAhead && <span>↑{aheadCount}</span>}
@@ -135,8 +135,8 @@ export function UpstreamSyncBadge({
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
-          <div>GitHub authentication failed</div>
-          <div className="text-daintree-text/70 mt-0.5">Click to reconnect GitHub</div>
+          <div>Forge authentication failed</div>
+          <div className="text-daintree-text/70 mt-0.5">Click to reconnect your code forge</div>
           {lastFetchedAt != null && (
             <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
           )}

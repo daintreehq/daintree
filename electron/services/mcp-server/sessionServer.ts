@@ -1043,7 +1043,7 @@ async function listConcreteResources(
       uri: "daintree://project/current/issues",
       name: "Current project — open issues",
       mimeType: "application/json",
-      description: "Open GitHub issues for the active project.",
+      description: "Open issues for the active project.",
     });
   }
   if (isResourcePermitted(sessionId, deps, "pulse")) {

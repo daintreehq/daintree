@@ -33,7 +33,7 @@ import {
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import type { Issue, PR } from "@shared/types/forge";
-import type { GitHubSortOrder } from "@shared/types/github";
+import type { GitHubSortOrder } from "../../shared/types.js";
 import { MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import {
   GitHubResourceRowsSkeleton,

@@ -75,7 +75,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     icon: Mic,
     description: "Persistent dictation indicator shown while recording is active",
   },
-  "github-stats": {
+  "forge-stats": {
     label: "Repository stats",
     icon: GitPullRequest,
     description: "Issues, PRs, and commits",

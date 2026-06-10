@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { parseGitHubError } from "../GitHubService.js";
-import { GitHubAuth, captureAuthMetadata } from "../github/GitHubAuth.js";
+import { parseGitHubError } from "../GitHubErrors.js";
+import { GitHubAuth, captureAuthMetadata } from "../GitHubAuth.js";
 
 function createStorage() {
   let token: string | undefined;

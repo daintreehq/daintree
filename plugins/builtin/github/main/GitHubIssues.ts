@@ -16,7 +16,7 @@ import {
   issueTooltipCache,
   issueTooltipWrittenAt,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
 import { truncateBody, isoToEpochMs } from "./GitHubCaches.js";
 import type {
@@ -25,7 +25,7 @@ import type {
   GitHubListOptions,
   GitHubListResponse,
   LinkedPRInfo,
-} from "../../../../shared/types/github.js";
+} from "../shared/types.js";
 import type { ForgeLabel, ForgeUser, IssueTooltipData } from "../../../../shared/types/forge.js";
 import type { RepoContext } from "./types.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";

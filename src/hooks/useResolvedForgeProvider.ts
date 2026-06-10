@@ -37,9 +37,7 @@ export function useResolvedForgeProvider(
   projectId: string | null | undefined
 ): ResolvedForgeProviderState & { refresh: () => void } {
   const [state, setState] = useState<ResolvedForgeProviderState>(() =>
-    projectId
-      ? (resolutionCache.get(projectId) ?? { ...UNRESOLVED, loading: true })
-      : UNRESOLVED
+    projectId ? (resolutionCache.get(projectId) ?? { ...UNRESOLVED, loading: true }) : UNRESOLVED
   );
 
   const resolve = useCallback(async (id: string) => {

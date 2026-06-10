@@ -1,10 +1,10 @@
 // eager-import-allow: reads/writes the GitHub first-page cache via sync fs
 import { readFileSync, existsSync, mkdirSync } from "fs";
-import { resilientAtomicWriteFileSync } from "../utils/fs.js";
-import { getWritesSuppressed } from "./diskPressureState.js";
+import { resilientAtomicWriteFileSync } from "../../../../electron/utils/fs.js";
+import { getWritesSuppressed } from "../../../../electron/services/diskPressureState.js";
 import path from "path";
 import os from "os";
-import type { GitHubIssue, GitHubPR } from "../../shared/types/github.js";
+import type { GitHubIssue, GitHubPR } from "../shared/types.js";
 
 // Get userData path without importing electron (works in both main and utility process)
 function getUserDataPath(): string {

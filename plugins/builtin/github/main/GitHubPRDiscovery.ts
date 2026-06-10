@@ -14,7 +14,7 @@ import {
   getETagCacheVersion,
   writePRTooltip,
 } from "./GitHubCaches.js";
-import type { GitHubPRCIStatus } from "../../../../shared/types/github.js";
+import type { GitHubPRCIStatus } from "../shared/types.js";
 import type {
   PRListProbeResult,
   PRSnapshot,

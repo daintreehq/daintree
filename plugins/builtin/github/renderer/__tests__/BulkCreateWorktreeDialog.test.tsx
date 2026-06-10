@@ -36,7 +36,7 @@ vi.mock("@/clients", () => ({
   },
   forgeClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
-    getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
+    getCurrentUser: () => mockGetCurrentUser(),
   },
   agentSettingsClient: {
     get: (...args: unknown[]) => mockAgentSettingsGet(...args),

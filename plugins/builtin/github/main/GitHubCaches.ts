@@ -1,14 +1,14 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { Cache } from "../../../../electron/utils/cache.js";
-import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
   GitHubPRCIStatus,
   GitHubPRCISummary,
   GitHubListResponse,
-} from "../../../../shared/types/github.js";
+} from "../shared/types.js";
 import type {
   RepoContext,
   RepoStats,

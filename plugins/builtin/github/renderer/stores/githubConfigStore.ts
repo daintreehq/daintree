@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GitHubTokenConfig } from "@/types";
+import type { GitHubTokenConfig } from "../../shared/types.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 

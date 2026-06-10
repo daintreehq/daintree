@@ -5,7 +5,7 @@ import { GitHubIcon } from "@/components/icons/brands";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
-import type { GitHubTokenValidation } from "@/types";
+import type { GitHubTokenValidation } from "../../shared/types.js";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";

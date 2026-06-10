@@ -1,5 +1,5 @@
-import type { GitHubRateLimitPayload } from "../types/ipc/github.js";
-import type { RateLimitInfo } from "../types/forge.js";
+import type { GitHubRateLimitPayload } from "../shared/types.js";
+import type { RateLimitInfo } from "../../../../shared/types/forge.js";
 
 // Project a GitHub rate-limit payload onto the provider-agnostic RateLimitInfo
 // shape. Canonical implementation — main's renderer broadcast and any other

@@ -8,7 +8,7 @@ import {
   INTERACTIVE_RESERVE,
   MAX_THROTTLE_MULTIPLIER,
 } from "../GitHubRateLimitService.js";
-import type { GitHubRateLimitPayload } from "../../../../../shared/types/ipc/github.js";
+import type { GitHubRateLimitPayload } from "../../shared/types.js";
 
 vi.mock("fs", () => ({
   appendFileSync: vi.fn(),

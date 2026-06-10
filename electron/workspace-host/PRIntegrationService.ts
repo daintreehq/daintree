@@ -1,10 +1,5 @@
 import type { TypedEventBus } from "../services/events.js";
 import type { PRServiceStatus, WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import { GitHubAuth } from "../services/github/GitHubAuth.js";
-import {
-  BUILTIN_GITHUB_PROVIDER_ID,
-  normalizeProviderId,
-} from "../../shared/utils/forgeProviderIds.js";
 
 interface PullRequestServiceLike {
   initialize(rootPath: string): void;
@@ -245,20 +240,14 @@ export class PRIntegrationService {
   }
 
   updateForgeCredentials(
-    providerId: string,
+    _providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null,
     projectRootPath: string | null
   ): void {
-    if (normalizeProviderId(providerId) === BUILTIN_GITHUB_PROVIDER_ID) {
-      if (credentials === null) {
-        GitHubAuth.setMemoryToken(null);
-      } else if (credentials.kind === "bearer") {
-        GitHubAuth.setMemoryToken(credentials.value);
-      }
-      // Non-bearer credentials are silently ignored — GitHub only supports bearer tokens.
-    }
-    // Additional providers dispatch through their own auth modules.
-
+    // Credential VALUES are not applied in this process — every forge call
+    // from the host goes through the RPC bridge to main, where the provider
+    // impl reads its own auth (#8870). The relay only signals presence/absence
+    // so detection can refresh or reset promptly on sign-in / sign-out.
     if (credentials) {
       void this.prService.refresh();
     } else {

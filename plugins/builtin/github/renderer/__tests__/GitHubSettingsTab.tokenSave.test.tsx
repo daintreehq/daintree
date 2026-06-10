@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 
-vi.mock("@github-renderer/stores/githubConfigStore", () => ({
+vi.mock("../stores/githubConfigStore", () => ({
   useGitHubConfigStore: vi.fn(),
 }));
 
@@ -22,7 +22,7 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
-import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
+import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 

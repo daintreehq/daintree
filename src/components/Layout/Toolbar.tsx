@@ -106,7 +106,7 @@ type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?:
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 // These controls are project-only visually, but their no-drag rectangles must
 // exist on first paint so secondary windows don't cache them as titlebar drag.
-const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "github-stats"]);
+const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "forge-stats"]);
 
 // Hardware-privacy indicators stay out of the overflow dropdown while their
 // signal is active — collapsing them under `…` would hide the only visual
@@ -329,7 +329,7 @@ function OverflowMenu({
         }}
       >
         {overflowIds.flatMap((id, idx) => {
-          if (id === "github-stats") {
+          if (id === "forge-stats") {
             if (!forgeProviderName) return [];
             const isLast = idx === overflowIds.length - 1;
             return [
@@ -900,7 +900,7 @@ export function Toolbar({
         render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
         isAvailable: true,
       },
-      "github-stats": {
+      "forge-stats": {
         // Placeholder (not removal) when no forge provider resolves: the
         // slot's no-drag rectangle must exist on first paint regardless
         // (PROJECT_SCOPED_TOOLBAR_IDS), and the placeholder keeps the
@@ -908,7 +908,7 @@ export function Toolbar({
         render: () =>
           currentProject && forgeProviderEntry ? (
             <ForgeStatsToolbarButton
-              key="github-stats"
+              key="forge-stats"
               ref={forgeStatsRef}
               currentProject={currentProject}
               data-toolbar-item=""
@@ -1146,7 +1146,7 @@ export function Toolbar({
   // Close open dropdowns when their buttons move into overflow
   useEffect(() => {
     const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
-    if (overflowSet.has("github-stats")) {
+    if (overflowSet.has("forge-stats")) {
       forgeStatsRef.current?.closeAll();
     }
     if (overflowSet.has("notification-center")) {

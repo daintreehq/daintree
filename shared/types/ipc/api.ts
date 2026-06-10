@@ -114,18 +114,6 @@ import type {
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
 import type {
-  RepositoryStats,
-  ProjectHealthData,
-  GitHubCliStatus,
-  GitHubTokenConfig,
-  GitHubTokenValidation,
-  GitHubRateLimitDetails,
-  GitHubTokenHealthPayload,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
-  GitHubFirstPageCachePayload,
-} from "./github.js";
-import type {
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -710,74 +698,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentHelp: {
     get(request: AgentHelpRequest): Promise<AgentHelpResult>;
   };
-  github: {
-    getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
-    getFirstPageCache(cwd: string): Promise<GitHubFirstPageCachePayload | null>;
-    getProjectHealth(cwd: string, bypassCache?: boolean): Promise<ProjectHealthData>;
-    openIssues(cwd: string, query?: string, state?: string): Promise<void>;
-    openPRs(cwd: string, query?: string, state?: string): Promise<void>;
-    openCommits(cwd: string, branch?: string): Promise<void>;
-    openIssue(cwd: string, issueNumber: number): Promise<void>;
-    openPR(prUrl: string): Promise<void>;
-    checkCli(): Promise<GitHubCliStatus>;
-    getConfig(): Promise<GitHubTokenConfig>;
-    setToken(token: string): Promise<GitHubTokenValidation>;
-    clearToken(): Promise<void>;
-    validateToken(token: string): Promise<GitHubTokenValidation>;
-    listIssues(options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: import("../github.js").GitHubSortOrder;
-    }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>>;
-    listPullRequests(options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "merged" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: import("../github.js").GitHubSortOrder;
-    }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
-    assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
-    unassignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
-    getIssueTooltip(
-      cwd: string,
-      issueNumber: number
-    ): Promise<import("../forge.js").IssueTooltipData | null>;
-    getPRTooltip(
-      cwd: string,
-      prNumber: number
-    ): Promise<import("../forge.js").PRTooltipData | null>;
-    getIssueUrl(cwd: string, issueNumber: number): Promise<string | null>;
-    getIssueByNumber(
-      cwd: string,
-      issueNumber: number
-    ): Promise<import("../github.js").GitHubIssue | null>;
-    getPRByNumber(cwd: string, prNumber: number): Promise<import("../github.js").GitHubPR | null>;
-    getIssuesByNumbers(
-      cwd: string,
-      numbers: number[]
-    ): Promise<Array<import("../github.js").GitHubIssue | null>>;
-    getPRsByNumbers(
-      cwd: string,
-      numbers: number[]
-    ): Promise<Array<import("../github.js").GitHubPR | null>>;
-    getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
-    /** @deprecated Use `project.listRemotes` instead (#8456). */
-    listRemotes(cwd: string): Promise<import("./forge.js").RemoteInfo[]>;
-    resolveAuthorAvatar(email: string): Promise<string | null>;
-    onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
-    onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
-    onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
-    onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
-    getRateLimitDetails(): Promise<GitHubRateLimitDetails | null>;
-    onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
-    onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
-    onRepoCountsUpdated(callback: (data: RepoCountsUpdatedPayload) => void): () => void;
-    getTokenHealth(): Promise<GitHubTokenHealthPayload>;
-  };
   // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.
   connectivity: GeneratedElectronAPI["connectivity"] & {
     onServiceChanged(
@@ -805,7 +725,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch?: string;
       skip?: number;
       limit?: number;
-    }): Promise<import("../github.js").GitCommitListResponse>;
+    }): Promise<import("../git.js").GitCommitListResponse>;
     stageFile(cwd: string, filePath: string): Promise<void>;
     unstageFile(cwd: string, filePath: string): Promise<void>;
     stageFiles(cwd: string, filePaths: string[]): Promise<void>;

@@ -21,7 +21,7 @@ const CUSTOMIZABLE_BUTTON_IDS: AnyToolbarButtonId[] = [
   "browser",
   "dev-server",
   "voice-recording",
-  "github-stats",
+  "forge-stats",
   "notification-center",
   "copy-tree",
   "command-palette",

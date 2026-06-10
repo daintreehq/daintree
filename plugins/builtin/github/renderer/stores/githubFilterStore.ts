@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GitHubSortOrder } from "@shared/types/github";
+import type { GitHubSortOrder } from "../../shared/types.js";
 
 export type IssueStateFilter = "open" | "closed" | "all";
 export type PRStateFilter = "open" | "closed" | "merged" | "all";

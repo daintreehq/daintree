@@ -21,6 +21,7 @@
   "include": [
     "./**/*.ts",
     "../plugins/builtin/github/main/**/*.ts",
+    "../plugins/builtin/github/shared/**/*.ts",
     "../plugins/sample/hello-daintree/main/**/*.ts"
   ],
   "exclude": ["node_modules", "preload.cts"],

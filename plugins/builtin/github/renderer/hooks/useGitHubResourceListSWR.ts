@@ -25,7 +25,7 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import type { Issue, ListOptions, PR } from "@shared/types/forge";
-import type { GitHubSortOrder } from "@shared/types/github";
+import type { GitHubSortOrder } from "../../shared/types.js";
 import { parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 

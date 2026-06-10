@@ -11,7 +11,7 @@ function makeWidths(ids: ToolbarButtonId[], width = 36): Map<string, number> {
 }
 
 describe("computeOverflow", () => {
-  const ids: ToolbarButtonId[] = ["terminal", "browser", "github-stats", "settings", "copy-tree"];
+  const ids: ToolbarButtonId[] = ["terminal", "browser", "forge-stats", "settings", "copy-tree"];
 
   it("returns all visible when everything fits", () => {
     const widths = makeWidths(ids, 36);
@@ -32,13 +32,13 @@ describe("computeOverflow", () => {
     // target = 179 (removal no longer carries a hysteresis buffer — that lives
     // in the restoration gate now).
     // Remove copy-tree(5,idx4): 180-36=144 ≤ 179 → stop. Only copy-tree overflows.
-    // github-stats is priority 1 (stays visible)
+    // forge-stats is priority 1 (stays visible)
     const widths = makeWidths(ids, 36);
     const result = computeOverflow(179, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
     expect(result.overflowIds).toEqual(["copy-tree"]);
     expect(result.visibleIds).toContain("terminal");
     expect(result.visibleIds).toContain("browser");
-    expect(result.visibleIds).toContain("github-stats");
+    expect(result.visibleIds).toContain("forge-stats");
     expect(result.visibleIds).toContain("settings");
   });
 
@@ -224,7 +224,7 @@ describe("computeOverflow", () => {
 });
 
 describe("computeGuardedOverflow", () => {
-  const ids: ToolbarButtonId[] = ["terminal", "browser", "github-stats", "settings", "copy-tree"];
+  const ids: ToolbarButtonId[] = ["terminal", "browser", "forge-stats", "settings", "copy-tree"];
 
   it("delegates to computeOverflow on the first call (null previous)", () => {
     const widths = makeWidths(ids, 36);
@@ -250,7 +250,7 @@ describe("computeGuardedOverflow", () => {
   it("recomputes immediately when shrinking, even if overflow is currently present", () => {
     const widths = makeWidths(ids, 36);
     const previous: OverflowResult = {
-      visibleIds: ["terminal", "browser", "github-stats", "settings"],
+      visibleIds: ["terminal", "browser", "forge-stats", "settings"],
       overflowIds: ["copy-tree"],
     };
     // Shrinking from 179 to 140: copy-tree already overflows, now settings must too.
@@ -269,7 +269,7 @@ describe("computeGuardedOverflow", () => {
   it("holds the previous result when growing but still below the restore threshold", () => {
     const widths = makeWidths(ids, 36);
     const previous: OverflowResult = {
-      visibleIds: ["terminal", "browser", "github-stats", "settings"],
+      visibleIds: ["terminal", "browser", "forge-stats", "settings"],
       overflowIds: ["copy-tree"],
     };
     // Previous width 170, smallest overflowed = 36, restore buffer = 16.
@@ -288,7 +288,7 @@ describe("computeGuardedOverflow", () => {
   it("restores items once growth clears the restore threshold", () => {
     const widths = makeWidths(ids, 36);
     const previous: OverflowResult = {
-      visibleIds: ["terminal", "browser", "github-stats", "settings"],
+      visibleIds: ["terminal", "browser", "forge-stats", "settings"],
       overflowIds: ["copy-tree"],
     };
     // Previous width 170, threshold = 170 + 36 + 16 = 222. At 222 we restore.
@@ -352,13 +352,13 @@ describe("computeGuardedOverflow", () => {
     // must not be returned.
     const widths = makeWidths(ids, 36);
     const previous: OverflowResult = {
-      visibleIds: ["terminal", "browser", "github-stats", "settings"],
+      visibleIds: ["terminal", "browser", "forge-stats", "settings"],
       overflowIds: ["copy-tree"],
     };
     const idsWithoutCopyTree: ToolbarButtonId[] = [
       "terminal",
       "browser",
-      "github-stats",
+      "forge-stats",
       "settings",
     ];
     const result = computeGuardedOverflow(
@@ -407,12 +407,12 @@ describe("computeGuardedOverflow", () => {
     const widths = new Map<string, number>([
       ["terminal", 36],
       ["browser", 36],
-      ["github-stats", 36],
+      ["forge-stats", 36],
       ["settings", 36],
       ["copy-tree", 60],
     ]);
     const previous: OverflowResult = {
-      visibleIds: ["terminal", "browser", "github-stats"],
+      visibleIds: ["terminal", "browser", "forge-stats"],
       overflowIds: ["settings", "copy-tree"],
     };
     // Previous width 140, smallest overflowed = 36, threshold = 140+36+16 = 192.

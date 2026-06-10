@@ -12,7 +12,6 @@ const {
   onUpdateMock,
   debounceCancelSpy,
   compareWorktreesMock,
-  openPRMock,
   openExternalMock,
   classifyPushErrorMock,
   abortRepositoryOperationMock,
@@ -41,7 +40,6 @@ const {
   onUpdateMock: vi.fn(),
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
-  openPRMock: vi.fn().mockResolvedValue(undefined),
   openExternalMock: vi.fn().mockResolvedValue(undefined),
   // Mirrors the real GitHub forge provider: extracts a GH### code from stderr
   // and reports the resolved canonical provider id used to route the
@@ -128,10 +126,6 @@ vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
-}));
-
-vi.mock("@/clients/githubClient", () => ({
-  githubClient: { openPR: openPRMock },
 }));
 
 vi.mock("@/clients/systemClient", () => ({
@@ -1146,8 +1140,6 @@ describe("ReviewHub", () => {
       // system opener (no GitHub-specific IPC).
       fireEvent.click(screen.getByRole("button", { name: /view pull request #42/i }));
       expect(openExternalMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
-      // The GitHub-specific IPC must not be used (works for any forge now).
-      expect(openPRMock).not.toHaveBeenCalled();
     });
 
     it("shows 'No PR' when branch has remote but no PR", async () => {

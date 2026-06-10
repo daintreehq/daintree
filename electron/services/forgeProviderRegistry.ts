@@ -270,4 +270,3 @@ function listProvidersByHostname(hostname: string): RegisteredForgeProvider[] {
   }
   return matches;
 }
-

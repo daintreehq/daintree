@@ -25,18 +25,14 @@ import {
   REVIEW_THREADS_PER_PAGE,
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import {
   deriveRequiredCIStatus,
   deriveGlobalCIStatus,
   normalizeRawState,
 } from "./prRequiredCIStatus.js";
 import type { RollupContextNode, GlobalCIDeriveInput } from "./prRequiredCIStatus.js";
-import type {
-  GitHubPR,
-  GitHubListOptions,
-  GitHubListResponse,
-} from "../../../../shared/types/github.js";
+import type { GitHubPR, GitHubListOptions, GitHubListResponse } from "../shared/types.js";
 import type {
   ForgeLabel,
   ForgeUser,

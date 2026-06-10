@@ -115,7 +115,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "system",
     requiresContext: true,
     requiresTimestamp: true,
-    description: "GitHub confirmed issue does not exist on current repo",
+    description: "Forge provider confirmed issue does not exist on current repo",
   },
 
   // File events

@@ -11,13 +11,12 @@ import type {
   WorkspaceClientConfig,
 } from "../../shared/types/workspace-host.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
 import { createLogger } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
+import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 
 const logger = createLogger("main:WorkspaceHost");
@@ -248,6 +247,20 @@ export class WorkspaceHostProcess extends EventEmitter {
    * Update the cached fetch-throttle multiplier and push immediately if
    * initialized. On restart, `ready` replays the cached value automatically.
    */
+  private async relayForgeCredentialsFromRegistry(): Promise<void> {
+    for (const [providerId, impl] of getForgeProviderImplEntries()) {
+      try {
+        const credentials = await impl.getCredentials();
+        if (!credentials) continue;
+        if (this.isDisposed || !this.isInitialized) return;
+        this.send({ type: "update-forge-credentials", providerId, credentials });
+      } catch {
+        // A provider that cannot produce credentials must not block the
+        // replay of the remaining providers (or the ready handling).
+      }
+    }
+  }
+
   relayFetchThrottle(multiplier: number): void {
     this.fetchThrottleMultiplierCache = multiplier;
     if (this.isInitialized && this.child) {
@@ -800,14 +813,11 @@ export class WorkspaceHostProcess extends EventEmitter {
         // `exit` handler. This is the fix for #8553 (preserved) and #8683
         // (no proactive reset timer).
 
-        const token = GitHubAuth.getToken();
-        if (token) {
-          this.send({
-            type: "update-forge-credentials",
-            providerId: BUILTIN_GITHUB_PROVIDER_ID,
-            credentials: { kind: "bearer" as const, value: token },
-          });
-        }
+        // Replay every registered provider's credentials into the (re)started
+        // host. Pulled from the forge registry so this stays provider-neutral;
+        // hosts that become ready before a provider plugin activates are
+        // covered by the plugin's activation-time credential push.
+        void this.relayForgeCredentialsFromRegistry();
 
         // Replay cached log-level overrides on every ready (initial + restarts).
         this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });

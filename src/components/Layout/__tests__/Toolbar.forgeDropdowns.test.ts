@@ -182,9 +182,8 @@ describe("Forge stats persistThroughChildOverlays — issue #3556", () => {
 describe("Forge neutrality — host carries no GitHub references", () => {
   it("ForgeStatsToolbarButton has no GitHub-specific imports or strings", async () => {
     const source = await fs.readFile(FORGE_STATS_PATH, "utf-8");
-    // The lowercase persisted toolbar id ("github-stats") survives for layout
-    // compatibility; everything brand-shaped must be gone.
     expect(source).not.toContain("GitHub");
+    expect(source).not.toContain("github-stats");
     expect(source).not.toContain("@github-renderer");
     expect(source).not.toContain("githubClient");
     expect(source).not.toContain("BUILTIN_GITHUB_PROVIDER_ID");

@@ -11,7 +11,7 @@ import {
   UI_EXIT_EASING_FM,
 } from "@/lib/animationUtils";
 import { CommitListItem } from "./CommitListItem";
-import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
+import type { GitCommit, GitCommitListResponse } from "@shared/types/git";
 import { actionService } from "@/services/ActionService";
 import { CommitListSkeleton } from "./GitHubDropdownSkeletons";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
