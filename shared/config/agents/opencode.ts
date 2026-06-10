@@ -13,6 +13,7 @@ export const config: AgentConfig = {
   supportsContextInjection: true,
   tooltip: "provider-agnostic, open source",
   usageUrl: "https://opencode.ai/",
+  externalLinks: [{ label: "View docs", url: "https://opencode.ai/docs/" }],
   version: {
     args: ["--version"],
     githubRepo: "opencode-ai/opencode",

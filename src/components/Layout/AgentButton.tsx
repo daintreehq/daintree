@@ -34,8 +34,9 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { ChevronDown, PanelBottom } from "lucide-react";
+import { ChevronDown, ExternalLink, PanelBottom } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import {
   isAgentLaunchable,
@@ -77,6 +78,27 @@ interface AgentButtonProps {
 const stopPointer = (e: ReactPointerEvent) => {
   e.stopPropagation();
 };
+
+// Owns its own leading separator so both ContextMenuContent blocks stay
+// symmetrical — agents without links render nothing, including the separator.
+function AgentExternalLinkItems({ links }: { links?: AgentExternalLink[] }) {
+  if (!links || links.length === 0) return null;
+  return (
+    <>
+      <ContextMenuSeparator />
+      {links.map((link) => (
+        <ContextMenuActionItem
+          key={link.url}
+          actionId="system.openExternal"
+          args={{ url: link.url }}
+        >
+          <ExternalLink className="mr-2 h-3.5 w-3.5" />
+          {link.label}
+        </ContextMenuActionItem>
+      ))}
+    </>
+  );
+}
 
 interface WorktreeMenuItemsProps {
   agentType: AgentType;
@@ -447,6 +469,7 @@ export function AgentButton({
           >
             {config.name} Settings...
           </ContextMenuActionItem>
+          <AgentExternalLinkItems links={config.externalLinks} />
         </ContextMenuContent>
       </ContextMenu>
     );
@@ -743,6 +766,7 @@ export function AgentButton({
         >
           {config.name} Settings...
         </ContextMenuActionItem>
+        <AgentExternalLinkItems links={config.externalLinks} />
       </ContextMenuContent>
     </ContextMenu>
   );

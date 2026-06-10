@@ -1563,6 +1563,53 @@ describe("aider detection patterns", () => {
   });
 });
 
+describe("externalLinks", () => {
+  it("every declared link has a non-empty label and an https URL", () => {
+    for (const id of getAgentIds()) {
+      for (const link of getAgentConfig(id)?.externalLinks ?? []) {
+        expect(link.label.trim().length).toBeGreaterThan(0);
+        expect(link.url).toMatch(/^https:\/\/\S+$/);
+      }
+    }
+  });
+
+  it("no agent declares an empty externalLinks array (omit over empty)", () => {
+    for (const id of getAgentIds()) {
+      const links = getAgentConfig(id)?.externalLinks;
+      if (links !== undefined) {
+        expect(links.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("labels follow menu microcopy — no trailing period or ellipsis", () => {
+    for (const id of getAgentIds()) {
+      for (const link of getAgentConfig(id)?.externalLinks ?? []) {
+        expect(link.label).not.toMatch(/[.…]$/);
+      }
+    }
+  });
+
+  it("link URLs are unique within each agent", () => {
+    for (const id of getAgentIds()) {
+      const urls = (getAgentConfig(id)?.externalLinks ?? []).map((l) => l.url);
+      expect(new Set(urls).size).toBe(urls.length);
+    }
+  });
+
+  it("agents with a genuine usage dashboard label it 'View usage'", () => {
+    // claude and codex point usageUrl at real usage dashboards; their context
+    // menu link must reuse that exact destination rather than drifting to a
+    // separate URL.
+    for (const id of ["claude", "codex"]) {
+      const config = getAgentConfig(id);
+      const usageLink = config?.externalLinks?.find((l) => l.label === "View usage");
+      expect(usageLink).toBeDefined();
+      expect(usageLink?.url).toBe(config?.usageUrl);
+    }
+  });
+});
+
 describe("UserAgentConfigSchema supports field", () => {
   it("preserves supports:false through validation", () => {
     const result = UserAgentConfigSchema.safeParse({

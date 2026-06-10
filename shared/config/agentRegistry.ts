@@ -21,6 +21,18 @@ export interface AgentInstallHelp {
 }
 
 /**
+ * A curated external link surfaced in the agent button context menu.
+ * Labels are sentence case with no trailing period ("View usage",
+ * "View docs", "Billing settings"). Only declare links to genuinely
+ * useful destinations — omit the field rather than pointing at a
+ * product homepage.
+ */
+export interface AgentExternalLink {
+  label: string;
+  url: string;
+}
+
+/**
  * Configuration for pattern-based working state detection.
  * Patterns are matched against terminal output to detect when an agent is actively working.
  */
@@ -353,6 +365,8 @@ export interface AgentConfig {
   shortcut?: string | null;
   tooltip?: string;
   usageUrl?: string;
+  /** Curated links shown in the agent button context menu; omit when none apply */
+  externalLinks?: AgentExternalLink[];
   help?: AgentHelpConfig;
   install?: AgentInstallHelp;
   capabilities?: {

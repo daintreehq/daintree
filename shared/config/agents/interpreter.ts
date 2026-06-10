@@ -14,6 +14,7 @@ export const config: AgentConfig = {
   supports: false,
   tooltip: "general code execution — runs Python, shell, and JS on the host",
   usageUrl: "https://docs.openinterpreter.com/",
+  externalLinks: [{ label: "View docs", url: "https://docs.openinterpreter.com/" }],
   packages: {
     pypi: "open-interpreter",
   },

@@ -15,6 +15,7 @@ export const config: AgentConfig = {
   supportsContextInjection: true,
   tooltip: "provider-agnostic, by Block Inc.",
   usageUrl: "https://block.github.io/goose/",
+  externalLinks: [{ label: "View docs", url: "https://block.github.io/goose/docs/" }],
   version: {
     args: ["--version"],
     githubRepo: "block/goose",

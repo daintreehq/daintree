@@ -18,6 +18,7 @@ export const config: AgentConfig = {
   supports: false,
   tooltip: "Pip-distributed, git-aware coding agent",
   usageUrl: "https://aider.chat/",
+  externalLinks: [{ label: "View docs", url: "https://aider.chat/docs/" }],
   // packages.pypi triggers uv/pipx path synthesis in CliAvailabilityService,
   // which already covers ~/.local/bin/aider on POSIX hosts. nativePaths only
   // adds destinations not synthesized automatically: macOS Homebrew bins and

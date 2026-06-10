@@ -23,6 +23,7 @@ export const config: AgentConfig = {
   shortcut: "Cmd/Ctrl+Alt+X",
   tooltip: "careful, methodical runs",
   usageUrl: "https://chatgpt.com/codex/settings/usage",
+  externalLinks: [{ label: "View usage", url: "https://chatgpt.com/codex/settings/usage" }],
   version: {
     args: ["--version"],
     githubRepo: "openai/codex",

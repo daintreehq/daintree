@@ -26,6 +26,7 @@ export const config: AgentConfig = {
   assistantMinVersion: "1.0.0",
   shortcut: "Cmd/Ctrl+Alt+C",
   usageUrl: "https://claude.ai/settings/usage",
+  externalLinks: [{ label: "View usage", url: "https://claude.ai/settings/usage" }],
   version: {
     args: ["--version"],
     githubRepo: "anthropics/claude-code",
