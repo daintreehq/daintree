@@ -92,6 +92,12 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
     expect(source).toContain("width: statsContainerWidth");
     expect(source).toContain("forgeMode ? 13 : 13 / 3");
     expect(source).toContain("calc(${statsBaseWidthRem}rem +");
+    // Counts wider than the per-pill character budget grow every pill share
+    // by the same overflow — equal widths are preserved by widening the
+    // shared budget, not by letting one pill clip (5-digit commit counts
+    // overflowed the commits-only pill).
+    expect(source).toContain("pillOverflowChars");
+    expect(source).toMatch(/maxOverflowChars\s*\*\s*PILL_EXTRA_CHAR_REM/);
   });
 
   it("parent className props do not introduce transition-all", () => {

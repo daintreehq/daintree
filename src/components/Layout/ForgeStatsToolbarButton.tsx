@@ -75,6 +75,18 @@ const OPEN_REFRESH_STALENESS_MS = 2 * 60 * 1000;
 // doesn't burn its TTL unseen.
 const ACTIVITY_CHIP_TTL_MS = 3 * 60 * 1000;
 
+// Each flex-1 pill's share of the 13rem budget (~4.33rem) leaves room for
+// about 4 characters of text-xs tabular numerals after the icon + gap + px-2
+// chrome (~2.5rem). Counts wider than that (5+ digit commit totals) were
+// silently clipped by the container's overflow-hidden; widths past the budget
+// grow at 0.55rem per character — a text-xs tabular digit (~0.45rem) plus
+// slack.
+const PILL_CHAR_BUDGET = 4;
+const PILL_EXTRA_CHAR_REM = 0.55;
+
+const pillOverflowChars = (display: number | string | null) =>
+  Math.max(0, String(display ?? "—").length - PILL_CHAR_BUDGET);
+
 // Re-exported for external consumers (tests, rate-limit math)
 export { msUntilNextLabelChange } from "./RateLimitDetails";
 
@@ -322,8 +334,18 @@ export const ForgeStatsToolbarButton = memo(
     // stopped opening on hover.
     const trailingIndicatorCount = (rateLimitActive ? 1 : 0) + (prCircuitTripped ? 1 : 0);
     // Commits-only mode keeps a single pill at its usual one-third share so
-    // the segment doesn't stretch to the full three-pill budget.
-    const statsBaseWidthRem = forgeMode ? 13 : 13 / 3;
+    // the segment doesn't stretch to the full three-pill budget. When the
+    // widest displayed count exceeds the per-pill character budget, every
+    // pill share grows by the same overflow so the pills stay equal-width
+    // and nothing clips.
+    const pillCount = forgeMode ? 3 : 1;
+    const maxOverflowChars = Math.max(
+      forgeMode ? pillOverflowChars(issueDisplayCount ?? issueCount) : 0,
+      forgeMode ? pillOverflowChars(prDisplayCount ?? prCount) : 0,
+      pillOverflowChars(commitCount)
+    );
+    const statsBaseWidthRem =
+      (forgeMode ? 13 : 13 / 3) + pillCount * maxOverflowChars * PILL_EXTRA_CHAR_REM;
     const statsContainerWidth = `calc(${statsBaseWidthRem}rem + ${trailingIndicatorCount * 1.75}rem + ${trailingIndicatorCount}px)`;
 
     // Fetch the per-bucket breakdown when the tooltip opens, and tick a 1Hz
