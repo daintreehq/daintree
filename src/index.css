@@ -2520,9 +2520,10 @@ body[data-performance-mode="true"] .forge-status-error {
   border-right: 1px solid var(--color-daintree-border);
 }
 
-/* Unified second gutter column and split new-side gutter column. */
-.diff-viewer .diff td.diff-gutter:nth-child(2),
-.diff-viewer .diff[data-view-type="split"] td.diff-gutter:nth-child(3) {
+/* Unified second gutter column docks beside the first. (Split tables don't
+   need a docking rule: the centered-split system below keeps the table
+   static, so its gutters never travel.) */
+.diff-viewer .diff td.diff-gutter:nth-child(2) {
   left: var(--diff-gutter-width, 50px);
 }
 
@@ -2817,9 +2818,107 @@ body[data-performance-mode="true"] .forge-status-error {
 }
 
 /* Per-file horizontal scroll wrapper — gives each file its own scrollbar
-   so all rows scroll together instead of each <td> scrolling independently. */
+   so all rows scroll together instead of each <td> scrolling independently.
+   Used by unified view and single-side (add/delete) split tables; two-column
+   split tables use the centered-split system below instead. */
 .diff-viewer .diff-file-scroll {
   overflow-x: auto;
+}
+
+/* Centered split view: each pane gets a fixed half of the viewport instead of
+   the old-side column growing to its longest line and shoving the new side
+   off-screen. The table itself never scrolls — code cells clip their overflow
+   and shift content via text-indent driven by --diff-hscroll, which FileDiff
+   mirrors from the scrollbar strip's scrollLeft. Because both panes consume
+   the same offset, their scroll positions are locked by construction, and the
+   pane with shorter lines simply shows blank space past its end. */
+.diff-viewer .diff-file-centered table.diff {
+  table-layout: fixed;
+  width: 100%;
+}
+
+/* Under fixed layout the <col> widths govern: gutters fixed, the two code
+   columns split the remainder equally — the center divider. */
+.diff-viewer .diff-file-centered col.diff-gutter-col {
+  width: var(--diff-gutter-width, 50px);
+}
+
+.diff-viewer .diff-file-centered td.diff-code {
+  overflow: hidden;
+  text-indent: calc(-1 * var(--diff-hscroll, 0px));
+}
+
+/* Mark the center divider on the new-side gutter. */
+.diff-viewer .diff-file-centered td.diff-gutter:nth-child(3) {
+  border-left: 1px solid var(--color-daintree-border);
+}
+
+/* The single horizontal scrollbar driving both panes. Sticky against the
+   vertical scroller so it stays reachable mid-file. Height is explicit:
+   FileDiff measures real overflow (spacer vs strip width) and sets
+   data-active; without it the strip takes no space at all. */
+.diff-viewer .diff-hscrollbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  overflow-x: auto;
+  height: 0;
+  background: var(--color-daintree-bg);
+  /* The global `* { scrollbar-width: thin; scrollbar-color: … }` opts every
+     element into STANDARD scrollbars, which disqualifies ::-webkit-scrollbar
+     styling (Chromium 121+) and renders as a macOS overlay — invisible unless
+     already scrolling. This strip IS the scroll control, so it must be a
+     classic always-visible bar: reset the standard properties to auto to
+     re-enable the webkit pseudo styling below. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  /* Don't let edge overscroll chain into ancestor scrollers or gestures. */
+  overscroll-behavior-x: contain;
+}
+
+.diff-viewer .diff-hscrollbar[data-active] {
+  height: 12px;
+}
+
+.diff-viewer .diff-hscroll-spacer {
+  height: 1px;
+  /* viewport + max(0, longest line - pane content width); pane content is
+     (100% - both gutters) / 2 minus the 24px cell padding. */
+  width: calc(
+    100% +
+      max(0px, var(--diff-max-line, 0px) - ((100% - 2 * var(--diff-gutter-width, 50px)) / 2 - 24px))
+  );
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar {
+  height: 12px;
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
+  background: var(--color-daintree-bg);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: 6px;
+  border: 3px solid var(--color-daintree-bg);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+/* D1a (light) — see the .diff-viewer scrollbar note above. */
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 .diff-viewer .diff-file-scroll::-webkit-scrollbar {

@@ -245,3 +245,72 @@ describe("DiffViewer collapse behavior", () => {
     expect(onToggleCollapse).toHaveBeenCalledTimes(2);
   });
 });
+
+const ADDED_FILE_DIFF = `diff --git a/new.ts b/new.ts
+new file mode 100644
+index 0000000..abcdef1
+--- /dev/null
++++ b/new.ts
+@@ -0,0 +1,2 @@
++line1
++line2`;
+
+describe("DiffViewer centered split", () => {
+  it("uses the centered-split scroll system for two-column split diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).not.toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).toBeNull();
+    expect(screen.getByTestId("diff-hscrollbar")).toBeTruthy();
+  });
+
+  it("keeps the native scroller in unified view", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller when wrapping lines", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" wrapLines />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller for single-side added-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("mirrors the scrollbar strip's scrollLeft into --diff-hscroll", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+    const region = container.querySelector<HTMLElement>(".diff-file-centered");
+    const bar = screen.getByTestId("diff-hscrollbar");
+
+    expect(region?.style.getPropertyValue("--diff-hscroll")).toBe("0px");
+
+    bar.scrollLeft = 120;
+    fireEvent.scroll(bar);
+
+    expect(region?.style.getPropertyValue("--diff-hscroll")).toBe("120px");
+  });
+
+  it("forwards horizontal wheel deltas to the scrollbar strip", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+    const region = container.querySelector<HTMLElement>(".diff-file-centered");
+    const bar = screen.getByTestId("diff-hscrollbar");
+    Object.defineProperty(bar, "scrollWidth", { value: 500, configurable: true });
+    Object.defineProperty(bar, "clientWidth", { value: 200, configurable: true });
+
+    fireEvent.wheel(region!, { deltaX: 50, deltaY: 0 });
+    expect(bar.scrollLeft).toBe(50);
+
+    // Predominantly vertical gestures stay with the vertical scroller.
+    fireEvent.wheel(region!, { deltaX: 5, deltaY: 50 });
+    expect(bar.scrollLeft).toBe(50);
+  });
+});

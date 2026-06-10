@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, ReactElement } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactElement } from "react";
 import {
   parseDiff,
   Diff,
@@ -216,6 +216,28 @@ function useTokens(
 }
 
 /**
+ * Estimate a line's rendered width in monospace columns for the centered-split
+ * scroll range. Tabs count at the default tab-size of 8 (a deliberate
+ * overestimate — tabs advance to the next stop, so the real width is ≤ this;
+ * the only cost is extra blank scroll space past the longest line). CJK and
+ * other wide glyphs occupy two columns, so they count once more.
+ */
+const WIDE_CHAR_RE =
+  /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]|\p{Extended_Pictographic}/gu;
+const NON_ASCII_RE = /[^\u0020-\u00FF]/;
+
+function estimateLineColumns(text: string): number {
+  let cols = text.length;
+  if (text.includes("\t")) {
+    cols += (text.match(/\t/g) ?? []).length * 7;
+  }
+  if (NON_ASCII_RE.test(text)) {
+    cols += (text.match(WIDE_CHAR_RE) ?? []).length;
+  }
+  return cols;
+}
+
+/**
  * Build an old-side source (indexed by old line numbers, as
  * `expandFromRawCode` expects) from the new-side file content. Unchanged
  * regions are byte-identical between revisions, differing only by the running
@@ -383,6 +405,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           file={file}
           rawText={fileTexts?.[index] ?? null}
           viewType={viewType}
+          wrapLines={wrapLines}
           rootPath={rootPath}
           oldSource={files.length === 1 ? oldSource : null}
           onToggleCollapse={onToggleCollapse}
@@ -447,6 +470,8 @@ interface FileDiffProps {
   /** Raw unified-diff text for just this file, when sliceable from the input */
   rawText: string | null;
   viewType: ViewType;
+  /** Soft-wrap mode (disables the centered-split horizontal scroll system) */
+  wrapLines: boolean;
   rootPath?: string;
   /** Synthetic old-side source enabling context expansion (single-file diffs only) */
   oldSource: string[] | null;
@@ -458,6 +483,7 @@ function FileDiff({
   file,
   rawText,
   viewType,
+  wrapLines,
   rootPath,
   oldSource,
   onToggleCollapse,
@@ -518,6 +544,120 @@ function FileDiff({
     const digits = Math.max(3, String(maxLine).length);
     return `calc(${digits + 1}ch + 21px)`;
   }, [visibleHunks]);
+
+  // Centered split: both panes get a fixed half of the viewport and share one
+  // horizontal scroll offset, instead of the old-side column growing to its
+  // longest line and shoving the new side off-screen. Only applies to true
+  // two-column tables — add/delete files render a single full-width side
+  // ("monotonous" in react-diff-view), and wrap mode has no horizontal
+  // overflow at all.
+  const isCenteredSplit =
+    viewType === "split" &&
+    !wrapLines &&
+    (diffType === "modify" || diffType === "rename" || diffType === "copy");
+
+  // Longest rendered line in monospace columns, sizing the shared scrollbar's
+  // range (published as --diff-max-line in ch units).
+  const maxLineCols = useMemo(() => {
+    if (!isCenteredSplit) return 0;
+    let max = 0;
+    for (const hunk of visibleHunks) {
+      for (const change of hunk.changes) {
+        const cols = estimateLineColumns(change.content);
+        if (cols > max) max = cols;
+      }
+    }
+    return max;
+  }, [visibleHunks, isCenteredSplit]);
+
+  const regionRef = useRef<HTMLDivElement | null>(null);
+  const hScrollbarRef = useRef<HTMLDivElement | null>(null);
+
+  // The scrollbar strip is the single scroll surface for both panes: its
+  // scrollLeft becomes --diff-hscroll, which shifts every code cell's content
+  // via text-indent — the shared offset is what locks the two sides together.
+  // Written straight to the DOM (not state) so scrolling never re-renders the
+  // diff tree.
+  const handleHScroll = useCallback(() => {
+    const region = regionRef.current;
+    const bar = hScrollbarRef.current;
+    if (!region || !bar) return;
+    region.style.setProperty("--diff-hscroll", `${bar.scrollLeft}px`);
+  }, []);
+
+  // Trackpad/wheel gestures over the diff forward their horizontal component
+  // to the scrollbar strip. Native listener because React delegates wheel as
+  // passive, which would make preventDefault a no-op.
+  useEffect(() => {
+    if (!isCenteredSplit) return;
+    const region = regionRef.current;
+    if (!region) return;
+    const onWheel = (event: WheelEvent) => {
+      const bar = hScrollbarRef.current;
+      if (!bar) return;
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      const maxScroll = bar.scrollWidth - bar.clientWidth;
+      if (maxScroll <= 0) return;
+      const next = Math.min(maxScroll, Math.max(0, bar.scrollLeft + event.deltaX));
+      if (next !== bar.scrollLeft) {
+        bar.scrollLeft = next;
+        event.preventDefault();
+      }
+    };
+    region.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      region.removeEventListener("wheel", onWheel);
+    };
+  }, [isCenteredSplit]);
+
+  // Keep the indent in sync when the scroll system mounts/unmounts or content
+  // changes under a non-zero offset (wrap toggle round-trip, collapse, hunk
+  // reveal) — the strip may clamp scrollLeft without firing a scroll event.
+  useEffect(() => {
+    const region = regionRef.current;
+    if (!region) return;
+    region.style.setProperty("--diff-hscroll", `${hScrollbarRef.current?.scrollLeft ?? 0}px`);
+  }, [isCenteredSplit, visibleHunks]);
+
+  // The strip only takes up vertical space when there is real overflow to
+  // scroll, measured from the spacer (estimated longest line) against the
+  // strip's own width. ResizeObserver re-measures on dialog resizes and
+  // spacer-width changes; it is absent under jsdom, where the initial
+  // measurement (always 0 > 0 → false) is all we need.
+  const [hasHOverflow, setHasHOverflow] = useState(false);
+  useEffect(() => {
+    if (!isCenteredSplit) {
+      setHasHOverflow(false);
+      return;
+    }
+    const bar = hScrollbarRef.current;
+    if (!bar) return;
+    const measure = () => {
+      setHasHOverflow(bar.scrollWidth > bar.clientWidth + 1);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    if (bar.firstElementChild) observer.observe(bar.firstElementChild);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isCenteredSplit, visibleHunks, maxLineCols]);
+
+  // Arrow-key horizontal scrolling parity with the focusable native scroller
+  // used by the other view modes.
+  const handleRegionKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const bar = hScrollbarRef.current;
+    if (!bar) return;
+    const maxScroll = bar.scrollWidth - bar.clientWidth;
+    if (maxScroll <= 0) return;
+    event.preventDefault();
+    const delta = event.key === "ArrowRight" ? 40 : -40;
+    bar.scrollLeft = Math.min(maxScroll, Math.max(0, bar.scrollLeft + delta));
+  }, []);
 
   const diffRegionId = useMemo(
     () =>
@@ -599,8 +739,10 @@ function FileDiff({
     onToggleCollapse?.();
   };
 
-  const fileStyle: CSSProperties & Record<"--diff-gutter-width", string> = {
+  const fileStyle: CSSProperties & Record<"--diff-gutter-width" | "--diff-max-line", string> = {
     "--diff-gutter-width": gutterWidth,
+    // +1ch slack so the caret-width estimate never clips the last character.
+    "--diff-max-line": `${maxLineCols + 1}ch`,
   };
 
   const oldTotalLines = oldSource?.length ?? null;
@@ -728,10 +870,12 @@ function FileDiff({
       {!isCollapsed && (
         <div
           id={diffRegionId}
-          className="diff-file-scroll"
+          ref={regionRef}
+          className={isCenteredSplit ? "diff-file-centered" : "diff-file-scroll"}
           tabIndex={0}
           role="region"
           aria-label={relPath || "Diff"}
+          onKeyDown={isCenteredSplit ? handleRegionKeyDown : undefined}
         >
           <Diff
             viewType={viewType}
@@ -753,6 +897,19 @@ function FileDiff({
               Show {Math.min(hiddenHunkCount, SHOW_MORE_HUNKS_STEP)} more{" "}
               {hiddenHunkCount === 1 ? "hunk" : "hunks"} ({hiddenHunkCount} remaining)
             </button>
+          )}
+          {isCenteredSplit && (
+            <div
+              ref={hScrollbarRef}
+              className="diff-hscrollbar"
+              data-testid="diff-hscrollbar"
+              data-active={hasHOverflow || undefined}
+              onScroll={handleHScroll}
+              aria-hidden="true"
+              tabIndex={-1}
+            >
+              <div className="diff-hscroll-spacer" />
+            </div>
           )}
         </div>
       )}
