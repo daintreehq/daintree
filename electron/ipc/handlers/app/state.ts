@@ -60,36 +60,54 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
     const currentProject = resolveProjectForHydration(ctx);
-    const globalAppState = store.get("appState");
     const projectId = currentProject?.id;
     const panelFilter = getCrashRecoveryService().consumePanelFilter();
-    const hasCrashRestoreTerminals =
-      panelFilter !== null &&
-      Array.isArray(globalAppState.terminals) &&
-      globalAppState.terminals.length > 0;
 
     // Hover-prefetch fast path: when a project switcher hover (or any other
     // pre-populated path) has primed the cache for this project, short-circuit
     // the disk read. Only safe when there's no in-flight crash recovery filter
     // and we aren't booting in safe mode — those scenarios layer constraints
     // (`panelFilter`, dropped terminals) that the prefetch built without.
+    // consumePrefetchedHydrateResult is destructive (return-and-delete), so the
+    // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
-    if (projectId && panelFilter === null && !cacheInSafeMode) {
-      const cached = consumePrefetchedHydrateResult(projectId);
-      if (cached) {
-        return {
-          ...cached,
-          skippedPanelCount: 0,
-          crashCount: cacheGuard.getCrashCount(),
-          lastCrashAt: cacheGuard.getLastCrashTimestamp(),
-          settingsRecovery: consumePendingSettingsRecovery(),
-          // Crash-loop quarantine notifications are gated on safe mode; the
-          // fast path runs only when safe mode is inactive, so clear the field.
-          crashLoopStateRecovery: null,
-        };
-      }
+    const cacheEligible = Boolean(projectId) && panelFilter === null && !cacheInSafeMode;
+    const cached = cacheEligible ? consumePrefetchedHydrateResult(projectId!) : undefined;
+    markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
+      hit: Boolean(cached),
+      projectId: projectId ?? null,
+      reason: cached
+        ? "hit"
+        : !projectId
+          ? "no-project"
+          : cacheInSafeMode
+            ? "safe-mode"
+            : panelFilter !== null
+              ? "panel-filter"
+              : "miss",
+    });
+    if (cached) {
+      return {
+        ...cached,
+        skippedPanelCount: 0,
+        crashCount: cacheGuard.getCrashCount(),
+        lastCrashAt: cacheGuard.getLastCrashTimestamp(),
+        settingsRecovery: consumePendingSettingsRecovery(),
+        // Crash-loop quarantine notifications are gated on safe mode; the
+        // fast path runs only when safe mode is inactive, so clear the field.
+        crashLoopStateRecovery: null,
+      };
     }
+
+    // Read the global app state only after the fast path — the cached
+    // HydrateResult already carries appState, so reading it earlier would pay
+    // a redundant full config.json parse on every cache hit.
+    const globalAppState = store.get("appState");
+    const hasCrashRestoreTerminals =
+      panelFilter !== null &&
+      Array.isArray(globalAppState.terminals) &&
+      globalAppState.terminals.length > 0;
 
     // First, try to get terminals from per-project state (new model)
     // Fall back to global appState.terminals for migration
@@ -105,11 +123,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // list so existing users keep their MRU on first open after upgrade.
     let mruListToUse = globalAppState.mruList;
     let projectStateQuarantinedPath: string | undefined;
+    // Per-project layout state folded into the payload so the renderer skips
+    // the standalone getTabGroups/getTerminalSizes/getDraftInputs round-trips
+    // during hydration. Left undefined on the no-project fallback branch so
+    // the renderer falls back to the standalone IPC calls.
+    let tabGroupsToUse: import("../../../../shared/types/panel.js").TabGroup[] | undefined;
+    let terminalSizesToUse: Record<string, { cols: number; rows: number }> | undefined;
+    let draftInputsToUse: Record<string, string> | undefined;
 
     if (projectId) {
       const { state: projectState, quarantinedPath } =
         await projectStore.getProjectStateWithRecovery(projectId);
       projectStateQuarantinedPath = quarantinedPath;
+      // Defaults match the standalone handlers' null-state returns.
+      tabGroupsToUse = projectState?.tabGroups ?? [];
+      terminalSizesToUse = projectState?.terminalSizes ?? {};
+      draftInputsToUse = projectState?.draftInputs ?? {};
       // undefined means "not migrated yet" — fall through to the global list.
       if (projectState?.mruList !== undefined) {
         mruListToUse = projectState.mruList;
@@ -399,6 +428,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // Folded into the payload so the renderer skips a standalone
       // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
       systemTmpDir: os.tmpdir(),
+      tabGroups: tabGroupsToUse,
+      terminalSizes: terminalSizesToUse,
+      draftInputs: draftInputsToUse,
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));

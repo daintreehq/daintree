@@ -28,6 +28,8 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
+  buildSkeletonCss,
+  insertSkeletonCss,
   injectSkeletonCss,
   resolveInitialColorSchemeId,
   resolveInstanceRole,
@@ -165,7 +167,7 @@ export function setupBrowserWindow(
   // Daintree always defaults to its dark theme on first run, regardless of the
   // OS color-scheme preference. Users who want light or system-following
   // behavior can opt in via Settings → Appearance.
-  const colorSchemeId = resolveInitialColorSchemeId();
+  const colorSchemeId = resolveInitialColorSchemeId(themeConfig);
 
   // Apply lazy migration for legacy string-encoded customSchemes
   let customSchemes: AppColorScheme[] = [];
@@ -261,7 +263,11 @@ export function setupBrowserWindow(
       sandbox: true,
       webviewTag: true,
       navigateOnDragDrop: false,
-      v8CacheOptions: "code",
+      // bypassHeatCheck writes the V8 code cache on the first load instead of
+      // Chromium's default third-load heat check, so launch 2 after an
+      // install/update is already warm. Dev-server URLs churn constantly, so
+      // keep the default heuristic there.
+      v8CacheOptions: app.isPackaged ? "bypassHeatCheck" : "code",
       // Seed the renderer with the persisted theme so first paint applies the
       // saved scheme instead of a prefers-color-scheme default (#9169). The
       // instance role rides along so worker instances suppress automatic
@@ -356,18 +362,31 @@ export function setupBrowserWindow(
     // insertCSS is navigation-scoped, so re-inject once the new document has
     // parsed. Listen for every dom-ready (not once) so the skeleton survives
     // renderer-crash auto-reloads. Inline fallbacks in index.html cover the
-    // gap before dom-ready fires.
+    // gap before dom-ready fires. The CSS string is precomputed before
+    // loadURL so the boot-path dom-ready handler (which gates win.show())
+    // skips the synchronous config.json re-reads; later dom-ready events
+    // (crash auto-reloads) rebuild it so the skeleton reflects current
+    // theme/sidebar/focus state.
+    const precomputedSkeletonCss = buildSkeletonCss();
+    let firstDomReady = true;
     appWebContents.on("dom-ready", () => {
-      injectSkeletonCss(appWebContents);
+      if (firstDomReady) {
+        firstDomReady = false;
+        insertSkeletonCss(appWebContents, precomputedSkeletonCss);
+      } else {
+        injectSkeletonCss(appWebContents);
+      }
     });
 
-    // Gate win.show() on the WebContentsView's first dom-ready so the HTML
-    // skeleton is parsed before the OS maps the window — eliminates the
-    // blank-window flash. `ready-to-show` on BrowserWindow does NOT cover
-    // child WebContentsView paint, and fires immediately for the sentinel
-    // data: page; dom-ready on appWebContents is the correct signal.
-    // 5s timeout fallback ensures a hung renderer doesn't leave the window
-    // permanently hidden — strictly worse than a brief blank.
+    // Gate win.show() on the skeleton markup being parsed so the OS never
+    // maps a blank window. Primary signal: the APP_SKELETON_PARSED send from
+    // public/skeleton-ready.js, which fires as soon as the skeleton is in the
+    // DOM — well before dom-ready, which waits for the deferred module graph
+    // to evaluate. dom-ready stays as a backstop (`ready-to-show` on
+    // BrowserWindow does NOT cover child WebContentsView paint, and fires
+    // immediately for the sentinel data: page). 5s timeout fallback ensures a
+    // hung renderer doesn't leave the window permanently hidden — strictly
+    // worse than a brief blank.
     let shown = false;
     const showOnce = (viaFallback = false): void => {
       if (shown) return;
@@ -388,11 +407,17 @@ export function setupBrowserWindow(
       );
       showOnce(true);
     }, SHOW_FALLBACK_MS);
+    // WebContents-scoped ipc — project views loading the same index.html send
+    // on their own webContents and never reach this listener.
+    appWebContents.ipc.once(CHANNELS.APP_SKELETON_PARSED, () => showOnce(false));
     appWebContents.once("dom-ready", () => showOnce(false));
     win.once("closed", () => {
       if (fallbackTimer) {
         clearTimeout(fallbackTimer);
         fallbackTimer = null;
+      }
+      if (!appWebContents.isDestroyed()) {
+        appWebContents.ipc.removeAllListeners(CHANNELS.APP_SKELETON_PARSED);
       }
     });
 

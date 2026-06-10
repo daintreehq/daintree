@@ -6,6 +6,7 @@
 import { defineIpcNamespace, op } from "../define.js";
 import { COMMANDS_METHOD_CHANNELS } from "./commands.preload.js";
 import { commandService } from "../../services/CommandService.js";
+import { builtinCommandsReady } from "../../services/commands/index.js";
 import type {
   BuilderStep,
   CommandContext,
@@ -17,6 +18,9 @@ import type {
 import { AppError } from "../../utils/errorTypes.js";
 
 async function handleCommandsList(context?: CommandContext): Promise<CommandManifestEntry[]> {
+  // Built-in registration runs from the deferred queue's heavy group; await it
+  // so an early command-palette open can't observe an empty registry.
+  await builtinCommandsReady();
   return await commandService.list(context);
 }
 
@@ -25,6 +29,7 @@ async function handleCommandsGet(payload: CommandGetPayload): Promise<CommandMan
     console.warn("[CommandHandlers] Invalid commands:get payload", payload);
     return null;
   }
+  await builtinCommandsReady();
   return (await commandService.getManifest(payload.commandId, payload.context)) ?? null;
 }
 
@@ -56,6 +61,7 @@ async function handleCommandsExecute(payload: CommandExecutePayload): Promise<Co
     });
   }
 
+  await builtinCommandsReady();
   return commandService.execute(payload.commandId, context, args);
 }
 
@@ -65,6 +71,7 @@ async function handleCommandsGetBuilder(
   if (typeof commandId !== "string") {
     return null;
   }
+  await builtinCommandsReady();
   return commandService.getBuilder(commandId) ?? null;
 }
 

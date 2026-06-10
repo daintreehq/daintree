@@ -30,6 +30,9 @@ const mockState = vi.hoisted(() => ({
         focusMode?: boolean;
         focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean };
         mruList?: string[];
+        tabGroups?: unknown[];
+        terminalSizes?: Record<string, { cols: number; rows: number }>;
+        draftInputs?: Record<string, string>;
       }
     | undefined,
   projectStateQuarantinedPath: undefined as string | undefined,
@@ -301,6 +304,38 @@ describe("AppHydrationService adversarial", () => {
     // so the renderer can derive the clipboard directory without a round-trip.
     expect(result.systemTmpDir).toBe(os.tmpdir());
     expect(result.systemTmpDir!.length).toBeGreaterThan(0);
+  });
+
+  it("folds tabGroups/terminalSizes/draftInputs from project state into the payload", async () => {
+    const tabGroups = [{ id: "g1", location: "grid", activeTabId: "t1", panelIds: ["t1"] }];
+    const terminalSizes = { t1: { cols: 120, rows: 40 } };
+    const draftInputs = { t1: "draft text" };
+    mockState.projectState = {
+      terminals: [],
+      tabGroups,
+      terminalSizes,
+      draftInputs,
+    };
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.tabGroups).toEqual(tabGroups);
+    expect(result.terminalSizes).toEqual(terminalSizes);
+    expect(result.draftInputs).toEqual(draftInputs);
+  });
+
+  it("defaults tabGroups/terminalSizes/draftInputs to empty when project state is missing", async () => {
+    mockState.projectState = undefined;
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    // Must mirror the standalone IPC handlers' null-state returns so the
+    // renderer's payload-presence gate never re-fetches on a fresh project.
+    expect(result.tabGroups).toEqual([]);
+    expect(result.terminalSizes).toEqual({});
+    expect(result.draftInputs).toEqual({});
   });
 
   it("CONCURRENT_CALLS_READ_ONLY", async () => {

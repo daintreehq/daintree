@@ -18,6 +18,7 @@ import { migration018 } from "./018-archive-notes.js";
 import { migration019 } from "./019-remove-fleet-deck-open.js";
 import { migration020 } from "./020-window-states-store.js";
 import { migration021 } from "./021-merge-disabled-plugins.js";
+import { migration022 } from "./022-audit-logs-store.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -40,4 +41,5 @@ export const migrations: Migration[] = [
   migration019,
   migration020,
   migration021,
+  migration022,
 ];

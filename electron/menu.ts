@@ -15,8 +15,8 @@ import {
   getWorktreePortBrokerRef,
 } from "./window/windowServices.js";
 import { distributePortsToView } from "./window/portDistribution.js";
-import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
+import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
@@ -63,13 +63,19 @@ function applyUpdateMenuState(state: UpdateMenuState): void {
 // handler reads the current state at invocation time and branches: Ready
 // triggers quitAndInstall; everything else (Idle, Checking) initiates a
 // manual check. Checking is also disabled, so the click only fires for the
-// other two anyway.
+// other two anyway. AutoUpdaterService is dynamically imported so the
+// electron-updater module graph stays off the boot path; clicks before the
+// deferred initialize() remain no-ops via the service's !initialized guard.
 function handleUpdateMenuClick(): void {
-  if (autoUpdaterService.getMenuState() === "ready") {
-    autoUpdaterService.quitAndInstallIfReady();
-  } else {
-    autoUpdaterService.checkForUpdatesManually();
-  }
+  void import("./services/AutoUpdaterService.js")
+    .then(({ autoUpdaterService }) => {
+      if (autoUpdaterService.getMenuState() === "ready") {
+        autoUpdaterService.quitAndInstallIfReady();
+      } else {
+        autoUpdaterService.checkForUpdatesManually();
+      }
+    })
+    .catch((err) => console.error("[MAIN] Failed to load AutoUpdaterService for menu click:", err));
 }
 
 // Each createApplicationMenu rebuild allocates new MenuItem instances, so the
@@ -545,12 +551,23 @@ export function createApplicationMenu(
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 
-  unsubscribeUpdateMenuState?.();
-  unsubscribeUpdateMenuState = autoUpdaterService.onMenuStateChange(applyUpdateMenuState);
-  // Apply the current state immediately so a rebuild that completes mid-check
-  // (or with a downloaded update already staged) doesn't snap items back to
-  // the default "Check for Updates…" label.
-  applyUpdateMenuState(autoUpdaterService.getMenuState());
+  wireUpdateMenuState();
+}
+
+// Wire the update-state listener against the deferred-loaded singleton. A
+// no-op until the auto-updater deferred task sets the serviceRef — that task
+// calls this directly so the first wiring happens when the service loads,
+// keeping electron-updater off the menu-build path. Rebuilds after that find
+// the ref set and apply the current state synchronously, so a rebuild that
+// completes mid-check (or with a downloaded update already staged) doesn't
+// snap items back to the default "Check for Updates…" label.
+export function wireUpdateMenuState(): void {
+  const svc = getAutoUpdaterServiceRef();
+  if (svc) {
+    unsubscribeUpdateMenuState?.();
+    unsubscribeUpdateMenuState = svc.onMenuStateChange(applyUpdateMenuState);
+    applyUpdateMenuState(svc.getMenuState());
+  }
 }
 
 function buildRecentProjectsMenu(

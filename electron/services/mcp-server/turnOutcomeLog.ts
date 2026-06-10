@@ -10,7 +10,20 @@ import {
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
 } from "../../../shared/types/ipc/mcpServer.js";
+import { auditLogsStore } from "../../store.js";
 import { AUDIT_FLUSH_DEBOUNCE_MS, TIER_NOT_PERMITTED_CODE } from "./shared.js";
+
+export interface TurnOutcomeLogStore {
+  read(): unknown;
+  write(records: AssistantTurnRecord[]): void;
+}
+
+// Persists the ring in the dedicated audit-logs store; see the matching note
+// in auditLog.ts. Config flags stay in config.json.
+const defaultLogStore: TurnOutcomeLogStore = {
+  read: () => auditLogsStore.get("mcpTurnOutcomeLog"),
+  write: (records) => auditLogsStore.set("mcpTurnOutcomeLog", records),
+};
 
 /**
  * Per-terminal recent-output ring size. Mirrors the pty-host
@@ -198,6 +211,7 @@ export interface TurnOutcomeServiceDeps {
   readConfig: () => Record<string, unknown>;
   getSessionIdForTerminal: (terminalId: string) => string | null;
   getRecentAuditRecords: () => readonly McpAuditRecord[];
+  logStore?: TurnOutcomeLogStore;
 }
 
 export class TurnOutcomeService {
@@ -248,7 +262,11 @@ export class TurnOutcomeService {
     | ((outcome: TurnOutcomeAlertClass, helpSessionId: string, turnId: string | undefined) => void)
     | null = null;
 
-  constructor(private readonly deps: TurnOutcomeServiceDeps) {}
+  private readonly logStore: TurnOutcomeLogStore;
+
+  constructor(private readonly deps: TurnOutcomeServiceDeps) {
+    this.logStore = deps.logStore ?? defaultLogStore;
+  }
 
   /**
    * Wire the live alert push for `agent-stuck` / `reasoning-loop` outcomes
@@ -320,9 +338,9 @@ export class TurnOutcomeService {
 
   hydrate(): void {
     if (this.hydrated) return;
-    const config = this.deps.readConfig();
-    const persisted = Array.isArray(config.turnOutcomeLog) ? config.turnOutcomeLog : [];
-    const cap = this.normalizeMaxRecords(config.auditMaxRecords);
+    const stored = this.logStore.read();
+    const persisted = Array.isArray(stored) ? (stored as AssistantTurnRecord[]) : [];
+    const cap = this.normalizeMaxRecords(this.deps.readConfig().auditMaxRecords);
     this.records =
       persisted.length > cap ? persisted.slice(persisted.length - cap) : [...persisted];
     this.hydrated = true;
@@ -490,7 +508,7 @@ export class TurnOutcomeService {
   private flush(): void {
     if (!this.hydrated) return;
     try {
-      this.deps.saveConfig({ turnOutcomeLog: [...this.records] });
+      this.logStore.write([...this.records]);
     } catch (err) {
       console.error("[MCP] Failed to flush turn outcome log:", err);
     }

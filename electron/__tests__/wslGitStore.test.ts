@@ -23,7 +23,7 @@ describe("wslGitByWorktree store helpers (#9926)", () => {
     // Mirror the production defaults shape for the keys these tests touch
     // (electron-store returns the default for missing keys, so the in-shape
     // `wslGitByWorktree: {}` is what real callers see on first read).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     return {
       defaults: {
         _schemaVersion: 0,

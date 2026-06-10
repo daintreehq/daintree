@@ -79,7 +79,6 @@ import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/enviro
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
-import { registerCommands } from "./services/commands/index.js";
 import {
   initializeCrashRecoveryService,
   getCrashRecoveryService,
@@ -184,8 +183,6 @@ if (!gotTheLock) {
   setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
 
   registerLoggerTransport(broadcastToRenderer, () => BrowserWindow.getAllWindows().length > 0);
-
-  registerCommands();
 
   crashReporter.start({ uploadToServer: false });
   initializeCrashLoopGuard();

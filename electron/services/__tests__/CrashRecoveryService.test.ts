@@ -1228,6 +1228,28 @@ describe("CrashRecoveryService", () => {
       expect(result.autoRestoreOnCrash).toBe(false);
       expect(storeMock.set).toHaveBeenCalledWith("crashRecovery", { autoRestoreOnCrash: false });
     });
+
+    it("getConfig memoizes the store read so repeated calls don't re-parse config.json", () => {
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+
+      expect(svc.getConfig()).toEqual({ autoRestoreOnCrash: false });
+      expect(svc.getConfig()).toEqual({ autoRestoreOnCrash: false });
+
+      expect(storeMock.get.mock.calls.filter(([key]) => key === "crashRecovery")).toHaveLength(1);
+    });
+
+    it("setConfig refreshes the memo so the settings tab round-trips the new value", () => {
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      expect(svc.getConfig().autoRestoreOnCrash).toBe(false);
+
+      svc.setConfig({ autoRestoreOnCrash: true });
+
+      // Even if the store mock still serves the stale value, the memo must
+      // reflect the write — otherwise a cached false would shadow the toggle.
+      expect(svc.getConfig().autoRestoreOnCrash).toBe(true);
+    });
   });
 
   describe("getLastBackupTimestamp", () => {

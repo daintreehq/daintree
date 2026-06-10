@@ -196,9 +196,11 @@ export class WorkspaceHostPool {
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
 
     const initPromise = (async () => {
-      await host.waitForReady();
+      const [, forgeSettings] = await Promise.all([
+        host.waitForReady(),
+        readForgeSettingsForProject(normalizedPath),
+      ]);
       const requestId = host.generateRequestId();
-      const forgeSettings = await readForgeSettingsForProject(normalizedPath);
       await host.sendWithResponse({
         type: "load-project",
         requestId,
@@ -255,9 +257,11 @@ export class WorkspaceHostPool {
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
 
     const initPromise = (async () => {
-      await host.waitForReady();
+      const [, forgeSettings] = await Promise.all([
+        host.waitForReady(),
+        readForgeSettingsForProject(normalizedPath),
+      ]);
       const requestId = host.generateRequestId();
-      const forgeSettings = await readForgeSettingsForProject(normalizedPath);
       await host.sendWithResponse({
         type: "load-project",
         requestId,
@@ -436,10 +440,12 @@ export class WorkspaceHostPool {
 
   private async reloadProjectAfterRestart(entry: ProcessEntry): Promise<void> {
     const host = entry.host;
-    await host.waitForReady();
+    const [, forgeSettings] = await Promise.all([
+      host.waitForReady(),
+      readForgeSettingsForProject(entry.projectPath),
+    ]);
 
     const requestId = host.generateRequestId();
-    const forgeSettings = await readForgeSettingsForProject(entry.projectPath);
     await host.sendWithResponse({
       type: "load-project",
       requestId,

@@ -1,11 +1,20 @@
+import { Suspense, lazy } from "react";
 import type { WorktreeState } from "@/types";
 import type { Issue } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 import { IssuePickerDialog } from "../IssuePickerDialog";
-import { ReviewHub } from "../ReviewHub/ReviewHub";
 import { PlanFileViewer } from "@/components/FileViewer/PlanFileViewer";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
+
+// Lazy boundary keeps ReviewHubContent/DiffViewer (~50KB gz) out of App's
+// first-paint eval closure — the hub only renders when a card opens it. The
+// chunk stays modulepreloaded via the ReviewPane seed, so the null fallback
+// covers eval-only time on first open.
+const LazyReviewHub = lazy(() =>
+  import("../ReviewHub/ReviewHub").then((m) => ({ default: m.ReviewHub }))
+);
 
 export interface WorktreeDialogsProps {
   worktree: WorktreeState;
@@ -42,6 +51,10 @@ export function WorktreeDialogs({
   showPlanViewer,
   onClosePlanViewer,
 }: WorktreeDialogsProps) {
+  // Keep-mounted is NOT for a close animation (ReviewHub returns null when
+  // !isOpen) — it avoids re-suspending on reopen and keeps focus-restore
+  // cleanup semantics identical to the previously-static mount.
+  const reviewHubMounted = useKeepMounted(showReviewHub);
   return (
     <>
       <ConfirmDialog
@@ -71,13 +84,17 @@ export function WorktreeDialogs({
         onDetach={onDetachIssue}
       />
 
-      <ReviewHub
-        isOpen={showReviewHub}
-        worktreePath={worktree.path}
-        onClose={onCloseReviewHub}
-        initialCommitMessage={reviewHubInitialCommitMessage}
-        autoStageOnOpen={reviewHubAutoStageOnOpen}
-      />
+      {reviewHubMounted && (
+        <Suspense fallback={null}>
+          <LazyReviewHub
+            isOpen={showReviewHub}
+            worktreePath={worktree.path}
+            onClose={onCloseReviewHub}
+            initialCommitMessage={reviewHubInitialCommitMessage}
+            autoStageOnOpen={reviewHubAutoStageOnOpen}
+          />
+        </Suspense>
+      )}
 
       <PlanFileViewer
         isOpen={showPlanViewer}

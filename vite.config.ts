@@ -533,6 +533,86 @@ function chunkModulesPlugin(): Plugin {
   };
 }
 
+// Prepends the V8 explicit-compile-hints magic comment (Chrome >=136; we ship
+// Chromium 148) to a curated set of boot-hot chunks so V8 eagerly compiles all
+// their functions in one background pass instead of lazily re-parsing each
+// function at first call during boot. Biggest win on a cold app:// code cache
+// (first launch, post-update). Curated on purpose, per V8 guidance to annotate
+// only files where most functions actually run on load: the entry chunk, the
+// App chunk, vendor-react, vendor-xterm, TerminalInstanceService, and
+// appThemeStore. Everything else — explicitly including vendor-editor (~451KB
+// of CodeMirror that is mostly uncalled at boot) and palette/settings/
+// per-language chunks — is excluded to avoid wasted background compile and
+// bytecode memory. Expand to the full first-render closure only if cold-cache
+// perf samples confirm a win.
+//
+// Must run in generateBundle (NOT renderChunk, NOT the `banner` option):
+// rolldown's native oxc minifier runs after renderChunk and would strip or
+// displace the comment, and V8 only honors it on line 1. generateBundle runs
+// post-minify, so the comment lands as the first line of the emitted file.
+//
+// The raw prepend is sourcemap-unsafe (it shifts every line by one without
+// adjusting mappings). Acceptable here because production maps are not
+// shipped — build.sourcemap is false in this config. If sourcemaps are ever
+// enabled, this must move to a magic-string-based edit that remaps.
+function compileHintsPlugin(): Plugin {
+  const COMPILE_HINT = "//# allFunctionsCalledOnLoad\n";
+  // Stable codeSplitting group / facade-derived chunk names.
+  const hintedChunkNames = new Set([
+    "vendor-react",
+    "vendor-xterm",
+    "TerminalInstanceService",
+    "appThemeStore",
+  ]);
+  // Fallback for chunks whose name could drift: match the facade module.
+  const hintedFacadeSuffixes = [
+    "src/App.tsx",
+    "src/services/TerminalInstanceService.ts",
+    "src/store/appThemeStore.ts",
+  ];
+
+  const isHinted = (chunk: {
+    isEntry: boolean;
+    name: string;
+    facadeModuleId?: string | null;
+  }): boolean => {
+    const facade = chunk.facadeModuleId?.split(path.sep).join("/");
+    return (
+      chunk.isEntry ||
+      hintedChunkNames.has(chunk.name) ||
+      (facade != null && hintedFacadeSuffixes.some((suffix) => facade.endsWith(suffix)))
+    );
+  };
+
+  return {
+    name: "v8-compile-hints",
+    apply: "build",
+    // generateBundle mutations happen after [hash] placeholders are resolved,
+    // so the prepended hint would not by itself change a chunk's filename.
+    // Folding the hint into the hash here keeps hinted-set/comment changes
+    // cache-correct for any consumer keyed on the chunk URL.
+    augmentChunkHash(chunk) {
+      return isHinted(chunk) ? COMPILE_HINT : undefined;
+    },
+    // `order: "post"` is required: vite:build-import-analysis also mutates
+    // chunk code in generateBundle (prepending the `__vite__mapDeps` const to
+    // chunks with dynamic imports), and it runs after default-order hooks. A
+    // default-order hook here left the hint on line 2 for the entry/App/
+    // TerminalInstanceService chunks, where V8 ignores it.
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        for (const output of Object.values(bundle)) {
+          if (output.type !== "chunk") continue;
+          if (isHinted(output) && !output.code.startsWith(COMPILE_HINT)) {
+            output.code = COMPILE_HINT + output.code;
+          }
+        }
+      },
+    },
+  };
+}
+
 // Minimal view of a Rolldown OutputChunk passed to the preload helper. The
 // bundle's `imports[]` / `dynamicImports[]` hold output FILE NAMES (other bundle
 // keys), not the source-path keys the manifest uses — these are JS getters on
@@ -703,6 +783,7 @@ export default defineConfig(({ command, mode }) => {
       latin400FontPreloadPlugin(),
       firstRenderModulePreloadPlugin(),
       chunkModulesPlugin(),
+      compileHintsPlugin(),
       xtermMinifyIdentifiersGuardPlugin(),
       ...(process.env.ANALYZE === "true"
         ? [visualizer({ filename: "stats.html", gzipSize: true, brotliSize: true }) as Plugin]
@@ -736,6 +817,20 @@ export default defineConfig(({ command, mode }) => {
         output: {
           codeSplitting: {
             groups: [
+              {
+                // Top priority on purpose: this must exceed every group whose
+                // captured packages depend on React, because rolldown
+                // advancedChunks groups capture their modules' dependency
+                // closure unless a higher-priority group claims them first. At
+                // priority 15, react/index.js + react/jsx-runtime.js were
+                // captured into vendor-editor (priority 60), dragging the whole
+                // CodeMirror runtime into the entry's eager static closure.
+                // Any future group added above 80 must not match React-dependent
+                // packages, or react core leaks back into that group's chunk.
+                name: "vendor-react",
+                test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store)[\\/]/,
+                priority: 80,
+              },
               {
                 name: "vendor-xterm-webgl",
                 test: /node_modules[\\/]@xterm[\\/]addon-webgl[\\/]/,
@@ -786,11 +881,6 @@ export default defineConfig(({ command, mode }) => {
                 priority: 20,
               },
               {
-                name: "vendor-react",
-                test: /node_modules[\\/](react|react-dom|scheduler|use-sync-external-store)[\\/]/,
-                priority: 15,
-              },
-              {
                 // Shared Radix utility deps used by both the eager primitives
                 // (slot/checkbox/switch) and the deferred overlay primitives.
                 // Splitting these out of `vendor-radix-overlay` prevents the
@@ -821,11 +911,16 @@ export default defineConfig(({ command, mode }) => {
                 // parser packages so each per-language parser (and its
                 // grammar dependency) stays in its own async chunk instead
                 // of being swept into this catch-all (which is part of the
-                // eager closure). `@lezer/common`, `@lezer/lr`, and
-                // `@lezer/highlight` stay in this `vendor` group because
-                // `@codemirror/language` depends on them eagerly.
+                // eager closure). `@lezer/common` and `@lezer/highlight` are
+                // allowed here as @codemirror/language deps (in practice the
+                // vendor-editor closure capture claims them). `@lezer/lr` is
+                // deliberately NOT allowed: its only importers are the lazy
+                // per-language parser chunks, and pinning it into this eager
+                // chunk made `vendor` statically import vendor-editor (via
+                // @lezer/lr -> @lezer/common), dragging CodeMirror back into
+                // the entry's eager closure after the vendor-react pin.
                 name: "vendor",
-                test: /node_modules[\\/](?!(refractor[\\/]lang[\\/]|@codemirror[\\/](lang-|legacy-modes)|@lezer[\\/](?!(common|lr|highlight)[\\/])))/,
+                test: /node_modules[\\/](?!(refractor[\\/]lang[\\/]|@codemirror[\\/](lang-|legacy-modes)|@lezer[\\/](?!(common|highlight)[\\/])))/,
                 priority: 10,
               },
             ],

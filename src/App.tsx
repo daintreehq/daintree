@@ -344,6 +344,16 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
 import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./components/Sidebar";
+import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
+
+// Kick the hydration-bootstrap IPC pair (keybinding overrides + user-agent
+// registry) at module-eval time so the round-trips overlap App's first render
+// instead of starting in the post-commit hydration effect. The guard memoizes,
+// so the await inside hydrateAppState stays the synchronization point. The
+// `.catch` is required: the guard resets its memo and RETHROWS on failure, so
+// a bare void call would surface an unhandled rejection — the swallowed early
+// failure is retried by hydrateAppState's own await.
+void ensureHydrationBootstrap().catch(() => {});
 
 const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 
@@ -679,13 +689,21 @@ function AppInner() {
     });
     return () => unsubscribe?.();
   }, []);
-  useShortcutHints(isStateLoaded);
+  // Defers the post-hydration housekeeping IPC reads (shortcut-hint counts,
+  // milestones, GitHub-recommendation plugin/remotes probes) out of the
+  // synchronous isStateLoaded effect flush: their sends would otherwise land
+  // on main ahead of the loaded-frame paint and compete with the
+  // deferred-services drain. The flag flips from the background-priority task
+  // below, so the gated hooks hydrate at idle; each reconciles current store
+  // state on attach, so nothing observable is lost in the gap.
+  const [idleHousekeepingReady, setIdleHousekeepingReady] = useState(false);
+  useShortcutHints(isStateLoaded && idleHousekeepingReady);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);
-  useOrchestrationMilestones(isStateLoaded);
+  useOrchestrationMilestones(isStateLoaded && idleHousekeepingReady);
   useAgentWaitingNudge(isStateLoaded);
-  useGitHubEnableRecommendation(isStateLoaded);
+  useGitHubEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
 
   useEffect(() => {
@@ -695,6 +713,7 @@ function AppInner() {
 
     const execute = () => {
       if (controller.signal.aborted) return;
+      setIdleHousekeepingReady(true);
       void preloadSettingsDialog();
       void preloadNewWorktreeDialog();
       void preloadActionPalette();

@@ -92,6 +92,7 @@ vi.mock("../../useElectron", () => ({
 }));
 
 import { useAgentWaitingNudge } from "../useAgentWaitingNudge";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
 function emitStoreUpdate(terminals: Terminal[]) {
   storeState = {
@@ -107,6 +108,9 @@ describe("useAgentWaitingNudge", () => {
     storeSubscribers = [];
     storeState = { panelsById: {}, panelIds: [] };
     notifyMock.mockReturnValue("notif-123");
+    // The hook reads waitingEnabled from the settings store (hydrated at App
+    // mount) rather than a per-hook getSettings IPC.
+    useNotificationSettingsStore.setState({ hydrated: true, waitingEnabled: false });
   });
 
   afterEach(() => {
@@ -164,20 +168,34 @@ describe("useAgentWaitingNudge", () => {
   });
 
   it("does not fire when waitingEnabled is already true", async () => {
-    notificationMock.getSettings.mockResolvedValueOnce({
-      enabled: true,
-      waitingEnabled: true,
-      completedEnabled: false,
-      soundEnabled: false,
-      waitingEscalationEnabled: false,
-      waitingEscalationMinutes: 5,
-    });
+    useNotificationSettingsStore.setState({ hydrated: true, waitingEnabled: true });
 
     renderHook(() => useAgentWaitingNudge(true));
     await act(async () => {});
 
     emitStoreUpdate([{ id: "t1", agentState: "waiting" }]);
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for the settings store to hydrate before reading waitingEnabled", async () => {
+    storeState = {
+      panelsById: { t1: { id: "t1", agentState: "waiting" } },
+      panelIds: ["t1"],
+    };
+    // Pre-hydration default is waitingEnabled: true — an eager read here
+    // would wrongly suppress the nudge for a user whose persisted setting
+    // is false.
+    useNotificationSettingsStore.setState({ hydrated: false, waitingEnabled: true });
+
+    renderHook(() => useAgentWaitingNudge(true));
+    await act(async () => {});
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      useNotificationSettingsStore.setState({ hydrated: true, waitingEnabled: false });
+    });
+
+    expect(notifyMock).toHaveBeenCalledOnce();
   });
 
   it("fires on first agent waiting transition when eligible", async () => {

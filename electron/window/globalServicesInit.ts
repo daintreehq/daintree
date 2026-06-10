@@ -29,6 +29,9 @@ import { initializeSystemSleepService } from "../services/SystemSleepService.js"
 import { initializeOsDndService } from "../services/OsDndService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+// Free for eager import: PtyClient already value-imports HelpSessionService,
+// so this static edge adds zero boot cost — keep it that way.
+import { helpSessionService } from "../services/HelpSessionService.js";
 import {
   markPerformance,
   startEventLoopLagMonitor,
@@ -45,6 +48,7 @@ import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
+import { wireUpdateMenuState } from "../menu.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -54,6 +58,7 @@ import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { registerCommands } from "../services/commands/index.js";
 import { store } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
@@ -167,18 +172,6 @@ export async function initGlobalServices(
     return "exit-requested";
   }
 
-  // Sentry and GitHub token validation are deferred to after the renderer
-  // reports first-interactive to avoid contending for the event loop while
-  // React hydrates. GitHubAuth.initializeStorage must stay eager because
-  // other services read tokens synchronously during startup.
-  registerDeferredTask({
-    name: "telemetry",
-    run: async () => {
-      await initializeTelemetry();
-      setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
-    },
-  });
-
   // Initialize GitHubAuth storage (must stay eager — synchronous reads)
   GitHubAuth.initializeStorage({
     get: () => secureStorage.get("userConfig.githubToken"),
@@ -186,51 +179,6 @@ export async function initGlobalServices(
     delete: () => secureStorage.delete("userConfig.githubToken"),
   });
   console.log("[MAIN] GitHubAuth initialized with storage");
-
-  // Skip startup token validation when the GitHub plugin is disabled — the
-  // /user fetch is GitHub network work the user opted out of. Read the
-  // persisted disabled list directly: this task is registered before the
-  // plugin-service deferred task runs, so the forge registry can't be
-  // consulted yet. (Re-enable validates on next launch or via set-token.)
-  const persistedPlugins = store.get("plugins") as { disabled?: unknown } | undefined;
-  const githubPluginDisabled =
-    Array.isArray(persistedPlugins?.disabled) &&
-    persistedPlugins.disabled.includes("daintree.github");
-
-  if (GitHubAuth.hasToken() && !githubPluginDisabled) {
-    const token = GitHubAuth.getToken();
-    if (token) {
-      const versionAtStart = GitHubAuth.getTokenVersion();
-      registerDeferredTask({
-        name: "github-auth-validate",
-        // Floated, not awaited: GitHubAuth.validate has an internal 10s
-        // AbortSignal.timeout, and no later task depends on the validated user
-        // info. Returning void lets drainNext advance immediately instead of
-        // stalling the whole queue on a slow/offline network. The versionAtStart
-        // guard makes setValidatedUserInfo a safe no-op if the token rotates
-        // mid-flight, and the shutdown hard-timeout budget (#4287) bounds any
-        // in-flight fetch still pending at quit.
-        run: () => {
-          void (async () => {
-            try {
-              const validation = await GitHubAuth.validate(token);
-              if (validation.valid && validation.username) {
-                GitHubAuth.setValidatedUserInfo(
-                  validation.username,
-                  validation.avatarUrl,
-                  validation.scopes,
-                  versionAtStart
-                );
-                console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
-              }
-            } catch (err) {
-              console.warn("[MAIN] Failed to validate stored GitHub token:", err);
-            }
-          })();
-        },
-      });
-    }
-  }
 
   // E2E hook: seed/clear an in-memory GitHub token so fault-mode tests can
   // reach IPC paths gated on `hasToken: true` without hitting the network.
@@ -288,141 +236,14 @@ export async function initGlobalServices(
     isPlaintextEnabled: () => store.get("appState")?.developerMode?.pluginAuditPlaintext === true,
   });
 
-  registerDeferredTask({
-    name: "agent-notification-service",
-    run: async () => {
-      const { agentNotificationService } = await import("../services/AgentNotificationService.js");
-      setAgentNotificationServiceRef(agentNotificationService);
-      agentNotificationService.initialize();
-    },
-  });
-
-  // Auto-updater
-  registerDeferredTask({
-    name: "auto-updater",
-    run: async () => {
-      const { autoUpdaterService } = await import("../services/AutoUpdaterService.js");
-      setAutoUpdaterServiceRef(autoUpdaterService);
-      autoUpdaterService.initialize();
-    },
-  });
-
-  // Windows Store update notifier — parallel path to electron-updater for
-  // builds where the Store owns the install but the user still wants to know
-  // a newer version is available.
-  registerDeferredTask({
-    name: "windows-store-notifier",
-    run: async () => {
-      const { windowsStoreNotifierService } =
-        await import("../services/WindowsStoreNotifierService.js");
-      setWindowsStoreNotifierServiceRef(windowsStoreNotifierService);
-      windowsStoreNotifierService.initialize();
-    },
-  });
-
-  // CCR config — discover Claude Code Router models as agent presets.
-  // Deferred: the renderer fetches presets via getCcrPresets() which falls
-  // through to [] when the cache is empty, and AGENT_PRESETS_UPDATED broadcasts
-  // populate the renderer store as soon as loadAndApply() completes.
-  registerDeferredTask({
-    name: "ccr-config",
-    run: async () => {
-      const { CcrConfigService } = await import("../services/CcrConfigService.js");
-      const ccr = CcrConfigService.getInstance();
-      setCcrConfigService(ccr);
-      try {
-        await ccr.loadAndApply();
-      } catch (err) {
-        console.warn("[MAIN] CcrConfigService loadAndApply failed (non-fatal):", err);
-      }
-      // Watcher is independent of initial load success — if the config file
-      // is malformed on first boot, polling lets us pick up the fix later.
-      // startWatching() is idempotent.
-      ccr.startWatching();
-      console.log("[MAIN] CcrConfigService initialized");
-    },
-  });
-
-  // Plugin service — IPC handlers are registered eagerly in windowServices.ts
-  // and return empty lists from internal Maps until initialize() populates them.
-  // Plugin contributions broadcast on registration, so late init is renderer-safe.
-  //
-  // Timing note (#10322): `initialize()` registers panel-kind contributions
-  // mid-chain, so the `plugin:panel-kinds-changed` broadcast can reach the
-  // renderer a microtask before `setPluginDirResolver()` below swaps the
-  // `plugin://` handler off its placeholder. A plugin panel restored from
-  // persisted state could therefore 404 its first asset fetch. That window is
-  // self-healing: `PluginViewHost`'s `ErrorBoundary` offers a "Try again" that
-  // re-imports once the live resolver is in place.
-  registerDeferredTask({
-    name: "plugin-service",
-    run: async () => {
-      const { pluginService } = await import("../services/PluginService.js");
-      try {
-        await pluginService.initialize();
-      } catch (err) {
-        console.error("[MAIN] PluginService initialization failed:", err);
-      }
-      // Point the already-registered `plugin://` handler at the live resolver
-      // (#10322). main.ts registers the handler before first paint with a
-      // placeholder that 404s; now that the singleton is initialized, swap in
-      // the real `getPluginDir` so plugin asset requests resolve.
-      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
-      // macOS: drain any `.dntr` paths queued during cold launch (Finder
-      // double-click / "Open With") and take over live open-file events now
-      // that PluginService can install them. Fire-and-forget — install runs
-      // concurrently with the remaining deferred tasks. #9293
-      void activateOpenFileInstaller(pluginService);
-      // Fire-and-forget — activations fan out in parallel and report errors
-      // via the per-plugin `loadError` provenance record. Awaiting here would
-      // delay subsequent deferred tasks behind the slowest plugin's activate().
-      void pluginService.activateStartupFinishedPlugins();
-    },
-  });
-
-  // CLI control socket (F32) — lets the `daintree-plugin` CLI install/uninstall
-  // into this running instance. Registered after `plugin-service` and gated
-  // internally on `pluginService.waitForInit()`, so the socket only accepts a
-  // `plugin.install` once activation has settled. Skipped under smoke test (no
-  // CLI driving a headless boot) to avoid leaving a socket behind.
-  if (!isSmokeTest) {
-    registerDeferredTask({
-      name: "plugin-cli-server",
-      run: async () => {
-        // Fire-and-forget: startPluginCliServer() internally awaits
-        // pluginService.waitForInit() (which only settles after startup
-        // activation), so awaiting it here would stall every later deferred
-        // task behind plugin activation. The waitForReady gate guarantees no
-        // CLI request is serviced before init settles, so binding async is safe.
-        const { startPluginCliServer } = await import("../services/PluginCliServer.js");
-        void startPluginCliServer()
-          .then(() => console.log("[MAIN] Plugin CLI control socket listening"))
-          .catch((err) =>
-            console.warn("[MAIN] Plugin CLI control socket failed to start (non-fatal):", err)
-          );
-      },
-    });
-  }
-
-  // Plugin-MCP inbound audit log (#9234) — warm the hydrate() store read off
-  // the cold-boot path (#10073). hydrate() is idempotent, and append() demand-
-  // hydrates anyway, so this is purely pre-warming for when the supervisor
-  // (#9233) lands. The consent service is not pre-warmed: its constructor is
-  // bare allocation and PluginInstaller already constructs it lazily on demand.
-  registerDeferredTask({
-    name: "plugin-mcp-audit-warm",
-    run: async () => {
-      const { getPluginMcpAuditService } = await import("../services/plugin-mcp/instances.js");
-      getPluginMcpAuditService().hydrate();
-    },
-  });
-
-  // ── Deferred global service starts ──
+  // ── Group 1: cheap synchronous wires ──
   // These were previously run on the same tick as loadRenderer(), contending
   // with the renderer for event-loop time while React hydrated and painted.
   // They now drain sequentially after the renderer signals first-interactive
   // (or after a fallback timeout), with `setImmediate` interleaved between
-  // tasks so IPC from the renderer stays responsive during drain.
+  // tasks so IPC from the renderer stays responsive during drain. Drain order
+  // is registration order: cheap synchronous wires first (this group), then
+  // telemetry, then the heavy dynamic-import tasks — see the group headers.
 
   registerDeferredTask({
     name: "crash-recovery-backup-timer",
@@ -435,15 +256,6 @@ export async function initGlobalServices(
     name: "hibernation-service",
     run: () => {
       initializeHibernationService();
-    },
-  });
-
-  registerDeferredTask({
-    name: "idle-terminal-notification-service",
-    run: async () => {
-      const { initializeIdleTerminalNotificationService } =
-        await import("../services/IdleTerminalNotificationService.js");
-      initializeIdleTerminalNotificationService();
     },
   });
 
@@ -703,6 +515,191 @@ export async function initGlobalServices(
     },
   });
 
+  // GitHub token-health probing is no longer started here — the
+  // daintree.github plugin owns it via activate()/dispose() (#9304
+  // follow-up), so a disabled plugin issues no background GitHub probes.
+  // Token STORAGE stays eager above (GitHubAuth.initializeStorage)
+  // regardless of plugin state.
+
+  // Background agent provider reachability probes (Claude, Gemini, Codex)
+  // and the registry that aggregates GitHub, agents, and MCP into a single
+  // per-service connectivity snapshot for renderers. Registry must register
+  // before mcp-server so it wires onStatusChange before MCP's first event —
+  // preserved by the group split (mcp-server drains in the heavy group 3).
+  registerDeferredTask({
+    name: "agent-connectivity",
+    run: () => {
+      agentConnectivityService.start();
+    },
+  });
+
+  registerDeferredTask({
+    name: "service-connectivity-registry",
+    run: () => {
+      getServiceConnectivityRegistry().start();
+    },
+  });
+
+  // Skip startup token validation when the GitHub plugin is disabled — the
+  // /user fetch is GitHub network work the user opted out of. Read the
+  // persisted disabled list directly: this task is registered before the
+  // plugin-service deferred task runs, so the forge registry can't be
+  // consulted yet. (Re-enable validates on next launch or via set-token.)
+  const persistedPlugins = store.get("plugins") as { disabled?: unknown } | undefined;
+  const githubPluginDisabled =
+    Array.isArray(persistedPlugins?.disabled) &&
+    persistedPlugins.disabled.includes("daintree.github");
+
+  if (GitHubAuth.hasToken() && !githubPluginDisabled) {
+    const token = GitHubAuth.getToken();
+    if (token) {
+      const versionAtStart = GitHubAuth.getTokenVersion();
+      registerDeferredTask({
+        name: "github-auth-validate",
+        // Floated, not awaited: GitHubAuth.validate has an internal 10s
+        // AbortSignal.timeout, and no later task depends on the validated user
+        // info. Returning void lets drainNext advance immediately instead of
+        // stalling the whole queue on a slow/offline network. The versionAtStart
+        // guard makes setValidatedUserInfo a safe no-op if the token rotates
+        // mid-flight, and the shutdown hard-timeout budget (#4287) bounds any
+        // in-flight fetch still pending at quit.
+        run: () => {
+          void (async () => {
+            try {
+              const validation = await GitHubAuth.validate(token);
+              if (validation.valid && validation.username) {
+                GitHubAuth.setValidatedUserInfo(
+                  validation.username,
+                  validation.avatarUrl,
+                  validation.scopes,
+                  versionAtStart
+                );
+                console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
+              }
+            } catch (err) {
+              console.warn("[MAIN] Failed to validate stored GitHub token:", err);
+            }
+          })();
+        },
+      });
+    }
+  }
+
+  // Low-frequency re-invocation of the boot cleanup routines so on-disk state
+  // doesn't grow unbounded across a long session (#9537). Gated on system idle
+  // internally; disposed in shutdown.ts before the DB closes.
+  registerDeferredTask({
+    name: "periodic-cleanup",
+    run: () => {
+      getPeriodicCleanupService().start();
+    },
+  });
+
+  // ── Group 2: telemetry ──
+  // Registered immediately after the cheap group and BEFORE the heavy
+  // dynamic-import group: trackEvent silently drops events while
+  // captureEventFn is null, so telemetry-last would lose
+  // deferred_init_task_failed events from (and delay crash capture for) the
+  // heavy tasks below. Sentry's module graph is itself heavy, but one heavy
+  // eval ahead of the rest buys observability over all of them.
+  registerDeferredTask({
+    name: "telemetry",
+    run: async () => {
+      await initializeTelemetry();
+      setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
+    },
+  });
+
+  // ── Group 3: heavy dynamic-import tasks ──
+  // Each task's first import() evals a large module graph (electron-updater,
+  // the ~2900-line PluginService + manifest scans) in one un-yieldable
+  // main-thread block. Registered last so the cheap wires above complete
+  // while the renderer's post-hydration IPC burst (terminal restore spawns,
+  // worktree fetches) is hottest, and the solid eval blocks land after it
+  // tails off.
+
+  registerDeferredTask({
+    name: "agent-notification-service",
+    run: async () => {
+      const { agentNotificationService } = await import("../services/AgentNotificationService.js");
+      setAgentNotificationServiceRef(agentNotificationService);
+      agentNotificationService.initialize();
+    },
+  });
+
+  // Auto-updater
+  registerDeferredTask({
+    name: "auto-updater",
+    run: async () => {
+      const { autoUpdaterService } = await import("../services/AutoUpdaterService.js");
+      setAutoUpdaterServiceRef(autoUpdaterService);
+      // First wiring of the menu's update-state listener — menu builds before
+      // this task are no-ops on the unset ref (see wireUpdateMenuState).
+      wireUpdateMenuState();
+      autoUpdaterService.initialize();
+    },
+  });
+
+  // Windows Store update notifier — parallel path to electron-updater for
+  // builds where the Store owns the install but the user still wants to know
+  // a newer version is available.
+  registerDeferredTask({
+    name: "windows-store-notifier",
+    run: async () => {
+      const { windowsStoreNotifierService } =
+        await import("../services/WindowsStoreNotifierService.js");
+      setWindowsStoreNotifierServiceRef(windowsStoreNotifierService);
+      windowsStoreNotifierService.initialize();
+    },
+  });
+
+  // CCR config — discover Claude Code Router models as agent presets.
+  // Deferred: the renderer fetches presets via getCcrPresets() which falls
+  // through to [] when the cache is empty, and AGENT_PRESETS_UPDATED broadcasts
+  // populate the renderer store as soon as loadAndApply() completes.
+  registerDeferredTask({
+    name: "ccr-config",
+    run: async () => {
+      const { CcrConfigService } = await import("../services/CcrConfigService.js");
+      const ccr = CcrConfigService.getInstance();
+      setCcrConfigService(ccr);
+      try {
+        await ccr.loadAndApply();
+      } catch (err) {
+        console.warn("[MAIN] CcrConfigService loadAndApply failed (non-fatal):", err);
+      }
+      // Watcher is independent of initial load success — if the config file
+      // is malformed on first boot, polling lets us pick up the fix later.
+      // startWatching() is idempotent.
+      ccr.startWatching();
+      console.log("[MAIN] CcrConfigService initialized");
+    },
+  });
+
+  // Built-in commands — registration fires the githubCreateIssue/githubWorkIssue
+  // chunk imports, so it belongs in the deferred queue, not main-module eval.
+  // Commands must register before the renderer's command picker first calls
+  // commands.list (post-first-interactive); loadCommands refetches on every
+  // picker open, so a near-drain race self-heals. registerCommands() is
+  // fire-and-forget internally and returns synchronously, never stalling the
+  // drain. Registered once per process (initGlobalServices runs once),
+  // matching the previous main.ts semantics.
+  registerDeferredTask({
+    name: "builtin-commands",
+    run: () => {
+      registerCommands();
+    },
+  });
+
+  registerDeferredTask({
+    name: "idle-terminal-notification-service",
+    run: async () => {
+      const { initializeIdleTerminalNotificationService } =
+        await import("../services/IdleTerminalNotificationService.js");
+      initializeIdleTerminalNotificationService();
+    },
+  });
+
   // Must register AFTER event-loop-lag and app-metrics monitors so it can
   // read their data once its own start() fires.
   registerDeferredTask({
@@ -729,64 +726,109 @@ export async function initGlobalServices(
     },
   });
 
-  // GitHub token-health probing is no longer started here — the
-  // daintree.github plugin owns it via activate()/dispose() (#9304
-  // follow-up), so a disabled plugin issues no background GitHub probes.
-  // Token STORAGE stays eager above (GitHubAuth.initializeStorage)
-  // regardless of plugin state.
-
-  // Background agent provider reachability probes (Claude, Gemini, Codex)
-  // and the registry that aggregates GitHub, agents, and MCP into a single
-  // per-service connectivity snapshot for renderers. Registry must register
-  // before mcp-server so it wires onStatusChange before MCP's first event.
+  // Plugin service — IPC handlers are registered eagerly in windowServices.ts
+  // and return empty lists from internal Maps until initialize() populates them.
+  // Plugin contributions broadcast on registration, so late init is renderer-safe.
+  //
+  // Timing note (#10322): `initialize()` registers panel-kind contributions
+  // mid-chain, so the `plugin:panel-kinds-changed` broadcast can reach the
+  // renderer a microtask before `setPluginDirResolver()` below swaps the
+  // `plugin://` handler off its placeholder. A plugin panel restored from
+  // persisted state could therefore 404 its first asset fetch. That window is
+  // self-healing: `PluginViewHost`'s `ErrorBoundary` offers a "Try again" that
+  // re-imports once the live resolver is in place.
   registerDeferredTask({
-    name: "agent-connectivity",
-    run: () => {
-      agentConnectivityService.start();
+    name: "plugin-service",
+    run: async () => {
+      const { pluginService } = await import("../services/PluginService.js");
+      try {
+        await pluginService.initialize();
+      } catch (err) {
+        console.error("[MAIN] PluginService initialization failed:", err);
+      }
+      // Point the already-registered `plugin://` handler at the live resolver
+      // (#10322). main.ts registers the handler before first paint with a
+      // placeholder that 404s; now that the singleton is initialized, swap in
+      // the real `getPluginDir` so plugin asset requests resolve.
+      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
+      // macOS: drain any `.dntr` paths queued during cold launch (Finder
+      // double-click / "Open With") and take over live open-file events now
+      // that PluginService can install them. Fire-and-forget — install runs
+      // concurrently with the remaining deferred tasks. #9293
+      void activateOpenFileInstaller(pluginService);
+      // Fire-and-forget — activations fan out in parallel and report errors
+      // via the per-plugin `loadError` provenance record. Awaiting here would
+      // delay subsequent deferred tasks behind the slowest plugin's activate().
+      void pluginService.activateStartupFinishedPlugins();
     },
   });
 
+  // CLI control socket (F32) — lets the `daintree-plugin` CLI install/uninstall
+  // into this running instance. Registered after `plugin-service` and gated
+  // internally on `pluginService.waitForInit()`, so the socket only accepts a
+  // `plugin.install` once activation has settled. Skipped under smoke test (no
+  // CLI driving a headless boot) to avoid leaving a socket behind.
+  if (!isSmokeTest) {
+    registerDeferredTask({
+      name: "plugin-cli-server",
+      run: async () => {
+        // Fire-and-forget: startPluginCliServer() internally awaits
+        // pluginService.waitForInit() (which only settles after startup
+        // activation), so awaiting it here would stall every later deferred
+        // task behind plugin activation. The waitForReady gate guarantees no
+        // CLI request is serviced before init settles, so binding async is safe.
+        const { startPluginCliServer } = await import("../services/PluginCliServer.js");
+        void startPluginCliServer()
+          .then(() => console.log("[MAIN] Plugin CLI control socket listening"))
+          .catch((err) =>
+            console.warn("[MAIN] Plugin CLI control socket failed to start (non-fatal):", err)
+          );
+      },
+    });
+  }
+
+  // Plugin-MCP inbound audit log (#9234) — warm the hydrate() store read off
+  // the cold-boot path (#10073). hydrate() is idempotent, and append() demand-
+  // hydrates anyway, so this is purely pre-warming for when the supervisor
+  // (#9233) lands. The consent service is not pre-warmed: its constructor is
+  // bare allocation and PluginInstaller already constructs it lazily on demand.
   registerDeferredTask({
-    name: "service-connectivity-registry",
-    run: () => {
-      getServiceConnectivityRegistry().start();
+    name: "plugin-mcp-audit-warm",
+    run: async () => {
+      const { getPluginMcpAuditService } = await import("../services/plugin-mcp/instances.js");
+      getPluginMcpAuditService().hydrate();
     },
   });
 
   if (windowRegistry) {
     const registryRef = windowRegistry;
-    // Wire `helpSessionService.mcpRegistry` synchronously, BEFORE the
-    // deferred queue drains. The renderer can call `help:provision-session`
-    // as soon as IPC handlers are registered (a few hundred ms before the
-    // first deferred task runs); without this synchronous wire-up,
-    // `ensureMcpServerReady()` would no-op on the null registry and the
-    // assistant would launch with a stub `.mcp.json` missing the daintree
-    // entry. The setter is just a reference store — no MCP SDK loaded.
-    try {
-      const { helpSessionService } = await import("../services/HelpSessionService.js");
-      helpSessionService.setMcpRegistry(registryRef);
-    } catch (err) {
-      console.error("[MAIN] Failed to wire HelpSessionService MCP registry:", err);
-    }
+    // Wire `helpSessionService.mcpRegistry` synchronously by construction (no
+    // import, no await). The renderer can call `help:provision-session` as
+    // soon as IPC handlers are registered (a few hundred ms before the first
+    // deferred task runs); without this wire-up, `ensureMcpServerReady()`
+    // would no-op on the null registry and the assistant would launch with a
+    // stub `.mcp.json` missing the daintree entry. The setter is just a
+    // reference store — no MCP SDK loaded.
+    helpSessionService.setMcpRegistry(registryRef);
 
-    // Load the pending-hibernation file and wire it into HelpSessionService
-    // synchronously, BEFORE the deferred queue drains. Project-view eviction
-    // fires inside `pvm.switchTo()` and can run as soon as the user does the
-    // first project switch — which can be before `APP_FIRST_INTERACTIVE`
-    // releases the deferred queue. A missed wire-up means the capture-on-
-    // eviction path silently no-ops and the user's first cross-project
-    // switch loses its hibernation entry. Wiring here mirrors the
-    // setMcpRegistry rationale above. Disk I/O is a single small JSON read.
-    try {
+    // Load the pending-hibernation file and wire it into HelpSessionService.
+    // Floated, not awaited: the deadline is the user's first project switch
+    // (project-view eviction fires inside `pvm.switchTo()`, possibly before
+    // `APP_FIRST_INTERACTIVE` releases the deferred queue) — a missed wire-up
+    // means the capture-on-eviction path silently no-ops and that switch
+    // loses its hibernation entry. The chain is a single small JSON read that
+    // finishes in single-digit ms, long before loadURL even resolves, so
+    // floating keeps the disk I/O off the renderer-load dispatch path while
+    // comfortably beating the deadline.
+    void (async () => {
       const { getPendingHelpHibernationStore } =
         await import("../services/PendingHelpHibernationStore.js");
       const pendingStore = getPendingHelpHibernationStore();
       await pendingStore.load();
-      const { helpSessionService } = await import("../services/HelpSessionService.js");
       helpSessionService.setPendingHibernationStore(pendingStore);
-    } catch (err) {
+    })().catch((err) => {
       console.warn("[MAIN] Failed to wire pending-hibernation store:", err);
-    }
+    });
 
     registerDeferredTask({
       name: "mcp-server",
@@ -903,16 +945,6 @@ export async function initGlobalServices(
       const { startAssistantScratchCleanup } =
         await import("../services/AssistantScratchService.js");
       await startAssistantScratchCleanup();
-    },
-  });
-
-  // Low-frequency re-invocation of the boot cleanup routines so on-disk state
-  // doesn't grow unbounded across a long session (#9537). Gated on system idle
-  // internally; disposed in shutdown.ts before the DB closes.
-  registerDeferredTask({
-    name: "periodic-cleanup",
-    run: () => {
-      getPeriodicCleanupService().start();
     },
   });
 

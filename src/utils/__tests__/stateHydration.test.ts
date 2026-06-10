@@ -3057,6 +3057,90 @@ describe("hydrateAppState", () => {
     });
   });
 
+  describe("per-project layout payload folding", () => {
+    const baseOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("uses tabGroups/terminalSizes/draftInputs from the hydrate payload and skips the standalone IPC calls", async () => {
+      const payloadTabGroups = [
+        {
+          id: "group-payload",
+          location: "grid",
+          activeTabId: "terminal-1",
+          panelIds: ["terminal-1"],
+        },
+      ];
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        tabGroups: payloadTabGroups,
+        terminalSizes: { "terminal-1": { cols: 100, rows: 30 } },
+        draftInputs: { "terminal-1": "payload draft" },
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+      expect(projectClientMock.getTerminalSizes).not.toHaveBeenCalled();
+      expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
+      expect(hydrateTabGroups).toHaveBeenCalledWith(payloadTabGroups);
+
+      const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+      expect(useTerminalInputStore.getState().draftInputs.get("project-1:terminal-1")).toBe(
+        "payload draft"
+      );
+    });
+
+    it("falls back to the standalone IPC calls when the payload fields are absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // tabGroups/terminalSizes/draftInputs intentionally omitted (older
+        // main process, or the safe-boot {ok:false} payload).
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
+      expect(projectClientMock.getTerminalSizes).toHaveBeenCalledWith("project-1");
+      expect(projectClientMock.getDraftInputs).toHaveBeenCalledWith("project-1");
+    });
+
+    it("treats empty payload fields as authoritative (no IPC fallback, stale groups cleared)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        tabGroups: [],
+        terminalSizes: {},
+        draftInputs: {},
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+      expect(projectClientMock.getTerminalSizes).not.toHaveBeenCalled();
+      expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
+      // Empty array still clears stale groups (mirrors the IPC path).
+      expect(hydrateTabGroups).toHaveBeenCalledWith([]);
+    });
+  });
+
   describe("system temp dir folding", () => {
     const baseOptions = () => ({
       addPanel: vi.fn().mockResolvedValue("panel-1"),

@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // task-ordering assertions below.
 const registeredTaskNames: string[] = [];
 const registeredTaskRuns = new Map<string, () => unknown>();
-const setMcpRegistry = vi.fn();
+// Hoisted: the HelpSessionService mock factory now runs at import time
+// (globalServicesInit value-imports the singleton statically).
+const setMcpRegistry = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let mockLogRetentionDays: number | undefined = 30;
@@ -27,6 +29,7 @@ const {
     getPluginMcpConsentStore: vi.fn(),
   };
 });
+const registerCommandsMock = vi.hoisted(() => vi.fn());
 const {
   pluginInitialize,
   pluginGetPluginDir,
@@ -244,10 +247,26 @@ vi.mock("../../setup/environment.js", () => ({
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     setMcpRegistry,
+    setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
   },
+}));
+
+vi.mock("../../services/PendingHelpHibernationStore.js", () => ({
+  getPendingHelpHibernationStore: vi.fn(() => ({ load: vi.fn(async () => {}) })),
+}));
+
+// globalServicesInit statically imports menu.ts (wireUpdateMenuState) and the
+// commands barrel (registerCommands); both pull electron/service graphs this
+// suite doesn't exercise — mock at the boundary.
+vi.mock("../../menu.js", () => ({
+  wireUpdateMenuState: vi.fn(),
+}));
+
+vi.mock("../../services/commands/index.js", () => ({
+  registerCommands: registerCommandsMock,
 }));
 
 vi.mock("../deferredInitQueue.js", () => ({
@@ -294,6 +313,7 @@ describe("initGlobalServices task ordering", () => {
     pluginActivateStartup.mockClear();
     setPluginDirResolver.mockClear();
     activateOpenFileInstaller.mockClear();
+    registerCommandsMock.mockClear();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
@@ -303,6 +323,92 @@ describe("initGlobalServices task ordering", () => {
 
   afterEach(() => {
     setGlobalServicesInitialized(false);
+  });
+
+  it("registers tasks in grouped order: cheap wires, then telemetry, then heavy dynamic-import tasks", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    // Group 1 — cheap synchronous wires. github-auth-validate is also group 1
+    // but conditional on a stored token; covered by its own test below.
+    const cheap = [
+      "crash-recovery-backup-timer",
+      "hibernation-service",
+      "system-sleep-service",
+      "os-dnd-service",
+      "database-maintenance",
+      "pre-agent-snapshot-service",
+      "disk-space-monitor",
+      "event-loop-lag-monitor",
+      "app-metrics-monitor",
+      "agent-connectivity",
+      "service-connectivity-registry",
+      "periodic-cleanup",
+    ];
+    // Group 3 — heavy dynamic-import tasks. Telemetry (group 2) sits between
+    // so Sentry is live before any heavy task can fail (trackEvent drops
+    // events while captureEventFn is null).
+    const heavy = [
+      "agent-notification-service",
+      "auto-updater",
+      "windows-store-notifier",
+      "ccr-config",
+      "builtin-commands",
+      "idle-terminal-notification-service",
+      "resource-profile-service",
+      "plugin-service",
+      "plugin-cli-server",
+      "plugin-mcp-audit-warm",
+      "mcp-server",
+      "help-session-gc",
+      "help-session-pty",
+      "session-eviction",
+      "prune-old-logs",
+      "trashed-pid-cleanup",
+      "scratch-cleanup",
+      "assistant-scratch-cleanup",
+    ];
+
+    const telemetryIdx = registeredTaskNames.indexOf("telemetry");
+    expect(telemetryIdx).toBeGreaterThanOrEqual(0);
+    for (const name of cheap) {
+      const idx = registeredTaskNames.indexOf(name);
+      expect(idx, `${name} should be registered`).toBeGreaterThanOrEqual(0);
+      expect(idx, `${name} should register before telemetry`).toBeLessThan(telemetryIdx);
+    }
+    for (const name of heavy) {
+      const idx = registeredTaskNames.indexOf(name);
+      expect(idx, `${name} should be registered`).toBeGreaterThanOrEqual(0);
+      expect(idx, `${name} should register after telemetry`).toBeGreaterThan(telemetryIdx);
+    }
+  });
+
+  it("registers github-auth-validate in the cheap group (before telemetry) when a token exists", async () => {
+    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const validateIdx = registeredTaskNames.indexOf("github-auth-validate");
+    const telemetryIdx = registeredTaskNames.indexOf("telemetry");
+    expect(validateIdx).toBeGreaterThanOrEqual(0);
+    expect(validateIdx).toBeLessThan(telemetryIdx);
+  });
+
+  it("registers builtin-commands as a deferred task that fires registerCommands only when run", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("builtin-commands");
+    expect(run).toBeDefined();
+    // Registration moved out of main-module eval (boot path) into the queue —
+    // the command-chunk imports must not fire before the drain.
+    expect(registerCommandsMock).not.toHaveBeenCalled();
+
+    run!();
+
+    expect(registerCommandsMock).toHaveBeenCalledTimes(1);
   });
 
   it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {

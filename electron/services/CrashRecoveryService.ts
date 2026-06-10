@@ -78,6 +78,10 @@ export class CrashRecoveryService {
   // files are deleted, rotated, or overwritten between marker consumption and
   // the user resolving the recovery dialog.
   private cachedBackupSnapshot: SessionSnapshot | null = null;
+  // Memoized crash-recovery config — store.get re-reads and re-parses the
+  // whole config.json on every call, which is sync main-thread work inside
+  // the boot IPC handler. setConfig keeps the memo in sync with writes.
+  private cachedConfig: CrashRecoveryConfig | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -135,11 +139,13 @@ export class CrashRecoveryService {
   }
 
   getConfig(): CrashRecoveryConfig {
+    if (this.cachedConfig) return this.cachedConfig;
     const stored = store.get("crashRecovery");
-    return {
+    this.cachedConfig = {
       autoRestoreOnCrash:
         typeof stored?.autoRestoreOnCrash === "boolean" ? stored.autoRestoreOnCrash : true,
     };
+    return this.cachedConfig;
   }
 
   setConfig(patch: Partial<CrashRecoveryConfig>): CrashRecoveryConfig {
@@ -152,6 +158,7 @@ export class CrashRecoveryService {
       updated.autoRestoreOnCrash = patch.autoRestoreOnCrash;
     }
     store.set("crashRecovery", updated);
+    this.cachedConfig = updated;
     return updated;
   }
 

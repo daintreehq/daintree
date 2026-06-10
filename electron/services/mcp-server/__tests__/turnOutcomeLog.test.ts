@@ -49,6 +49,8 @@ interface Fixture {
   config: Record<string, unknown>;
   service: TurnOutcomeService;
   saveConfig: ReturnType<typeof vi.fn>;
+  logStore: { read: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn> };
+  getPersistedLog: () => unknown[];
   getSessionIdForTerminal: (terminalId: string) => string | null;
   getRecentAuditRecords: () => readonly McpAuditRecord[];
   flushPersist: () => void;
@@ -57,6 +59,7 @@ interface Fixture {
 function makeFixture(
   opts: {
     initialConfig?: Record<string, unknown>;
+    initialLog?: unknown[];
     sessionId?: string | null;
     auditRecords?: McpAuditRecord[];
   } = {}
@@ -69,6 +72,13 @@ function makeFixture(
   const saveConfig = vi.fn((patch: Record<string, unknown>) => {
     Object.assign(config, patch);
   });
+  let persistedLog: unknown[] = [...(opts.initialLog ?? [])];
+  const logStore = {
+    read: vi.fn(() => persistedLog),
+    write: vi.fn((records: unknown[]) => {
+      persistedLog = records;
+    }),
+  };
   const sessionId = "sessionId" in opts ? opts.sessionId : "session-1";
   const getSessionIdForTerminal = vi.fn((_terminalId: string) => sessionId) as unknown as (
     terminalId: string
@@ -81,12 +91,15 @@ function makeFixture(
     readConfig: () => config,
     getSessionIdForTerminal,
     getRecentAuditRecords,
+    logStore,
   };
   const service = new TurnOutcomeService(deps);
   return {
     config,
     service,
     saveConfig,
+    logStore,
+    getPersistedLog: () => persistedLog,
     getSessionIdForTerminal,
     getRecentAuditRecords,
     flushPersist: () => {
@@ -506,19 +519,18 @@ describe("TurnOutcomeService.handleTransition", () => {
     expect(f.service.getRecords()[0]?.outcome).toBe("answered");
   });
 
-  it("flushNow persists pending records synchronously", () => {
+  it("flushNow persists pending records synchronously to the log store", () => {
     const f = makeFixture();
     f.service.appendOutput("term-1", "Done — the file was updated and the tests pass cleanly.");
     f.service.handleTransition(
       makeTransition({ previousState: "working", state: "idle", trigger: "output" })
     );
-    expect(f.saveConfig).not.toHaveBeenCalledWith(
-      expect.objectContaining({ turnOutcomeLog: expect.any(Array) })
-    );
+    expect(f.logStore.write).not.toHaveBeenCalled();
     f.flushPersist();
-    expect(f.saveConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ turnOutcomeLog: expect.any(Array) })
-    );
+    expect(f.logStore.write).toHaveBeenCalledTimes(1);
+    expect(f.getPersistedLog()).toHaveLength(1);
+    // The ring never travels through the config patch.
+    expect(f.saveConfig).not.toHaveBeenCalled();
   });
 
   it("hydrates persisted records on first read", () => {
@@ -531,13 +543,7 @@ describe("TurnOutcomeService.handleTransition", () => {
         outcome: "answered",
       },
     ];
-    const f = makeFixture({
-      initialConfig: {
-        auditEnabled: true,
-        auditMaxRecords: 500,
-        turnOutcomeLog: persisted,
-      },
-    });
+    const f = makeFixture({ initialLog: persisted });
     expect(f.service.getRecords()).toHaveLength(1);
     expect(f.service.getRecords()[0]?.id).toBe("rec-1");
   });

@@ -12,7 +12,13 @@ const registryMock = vi.hoisted(() => ({
   getEffectiveAgentIds: vi.fn(() => ["claude", "codex"]),
 }));
 
+const bootMock = vi.hoisted(() => ({
+  getSafeBootPromise: vi.fn(async () => ({ ok: false as const, error: new Error("no boot") })),
+}));
+
 vi.mock("@/clients", () => ({ agentSettingsClient: clientMock }));
+
+vi.mock("@/lib/bootPromise", () => ({ getSafeBootPromise: bootMock.getSafeBootPromise }));
 
 vi.mock("../../../shared/config/agentRegistry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../shared/config/agentRegistry")>();
@@ -90,7 +96,10 @@ describe("agentSettingsStore adversarial", () => {
     const p1 = useAgentSettingsStore.getState().initialize();
     const p2 = useAgentSettingsStore.getState().initialize();
 
-    expect(clientMock.get).toHaveBeenCalledTimes(1);
+    // initialize() consults the boot payload before the live client, so the
+    // client fetch lands a few microtasks in — wait for it before asserting
+    // the dedupe.
+    await vi.waitFor(() => expect(clientMock.get).toHaveBeenCalledTimes(1));
 
     resolveGet({ agents: { claude: { pinned: true, enabled: true, flags: {} } } });
     await Promise.all([p1, p2]);
@@ -665,6 +674,58 @@ describe("agentSettingsStore adversarial", () => {
     expect(state.settings?.agents.claude?.pinned).toBeUndefined();
   });
 
+  it("initialize seeds from the boot payload without a live client fetch", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
+    bootMock.getSafeBootPromise.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        agentSettings: {
+          settingsVersion: 1,
+          agents: {
+            claude: { pinned: true, customFlags: "--from-boot" },
+            codex: { pinned: false, customFlags: "" },
+          },
+        },
+      },
+    } as never);
+
+    await useAgentSettingsStore.getState().initialize();
+
+    expect(clientMock.get).not.toHaveBeenCalled();
+    const state = useAgentSettingsStore.getState();
+    expect(state.isInitialized).toBe(true);
+    expect(state.settings?.agents.claude?.customFlags).toBe("--from-boot");
+  });
+
+  it("initialize falls back to the live client when the boot payload failed", async () => {
+    bootMock.getSafeBootPromise.mockResolvedValueOnce({
+      ok: false,
+      error: new Error("boot IPC down"),
+    } as never);
+    clientMock.get.mockResolvedValue({ settingsVersion: 1, agents: {} });
+
+    await useAgentSettingsStore.getState().initialize();
+
+    expect(clientMock.get).toHaveBeenCalledTimes(1);
+    expect(useAgentSettingsStore.getState().isInitialized).toBe(true);
+  });
+
+  it("initialize falls back to the live client when the boot payload was released", async () => {
+    // `releaseBootPayload()` nulls `agentSettings` after hydration — a
+    // re-initialize after cleanup must hit the live client, not crash on the
+    // released field.
+    bootMock.getSafeBootPromise.mockResolvedValueOnce({
+      ok: true,
+      result: { agentSettings: undefined },
+    } as never);
+    clientMock.get.mockResolvedValue({ settingsVersion: 1, agents: {} });
+
+    await useAgentSettingsStore.getState().initialize();
+
+    expect(clientMock.get).toHaveBeenCalledTimes(1);
+    expect(useAgentSettingsStore.getState().isInitialized).toBe(true);
+  });
+
   it("initialize after a concurrent refresh flips isInitialized even when the result is stale", async () => {
     registryMock.getEffectiveAgentIds.mockReturnValue(["claude"]);
     setAvailability({ claude: "ready" }, true);
@@ -679,9 +740,12 @@ describe("agentSettingsStore adversarial", () => {
       )
       .mockResolvedValueOnce({ agents: { claude: { pinned: false } } });
 
-    // Kick off init; it holds initPromise. While in-flight, another caller
-    // triggers a refresh (bumping the epoch and invalidating init).
+    // Kick off init; it holds initPromise. Wait for it to reach the client
+    // (it consults the boot payload first) so the mocked `get` order below
+    // stays init-then-refresh. While in-flight, another caller triggers a
+    // refresh (bumping the epoch and invalidating init).
     const initPending = useAgentSettingsStore.getState().initialize();
+    await vi.waitFor(() => expect(clientMock.get).toHaveBeenCalledTimes(1));
     useAgentSettingsStore.setState({ isInitialized: false, isLoading: true });
     const concurrent = useAgentSettingsStore.getState().refresh();
     await concurrent;

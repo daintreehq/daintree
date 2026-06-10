@@ -13,7 +13,11 @@ import type {
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
-import type { AssistantTurnRecord, McpAuditRecord } from "../shared/types/ipc/mcpServer.js";
+import type {
+  AssistantTurnRecord,
+  McpAuditRecord,
+  McpLogRecord,
+} from "../shared/types/ipc/mcpServer.js";
 import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/mcpServer.js";
 import type { PluginActionAuditRecord } from "../shared/types/ipc/pluginAudit.js";
 import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginAudit.js";
@@ -43,6 +47,11 @@ interface WindowStateEntry {
 
 interface WindowStatesStoreSchema {
   windowStates: Record<string, WindowStateEntry>;
+}
+
+interface AuditLogsStoreSchema {
+  mcpAuditLog: McpLogRecord[];
+  mcpTurnOutcomeLog: AssistantTurnRecord[];
 }
 
 export interface StoreSchema {
@@ -226,7 +235,9 @@ export interface StoreSchema {
     fullToolSurface: boolean;
     auditEnabled: boolean;
     auditMaxRecords: number;
+    /** @deprecated Moved to the audit-logs store by migration022. Read-only carryover. */
     auditLog?: McpAuditRecord[];
+    /** @deprecated Moved to the audit-logs store by migration022. Read-only carryover. */
     turnOutcomeLog?: AssistantTurnRecord[];
     abusePolicyEnabled: boolean;
     abusePolicyMaxDenials: number;
@@ -978,6 +989,59 @@ export const windowStatesStore = new Proxy({} as Store<WindowStatesStoreSchema>,
   },
   has(_target, prop) {
     const instance = initializeWindowStatesStore();
+    return Reflect.has(instance as object, prop);
+  },
+});
+
+let auditLogsInstance: Store<AuditLogsStoreSchema> | undefined;
+
+function initializeAuditLogsStore(): Store<AuditLogsStoreSchema> {
+  if (auditLogsInstance) return auditLogsInstance;
+  try {
+    const created = new Store<AuditLogsStoreSchema>({
+      name: "audit-logs",
+      cwd: storeOptions.cwd,
+      defaults: { mcpAuditLog: [], mcpTurnOutcomeLog: [] },
+      clearInvalidConfig: true,
+      configFileMode: 0o600,
+    });
+    tightenFilePermissions(created.path);
+    auditLogsInstance = created;
+    return created;
+  } catch (error) {
+    console.warn("[Store] Failed to initialize audit-logs store, using in-memory fallback:", error);
+    const memoryStore = new Map();
+    const fallback = {
+      get: (key: string) => memoryStore.get(key),
+      set: (key: string, value: unknown) => memoryStore.set(key, value),
+      delete: (key: string) => memoryStore.delete(key),
+      has: (key: string) => memoryStore.has(key),
+      clear: () => memoryStore.clear(),
+      store: {},
+      path: "",
+    } as unknown as Store<AuditLogsStoreSchema>;
+    auditLogsInstance = fallback;
+    return fallback;
+  }
+}
+
+// Lazy like the main `store` Proxy: the audit rings can grow to multiple MB
+// and are only needed when an MCP audit consumer reads or flushes — never
+// during bootstrap, so the sync read+parse of audit-logs.json is deferred.
+export const auditLogsStore = new Proxy({} as Store<AuditLogsStoreSchema>, {
+  get(_target, prop) {
+    const instance = initializeAuditLogsStore();
+    const value = Reflect.get(instance as object, prop, instance);
+    return typeof value === "function"
+      ? (value as (...args: unknown[]) => unknown).bind(instance)
+      : value;
+  },
+  set(_target, prop, value) {
+    const instance = initializeAuditLogsStore();
+    return Reflect.set(instance as object, prop, value, instance);
+  },
+  has(_target, prop) {
+    const instance = initializeAuditLogsStore();
     return Reflect.has(instance as object, prop);
   },
 });

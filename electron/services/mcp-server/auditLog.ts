@@ -19,6 +19,7 @@ import {
   isAuditRecord,
   isGrantRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
+import { auditLogsStore } from "../../store.js";
 import type { McpTier } from "./shared.js";
 import {
   AUDIT_FLUSH_DEBOUNCE_MS,
@@ -38,6 +39,20 @@ const FAILURE_CLUSTER_WINDOW = 10;
 const FAILURE_CLUSTER_MIN_FAILURES = 3;
 const MAD_SCALE_FACTOR = 0.6745;
 const P95_Z_SCORE_MIN_TOOLS = 5;
+
+export interface McpAuditLogStore {
+  read(): unknown;
+  write(records: McpLogRecord[]): void;
+}
+
+// Persists the ring in the dedicated audit-logs store so settings writes to
+// config.json stay decoupled from audit appends and bootstrap never pays the
+// parse cost of the rings. `auditEnabled` / `auditMaxRecords` stay in
+// config.json (`mcpServer`), read via the injected config closures.
+const defaultLogStore: McpAuditLogStore = {
+  read: () => auditLogsStore.get("mcpAuditLog"),
+  write: (records) => auditLogsStore.set("mcpAuditLog", records),
+};
 
 function percentile(values: number[], p: number): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -73,14 +88,15 @@ export class AuditService {
 
   constructor(
     private readonly saveConfig: (patch: Record<string, unknown>) => void,
-    private readonly readConfig: () => Record<string, unknown>
+    private readonly readConfig: () => Record<string, unknown>,
+    private readonly logStore: McpAuditLogStore = defaultLogStore
   ) {}
 
   hydrate(): void {
     if (this.hydrated) return;
-    const config = this.readConfig();
-    const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
-    const cap = this.normalizeMaxRecords(config.auditMaxRecords);
+    const stored = this.logStore.read();
+    const persisted = Array.isArray(stored) ? stored : [];
+    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
     const safe = persisted.filter(
       (r: unknown): r is Record<string, unknown> => r !== null && typeof r === "object"
     );
@@ -536,7 +552,7 @@ export class AuditService {
   private flush(): void {
     if (!this.hydrated) return;
     try {
-      this.saveConfig({ auditLog: [...this.records] });
+      this.logStore.write([...this.records]);
     } catch (err) {
       console.error("[MCP] Failed to flush audit log:", err);
     }

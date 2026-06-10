@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-// eslint-disable-next-line no-restricted-imports
+
 import { worktreeClient, copyTreeClient, forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";

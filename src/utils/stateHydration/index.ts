@@ -235,38 +235,48 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       return null;
     });
 
+    // Each of these rides along in the batched hydrate payload when the main
+    // process is new enough; the standalone IPC calls only fire as a fallback
+    // when the field is absent (older main process, or the safe-boot
+    // {ok:false} payload). Mirrors the systemTmpDir fallback above.
     const tabGroupsPromise =
       currentProjectId && options.hydrateTabGroups
-        ? projectClient
-            .getTabGroups(currentProjectId)
-            .then((tabGroups) => tabGroups ?? [])
-            .catch((error) => {
-              logWarn("Failed to prefetch tab groups", { error });
-              return null;
-            })
+        ? hydrateResult.tabGroups !== undefined
+          ? Promise.resolve(hydrateResult.tabGroups)
+          : projectClient
+              .getTabGroups(currentProjectId)
+              .then((tabGroups) => tabGroups ?? [])
+              .catch((error) => {
+                logWarn("Failed to prefetch tab groups", { error });
+                return null;
+              })
         : null;
 
     type TerminalSizeMap = Record<string, { cols: number; rows: number }>;
     const emptyTerminalSizes: TerminalSizeMap = {};
     const terminalSizesPromise: Promise<TerminalSizeMap> = currentProjectId
-      ? projectClient
-          .getTerminalSizes(currentProjectId)
-          .then((sizes) => sizes ?? emptyTerminalSizes)
-          .catch((error) => {
-            logWarn("Failed to prefetch terminal sizes", { error });
-            return emptyTerminalSizes;
-          })
+      ? hydrateResult.terminalSizes !== undefined
+        ? Promise.resolve(hydrateResult.terminalSizes)
+        : projectClient
+            .getTerminalSizes(currentProjectId)
+            .then((sizes) => sizes ?? emptyTerminalSizes)
+            .catch((error) => {
+              logWarn("Failed to prefetch terminal sizes", { error });
+              return emptyTerminalSizes;
+            })
       : Promise.resolve(emptyTerminalSizes);
 
     const emptyDraftInputs: Record<string, string> = {};
     const draftInputsPromise: Promise<Record<string, string>> = currentProjectId
-      ? projectClient
-          .getDraftInputs(currentProjectId)
-          .then((drafts) => drafts ?? emptyDraftInputs)
-          .catch((error) => {
-            logWarn("Failed to prefetch draft inputs", { error });
-            return emptyDraftInputs;
-          })
+      ? hydrateResult.draftInputs !== undefined
+        ? Promise.resolve(hydrateResult.draftInputs)
+        : projectClient
+            .getDraftInputs(currentProjectId)
+            .then((drafts) => drafts ?? emptyDraftInputs)
+            .catch((error) => {
+              logWarn("Failed to prefetch draft inputs", { error });
+              return emptyDraftInputs;
+            })
       : Promise.resolve(emptyDraftInputs);
 
     const emptyProjectPresets: Record<string, AgentPreset[]> = {};

@@ -24,6 +24,17 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
+import type {
+  GlobalSettingsTab,
+  ProjectSettingsTab,
+  SettingsScope,
+  SettingsTab,
+} from "./settingsTabIds";
+
+// Boot-path consumers import the ids/validators from settingsTabIds (no
+// component imports); re-export them so registry consumers are untouched.
+export { isSettingsTab, scopeForTab } from "./settingsTabIds";
+export type { GlobalSettingsTab, ProjectSettingsTab, SettingsScope, SettingsTab };
 
 // ── Entry types ─────────────────────────────────────────────────────────
 
@@ -43,7 +54,9 @@ export interface SettingsSectionMeta {
 }
 
 export interface SettingsTabEntry {
-  readonly id: string;
+  // Typed against the settingsTabIds tuples so an id added here without a
+  // matching tuple entry fails to compile (drift guard, direction 1).
+  readonly id: SettingsTab;
   readonly scope: "global" | "project";
   readonly group: string;
   readonly label: string;
@@ -1650,15 +1663,17 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 ] as const satisfies readonly AnySettingsTabEntry[];
 
-// ── Tab id types (derived from registry by scope) ───────────────────────
+// ── Drift guards against settingsTabIds (direction 2) ───────────────────
+// Direction 1 (registry id must exist in the tuples) is the `id: SettingsTab`
+// field on SettingsTabEntry. Direction 2: every tuple id must have a
+// registered entry — `_Missing` is non-never (and this fails to compile) when
+// an id is added to settingsTabIds without a registry entry.
 
 type ProjectScopedEntry = Extract<(typeof SETTINGS_REGISTRY)[number], { scope: "project" }>;
-type GlobalScopedEntry = Extract<(typeof SETTINGS_REGISTRY)[number], { scope: "global" }>;
 
-export type ProjectSettingsTab = ProjectScopedEntry["id"];
-export type GlobalSettingsTab = GlobalScopedEntry["id"];
-export type SettingsTab = GlobalSettingsTab | ProjectSettingsTab;
-export type SettingsScope = "global" | "project";
+type _Missing = Exclude<SettingsTab, (typeof SETTINGS_REGISTRY)[number]["id"]>;
+const _assertAllRegistered: _Missing extends never ? true : never = true;
+void _assertAllRegistered;
 
 // ── Project tab search metadata (parallel to SETTINGS_REGISTRY entries) ──
 
@@ -1842,7 +1857,8 @@ export const PROJECT_TAB_IDS: readonly ProjectSettingsTab[] = SETTINGS_REGISTRY.
 
 // ── Derived maps ────────────────────────────────────────────────────────
 
-const _entryMap = new Map(SETTINGS_REGISTRY.map((e) => [e.id, e]));
+// Keyed as `string` so `getSettingsTabEntry` keeps accepting unvalidated ids.
+const _entryMap = new Map<string, AnySettingsTabEntry>(SETTINGS_REGISTRY.map((e) => [e.id, e]));
 
 export function getSettingsTabEntry(id: string): AnySettingsTabEntry | undefined {
   return _entryMap.get(id);
@@ -1893,14 +1909,6 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
   "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
 };
-
-export function scopeForTab(tab: SettingsTab): SettingsScope {
-  return tab.startsWith("project:") ? "project" : "global";
-}
-
-export function isSettingsTab(value: string): value is SettingsTab {
-  return _entryMap.has(value);
-}
 
 export function preloadAllSettingsTabs(): void {
   for (const entry of SETTINGS_REGISTRY) {

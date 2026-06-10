@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
+import {
+  GLOBAL_SETTINGS_TAB_IDS,
+  PROJECT_SETTINGS_TAB_IDS,
+} from "@/components/Settings/settingsTabIds";
 
 export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]);
 
@@ -25,32 +29,16 @@ export const TerminalSpawnSourceSchema = z.enum(["quickrun", "recipe", "agent", 
  */
 export const AddPanelFocusPolicySchema = z.enum(["auto", "preserve", "take"]);
 
+// Derived from the settingsTabIds tuples so the action schema can't drift from
+// the registry (the previous hand-written enum was missing plugins,
+// plugin-actions, and run-history). The legacy aliases stay accepted because
+// ActionService validates argsSchema BEFORE dispatch reaches the handler —
+// useSettingsDialog normalizes them to "code-forge" (TODO #8329).
 export const SettingsTabSchema = z.enum([
-  "general",
-  "keyboard",
-  "terminal",
-  "terminalAppearance",
-  "worktree",
-  "agents",
-  "assistant",
-  "code-forge",
-  "portal",
-  "toolbar",
-  "integrations",
-  "notifications",
-  "voice",
-  "mcp",
-  "environment",
-  "privacy",
-  "troubleshooting",
-  "project:general",
-  "project:context",
-  "project:variables",
-  "project:automation",
-  "project:recipes",
-  "project:commands",
-  "project:notifications",
-  "project:code-forge",
+  ...GLOBAL_SETTINGS_TAB_IDS,
+  ...PROJECT_SETTINGS_TAB_IDS,
+  "github",
+  "forge",
 ]);
 
 export const SettingsNavTargetSchema = z.object({

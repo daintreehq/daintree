@@ -186,6 +186,15 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           /* non-critical — next pr-detection-state push corrects it */
         });
 
+      // Manual issue associations live in the electron store, not the
+      // workspace host — fetch them concurrently with the `get-all-states`
+      // round-trip instead of serializing behind it. The `.catch` at creation
+      // is load-bearing twice over: it preserves the #8079 "undefined = keep
+      // cached associations" failure semantics, and it prevents an unhandled
+      // rejection when the handler below returns early (generation/isReady
+      // guards) and never awaits the promise.
+      const associationsPromise = worktreeClient.getAllIssueAssociations().catch(() => undefined);
+
       worktreePort
         .request("get-all-states")
         .then(
@@ -205,9 +214,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
 
             // Hydrate the persistent watcher-degraded indicator from the
             // handshake so a late-mounting view reflects current state without
-            // waiting for a live event. Set before the async associations fetch
-            // so a degradation/recovery event delivered during that await wins
-            // over this now-stale snapshot value.
+            // waiting for a live event. Set before the associations await so a
+            // degradation/recovery event delivered during that await wins over
+            // this now-stale snapshot value.
             store.getState().setWatcherDegraded(response.watcherDegraded ?? false);
             // Hydrate the parallel topology-watcher-dark indicator the same way
             // (#9908), before the await, for the same race reason. A view that
@@ -244,16 +253,8 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // cached". An empty object means "authoritatively no associations".
             // Defaulting to `{}` on failure would wipe cached manual
             // associations on a transient IPC error (#8079 review).
-            let associations:
-              | Record<string, { issueNumber: number; issueTitle?: string }>
-              | undefined;
-            try {
-              associations = await worktreeClient.getAllIssueAssociations();
-              if (thisGen !== generation) return;
-            } catch {
-              // Non-critical — keep cached associations (associations stays undefined)
-              if (thisGen !== generation) return;
-            }
+            const associations = await associationsPromise;
+            if (thisGen !== generation) return;
 
             // If the host crashed during the associations fetch (a separate IPC
             // that port-close cannot reject), skip applySnapshot so it does not

@@ -103,11 +103,13 @@ export function getSafeBootPromise(): Promise<SafeBootResult> {
  * Free the heavy boot payload once hydration has copied it into Zustand. The
  * resolved `BootResult` is reachable for the renderer's life via the cached
  * thenables' `value` fields (React `use()` reads them synchronously), so its
- * large sub-objects (`appState`, `terminalConfig`, `agentSettings`) would
- * otherwise leak forever. The promise references themselves stay stable — only
- * the consumed sub-fields are nulled. The crash fields (`crashPending`,
- * `crashConfig`) are intentionally left intact: they are still read from the
- * cached payload after hydration. Call exactly once, after hydration settles.
+ * large sub-objects (`appState`, `terminalConfig`, `agentSettings`, and the
+ * per-project `tabGroups`/`terminalSizes`/`draftInputs` — the latter holding
+ * user-typed draft text) would otherwise leak forever. The promise references
+ * themselves stay stable — only the consumed sub-fields are nulled. The crash
+ * fields (`crashPending`, `crashConfig`) are intentionally left intact: they
+ * are still read from the cached payload after hydration. Call exactly once,
+ * after hydration settles.
  */
 export function releaseBootPayload(): void {
   const releaseFrom = (result: BootResult | undefined): void => {
@@ -115,6 +117,9 @@ export function releaseBootPayload(): void {
     result.appState = undefined as unknown as BootResult["appState"];
     result.terminalConfig = undefined as unknown as BootResult["terminalConfig"];
     result.agentSettings = undefined as unknown as BootResult["agentSettings"];
+    result.tabGroups = undefined;
+    result.terminalSizes = undefined;
+    result.draftInputs = undefined;
   };
 
   releaseFrom((bootPromise as ReactThenable<BootResult> | null)?.value);
