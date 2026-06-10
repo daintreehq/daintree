@@ -5,6 +5,8 @@ import { registerReviewDecorationProvider } from "./reviewDecorationProvider.js"
 import { startCacheSweep, stopCacheSweep, clearGitHubCaches } from "./GitHubCaches.js";
 import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
 import { GitHubAuth } from "./GitHubAuth.js";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
+import { store } from "../../../../electron/store.js";
 
 // Token STORAGE is plugin-owned (formerly eager in globalServicesInit) and
 // wires up at the top of activate(): persisted tokens live in electron-store
@@ -24,14 +26,32 @@ function initializeTokenStorage(): void {
 // Skips token validation by pre-seeding cached user info, mirroring the
 // post-validate state. Mirrors the __daintreeFaultRegistry pattern — gated
 // on DAINTREE_E2E_FAULT_MODE, never present in production.
+//
+// Post-forge-neutral the renderer's "connected" gate reads
+// `forge.getCredentialStatus` (the durable `forgeCredentials` store), NOT the
+// in-memory GitHubAuth token, so the seed must write BOTH: the memory token
+// for the impl's network calls and the forge-credential store entry for the
+// renderer config store (#10347).
 if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+  const setForgeCredentialPresence = (token: string | null): void => {
+    const existing = store.get("forgeCredentials") ?? {};
+    const next = { ...existing };
+    if (token) {
+      next[BUILTIN_GITHUB_PROVIDER_ID] = JSON.stringify({ token });
+    } else {
+      delete next[BUILTIN_GITHUB_PROVIDER_ID];
+    }
+    store.set("forgeCredentials", next);
+  };
   (globalThis as Record<string, unknown>).__daintreeSeedGitHubToken = (token: string) => {
     GitHubAuth.setMemoryToken(token);
     const version = GitHubAuth.getTokenVersion();
     GitHubAuth.setValidatedUserInfo("e2e-user", undefined, ["repo"], version);
+    setForgeCredentialPresence(token);
   };
   (globalThis as Record<string, unknown>).__daintreeClearGitHubToken = () => {
     GitHubAuth.setMemoryToken(null);
+    setForgeCredentialPresence(null);
   };
 }
 
@@ -75,8 +95,6 @@ async function syncCredentialsToWorkspaceHosts(): Promise<void> {
   if (!token) return;
   try {
     const { getWorkspaceClient } = await import("../../../../electron/services/WorkspaceClient.js");
-    const { BUILTIN_GITHUB_PROVIDER_ID } =
-      await import("../../../../shared/utils/forgeProviderIds.js");
     getWorkspaceClient().updateForgeCredentials(BUILTIN_GITHUB_PROVIDER_ID, {
       kind: "bearer",
       value: token,

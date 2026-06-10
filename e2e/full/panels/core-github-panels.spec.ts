@@ -14,6 +14,8 @@ import {
   stubListIssues,
   restoreListIssues,
   makeFixtureIssue,
+  stubRepoStats,
+  restoreRepoStats,
 } from "../../helpers/githubHelpers";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM } from "../../helpers/timeouts";
@@ -30,13 +32,18 @@ let fixtureCleanup: (() => void) | undefined;
 async function openIssuesDropdown(window: Page): Promise<void> {
   const pill = window.locator(SEL.github.statPillIssues);
   await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+  // A token-error pill routes clicks to Settings instead of opening the
+  // dropdown (#10347), and `isTokenError` only clears once the stats hook
+  // re-fetches with the freshly seeded token — wait out that propagation
+  // window before clicking.
+  await expect(pill).not.toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
   await pill.scrollIntoViewIfNeeded();
   await pill.click();
 }
 
 test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)", () => {
   test.beforeAll(async () => {
-    const { dir, cleanup } = createFixtureRepo({ name: "github-panels" });
+    const { dir, cleanup } = createFixtureRepo({ name: "github-panels", withGitHubRemote: true });
     fixtureCleanup = cleanup;
     ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "GitHub Panels Test");
@@ -45,6 +52,7 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
   test.afterEach(async () => {
     await clearAllFaults(ctx.app);
     await restoreListIssues(ctx.app);
+    await restoreRepoStats(ctx.app);
     await pushRateLimitClear(ctx.app);
     await pushTokenHealthHealthy(ctx.app);
     await clearGitHubToken(ctx.app);
@@ -60,19 +68,38 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     fixtureCleanup?.();
   });
 
-  test("issues dropdown shows the not-connected empty state without a token", async () => {
+  test("clicking the issues pill without a token routes to forge settings", async () => {
     const { window } = ctx;
     await clearGitHubToken(ctx.app);
     await refreshGitHubConfig(window);
 
-    await openIssuesDropdown(window);
+    // Token-error pills don't open the dropdown — the click routes to
+    // Settings → Code Forge so the user lands on the fix, not a dead list
+    // (ForgeStatsToolbarButton onClick, #10347 forge-neutral rework). Pin the
+    // stats state to a token error so the routing decision is deterministic.
+    const pill = window.locator(SEL.github.statPillIssues);
+    await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+    await stubRepoStats(ctx.app, {
+      issueCount: null,
+      prCount: null,
+      error: "GitHub token not configured",
+    });
+    await expect(pill).toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
+    await pill.click();
 
-    await expect(window.locator(SEL.github.noTokenEmptyState)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.tokenBlock)).toBeVisible({ timeout: T_MEDIUM });
+    await window.locator(SEL.settings.closeButton).click();
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("issues dropdown renders search and filter chrome when connected", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 });
+    // The fake E2E token can't satisfy a real list fetch — without a stub the
+    // dropdown falls back to its not-connected surface instead of the chrome.
+    await stubListIssues(ctx.app, [makeFixtureIssue(201, "E2E chrome issue")]);
 
     await openIssuesDropdown(window);
 
@@ -84,6 +111,7 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
   test("bulk-selecting issues opens the create-worktrees dialog", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 });
     await stubListIssues(ctx.app, [
       makeFixtureIssue(101, "E2E issue one"),
       makeFixtureIssue(102, "E2E issue two"),
@@ -114,6 +142,7 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
   test("issues dropdown shows the paused state under a rate-limit block", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 0, prCount: 0, commitCount: 5 });
     // Empty list so the rate-limit empty-state (not a data row) is the surface.
     await stubListIssues(ctx.app, []);
 
@@ -141,9 +170,12 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
   test("PR dropdown renders search chrome when connected", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 });
 
     const pill = window.locator(SEL.github.statPillPrs);
     await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+    // Same token-error propagation wait as openIssuesDropdown.
+    await expect(pill).not.toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
     await pill.scrollIntoViewIfNeeded();
     await pill.click();
 

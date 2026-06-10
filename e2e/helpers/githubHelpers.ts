@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds";
-import type { Issue, Page } from "../../shared/types/forge";
+import type { Issue, Page as ForgePage } from "../../shared/types/forge";
 
 /**
  * GitHub E2E helpers. All state is injected through the same fault-mode hooks
@@ -132,6 +132,88 @@ export async function pushTokenHealthHealthy(app: ElectronApplication): Promise<
   });
 }
 
+/**
+ * Replace the `forge:get-repo-stats` IPC handler with one returning fixture
+ * counts. The real stats fetch hits the provider's network path, which with
+ * the fake E2E token is a live 401 on networked runners and a network failure
+ * offline — so `isTokenError`, the freshness level, and the pill's click
+ * routing (#10347) would otherwise be nondeterministic, AND the polling loop
+ * would keep clobbering any one-shot pushed counts with a "couldn't refresh"
+ * error. Stubbing the handler makes every poll return the same fixed snapshot.
+ * Pass `error` to force a failure state — token-pattern messages flip the pill
+ * into its route-to-settings mode. Stash/restore mirrors {@link stubListIssues}.
+ */
+export async function stubRepoStats(
+  app: ElectronApplication,
+  stats: {
+    issueCount: number | null;
+    prCount: number | null;
+    commitCount?: number;
+    error?: string;
+  },
+  window?: Page
+): Promise<void> {
+  const now = Date.now();
+  const response = {
+    commitCount: stats.commitCount ?? 1,
+    issueCount: stats.issueCount,
+    prCount: stats.prCount,
+    loading: false,
+    error: stats.error,
+    lastUpdated: now,
+    issueCountRefreshedAt: now,
+    prCountRefreshedAt: now,
+  };
+  await app.evaluate(
+    ({ ipcMain }, { channel, response }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private Electron API
+      const handlers = (ipcMain as any)._invokeHandlers as Map<string, unknown> | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stash for restore
+      if (handlers && handlers.has(channel) && !(globalThis as any).__e2eOrigRepoStatsHandler) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stash for restore
+        (globalThis as any).__e2eOrigRepoStatsHandler = handlers.get(channel);
+      }
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, async () => response);
+    },
+    { channel: "forge:get-repo-stats", response }
+  );
+  // Replacing the handler only fixes FUTURE polls; the stats hook keeps any
+  // error state from a fetch that already landed until the next poll (a long
+  // interval). When a `window` is supplied, also push the counts straight onto
+  // the hook via the `forge:repo-counts-updated` broadcast so the pill updates
+  // immediately — needed by tests that assert on pill state right away rather
+  // than waiting out a re-poll.
+  if (window) {
+    const project = (await window.evaluate(() => window.electron.project.getCurrent())) as {
+      path: string;
+    } | null;
+    if (project) {
+      await broadcastToRenderers(app, "forge:repo-counts-updated", {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        projectPath: project.path,
+        stats: response,
+        fetchedAt: now,
+      });
+    }
+  }
+}
+
+/** Restore the real `forge:get-repo-stats` handler captured by {@link stubRepoStats}. */
+export async function restoreRepoStats(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ ipcMain }, channel) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private Electron API
+    const handlers = (ipcMain as any)._invokeHandlers as Map<string, unknown> | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- restore stashed handler
+    const orig = (globalThis as any).__e2eOrigRepoStatsHandler;
+    if (!orig) return;
+    ipcMain.removeHandler(channel);
+    if (handlers) handlers.set(channel, orig);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cleanup stash
+    delete (globalThis as any).__e2eOrigRepoStatsHandler;
+  }, "forge:get-repo-stats");
+}
+
 /** Build a minimal fixture issue (forge shape) for list stubbing. */
 export function makeFixtureIssue(number: number, title: string): Issue {
   const updatedAt = Date.now() - number * 60_000;
@@ -159,7 +241,7 @@ export function makeFixtureIssue(number: number, title: string): Issue {
  * is stashed on `globalThis` and restored by {@link restoreListIssues}.
  */
 export async function stubListIssues(app: ElectronApplication, issues: Issue[]): Promise<void> {
-  const response: Page<Issue> = {
+  const response: ForgePage<Issue> = {
     items: issues,
     nextCursor: null,
     hasMore: false,

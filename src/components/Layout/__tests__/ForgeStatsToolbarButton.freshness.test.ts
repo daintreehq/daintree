@@ -83,13 +83,15 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
     const pillSource = await fs.readFile(path.resolve(__dirname, "../ForgeStatPill.tsx"), "utf-8");
     expect(pillSource).toContain("h-full flex-1 justify-center");
     expect(pillSource).toContain("min-w-[2ch] text-center");
-    // The container width is dynamic — a constant 13rem budget for the three
-    // flex-1 pills plus a fixed slot per active trailing indicator — so the
+    // The container width is dynamic — a 13rem budget for the three flex-1
+    // pills (one third of it in commits-only mode, when no forge provider
+    // resolves) plus a fixed slot per active trailing indicator — so the
     // pills keep stable equal widths without the old fixed-width +
     // overflow-hidden combo clipping (and disabling hover on) the indicators.
     expect(source).toContain("flex h-8 shrink-0 items-center");
     expect(source).toContain("width: statsContainerWidth");
-    expect(source).toContain("calc(13rem +");
+    expect(source).toContain("forgeMode ? 13 : 13 / 3");
+    expect(source).toContain("calc(${statsBaseWidthRem}rem +");
   });
 
   it("parent className props do not introduce transition-all", () => {

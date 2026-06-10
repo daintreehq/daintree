@@ -330,8 +330,24 @@ function OverflowMenu({
       >
         {overflowIds.flatMap((id, idx) => {
           if (id === "forge-stats") {
-            if (!forgeProviderName) return [];
             const isLast = idx === overflowIds.length - 1;
+            // Without a resolved forge provider the visible slot is the
+            // commits-only pill — mirror that here: a local-git group with
+            // just the commit count (issues/PRs are forge data). The commits
+            // dropdown view is provider-supplied, so the no-forge item shows
+            // the count without an open action.
+            if (!forgeProviderName) {
+              return [
+                <DropdownMenuGroup key="forge-group">
+                  <DropdownMenuLabel>Git</DropdownMenuLabel>
+                  <DropdownMenuItem key="forge-commits" disabled>
+                    <GitCommit className="mr-2 h-4 w-4" />
+                    Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>,
+                ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
+              ];
+            }
             return [
               <DropdownMenuGroup key="forge-group">
                 <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
@@ -901,12 +917,13 @@ export function Toolbar({
         isAvailable: true,
       },
       "forge-stats": {
-        // Placeholder (not removal) when no forge provider resolves: the
+        // The button owns its own shape now: full three-segment pill with a
+        // resolved forge provider, commits-only without one (commit count is
+        // local git data). Placeholder (not removal) when no project: the
         // slot's no-drag rectangle must exist on first paint regardless
-        // (PROJECT_SCOPED_TOOLBAR_IDS), and the placeholder keeps the
-        // footprint stable across a live enable.
+        // (PROJECT_SCOPED_TOOLBAR_IDS).
         render: () =>
-          currentProject && forgeProviderEntry ? (
+          currentProject ? (
             <ForgeStatsToolbarButton
               key="forge-stats"
               ref={forgeStatsRef}
@@ -1054,7 +1071,6 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
-      forgeProviderEntry,
       pluginButtonIds,
       pluginConfigs,
       devServerShortcut,

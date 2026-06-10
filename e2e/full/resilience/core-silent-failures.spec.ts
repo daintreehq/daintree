@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { injectFault, clearAllFaults } from "../../helpers/ipcFaults";
+import { stubRepoStats, restoreRepoStats } from "../../helpers/githubHelpers";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
@@ -13,7 +14,10 @@ let fixtureCleanup: (() => void) | undefined;
 
 test.describe.serial("Core: Silent IPC Failure Detection", () => {
   test.beforeAll(async () => {
-    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "silent-failures" }));
+    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({
+      name: "silent-failures",
+      withGitHubRemote: true,
+    }));
     ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Silent Failures");
   });
@@ -53,6 +57,13 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
       await refresh();
     });
 
+    // Pin the toolbar stats to healthy counts so the issues pill stays in its
+    // normal "open issues" state. Otherwise the real repo-stats fetch with the
+    // fake token 401s, the message trips `isTokenError`, and the pill relabels
+    // to "Configure GitHub token…" (and routes clicks to Settings) — which is
+    // not what this test, scoped to the list-fetch fault, means to exercise.
+    await stubRepoStats(ctx.app, { issueCount: 2, prCount: 1, commitCount: 5 }, ctx.window);
+
     await injectFault(ctx.app, "forge:list-issues", "E2E_INJECTED_ERROR");
 
     const issuesButton = ctx.window.locator('button[aria-label*="open issues"]');
@@ -66,7 +77,8 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
 
     await ctx.window.keyboard.press("Escape");
 
-    // Clean up seeded token so subsequent tests start from a clean state.
+    // Clean up seeded token + stubbed stats so subsequent tests start clean.
+    await restoreRepoStats(ctx.app);
     await ctx.app.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
       const clear = (globalThis as any).__daintreeClearGitHubToken as (() => void) | undefined;

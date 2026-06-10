@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ForgeProviderEntry, ForgeProviderResolutionVia } from "@shared/types/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { logError } from "@/utils/logger";
@@ -28,8 +28,14 @@ const UNRESOLVED: ResolvedForgeProviderState = {
 const resolutionCache = new Map<string, ResolvedForgeProviderState>();
 
 // Monotonic per-project resolve sequence: a slow older round-trip must not
-// overwrite the state/cache written by a newer (e.g. provenance-triggered)
-// resolve.
+// overwrite the CACHE entry written by a newer (e.g. provenance-triggered)
+// resolve. This guard is shared across hook instances, so it must only gate
+// the shared cache — never an instance's own setState. Several instances
+// resolve the same project concurrently on every provenance event (Toolbar,
+// ForgeStatsToolbarButton, SidebarContent, useRepositoryStats); if the shared
+// seq gated setState, every instance except the last to increment would
+// discard its response and keep a stale entry — a live plugin disable left
+// the stats pill mounted while only the stats instance saw the change.
 const resolveSeq = new Map<string, number>();
 
 /**
@@ -47,12 +53,17 @@ export function useResolvedForgeProvider(
     projectId ? (resolutionCache.get(projectId) ?? { ...UNRESOLVED, loading: true }) : UNRESOLVED
   );
 
+  // This instance's latest resolve call. Gates setState: only a response to
+  // an older call from the SAME instance is stale for that instance. The
+  // shared resolveSeq cannot serve this purpose (see its doc comment).
+  const instanceSeqRef = useRef(0);
+
   const resolve = useCallback(async (id: string) => {
     const seq = (resolveSeq.get(id) ?? 0) + 1;
     resolveSeq.set(id, seq);
+    instanceSeqRef.current = seq;
     try {
       const resolved = await window.electron.forge.resolveProvider(id);
-      if (resolveSeq.get(id) !== seq) return null;
       const entry = resolved?.entry ?? null;
       const next: ResolvedForgeProviderState = {
         entry,
@@ -60,13 +71,14 @@ export function useResolvedForgeProvider(
         resolvedVia: resolved?.resolvedVia ?? null,
         loading: false,
       };
-      resolutionCache.set(id, next);
+      if (resolveSeq.get(id) === seq) resolutionCache.set(id, next);
+      if (instanceSeqRef.current !== seq) return null;
       return next;
     } catch (err) {
-      if (resolveSeq.get(id) !== seq) return null;
+      if (instanceSeqRef.current !== seq) return null;
       logError("Forge provider resolution failed", err);
       const next = { ...UNRESOLVED };
-      resolutionCache.set(id, next);
+      if (resolveSeq.get(id) === seq) resolutionCache.set(id, next);
       return next;
     }
   }, []);

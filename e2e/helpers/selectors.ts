@@ -376,9 +376,11 @@ export const SEL = {
     testButton: '[aria-label="Test token"]',
     saveButton: '[aria-label="Save token"]',
     connectedBadge: 'text="GitHub connected"',
-    // Toolbar stat pills (open the issue/PR dropdowns)
+    // Toolbar stat pills (open the issue/PR dropdowns; commits renders even
+    // with no forge provider — local git data)
     statPillIssues: '[data-testid="forge-stat-pill-issues"]',
     statPillPrs: '[data-testid="forge-stat-pill-prs"]',
+    statPillCommits: '[data-testid="forge-stat-pill-commits"]',
     // Resource dropdown (issues / pull requests)
     searchIssues: '[aria-label="Search issues"]',
     searchPrs: '[aria-label="Search pull requests"]',

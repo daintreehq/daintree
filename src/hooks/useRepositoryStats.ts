@@ -241,12 +241,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // Worker instances suppress automatic background polling to conserve the
   // provider's API quota (#10123) — on-demand `refresh()` stays functional.
   const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
-  // No resolved forge provider for the active project (no matching plugin, or
-  // the owning plugin is disabled) means the gated stats IPC rejects anyway —
-  // don't poll into a wall of FORGE_PROVIDER_UNAVAILABLE errors.
+  // Stats poll for any open project. With no resolved forge provider (no
+  // matching remote, or the owning plugin is disabled) the stats IPC returns
+  // a commit-only snapshot (issue/PR counts null) and the toolbar renders the
+  // commits-only pill — polling only waits out the resolution round-trip so
+  // the first fetch doesn't race a provider that is about to resolve.
   const currentProjectId = useProjectStore((s) => s.currentProject?.id ?? null);
-  const { entry: providerEntry, providerId } = useResolvedForgeProvider(currentProjectId);
-  const providerResolved = providerEntry !== null;
+  const { providerId, loading: providerLoading } = useResolvedForgeProvider(currentProjectId);
   // Ref mirror for the push subscriptions: payloads are providerId-keyed, and
   // the subscriber closures must compare against the live resolution without
   // re-subscribing on every resolve.
@@ -256,7 +257,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   }, [providerId]);
 
   const polling = usePollingLifecycle({
-    enabled: !isWorkerInstance && providerResolved,
+    enabled: !isWorkerInstance && currentProjectId !== null && !providerLoading,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();

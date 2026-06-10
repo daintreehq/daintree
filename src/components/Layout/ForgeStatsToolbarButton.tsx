@@ -109,11 +109,16 @@ export const ForgeStatsToolbarButton = memo(
     } = useRepositoryStats();
 
     // Active forge provider for this project — drives the dropdown content
-    // slot, display copy, and the render gate. `entry` drops to null live
-    // when the owning plugin is disabled, collapsing the pills with it.
-    const { entry: providerEntry, providerId } = useResolvedForgeProvider(
-      currentProject?.id ?? null
-    );
+    // slot, display copy, and which segments render. `entry` drops to null
+    // live when the owning plugin is disabled, collapsing the issue/PR
+    // segments down to the commits-only pill (commit count is local git, not
+    // forge data, so it stays useful without any provider).
+    const {
+      entry: providerEntry,
+      providerId,
+      loading: providerLoading,
+    } = useResolvedForgeProvider(currentProject?.id ?? null);
+    const forgeMode = providerEntry !== null && providerId !== null;
     const providerName = providerEntry?.contribution.name ?? "forge";
     const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
       providerEntry?.contribution.slots?.statsDropdown ?? ""
@@ -316,7 +321,10 @@ export const ForgeStatsToolbarButton = memo(
     // receive pointer events, which is why the rate-limit details tooltip
     // stopped opening on hover.
     const trailingIndicatorCount = (rateLimitActive ? 1 : 0) + (prCircuitTripped ? 1 : 0);
-    const statsContainerWidth = `calc(13rem + ${trailingIndicatorCount * 1.75}rem + ${trailingIndicatorCount}px)`;
+    // Commits-only mode keeps a single pill at its usual one-third share so
+    // the segment doesn't stretch to the full three-pill budget.
+    const statsBaseWidthRem = forgeMode ? 13 : 13 / 3;
+    const statsContainerWidth = `calc(${statsBaseWidthRem}rem + ${trailingIndicatorCount * 1.75}rem + ${trailingIndicatorCount}px)`;
 
     // Fetch the per-bucket breakdown when the tooltip opens, and tick a 1Hz
     // clock so the per-bucket countdowns animate locally without re-fetching.
@@ -821,10 +829,12 @@ export const ForgeStatsToolbarButton = memo(
       [stats, isTokenError, openSettingsForToken]
     );
 
-    // With no resolved forge provider (none matches the remote, or the owning
-    // plugin is disabled) the pills have no data source — the toolbar slot
-    // collapses entirely rather than showing dead affordances.
-    if (!currentProject || !providerEntry || !providerId) return null;
+    // No project: nothing to count. While provider resolution is in flight,
+    // render nothing rather than flashing the commits-only shape for a repo
+    // that is about to resolve a forge provider. Once settled, a repo with no
+    // provider keeps the commits-only pill — issue/PR segments are forge data
+    // and render only in forgeMode.
+    if (!currentProject || providerLoading) return null;
 
     return (
       <ContextMenu>
@@ -837,176 +847,181 @@ export const ForgeStatsToolbarButton = memo(
                 "var(--toolbar-stats-divider,var(--theme-border-subtle))",
             }}
           >
-            <ForgeStatPill
-              buttonRef={issuesButtonRef}
-              open={issuesOpen}
-              count={issueCount}
-              displayCount={issueDisplayCount}
-              animKey={issueAnimKey}
-              testId="forge-stat-pill-issues"
-              ariaLabel={
-                isTokenError
-                  ? `Configure ${providerName} token to see issues`
-                  : `${issueDisplayCount ?? "—"} open issues${
-                      showIssuesChip ? " (new since last view)" : ""
-                    }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-              }
-              tooltipContent={
-                isTokenError
-                  ? `Configure ${providerName} token to see issues`
-                  : freshnessLevel === "fresh"
-                    ? `Browse ${providerName} issues`
-                    : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-              }
-              icon={CircleDot}
-              iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
-              openRingClassName="ring-1 ring-pr-open/20"
-              className={cn(
-                isTokenError && "opacity-40",
-                !isTokenError && stats?.issueCount === 0 && "opacity-50"
-              )}
-              dropdownContent={
-                DropdownView ? (
-                  <DropdownView
-                    kind="issues"
-                    projectPath={currentProject.path}
-                    providerId={providerId}
-                    open={issuesOpen}
-                    initialCount={stats?.issueCount}
-                    onClose={() => {
-                      setIssuesOpen(false);
-                      issuesButtonRef.current?.focus();
-                    }}
-                    onFreshFetch={handleListFreshFetch}
-                    onCountUpdate={handleIssueListCountUpdate}
-                  />
-                ) : null
-              }
-              persistThroughChildOverlays
-              keepMounted
-              onClick={() => {
-                setPrsOpen(false);
-                setCommitsOpen(false);
-                if (isTokenError) {
-                  setIssuesOpen(false);
-                  openSettingsForToken();
-                  return;
+            {forgeMode ? (
+              <ForgeStatPill
+                buttonRef={issuesButtonRef}
+                open={issuesOpen}
+                count={issueCount}
+                displayCount={issueDisplayCount}
+                animKey={issueAnimKey}
+                testId="forge-stat-pill-issues"
+                ariaLabel={
+                  isTokenError
+                    ? `Configure ${providerName} token to see issues`
+                    : `${issueDisplayCount ?? "—"} open issues${
+                        showIssuesChip ? " (new since last view)" : ""
+                      }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
-                const willOpen = !issuesOpen;
-                setIssuesOpen(willOpen);
-                if (willOpen) setIssuesPulseAt(null);
-                if (
-                  willOpen &&
-                  (issueCountRefreshedAt == null ||
-                    Date.now() - issueCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
-                ) {
-                  refreshStats();
+                tooltipContent={
+                  isTokenError
+                    ? `Configure ${providerName} token to see issues`
+                    : freshnessLevel === "fresh"
+                      ? `Browse ${providerName} issues`
+                      : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
-              }}
-              onOpenChange={(open) => {
-                setIssuesOpen(open);
-                if (!open) {
-                  issuesButtonRef.current?.focus();
+                icon={CircleDot}
+                iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
+                openRingClassName="ring-1 ring-pr-open/20"
+                className={cn(
+                  isTokenError && "opacity-40",
+                  !isTokenError && stats?.issueCount === 0 && "opacity-50"
+                )}
+                dropdownContent={
+                  DropdownView && providerId ? (
+                    <DropdownView
+                      kind="issues"
+                      projectPath={currentProject.path}
+                      providerId={providerId}
+                      open={issuesOpen}
+                      initialCount={stats?.issueCount}
+                      onClose={() => {
+                        setIssuesOpen(false);
+                        issuesButtonRef.current?.focus();
+                      }}
+                      onFreshFetch={handleListFreshFetch}
+                      onCountUpdate={handleIssueListCountUpdate}
+                    />
+                  ) : null
                 }
-              }}
-              onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
-              onPointerLeave={(e) => handlePrefetchPointerLeave("issue", e)}
-              activityChip={
-                <span
-                  aria-hidden="true"
-                  data-visible={showIssuesChip}
-                  className="toolbar-badge-chip bg-pr-open pointer-events-none absolute right-0 top-0 h-2 w-2"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
-                />
-              }
-            />
-            <ForgeStatPill
-              buttonRef={prsButtonRef}
-              open={prsOpen}
-              count={prCount}
-              displayCount={prDisplayCount}
-              animKey={prAnimKey}
-              testId="forge-stat-pill-prs"
-              ariaLabel={
-                isTokenError
-                  ? `Configure ${providerName} token to see pull requests`
-                  : `${prDisplayCount ?? "—"} open pull requests${
-                      showPrsChip ? " (new since last view)" : ""
-                    }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-              }
-              tooltipContent={
-                isTokenError
-                  ? `Configure ${providerName} token to see pull requests`
-                  : freshnessLevel === "fresh"
-                    ? `Browse ${providerName} pull requests`
-                    : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
-              }
-              icon={GitPullRequest}
-              iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
-              openRingClassName="ring-1 ring-pr-merged/20"
-              className={cn(
-                isTokenError && "opacity-40",
-                !isTokenError && stats?.prCount === 0 && "opacity-50"
-              )}
-              dropdownContent={
-                DropdownView ? (
-                  <DropdownView
-                    kind="prs"
-                    projectPath={currentProject.path}
-                    providerId={providerId}
-                    open={prsOpen}
-                    initialCount={stats?.prCount}
-                    onClose={() => {
-                      setPrsOpen(false);
-                      prsButtonRef.current?.focus();
-                    }}
-                    onFreshFetch={handleListFreshFetch}
-                    onCountUpdate={handlePrListCountUpdate}
-                  />
-                ) : null
-              }
-              keepMounted
-              onClick={() => {
-                setIssuesOpen(false);
-                setCommitsOpen(false);
-                if (isTokenError) {
+                persistThroughChildOverlays
+                keepMounted
+                onClick={() => {
                   setPrsOpen(false);
-                  openSettingsForToken();
-                  return;
+                  setCommitsOpen(false);
+                  if (isTokenError) {
+                    setIssuesOpen(false);
+                    openSettingsForToken();
+                    return;
+                  }
+                  const willOpen = !issuesOpen;
+                  setIssuesOpen(willOpen);
+                  if (willOpen) setIssuesPulseAt(null);
+                  if (
+                    willOpen &&
+                    (issueCountRefreshedAt == null ||
+                      Date.now() - issueCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
+                  ) {
+                    refreshStats();
+                  }
+                }}
+                onOpenChange={(open) => {
+                  setIssuesOpen(open);
+                  if (!open) {
+                    issuesButtonRef.current?.focus();
+                  }
+                }}
+                onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
+                onPointerLeave={(e) => handlePrefetchPointerLeave("issue", e)}
+                activityChip={
+                  <span
+                    aria-hidden="true"
+                    data-visible={showIssuesChip}
+                    className="toolbar-badge-chip bg-pr-open pointer-events-none absolute right-0 top-0 h-2 w-2"
+                    style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+                  />
                 }
-                const willOpen = !prsOpen;
-                setPrsOpen(willOpen);
-                if (willOpen) setPrsPulseAt(null);
-                if (
-                  willOpen &&
-                  (prCountRefreshedAt == null ||
-                    Date.now() - prCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
-                ) {
-                  refreshStats();
+              />
+            ) : null}
+            {forgeMode ? (
+              <ForgeStatPill
+                buttonRef={prsButtonRef}
+                open={prsOpen}
+                count={prCount}
+                displayCount={prDisplayCount}
+                animKey={prAnimKey}
+                testId="forge-stat-pill-prs"
+                ariaLabel={
+                  isTokenError
+                    ? `Configure ${providerName} token to see pull requests`
+                    : `${prDisplayCount ?? "—"} open pull requests${
+                        showPrsChip ? " (new since last view)" : ""
+                      }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
-              }}
-              onOpenChange={(open) => {
-                setPrsOpen(open);
-                if (!open) {
-                  prsButtonRef.current?.focus();
+                tooltipContent={
+                  isTokenError
+                    ? `Configure ${providerName} token to see pull requests`
+                    : freshnessLevel === "fresh"
+                      ? `Browse ${providerName} pull requests`
+                      : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
                 }
-              }}
-              onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
-              onPointerLeave={(e) => handlePrefetchPointerLeave("pr", e)}
-              activityChip={
-                <span
-                  aria-hidden="true"
-                  data-visible={showPrsChip}
-                  className="toolbar-badge-chip bg-pr-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
-                />
-              }
-            />
+                icon={GitPullRequest}
+                iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
+                openRingClassName="ring-1 ring-pr-merged/20"
+                className={cn(
+                  isTokenError && "opacity-40",
+                  !isTokenError && stats?.prCount === 0 && "opacity-50"
+                )}
+                dropdownContent={
+                  DropdownView && providerId ? (
+                    <DropdownView
+                      kind="prs"
+                      projectPath={currentProject.path}
+                      providerId={providerId}
+                      open={prsOpen}
+                      initialCount={stats?.prCount}
+                      onClose={() => {
+                        setPrsOpen(false);
+                        prsButtonRef.current?.focus();
+                      }}
+                      onFreshFetch={handleListFreshFetch}
+                      onCountUpdate={handlePrListCountUpdate}
+                    />
+                  ) : null
+                }
+                keepMounted
+                onClick={() => {
+                  setIssuesOpen(false);
+                  setCommitsOpen(false);
+                  if (isTokenError) {
+                    setPrsOpen(false);
+                    openSettingsForToken();
+                    return;
+                  }
+                  const willOpen = !prsOpen;
+                  setPrsOpen(willOpen);
+                  if (willOpen) setPrsPulseAt(null);
+                  if (
+                    willOpen &&
+                    (prCountRefreshedAt == null ||
+                      Date.now() - prCountRefreshedAt > OPEN_REFRESH_STALENESS_MS)
+                  ) {
+                    refreshStats();
+                  }
+                }}
+                onOpenChange={(open) => {
+                  setPrsOpen(open);
+                  if (!open) {
+                    prsButtonRef.current?.focus();
+                  }
+                }}
+                onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
+                onPointerLeave={(e) => handlePrefetchPointerLeave("pr", e)}
+                activityChip={
+                  <span
+                    aria-hidden="true"
+                    data-visible={showPrsChip}
+                    className="toolbar-badge-chip bg-pr-merged pointer-events-none absolute right-0 top-0 h-2 w-2"
+                    style={{ clipPath: "polygon(0 0, 100% 0, 100% 100%)" }}
+                  />
+                }
+              />
+            ) : null}
             <ForgeStatPill
               buttonRef={commitsButtonRef}
               open={commitsOpen}
               count={commitCount}
               animKey={commitAnimKey}
+              testId="forge-stat-pill-commits"
               ariaLabel={`${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
               tooltipContent={
                 commitFreshnessLevel === "fresh"
@@ -1017,7 +1032,7 @@ export const ForgeStatsToolbarButton = memo(
               openRingClassName="ring-1 ring-border-strong"
               className={cn(stats?.commitCount === 0 && "opacity-50")}
               dropdownContent={
-                DropdownView ? (
+                DropdownView && providerId ? (
                   <DropdownView
                     kind="commits"
                     projectPath={currentProject.path}
@@ -1034,6 +1049,10 @@ export const ForgeStatsToolbarButton = memo(
                 ) : null
               }
               onClick={() => {
+                // Without the provider-supplied dropdown view (commits-only
+                // mode) there is nothing to open — the count itself is the
+                // whole affordance.
+                if (!DropdownView || !providerId) return;
                 setIssuesOpen(false);
                 setPrsOpen(false);
                 setCommitsOpen((p) => !p);

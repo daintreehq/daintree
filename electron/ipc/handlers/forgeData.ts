@@ -327,7 +327,18 @@ async function handleForgeGetRepoStats(payload: {
     throw new Error("Invalid payload");
   }
   const cwd = requireCwd(payload.cwd);
-  const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+  let resolved: Awaited<ReturnType<typeof resolveForCwd>>;
+  try {
+    resolved = await resolveForCwd(cwd);
+  } catch {
+    // No forge provider for this repo (no matching remote, plugin disabled,
+    // or not yet activated): the toolbar still shows the local commit count,
+    // so return a commit-only snapshot instead of failing the whole surface.
+    // Forge counts stay null — the renderer renders the commits-only pill.
+    const commitCount = await getCommitCount(cwd).catch(() => 0);
+    return buildForgeRepositoryStats(commitCount, { issueCount: null, prCount: null });
+  }
+  const { impl, repoRef, namespaceId } = resolved;
   if (!impl.repoStats) {
     throw new Error("Provider does not support repository stats");
   }
