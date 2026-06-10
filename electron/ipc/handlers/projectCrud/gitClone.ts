@@ -10,6 +10,7 @@ import {
   getForgeProviderImpl,
 } from "../../../services/forgeProviderRegistry.js";
 import { makeForgeProviderId } from "../../../../shared/utils/forgeProviderIds.js";
+import { scrubSecrets } from "../../../../shared/utils/secretScrubber.js";
 import type { CloneAuthProbe, CloneCapability } from "../../../../shared/types/forge.js";
 import type {
   CloneRepoOptions,
@@ -23,16 +24,22 @@ import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
 
 /**
  * Resolve the clone capability of the forge provider matching the URL's
- * hostname. `undefined` when no provider matches, the matching plugin hasn't
- * bound an impl yet, or the impl doesn't implement `clone`.
+ * hostname. `undefined` when no provider matches or the impl doesn't implement
+ * `clone`. Activates the matching plugin first (like `forgeRpcServer`) so a
+ * clone issued before the provider's lazy `activate()` ran still gets the
+ * authenticated path instead of silently falling back to an anonymous clone.
  */
-function resolveCloneCapability(url: string): CloneCapability | undefined {
+async function resolveCloneCapability(url: string): Promise<CloneCapability | undefined> {
   const provider = getActiveProvider(url);
   if (!provider) return undefined;
-  const impl = getForgeProviderImpl(
-    makeForgeProviderId(provider.pluginId, provider.contribution.id)
-  );
-  return impl?.clone;
+  const namespacedId = makeForgeProviderId(provider.pluginId, provider.contribution.id);
+  try {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    await pluginService.activatePluginForForgeProvider(namespacedId);
+  } catch {
+    // Activation failure → fall through to whatever impl is (or isn't) bound.
+  }
+  return getForgeProviderImpl(namespacedId)?.clone;
 }
 
 /** Minimal shape of simple-git's internal PluginStore (`_plugins`). */
@@ -154,7 +161,7 @@ export function registerGitCloneHandlers(): () => void {
     // Resolve the URL's forge provider and probe its clone auth — an
     // authenticated probe picks the provider's clone path below. Probe
     // failures mean "no authenticated path", never a clone failure.
-    const cloneCapability = resolveCloneCapability(url);
+    const cloneCapability = await resolveCloneCapability(url);
     let authProbe: CloneAuthProbe = { authenticated: false };
     if (cloneCapability) {
       try {
@@ -273,7 +280,12 @@ export function registerGitCloneHandlers(): () => void {
         });
       }
 
-      const errorMessage = formatErrorMessage(error, "Failed to clone repository");
+      // Scrub before surfacing: a simple-git failure can echo the clone
+      // command or remote, and an authenticated clone URL embeds credentials
+      // (https://x-access-token:TOKEN@host/...). `scrubSecrets` redacts URL
+      // basic-auth and known token shapes so neither the progress event nor
+      // the thrown error leaks the secret.
+      const errorMessage = scrubSecrets(formatErrorMessage(error, "Failed to clone repository"));
       emitProgress("error", 0, `Clone failed: ${errorMessage}`);
       const reason = classifyGitError(error);
       // `url` deliberately omitted from context — it can carry embedded

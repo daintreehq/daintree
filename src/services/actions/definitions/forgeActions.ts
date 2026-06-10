@@ -20,6 +20,15 @@ const ForgeListOptionsSchema = z.object({
     ),
 });
 
+// PR listing adds `merged` to the state filter — pull requests have a merged
+// state that issues don't.
+const ForgePRListOptionsSchema = ForgeListOptionsSchema.extend({
+  state: z
+    .enum(["open", "closed", "merged", "all"])
+    .optional()
+    .describe("State filter (default: open)"),
+});
+
 const ForgePageResultSchema = z.object({
   items: z.array(z.unknown()),
   nextCursor: z.string().nullable(),
@@ -302,12 +311,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'all', default 'open'); `cursor` from a previous response's `nextCursor`. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `forge.listIssues`.",
+        "List repository pull requests via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'merged'|'all', default 'open'); `cursor` from a previous response's `nextCursor`. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `forge.listIssues`.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: ForgeListOptionsSchema,
+      argsSchema: ForgePRListOptionsSchema,
       resultSchema: ForgePageResultSchema,
       run: async ({ cwd, search, state, cursor }, ctx: ActionContext) => {
         const resolvedCwd = cwd ?? ctx.activeWorktreePath;

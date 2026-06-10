@@ -379,7 +379,11 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
   const capabilities = contribution.capabilities;
 
   return (
-    <div className="space-y-4">
+    // `forge-access-token` is the stable anchor settings-search and the
+    // token-recovery surfaces target — generic for any provider, regardless
+    // of whether the provider ships its own settings slot or uses the host
+    // credential form below.
+    <div className="space-y-4" id="forge-access-token">
       {credentialFields.length > 0 ? (
         <GenericCredentialForm
           providerId={providerId}

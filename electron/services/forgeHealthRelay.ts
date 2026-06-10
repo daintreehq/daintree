@@ -55,6 +55,22 @@ function subscribeProvider(providerId: string, impl: ForgeProviderImpl): RelayEn
   if (!health) return null;
   const disposers: Array<() => void> = [];
 
+  try {
+    subscribeHealthEvents(providerId, health, disposers);
+  } catch (error) {
+    // Partial subscriptions must not leak when a later subscribe throws.
+    disposeEntry({ impl, disposers });
+    throw error;
+  }
+
+  return { impl, disposers };
+}
+
+function subscribeHealthEvents(
+  providerId: string,
+  health: NonNullable<ForgeProviderImpl["healthEvents"]>,
+  disposers: Array<() => void>
+): void {
   disposers.push(
     health.onTokenHealthChanged((state) => {
       const payload: ForgeTokenHealthChangedPayload = {
@@ -78,8 +94,6 @@ function subscribeProvider(providerId: string, impl: ForgeProviderImpl): RelayEn
       })
     );
   }
-
-  return { impl, disposers };
 }
 
 function syncSubscriptions(): void {
@@ -88,18 +102,36 @@ function syncSubscriptions(): void {
 
   // Drop subscriptions for impls that disappeared or were re-bound — a
   // re-registered key carries a new impl object, so identity diffing
-  // re-subscribes against the fresh capability.
+  // re-subscribes against the fresh capability. A removed provider also
+  // gets a healthy reset broadcast so renderer health slices don't pin a
+  // stale unhealthy/rate-limited state after the plugin is disabled.
   for (const [providerId, entry] of [...subscriptions]) {
     if (current.get(providerId) !== entry.impl) {
       disposeEntry(entry);
       subscriptions.delete(providerId);
+      if (!current.has(providerId)) {
+        broadcastToRenderer(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, {
+          providerId,
+          isUnhealthy: false,
+        } satisfies ForgeTokenHealthChangedPayload);
+        broadcastToRenderer(CHANNELS.FORGE_RATE_LIMIT_CHANGED, {
+          providerId,
+          state: { limit: null, remaining: null, resetAt: null },
+        } satisfies ForgeRateLimitChangedPayload);
+      }
     }
   }
 
   for (const [providerId, impl] of current) {
     if (subscriptions.has(providerId)) continue;
-    const entry = subscribeProvider(providerId, impl);
-    if (entry) subscriptions.set(providerId, entry);
+    // One provider's throwing subscribe must not block the others or the
+    // initial relay registration.
+    try {
+      const entry = subscribeProvider(providerId, impl);
+      if (entry) subscriptions.set(providerId, entry);
+    } catch (error) {
+      console.warn(`[forgeHealthRelay] subscribe failed for ${providerId}:`, error);
+    }
   }
 }
 

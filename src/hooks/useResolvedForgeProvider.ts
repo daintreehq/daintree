@@ -22,8 +22,15 @@ const UNRESOLVED: ResolvedForgeProviderState = {
 
 // Last-known resolution per project so remounts render the previous answer
 // immediately instead of flashing unresolved while the round-trip is in
-// flight. Invalidated wholesale on plugin provenance changes.
+// flight. Invalidated wholesale on plugin provenance changes — including
+// entries for projects with no mounted hook, which would otherwise serve a
+// stale provider after an enable/disable while that project was unmounted.
 const resolutionCache = new Map<string, ResolvedForgeProviderState>();
+
+// Monotonic per-project resolve sequence: a slow older round-trip must not
+// overwrite the state/cache written by a newer (e.g. provenance-triggered)
+// resolve.
+const resolveSeq = new Map<string, number>();
 
 /**
  * Resolve the active forge provider for a project through the host's
@@ -41,8 +48,11 @@ export function useResolvedForgeProvider(
   );
 
   const resolve = useCallback(async (id: string) => {
+    const seq = (resolveSeq.get(id) ?? 0) + 1;
+    resolveSeq.set(id, seq);
     try {
       const resolved = await window.electron.forge.resolveProvider(id);
+      if (resolveSeq.get(id) !== seq) return null;
       const entry = resolved?.entry ?? null;
       const next: ResolvedForgeProviderState = {
         entry,
@@ -53,6 +63,7 @@ export function useResolvedForgeProvider(
       resolutionCache.set(id, next);
       return next;
     } catch (err) {
+      if (resolveSeq.get(id) !== seq) return null;
       logError("Forge provider resolution failed", err);
       const next = { ...UNRESOLVED };
       resolutionCache.set(id, next);
@@ -71,7 +82,7 @@ export function useResolvedForgeProvider(
 
     const run = () => {
       void resolve(projectId).then((next) => {
-        if (!cancelled) setState(next);
+        if (!cancelled && next) setState(next);
       });
     };
     run();
@@ -80,7 +91,7 @@ export function useResolvedForgeProvider(
     const unsubscribe =
       typeof plugin?.onProvenanceChanged === "function"
         ? plugin.onProvenanceChanged(() => {
-            resolutionCache.delete(projectId);
+            resolutionCache.clear();
             run();
           })
         : null;
@@ -94,7 +105,9 @@ export function useResolvedForgeProvider(
   const refresh = useCallback(() => {
     if (!projectId) return;
     resolutionCache.delete(projectId);
-    void resolve(projectId).then(setState);
+    void resolve(projectId).then((next) => {
+      if (next) setState(next);
+    });
   }, [projectId, resolve]);
 
   return { ...state, refresh };

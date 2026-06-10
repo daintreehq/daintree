@@ -413,6 +413,7 @@ function mapIssueGraphQLStates(state: ListOptions["state"]): string[] {
 }
 
 function mapPRGraphQLStates(state: ListOptions["state"]): string[] {
+  if (state === "merged") return ["MERGED"];
   if (state === "closed") return ["CLOSED", "MERGED"];
   if (state === "all") return ["OPEN", "CLOSED", "MERGED"];
   return ["OPEN"];
@@ -558,7 +559,7 @@ function dedupe<T>(
   return promise;
 }
 
-function listCacheState(opts: ListOptions): "open" | "closed" | "all" {
+function listCacheState(opts: ListOptions): "open" | "closed" | "merged" | "all" {
   return opts.state ?? "open";
 }
 

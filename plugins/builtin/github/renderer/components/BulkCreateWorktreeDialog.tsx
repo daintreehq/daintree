@@ -116,6 +116,12 @@ export function BulkCreateWorktreeDialog({
   useEffect(() => {
     if (!isOpen || !projectPath) return;
     let cancelled = false;
+    // Clear stale identity up front: until this fetch resolves the run loop
+    // must not assign to the previous project's viewer. A null viewer skips
+    // self-assignment (visible: the "assign to me" row hides) rather than
+    // assigning the wrong account.
+    setViewer(null);
+    viewerRef.current = null;
     void forgeClient
       .getCurrentUser(projectPath)
       .then((user) => {

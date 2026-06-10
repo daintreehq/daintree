@@ -147,7 +147,12 @@ export interface RepoMetadata {
  * do not support. `cursor` is opaque and provider-defined.
  */
 export interface ListOptions {
-  state?: "open" | "closed" | "all";
+  /**
+   * State filter. `"merged"` is PR-only — `listIssues` providers treat it as
+   * the default open set since issues have no merged state. Advisory: a
+   * provider that can't filter by a given state ignores it.
+   */
+  state?: "open" | "closed" | "merged" | "all";
   cursor?: string | null;
   perPage?: number;
   labels?: string[];
