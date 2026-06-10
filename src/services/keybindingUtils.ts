@@ -61,25 +61,26 @@ export const CODE_TO_KEY: Record<string, string> = {
   IntlBackslash: "\\",
 };
 
+const KEY_ALIASES: Record<string, string> = {
+  " ": "Space",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
+  arrowleft: "ArrowLeft",
+  arrowright: "ArrowRight",
+  escape: "Escape",
+  enter: "Enter",
+  return: "Enter",
+  tab: "Tab",
+  home: "Home",
+  end: "End",
+  pageup: "PageUp",
+  pagedown: "PageDown",
+  backspace: "Backspace",
+  delete: "Delete",
+};
+
 export function normalizeKey(key: string): string {
-  const keyMap: Record<string, string> = {
-    " ": "Space",
-    arrowup: "ArrowUp",
-    arrowdown: "ArrowDown",
-    arrowleft: "ArrowLeft",
-    arrowright: "ArrowRight",
-    escape: "Escape",
-    enter: "Enter",
-    return: "Enter",
-    tab: "Tab",
-    home: "Home",
-    end: "End",
-    pageup: "PageUp",
-    pagedown: "PageDown",
-    backspace: "Backspace",
-    delete: "Delete",
-  };
-  return keyMap[key.toLowerCase()] || key;
+  return KEY_ALIASES[key.toLowerCase()] || key;
 }
 
 /**
@@ -125,23 +126,35 @@ export function normalizeKeyForBinding(event: KeyboardEvent): string {
   return normalizeKey(event.key);
 }
 
-export function parseCombo(combo: string): {
+export interface ParsedCombo {
   cmd: boolean;
   ctrl: boolean;
   shift: boolean;
   alt: boolean;
   key: string;
-} {
+}
+
+// Combo strings are a small static set (defaults + overrides + plugin
+// bindings), but parseCombo runs once per binding per keydown — memoize like
+// whenAstCache in KeybindingService. Cached values are never mutated.
+const parsedComboCache = new Map<string, ParsedCombo>();
+
+export function parseCombo(combo: string): ParsedCombo {
+  const cached = parsedComboCache.get(combo);
+  if (cached) return cached;
+
   const parts = combo.split("+").map((p) => p.trim());
   const key = normalizeKey(parts.pop() || "");
 
-  return {
+  const parsed: ParsedCombo = {
     cmd: parts.some((p) => p.toLowerCase() === "cmd" || p.toLowerCase() === "meta"),
     ctrl: parts.some((p) => p.toLowerCase() === "ctrl"),
     shift: parts.some((p) => p.toLowerCase() === "shift"),
     alt: parts.some((p) => p.toLowerCase() === "alt" || p.toLowerCase() === "option"),
     key,
   };
+  parsedComboCache.set(combo, parsed);
+  return parsed;
 }
 
 function singleComboFieldsEqual(a: string, b: string, mac: boolean): boolean {

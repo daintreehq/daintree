@@ -157,9 +157,10 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       const terminalIds = await ptyClient.getTerminalsForProjectAsync(projectId);
 
+      const infos = await Promise.all(terminalIds.map((id) => ptyClient.getTerminalAsync(id)));
+
       const terminals: import("../../../../shared/types/ipc.js").BackendTerminalInfo[] = [];
-      for (const id of terminalIds) {
-        const terminal = await ptyClient.getTerminalAsync(id);
+      for (const terminal of infos) {
         // Dev preview and help PTYs should not be rehydrated as generic terminal
         // panels during project switching/hydration.
         if (

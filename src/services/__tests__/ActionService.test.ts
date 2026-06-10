@@ -2260,6 +2260,31 @@ describe("ActionService", () => {
       expect(getSchemaCache(service).size).toBe(0);
       expect(getRequiresArgsCache(service).size).toBe(0);
     });
+
+    it("list({ includeSchemas: false }) skips compilation and returns schema-free entries", () => {
+      registerSchemaAction();
+      const entries = service.list(undefined, { includeSchemas: false });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.inputSchema).toBeUndefined();
+      expect(entries[0]!.outputSchema).toBeUndefined();
+      expect(getSchemaCache(service).size).toBe(0);
+
+      const full = service.list();
+      expect(full[0]!.inputSchema).toBeDefined();
+      expect(getSchemaCache(service).size).toBe(1);
+    });
+
+    it("getDispatchMeta() returns danger/title/description without populating schemaCache", () => {
+      registerSchemaAction();
+      const meta = service.getDispatchMeta("actions.list" as ActionId);
+      expect(meta).toEqual({
+        danger: "safe",
+        title: "Test",
+        description: expect.stringContaining("lazy JSON schema compilation"),
+      });
+      expect(getSchemaCache(service).size).toBe(0);
+      expect(service.getDispatchMeta("actions.unknown" as ActionId)).toBeNull();
+    });
   });
 
   describe("dispatch error boundaries (issue #7284)", () => {

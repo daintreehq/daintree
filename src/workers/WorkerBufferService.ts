@@ -15,11 +15,18 @@ export const MAX_ANALYSIS_BUFFER_HARD_CAP = 1_000_000; // Ceiling while a fence/
 /**
  * Append a cleaned (ANSI-stripped) chunk to the analysis buffer.
  * Normalizes CRLF so the line-anchored fence/patch detection in
- * trimAnalysisBuffer behaves on Windows PTY output; normalizing the combined
- * string also handles a CRLF pair split across chunk boundaries.
+ * trimAnalysisBuffer behaves on Windows PTY output. Only the incoming chunk
+ * is normalized — `previous` is this function's own prior output, so it
+ * contains no CR-before-LF except a possible trailing CR run from a pair
+ * split across chunk boundaries, which the boundary check collapses. Keeps
+ * the append O(chunk) instead of O(buffer) at 50Hz during agent output.
  */
 export function appendToAnalysisBuffer(previous: string, cleanData: string): string {
-  return (previous + cleanData).replace(/\r\n/g, "\n");
+  const chunk = cleanData.replace(/\r+\n/g, "\n");
+  if (chunk.startsWith("\n") && previous.endsWith("\r")) {
+    return previous.replace(/\r+$/, "") + chunk;
+  }
+  return previous + chunk;
 }
 
 /**

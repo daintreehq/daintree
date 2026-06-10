@@ -721,26 +721,37 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const setManualOrder = useWorktreeFilterStore((state) => state.setManualOrder);
 
-  // Clean up stale pinned and collapsed worktrees in a single store write so
-  // pin/collapse pruning costs one persist flush, not N.
+  // Clean up stale pinned/collapsed worktrees (single store write so pruning
+  // costs one persist flush, not N) and stale manual order entries. Merged so
+  // the worktree-ID Set is built at most once per pass.
   useEffect(() => {
-    if (pinnedWorktrees.length === 0 && collapsedWorktrees.length === 0) return;
+    if (
+      pinnedWorktrees.length === 0 &&
+      collapsedWorktrees.length === 0 &&
+      manualOrder.length === 0
+    ) {
+      return;
+    }
     const existingIds = new Set(worktrees.map((w) => w.id));
     const hasStalePin = pinnedWorktrees.some((id) => !existingIds.has(id));
     const hasStaleCollapsed = collapsedWorktrees.some((id) => !existingIds.has(id));
-    if (!hasStalePin && !hasStaleCollapsed) return;
-    pruneStaleWorktreeIds(existingIds);
-  }, [worktrees, pinnedWorktrees, collapsedWorktrees, pruneStaleWorktreeIds]);
-
-  // Clean up stale manual order entries
-  useEffect(() => {
-    if (manualOrder.length === 0) return;
-    const existingIds = new Set(worktrees.map((w) => w.id));
-    const cleaned = manualOrder.filter((id) => existingIds.has(id));
-    if (cleaned.length !== manualOrder.length) {
-      setManualOrder(cleaned);
+    if (hasStalePin || hasStaleCollapsed) {
+      pruneStaleWorktreeIds(existingIds);
     }
-  }, [worktrees, manualOrder, setManualOrder]);
+    if (manualOrder.length > 0) {
+      const cleaned = manualOrder.filter((id) => existingIds.has(id));
+      if (cleaned.length !== manualOrder.length) {
+        setManualOrder(cleaned);
+      }
+    }
+  }, [
+    worktrees,
+    pinnedWorktrees,
+    collapsedWorktrees,
+    manualOrder,
+    pruneStaleWorktreeIds,
+    setManualOrder,
+  ]);
 
   // Compute derived metadata for each worktree. Panel scan is delegated to the
   // single-pass `panelStateByWorktree` selector above, so this useMemo only
@@ -1187,8 +1198,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // wrap the whole Virtuoso surface.
   const sidebarItems = useMemo<SidebarFlatItem[]>(() => {
     const items: SidebarFlatItem[] = [];
+    const pinnedSet = new Set(pinnedWorktrees);
     let nextRowIndex = firstScrollableRowIndex;
     if (groupedSections) {
+      const orderIndex = new Map(dragStartOrder.map((id, i) => [id, i]));
       for (const section of groupedSections) {
         items.push({
           kind: "header",
@@ -1204,8 +1217,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             id: `row-${w.id}`,
             worktreeId: w.id,
             ariaRowIndex: nextRowIndex++,
-            rowIndex: dragStartOrder.indexOf(w.id),
-            isPinned: pinnedWorktrees.includes(w.id),
+            rowIndex: orderIndex.get(w.id) ?? -1,
+            isPinned: pinnedSet.has(w.id),
             mode: "static",
           });
         }
@@ -1219,7 +1232,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           worktreeId: w.id,
           ariaRowIndex: nextRowIndex++,
           rowIndex: i,
-          isPinned: pinnedWorktrees.includes(w.id),
+          isPinned: pinnedSet.has(w.id),
           mode: "sortable",
         });
       }

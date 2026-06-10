@@ -215,6 +215,9 @@ export function resetLoggerStateForTesting(): void {
   previousSessionTail = null;
   isRotating = false;
   storagePath = null;
+  trackedLogFile = null;
+  trackedLogSize = -1;
+  bytesSinceSizeRefresh = 0;
   loggerRegistry.clear();
   levelOverrides.clear();
   defaultLevel = IS_DEBUG_BOOT ? "debug" : "info";
@@ -523,9 +526,9 @@ function flushLogs(): void {
 
 const loggerStringify = configure({ bigint: false });
 
-function safeStringify(value: unknown): string {
-  const sensitivePatterns = ["secret", "token", "password", "key"];
+const SENSITIVE_KEY_PATTERNS = ["secret", "token", "password", "key"];
 
+function safeStringify(value: unknown): string {
   try {
     return loggerStringify(
       value,
@@ -533,7 +536,7 @@ function safeStringify(value: unknown): string {
         const lowerKey = key.toLowerCase();
         if (SENSITIVE_KEYS.has(lowerKey)) return "[redacted]";
 
-        if (sensitivePatterns.some((pattern) => lowerKey.includes(pattern))) {
+        if (SENSITIVE_KEY_PATTERNS.some((pattern) => lowerKey.includes(pattern))) {
           return "[redacted]";
         }
 
@@ -548,27 +551,58 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function writeToLogFile(level: string, message: string, context?: LogContext): void {
+// Per-line fs bookkeeping: the directory is ensured and the file size statted
+// once, then the size is tracked incrementally from appended bytes. Other
+// processes (pty-host, workspace-host, watchdog) append to the same file, so
+// the tracked size is refreshed from disk periodically to bound drift.
+const SIZE_REFRESH_INTERVAL_BYTES = 256 * 1024;
+let trackedLogFile: string | null = null;
+let trackedLogSize = -1;
+let bytesSinceSizeRefresh = 0;
+
+function rotateIfNeededTracked(logFile: string): boolean {
+  if (
+    trackedLogSize < 0 ||
+    bytesSinceSizeRefresh >= SIZE_REFRESH_INTERVAL_BYTES ||
+    trackedLogSize >= ROTATION_MAX_SIZE
+  ) {
+    bytesSinceSizeRefresh = 0;
+    trackedLogSize = existsSync(logFile) ? statSync(logFile).size : 0;
+    if (trackedLogSize >= ROTATION_MAX_SIZE) {
+      if (!rotateLogsIfNeeded()) return false;
+      trackedLogSize = 0;
+    }
+  }
+  return true;
+}
+
+function writeToLogFile(level: string, message: string, contextStr: string): void {
   if (!ENABLE_FILE_LOGGING) return;
   if (getWritesSuppressed()) return;
 
   try {
     const logFile = getLogFilePath();
     const timestamp = new Date().toISOString();
-    const contextStr = context ? ` ${safeStringify(context)}` : "";
-    const logLine = `[${timestamp}] [${level}] ${message}${contextStr}\n`;
+    const logLine = scrubSecrets(
+      `[${timestamp}] [${level}] ${message}${contextStr ? ` ${contextStr}` : ""}\n`
+    );
 
-    const logDir = getLogDirectory();
-    if (!existsSync(logDir)) {
-      mkdirSync(logDir, { recursive: true });
+    if (logFile !== trackedLogFile) {
+      mkdirSync(getLogDirectory(), { recursive: true });
+      trackedLogFile = logFile;
+      trackedLogSize = -1;
     }
 
-    if (!rotateLogsIfNeeded()) {
+    if (!rotateIfNeededTracked(logFile)) {
       return;
     }
-    appendFileSync(logFile, scrubSecrets(logLine), "utf8");
+    appendFileSync(logFile, logLine, "utf8");
+    const bytes = Buffer.byteLength(logLine, "utf8");
+    trackedLogSize += bytes;
+    bytesSinceSizeRefresh += bytes;
   } catch (_error) {
-    // ignore
+    // Re-ensure the directory and re-stat on the next write.
+    trackedLogFile = null;
   }
 }
 
@@ -581,13 +615,12 @@ function redactSensitiveData(
   }
   visited.add(obj);
 
-  const sensitivePatterns = ["secret", "token", "password", "key"];
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     const lowerKey = key.toLowerCase();
     if (
       SENSITIVE_KEYS.has(lowerKey) ||
-      sensitivePatterns.some((pattern) => lowerKey.includes(pattern))
+      SENSITIVE_KEY_PATTERNS.some((pattern) => lowerKey.includes(pattern))
     ) {
       result[key] = "[redacted]";
     } else if (Array.isArray(value)) {
@@ -635,16 +668,15 @@ function emit(source: string, level: LogLevel, message: string, context?: LogCon
   });
 
   sendLogToRenderer(entry);
-  writeToLogFile(level.toUpperCase(), message, safeContext);
+  // Stringify once and share between the file and console transports.
+  const contextStr = safeContext ? safeStringify(safeContext) : "";
+  writeToLogFile(level.toUpperCase(), message, contextStr);
 
   if (!IS_TEST) {
     const prefix = `[${level.toUpperCase()}] [${source}]`;
     const consoleFn =
       level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-    consoleFn(
-      `${prefix} ${scrubSecrets(message)}`,
-      context ? scrubSecrets(safeStringify(safeContext)) : ""
-    );
+    consoleFn(`${prefix} ${scrubSecrets(message)}`, contextStr ? scrubSecrets(contextStr) : "");
   }
 }
 
@@ -663,7 +695,7 @@ function emitError(source: string, message: string, error?: unknown, context?: L
   });
 
   sendLogToRenderer(entry);
-  writeToLogFile("ERROR", message, safeContext);
+  writeToLogFile("ERROR", message, safeStringify(safeContext));
 
   if (!IS_TEST) {
     console.error(

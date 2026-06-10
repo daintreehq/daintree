@@ -49,10 +49,7 @@ export interface VisibleContentCell {
   width: number;
   fgColorMode: number;
   fgColor: number;
-  bgColorMode: number;
-  bgColor: number;
   attributes: number;
-  defaultVisual: boolean;
 }
 
 export class SustainedChangeTracker {
@@ -236,7 +233,9 @@ function isSuffixOf(needle: readonly string[], haystack: readonly string[]): boo
 function normalizeTextUnits(text: string): string[] {
   const units: NormalizedVisibleUnit[] = [];
   for (const char of text) {
-    if (/\s/u.test(char)) continue;
+    const code = char.charCodeAt(0);
+    if (code === 32 || (code >= 9 && code <= 13)) continue;
+    if (code > 127 && /\s/u.test(char)) continue;
     units.push({ key: char, collapsible: isCollapsibleFillText(char) });
   }
   return collapseRepeatedUnits(units);
@@ -261,19 +260,12 @@ function visibleCellUnit(cell: VisibleContentCell): NormalizedVisibleUnit | null
   }
 
   const chars = cell.chars;
-  if (chars.length === 0 || /^\s*$/u.test(chars)) {
+  if (chars.length === 0 || chars === " " || /^\s*$/u.test(chars)) {
     return null;
   }
 
   return {
-    key: [
-      chars,
-      cell.code,
-      cell.width,
-      cell.fgColorMode,
-      cell.fgColor,
-      foregroundContentAttributes(cell.attributes),
-    ].join("|"),
+    key: `${chars}|${cell.code}|${cell.width}|${cell.fgColorMode}|${cell.fgColor}|${foregroundContentAttributes(cell.attributes)}`,
     collapsible: isCollapsibleFillText(chars),
   };
 }
@@ -317,6 +309,9 @@ const COLLAPSIBLE_FILL_CHARS = new Set([
 ]);
 
 function isCollapsibleFillText(text: string): boolean {
+  if (COLLAPSIBLE_FILL_CHARS.has(text)) {
+    return true;
+  }
   const chars = Array.from(text);
   return chars.length > 0 && chars.every((char) => COLLAPSIBLE_FILL_CHARS.has(char));
 }

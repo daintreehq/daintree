@@ -382,6 +382,7 @@ export const createCorePanelActions = (
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal || !isPtyPanel(terminal)) return state;
+      if (terminal.lastCommand === lastCommand) return state;
 
       return {
         panelsById: {

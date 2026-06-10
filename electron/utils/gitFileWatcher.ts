@@ -235,11 +235,11 @@ export class GitFileWatcher {
             return;
           }
           if (this.disposed || !events || events.length === 0) return;
-          // Per-event iteration preserves the burstCount-driven adaptive
-          // debounce ramp: 100 files in a batch -> burstCount=100 -> maxDebounce.
-          for (let i = 0; i < events.length; i++) {
-            this.handleWorktreeChange();
-          }
+          // Passing the batch size preserves the burstCount-driven adaptive
+          // debounce ramp (100 files in a batch -> burstCount=100 ->
+          // maxDebounce) while clearing/setting the debounce timer once per
+          // batch instead of once per event.
+          this.handleWorktreeChange(events.length);
         },
         { ignore: WORKTREE_IGNORE_GLOBS }
       )
@@ -379,12 +379,12 @@ export class GitFileWatcher {
    * `worktreeDebounceRampMs` to the pending delay up to `worktreeMaxDebounceMs`.
    * A `worktreeMaxWaitMs` ceiling forces a flush during sustained bursts.
    */
-  private handleWorktreeChange(): void {
+  private handleWorktreeChange(eventCount = 1): void {
     if (this.disposed) {
       return;
     }
 
-    this.worktreeBurstCount++;
+    this.worktreeBurstCount += eventCount;
     const delay = Math.min(
       this.worktreeMaxDebounceMs,
       this.worktreeMinDebounceMs + (this.worktreeBurstCount - 1) * this.worktreeDebounceRampMs

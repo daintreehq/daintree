@@ -33,18 +33,24 @@ export interface RankContext {
   isSettingsOpen?: boolean;
 }
 
+const SEPARATOR_RE = /[/\\\-._\s]/;
+const LOWER_RE = /[a-z]/;
+const UPPER_RE = /[A-Z]/;
+const ALNUM_RE = /[a-zA-Z0-9]/;
+const TITLE_COLLATOR = new Intl.Collator("en", { sensitivity: "base" });
+
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
   const prev = str.charAt(index - 1);
   const curr = str.charAt(index);
-  return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
+  return SEPARATOR_RE.test(prev) || (LOWER_RE.test(prev) && UPPER_RE.test(curr));
 }
 
 export function extractAcronym(field: string): string {
   let acronym = "";
   for (let i = 0; i < field.length; i++) {
     const ch = field.charAt(i);
-    if (/[a-zA-Z0-9]/.test(ch) && isBoundary(field, i)) {
+    if (ALNUM_RE.test(ch) && isBoundary(field, i)) {
       acronym += ch.toLowerCase();
     }
   }
@@ -127,8 +133,10 @@ function scoreKeywords(lowerQuery: string, keywordsLower: readonly string[]): nu
 
 export function scoreAction(query: string, item: SearchableAction): number {
   if (!query) return 0;
-  const lowerQuery = query.toLowerCase();
+  return scoreActionLower(query.toLowerCase(), item);
+}
 
+function scoreActionLower(lowerQuery: string, item: SearchableAction): number {
   const titleScore = scoreTitle(lowerQuery, item.title, item.titleLower, item.titleAcronym);
 
   const categoryRaw =
@@ -210,6 +218,7 @@ export function rankActionMatches<T extends SearchableAction>(
 ): T[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
+  const lowerQuery = trimmed.toLowerCase();
 
   const mruScoreById = new Map<string, number>();
   mruList.forEach(({ id, score }) => mruScoreById.set(id, score));
@@ -217,7 +226,7 @@ export function rankActionMatches<T extends SearchableAction>(
 
   const scored: Array<{ item: T; score: number }> = [];
   for (const item of items) {
-    const base = scoreAction(trimmed, item);
+    const base = scoreActionLower(lowerQuery, item);
     if (base <= 0) continue;
     const frecencyScore = mruScoreById.get(item.id);
     const mruBonus =
@@ -229,7 +238,7 @@ export function rankActionMatches<T extends SearchableAction>(
   scored.sort((a, b) => {
     if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
     if (a.score !== b.score) return b.score - a.score;
-    return a.item.title.localeCompare(b.item.title, "en", { sensitivity: "base" });
+    return TITLE_COLLATOR.compare(a.item.title, b.item.title);
   });
 
   return scored.map((entry) => entry.item);

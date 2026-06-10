@@ -968,6 +968,7 @@ export class WorkspaceService {
     this.recoverWatcherIfNoMonitorsRemain();
 
     clearGitDirCache(monitor.path);
+    clearGitCommonDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
 
     // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
@@ -1312,8 +1313,7 @@ export class WorkspaceService {
     }
   }
 
-  private handleMonitorUpdate(monitor: WorktreeMonitor, _snapshot: WorktreeSnapshot): void {
-    const snapshot = monitor.getSnapshot();
+  private handleMonitorUpdate(_monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
@@ -2687,6 +2687,7 @@ export class WorkspaceService {
         }
 
         clearGitDirCache(monitor.path);
+        clearGitCommonDirCache(monitor.path);
 
         const cacheKey = this.listService.getCacheKey();
         if (cacheKey) {

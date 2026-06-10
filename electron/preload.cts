@@ -786,6 +786,49 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
   };
 }
 
+// Multiplexer for the shared terminal:data channel, mirroring _eventBusOn:
+// one ipcRenderer listener dispatching by terminal id, instead of one
+// filtering listener per terminal (O(N) handler invocations per chunk and a
+// MaxListenersExceededWarning at 10+ terminals).
+type TerminalDataSubscriber = (data: string | Uint8Array) => void;
+const _terminalDataSubscribers = new Map<string, Set<TerminalDataSubscriber>>();
+let _terminalDataWired = false;
+
+function _ensureTerminalDataWired(): void {
+  if (_terminalDataWired) return;
+  _terminalDataWired = true;
+  ipcRenderer.on(CHANNELS.TERMINAL_DATA, (_event, terminalId: unknown, data: unknown) => {
+    if (typeof terminalId !== "string") return;
+    const subs = _terminalDataSubscribers.get(terminalId);
+    if (!subs || subs.size === 0) return;
+    // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
+    if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
+      for (const cb of [...subs]) {
+        cb(data);
+      }
+    }
+  });
+}
+
+function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => void {
+  _ensureTerminalDataWired();
+  let subs = _terminalDataSubscribers.get(id);
+  if (!subs) {
+    subs = new Set();
+    _terminalDataSubscribers.set(id, subs);
+  }
+  // Fresh wrapper per subscription so the same callback can subscribe twice
+  // and each cleanup removes only its own subscription.
+  const wrapped: TerminalDataSubscriber = (data) => callback(data);
+  subs.add(wrapped);
+  return () => {
+    const current = _terminalDataSubscribers.get(id);
+    if (!current) return;
+    current.delete(wrapped);
+    if (current.size === 0) _terminalDataSubscribers.delete(id);
+  };
+}
+
 const api: ElectronAPI = {
   // Worktree API
   worktree: {
@@ -882,21 +925,10 @@ const api: ElectronAPI = {
     kill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
     gracefulKill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
 
-    // Tuple payload [id, data] requires per-terminal filtering
+    // Tuple payload [id, data] dispatched via the shared multiplexer above
     // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)
-    onData: (id: string, callback: (data: string | Uint8Array) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, terminalId: unknown, data: unknown) => {
-        if (typeof terminalId !== "string" || terminalId !== id) {
-          return;
-        }
-        // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-        if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
-          callback(data);
-        }
-      };
-      ipcRenderer.on(CHANNELS.TERMINAL_DATA, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_DATA, handler);
-    },
+    onData: (id: string, callback: (data: string | Uint8Array) => void) =>
+      _terminalDataOn(id, callback),
 
     onExit: (callback: (id: string, exitCode: number) => void) =>
       _eventBusOn("terminal:exit", (payload) => {

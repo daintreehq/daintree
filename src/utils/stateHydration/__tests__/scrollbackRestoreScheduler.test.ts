@@ -406,19 +406,19 @@ describe("retryFailedScrollbackRestoreBatch", () => {
     expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
   });
 
-  it("does not re-queue a still-restoring terminal (scheduler gate holds)", async () => {
+  it("does not re-queue a successfully restored terminal (task dropped on done)", async () => {
     const managed = fakeManaged("none");
     getMock.mockReturnValue(managed);
     fetchAndRestoreMock.mockResolvedValue(undefined);
 
     scheduleScrollbackRestore([{ terminalId: "t1", label: "a", location: "grid" }], () => true);
-    // Task captured but terminal is now "done" — a spurious retry must no-op.
+    // Successful restore drops the captured task — a spurious retry must no-op.
     await getScheduledDoRestore(0)();
     expect(managed.scrollbackRestoreState).toBe("done");
 
     scheduleBackgroundFetchAndRestoreMock.mockClear();
     retryFailedScrollbackRestoreBatch(["t1"]);
-    expect(clearScrollbackRestoreErrorMock).toHaveBeenCalledWith("t1");
+    expect(clearScrollbackRestoreErrorMock).not.toHaveBeenCalled();
     expect(scheduleBackgroundFetchAndRestoreMock).not.toHaveBeenCalled();
   });
 });

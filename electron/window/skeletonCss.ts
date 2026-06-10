@@ -14,7 +14,7 @@ import {
   getAppThemeCssVariables,
   applyAccentOverrideToScheme,
 } from "../../shared/theme/index.js";
-import type { AppColorScheme } from "../../shared/theme/index.js";
+import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
 import {
   appCustomSchemesReadSchema,
@@ -70,10 +70,13 @@ export function resolveInstanceRole(): InstanceRole {
  * Mirrors the fallback logic in createWindow and getAppThemeConfig: the raw
  * persisted id when present (without resolving `followSystem` — that happens
  * post-mount), else Daintree's dark default, or Bondi when the OS prefers a
- * light appearance.
+ * light appearance. Accepts a pre-read theme config so callers that already
+ * hold one avoid a redundant full-store read (every `store.get()` re-reads
+ * the config file from disk).
  */
-export function resolveInitialColorSchemeId(): string {
-  const themeConfig = store.get("appTheme");
+export function resolveInitialColorSchemeId(
+  themeConfig: Partial<AppThemeConfig> = store.get("appTheme")
+): string {
   if (
     themeConfig &&
     typeof themeConfig === "object" &&
@@ -97,8 +100,8 @@ export function resolveInitialColorSchemeId(): string {
  * does not touch surface-canvas, so the base scheme value is correct.
  */
 export function resolveInitialCanvasBackgroundColor(): string {
-  const colorSchemeId = resolveInitialColorSchemeId();
   const themeConfig = store.get("appTheme") ?? {};
+  const colorSchemeId = resolveInitialColorSchemeId(themeConfig);
   let customSchemes: AppColorScheme[] = [];
   const rawSchemes = (themeConfig as Record<string, unknown>).customSchemes;
   if (rawSchemes !== undefined) {

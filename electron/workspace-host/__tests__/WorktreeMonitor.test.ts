@@ -58,12 +58,12 @@ vi.mock("../../services/issueExtractor.js", () => ({
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue(null),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
-const mockIsRepoOperationInProgress = vi.fn().mockReturnValue(false);
 const mockGetRepoOperationStateSync = vi.fn().mockReturnValue(undefined);
 vi.mock("../../utils/gitRepoOperationState.js", () => ({
-  isRepoOperationInProgress: (...args: unknown[]) => mockIsRepoOperationInProgress(...args),
+  isRepoOperationInProgress: vi.fn().mockReturnValue(false),
   getRepoOperationStateSync: (...args: unknown[]) => mockGetRepoOperationStateSync(...args),
   OPERATION_SENTINEL_NAMES: [
     "MERGE_HEAD",
@@ -211,7 +211,7 @@ describe("WorktreeMonitor", () => {
     capturedOnEmfileLimitReached = undefined;
     capturedWatcherOptions = undefined;
     capturedWatcherOptionsHistory.length = 0;
-    mockIsRepoOperationInProgress.mockReturnValue(false);
+    mockGetRepoOperationStateSync.mockReturnValue(undefined);
     vi.mocked(getGitDir).mockReturnValue(null);
   });
 
@@ -2547,7 +2547,7 @@ describe("WorktreeMonitor", () => {
   describe("git operation skip (rebase / merge / cherry-pick)", () => {
     it("skips getWorktreeChangesWithStats while a git operation is in progress", async () => {
       vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
-      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
@@ -2555,7 +2555,7 @@ describe("WorktreeMonitor", () => {
       await monitor.start();
       await flushInitialStatus();
 
-      expect(mockIsRepoOperationInProgress).toHaveBeenCalledWith("/test/worktree/.git");
+      expect(mockGetRepoOperationStateSync).toHaveBeenCalledWith("/test/worktree/.git");
       expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
 
       monitor.stop();
@@ -2563,7 +2563,7 @@ describe("WorktreeMonitor", () => {
 
     it("runs git status normally once the operation finishes", async () => {
       vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
-      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetRepoOperationStateSync.mockReturnValue("MERGING");
       mockGetWorktreeChangesWithStats.mockResolvedValue({
         worktreeId: "/test/worktree",
         rootPath: "/test",
@@ -2586,7 +2586,7 @@ describe("WorktreeMonitor", () => {
 
       // Simulate the rebase/merge finishing — sentinels disappear, then a
       // subsequent updateGitStatus call exercises the normal flow.
-      mockIsRepoOperationInProgress.mockReturnValue(false);
+      mockGetRepoOperationStateSync.mockReturnValue(undefined);
       await monitor.updateGitStatus(true);
 
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
@@ -2597,7 +2597,7 @@ describe("WorktreeMonitor", () => {
 
     it("emits an initial snapshot when start() is skipped mid-operation", async () => {
       vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
-      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
@@ -2614,7 +2614,7 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
-    it("does not call isRepoOperationInProgress when getGitDir returns null", async () => {
+    it("does not check operation sentinels when getGitDir returns null", async () => {
       vi.mocked(getGitDir).mockReturnValue(null);
       mockGetWorktreeChangesWithStats.mockResolvedValue({
         worktreeId: "/test/worktree",
@@ -2635,7 +2635,7 @@ describe("WorktreeMonitor", () => {
       await monitor.start();
       await flushInitialStatus();
 
-      expect(mockIsRepoOperationInProgress).not.toHaveBeenCalled();
+      expect(mockGetRepoOperationStateSync).not.toHaveBeenCalled();
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled();
 
       monitor.stop();

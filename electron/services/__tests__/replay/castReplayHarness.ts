@@ -287,10 +287,7 @@ function cellToVisibleContentCell(cell: IBufferCell): VisibleContentCell {
     width: cell.getWidth(),
     fgColorMode: cell.getFgColorMode(),
     fgColor: cell.getFgColor(),
-    bgColorMode: cell.getBgColorMode(),
-    bgColor: cell.getBgColor(),
     attributes,
-    defaultVisual: cell.isFgDefault() && cell.isBgDefault() && attributes === 0,
   };
 }
 

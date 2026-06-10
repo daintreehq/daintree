@@ -154,17 +154,24 @@ export function useConflictedWorktrees(): WorktreeSnapshot[] {
   );
 }
 
+const EMPTY_BACKGROUND_PANEL_STATS = Object.freeze({ activeCount: 0, workingCount: 0 });
+
 /**
  * Get background panel stats for Zen Mode header display.
  * Returns count of active (grid) panels excluding the current one, and how many are working.
  * @param excludeId - The ID of the current panel to exclude from counts
+ * @param enabled - When false (panel not maximized), skips the per-write panel scan
  */
-export function useBackgroundPanelStats(excludeId: string): {
+export function useBackgroundPanelStats(
+  excludeId: string,
+  enabled = true
+): {
   activeCount: number;
   workingCount: number;
 } {
   return usePanelStore(
     useShallow((state) => {
+      if (!enabled) return EMPTY_BACKGROUND_PANEL_STATS;
       let active = 0;
       let working = 0;
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {

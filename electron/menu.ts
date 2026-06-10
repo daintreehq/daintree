@@ -145,6 +145,12 @@ export function createApplicationMenu(
     return items;
   };
 
+  const agentMenuItems = buildAgentMenuItems();
+  const filePluginItems = buildPluginMenuItems("file");
+  const viewPluginItems = buildPluginMenuItems("view");
+  const terminalPluginItems = buildPluginMenuItems("terminal");
+  const helpPluginItems = buildPluginMenuItems("help");
+
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
@@ -208,9 +214,7 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },
-        ...(buildPluginMenuItems("file").length > 0
-          ? [{ type: "separator" as const }, ...buildPluginMenuItems("file")]
-          : []),
+        ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
         {
           label: "Close Project",
@@ -376,9 +380,7 @@ export function createApplicationMenu(
             win.setSimpleFullScreen(!isSimpleFullScreen);
           },
         },
-        ...(buildPluginMenuItems("view").length > 0
-          ? [{ type: "separator" as const }, ...buildPluginMenuItems("view")]
-          : []),
+        ...(viewPluginItems.length > 0 ? [{ type: "separator" as const }, ...viewPluginItems] : []),
       ],
     },
     {
@@ -396,15 +398,11 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("terminal.new", getTargetBrowserWindow(browserWindow)),
         },
-        ...(buildAgentMenuItems().length > 0
-          ? [
-              { type: "separator" as const },
-              ...buildAgentMenuItems(),
-              { type: "separator" as const },
-            ]
+        ...(agentMenuItems.length > 0
+          ? [{ type: "separator" as const }, ...agentMenuItems, { type: "separator" as const }]
           : [{ type: "separator" as const }]),
-        ...(buildPluginMenuItems("terminal").length > 0
-          ? [...buildPluginMenuItems("terminal"), { type: "separator" as const }]
+        ...(terminalPluginItems.length > 0
+          ? [...terminalPluginItems, { type: "separator" as const }]
           : []),
         {
           label: "Quick Switcher...",
@@ -498,9 +496,7 @@ export function createApplicationMenu(
               },
             ]
           : []),
-        ...(buildPluginMenuItems("help").length > 0
-          ? [{ type: "separator" as const }, ...buildPluginMenuItems("help")]
-          : []),
+        ...(helpPluginItems.length > 0 ? [{ type: "separator" as const }, ...helpPluginItems] : []),
         ...(process.platform !== "darwin"
           ? [{ type: "separator" as const }, { role: "about" as const }]
           : []),

@@ -45,6 +45,7 @@ vi.mock("../../utils/git.js", () => ({
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
 vi.mock("../../services/worktree/mood.js", () => ({

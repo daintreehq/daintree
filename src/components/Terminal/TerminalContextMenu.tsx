@@ -102,7 +102,6 @@ export function TerminalContextMenu({
   const isHibernated = useIsHibernated(terminalId);
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
-  const panelsById = usePanelStore((s) => s.panelsById);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
   // dropdown only renders fleet items when the panel is fleet-arm-eligible
@@ -132,8 +131,48 @@ export function TerminalContextMenu({
     confirmLabel: string;
   } | null>(null);
 
+  // Recent dictation targets surfaced in the context menu must resolve to a
+  // live, non-trashed PTY panel that isn't the current one. Persisted entries
+  // come back without a panelId (stripped on rehydrate) — we try to match each
+  // to a live panel by (worktreeId + panelTitle) so cross-session recall works
+  // when the user reopens with the same worktree layout. Entries that can't
+  // be resolved are hidden rather than shown as dead links. Resolved at
+  // menu-open time via getState() so the wrapper doesn't re-render on every
+  // panel-store write.
+  const [liveRecentVoiceTargets, setLiveRecentVoiceTargets] = useState<
+    Array<{ panelId: string; label: string }>
+  >([]);
+
   const handleContextMenu = useCallback(
     (_e: React.MouseEvent) => {
+      const { panelsById } = usePanelStore.getState();
+      const resolved: Array<{ panelId: string; label: string }> = [];
+      const seenIds = new Set<string>([terminalId]);
+      for (const t of recentVoiceTargets) {
+        let livePanelId: string | undefined;
+        if (t.panelId) {
+          const panel = panelsById[t.panelId];
+          if (panel && panel.location !== "trash") livePanelId = t.panelId;
+        } else if (t.worktreeId && t.panelTitle) {
+          const titleMatch = Object.values(panelsById).find(
+            (panel) =>
+              panel.worktreeId === t.worktreeId &&
+              panel.title === t.panelTitle &&
+              panel.location !== "trash"
+          );
+          if (titleMatch) livePanelId = titleMatch.id;
+        }
+        if (!livePanelId || seenIds.has(livePanelId)) continue;
+        seenIds.add(livePanelId);
+        const label =
+          t.panelTitle?.trim() ||
+          t.worktreeLabel?.trim() ||
+          t.projectName?.trim() ||
+          "Untitled panel";
+        resolved.push({ panelId: livePanelId, label });
+      }
+      setLiveRecentVoiceTargets(resolved);
+
       const managed = terminalInstanceService.get(terminalId);
       if (!managed?.terminal) {
         setHasSelection(false);
@@ -144,43 +183,8 @@ export function TerminalContextMenu({
       setHasSelection(!!selection);
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
     },
-    [terminalId]
+    [terminalId, recentVoiceTargets]
   );
-
-  // Recent dictation targets surfaced in the context menu must resolve to a
-  // live, non-trashed PTY panel that isn't the current one. Persisted entries
-  // come back without a panelId (stripped on rehydrate) — we try to match each
-  // to a live panel by (worktreeId + panelTitle) so cross-session recall works
-  // when the user reopens with the same worktree layout. Entries that can't
-  // be resolved are hidden rather than shown as dead links.
-  const liveRecentVoiceTargets = useMemo(() => {
-    const resolved: Array<{ panelId: string; label: string }> = [];
-    const seenIds = new Set<string>([terminalId]);
-    for (const t of recentVoiceTargets) {
-      let livePanelId: string | undefined;
-      if (t.panelId) {
-        const panel = panelsById[t.panelId];
-        if (panel && panel.location !== "trash") livePanelId = t.panelId;
-      } else if (t.worktreeId && t.panelTitle) {
-        const titleMatch = Object.values(panelsById).find(
-          (panel) =>
-            panel.worktreeId === t.worktreeId &&
-            panel.title === t.panelTitle &&
-            panel.location !== "trash"
-        );
-        if (titleMatch) livePanelId = titleMatch.id;
-      }
-      if (!livePanelId || seenIds.has(livePanelId)) continue;
-      seenIds.add(livePanelId);
-      const label =
-        t.panelTitle?.trim() ||
-        t.worktreeLabel?.trim() ||
-        t.projectName?.trim() ||
-        "Untitled panel";
-      resolved.push({ panelId: livePanelId, label });
-    }
-    return resolved;
-  }, [recentVoiceTargets, panelsById, terminalId]);
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   const terminalBrowser = terminal && isBrowserPanel(terminal) ? terminal : undefined;

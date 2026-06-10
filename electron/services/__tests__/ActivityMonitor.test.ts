@@ -15,10 +15,7 @@ function visibleCell(partial: Partial<VisibleContentCell> = {}): VisibleContentC
     width: partial.width ?? 1,
     fgColorMode: partial.fgColorMode ?? 0,
     fgColor: partial.fgColor ?? 0,
-    bgColorMode: partial.bgColorMode ?? 0,
-    bgColor: partial.bgColor ?? 0,
     attributes: partial.attributes ?? 0,
-    defaultVisual: partial.defaultVisual ?? true,
   };
 }
 
@@ -827,6 +824,7 @@ describe("ActivityMonitor", () => {
       for (let i = 0; i < 4; i += 1) {
         visibleLines = [...visibleLines];
         visibleLines[i] = `rewritten historical line ${i + 1}`;
+        monitor.onData(visibleLines[i]!);
         vi.advanceTimersByTime(700);
       }
 
@@ -837,6 +835,7 @@ describe("ActivityMonitor", () => {
       for (let i = 0; i < 4; i += 1) {
         visibleLines = [...visibleLines];
         visibleLines[visibleLines.length - 1] = `visible activity ${i + 1}`;
+        monitor.onData(visibleLines[visibleLines.length - 1]!);
         vi.advanceTimersByTime(700);
       }
 
@@ -855,9 +854,7 @@ describe("ActivityMonitor", () => {
         agentId: "claude",
         getVisibleLines: () => ["●●●"],
         getVisibleContentSnapshot: () =>
-          createVisibleCellContentSnapshot([
-            visibleRow("●●●", { fgColorMode: 1, fgColor, defaultVisual: false }),
-          ]),
+          createVisibleCellContentSnapshot([visibleRow("●●●", { fgColorMode: 1, fgColor })]),
         initialState: "idle",
         skipInitialStateEmit: true,
       });
@@ -918,6 +915,7 @@ describe("ActivityMonitor", () => {
 
       for (let i = 0; i < 4; i += 1) {
         visible = `post resize activity ${i + 1}`;
+        monitor.onData(visible);
         vi.advanceTimersByTime(700);
       }
 
@@ -1051,6 +1049,7 @@ describe("ActivityMonitor", () => {
       monitor.notifySubmission();
       vi.advanceTimersByTime(5900);
       visible = "tick 2";
+      monitor.onData(visible);
       vi.advanceTimersByTime(50);
       vi.advanceTimersByTime(5900);
 
@@ -1059,6 +1058,33 @@ describe("ActivityMonitor", () => {
       vi.advanceTimersByTime(200);
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange.mock.calls.filter((call) => call[2] === "busy")).toHaveLength(1);
+
+      monitor.dispose();
+    });
+
+    it("reuses the cached viewport snapshot once quiet and recomputes after new data", () => {
+      const onStateChange = vi.fn();
+      const getVisibleContentSnapshot = vi.fn(() => createVisibleContentSnapshot("waiting"));
+      const monitor = new ActivityMonitor("agent-simple-snapshot-cache", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["waiting"],
+        getVisibleContentSnapshot,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(2000);
+      getVisibleContentSnapshot.mockClear();
+
+      // Quiet past the settle window: polling must stop re-extracting the viewport
+      vi.advanceTimersByTime(1000);
+      expect(getVisibleContentSnapshot).not.toHaveBeenCalled();
+
+      // New data restarts extraction on the next polls
+      monitor.onData("new output");
+      vi.advanceTimersByTime(100);
+      expect(getVisibleContentSnapshot).toHaveBeenCalled();
 
       monitor.dispose();
     });

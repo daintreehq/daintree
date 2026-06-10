@@ -68,9 +68,12 @@ let mockStoreState: Record<string, unknown> = {
   panelIds: [] as string[],
 };
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) => selector(mockStoreState),
-}));
+vi.mock("@/store/panelStore", () => {
+  const usePanelStore = (selector: (s: Record<string, unknown>) => unknown) =>
+    selector(mockStoreState);
+  usePanelStore.getState = () => mockStoreState;
+  return { usePanelStore };
+});
 
 let mockHasPty = false;
 

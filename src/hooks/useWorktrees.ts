@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
 import { compareWorktreeNames } from "@/lib/worktreeFilters";
 import { useWorktreeStore } from "./useWorktreeStore";
@@ -24,6 +24,41 @@ function normalizeSnapshot(s: WorktreeSnapshot): WorktreeState {
   } as WorktreeState;
 }
 
+// Keyed by store Map identity so the normalize-clone + sort happens once per
+// store update and is shared across every mounted useWorktrees consumer.
+const normalizedCache = new WeakMap<
+  Map<string, WorktreeSnapshot>,
+  { normalizedMap: Map<string, WorktreeState>; worktrees: WorktreeState[] }
+>();
+
+function getNormalized(worktreeMap: Map<string, WorktreeSnapshot>): {
+  normalizedMap: Map<string, WorktreeState>;
+  worktrees: WorktreeState[];
+} {
+  let cached = normalizedCache.get(worktreeMap);
+  if (!cached) {
+    const normalizedMap = new Map<string, WorktreeState>();
+    for (const [id, snap] of worktreeMap) {
+      normalizedMap.set(id, normalizeSnapshot(snap));
+    }
+    const worktrees = Array.from(normalizedMap.values()).sort((a, b) => {
+      if (a.isMainWorktree && !b.isMainWorktree) return -1;
+      if (!a.isMainWorktree && b.isMainWorktree) return 1;
+
+      const timeA = a.lastActivityTimestamp ?? 0;
+      const timeB = b.lastActivityTimestamp ?? 0;
+      if (timeA !== timeB) {
+        return timeB - timeA;
+      }
+
+      return compareWorktreeNames(a.name, b.name);
+    });
+    cached = { normalizedMap, worktrees };
+    normalizedCache.set(worktreeMap, cached);
+  }
+  return cached;
+}
+
 export function useWorktrees(): UseWorktreesReturn {
   const worktreeMap = useWorktreeStore((state) => state.worktrees);
   const isLoading = useWorktreeStore((state) => state.isLoading);
@@ -40,28 +75,7 @@ export function useWorktrees(): UseWorktreesReturn {
     window.electron.worktreePort.request("set-active", { worktreeId: id }).catch(() => {});
   }, []);
 
-  const normalizedMap = useMemo(() => {
-    const map = new Map<string, WorktreeState>();
-    for (const [id, snap] of worktreeMap) {
-      map.set(id, normalizeSnapshot(snap));
-    }
-    return map;
-  }, [worktreeMap]);
-
-  const worktrees = useMemo(() => {
-    return Array.from(normalizedMap.values()).sort((a, b) => {
-      if (a.isMainWorktree && !b.isMainWorktree) return -1;
-      if (!a.isMainWorktree && b.isMainWorktree) return 1;
-
-      const timeA = a.lastActivityTimestamp ?? 0;
-      const timeB = b.lastActivityTimestamp ?? 0;
-      if (timeA !== timeB) {
-        return timeB - timeA;
-      }
-
-      return compareWorktreeNames(a.name, b.name);
-    });
-  }, [normalizedMap]);
+  const { normalizedMap, worktrees } = getNormalized(worktreeMap);
 
   return {
     worktrees,

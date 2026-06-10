@@ -597,17 +597,34 @@ let userRegistry: Record<string, AgentConfig> = {};
 
 export function setUserRegistry(registry: Record<string, AgentConfig>): void {
   userRegistry = registry;
+  cachedEffectiveRegistry = null;
 }
 
 export function getUserRegistry(): Record<string, AgentConfig> {
   return userRegistry;
 }
 
+let cachedEffectiveRegistry: Record<string, AgentConfig> | null = null;
+let cachedPluginSnapshot: Record<string, AgentConfig> | null = null;
+
+/** Invalidate the memoized effective registry (tests that patch `AGENT_REGISTRY` entries). */
+export function invalidateEffectiveRegistryCache(): void {
+  cachedEffectiveRegistry = null;
+}
+
 export function getEffectiveRegistry(): Record<string, AgentConfig> {
-  // Merge order is priority order (later spreads win): plugin agents are the
-  // lowest tier (additive, never shadowing), user-registry overlays them, and
-  // built-ins always win last so a plugin or user can never patch a built-in.
-  return { ...getPluginAgentRegistry(), ...userRegistry, ...AGENT_REGISTRY };
+  // Memoized: invalidated by `setUserRegistry` and whenever the plugin snapshot
+  // reference changes (it is replaced wholesale on every plugin mutation).
+  // `AGENT_REGISTRY` entries are never reassigned in production code.
+  const pluginSnapshot = getPluginAgentRegistry();
+  if (cachedEffectiveRegistry === null || cachedPluginSnapshot !== pluginSnapshot) {
+    // Merge order is priority order (later spreads win): plugin agents are the
+    // lowest tier (additive, never shadowing), user-registry overlays them, and
+    // built-ins always win last so a plugin or user can never patch a built-in.
+    cachedEffectiveRegistry = { ...pluginSnapshot, ...userRegistry, ...AGENT_REGISTRY };
+    cachedPluginSnapshot = pluginSnapshot;
+  }
+  return cachedEffectiveRegistry;
 }
 
 export function getEffectiveAgentIds(): string[] {

@@ -51,6 +51,10 @@ const COMPLETION_HOLD_MS = 500;
 // working-signal gates (recent output suppresses completion detection), so a
 // cost summary printed mid-stream doesn't read as a finished session (#9873).
 const SIMPLE_COMPLETION_MIN_QUIET_MS = 1500;
+// Quiet window before captureSimpleOutputSnapshot starts reusing its cached
+// snapshot — long enough for xterm's async parse of the last chunk (and any
+// resize/focus-triggered redraw) to land before a frame is latched.
+const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
@@ -223,6 +227,11 @@ export class ActivityMonitor {
   private readonly skipInitialStateEmit: boolean;
   private readonly simpleOutputState: boolean;
   private readonly simpleOutputTemperature = new AgentActivityTemperature();
+  // Memoized captureSimpleOutputSnapshot result, valid only while the quiet
+  // clock it was keyed on (`simpleSnapshotCacheKey`) is unchanged.
+  private simpleSnapshotCache?: VisibleContentSnapshot;
+  private simpleSnapshotCacheKey = 0;
+  private simpleSnapshotSettleFrom = 0;
 
   // Polling interval configuration
   private POLLING_INTERVAL_MS: number;
@@ -411,7 +420,6 @@ export class ActivityMonitor {
   private detectPatternsFromData(data: string, now: number): void {
     this.patternBuf.update(data);
     const bufferText = stripAnsi(this.patternBuf.getText());
-    const lowerBuffer = bufferText.toLowerCase();
 
     // Check for boot-complete patterns in the rolling buffer
     if (!this.bootDetector.hasExitedBootState) {
@@ -431,7 +439,7 @@ export class ActivityMonitor {
     }
     const isWorking = patternResult
       ? patternResult.isWorking
-      : this.isEscInterruptFallback(lowerBuffer);
+      : this.isEscInterruptFallback(bufferText.toLowerCase());
 
     if (
       isWorking &&
@@ -734,6 +742,31 @@ export class ActivityMonitor {
   }
 
   private captureSimpleOutputSnapshot(): VisibleContentSnapshot | undefined {
+    // Reuse the previous snapshot once the terminal has been quiet past the
+    // settle window — extracting and hashing the full viewport 20x/sec for an
+    // idle terminal is pure waste. New data moves `lastDataTimestamp`; resize,
+    // focus, agent swap, and external promotion invalidate explicitly.
+    const quietSince = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
+    const settled = Date.now() - quietSince >= SIMPLE_SNAPSHOT_SETTLE_MS;
+    if (
+      settled &&
+      this.simpleSnapshotCache !== undefined &&
+      this.simpleSnapshotCacheKey === quietSince
+    ) {
+      return this.simpleSnapshotCache;
+    }
+
+    const snapshot = this.computeSimpleOutputSnapshot();
+    if (settled && snapshot !== undefined) {
+      this.simpleSnapshotCache = snapshot;
+      this.simpleSnapshotCacheKey = quietSince;
+    } else {
+      this.simpleSnapshotCache = undefined;
+    }
+    return snapshot;
+  }
+
+  private computeSimpleOutputSnapshot(): VisibleContentSnapshot | undefined {
     const cellSnapshot = this.getVisibleContentSnapshot?.(AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
     if (cellSnapshot !== undefined) {
       return cellSnapshot;
@@ -743,6 +776,14 @@ export class ActivityMonitor {
       return undefined;
     }
     return createVisibleContentSnapshot(this.getVisibleLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT));
+  }
+
+  // The viewport can keep mutating after these signals without new PTY data
+  // (async reflow/redraw), so restart the settle clock rather than just
+  // dropping the cached frame.
+  private invalidateSimpleSnapshotCache(): void {
+    this.simpleSnapshotCache = undefined;
+    this.simpleSnapshotSettleFrom = Date.now();
   }
 
   private noteSimpleOutputSnapshot(
@@ -820,6 +861,9 @@ export class ActivityMonitor {
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
     this.simpleOutputTemperature.reset();
+    this.simpleSnapshotCache = undefined;
+    this.simpleSnapshotCacheKey = 0;
+    this.simpleSnapshotSettleFrom = 0;
     this.lineRewriteDetector.reset();
     this.synchronizedFrameAnalyzer.reset();
     this.patternBuf.reset();
@@ -862,6 +906,7 @@ export class ActivityMonitor {
     // signal that the agent identity changed — discard accumulated state.
     this.synchronizedFrameAnalyzer.reset();
     this.simpleOutputTemperature.reset();
+    this.invalidateSimpleSnapshotCache();
   }
 
   notifySubmission(): void {
@@ -939,6 +984,7 @@ export class ActivityMonitor {
     // from the pre-promotion lull would otherwise hint "idle" at the first
     // poll after the 1.5s working hold and bounce the FSM straight back.
     this.simpleOutputTemperature.reset();
+    this.invalidateSimpleSnapshotCache();
     if (this.state !== "busy") {
       this.state = "busy";
       this.idleSince = now;
@@ -956,6 +1002,7 @@ export class ActivityMonitor {
     // first post-resize frame doesn't compare against pre-resize cells.
     this.synchronizedFrameAnalyzer.reset();
     this.simpleOutputTemperature.noteResize(Date.now(), suppressionMs);
+    this.invalidateSimpleSnapshotCache();
   }
 
   private isResizeSuppressed(now: number): boolean {
@@ -977,6 +1024,7 @@ export class ActivityMonitor {
     // fresh baseline. Unlike resize, focus does not invalidate cell ring-buffer
     // history or the high-output window — those stay intact.
     this.simpleOutputTemperature.reset();
+    this.invalidateSimpleSnapshotCache();
   }
 
   isFocusSuppressed(now: number = Date.now()): boolean {
@@ -992,6 +1040,9 @@ export class ActivityMonitor {
     if (!this.getVisibleLines || this.pollingInterval) return;
 
     this.bootDetector.pollingStartTime = Date.now();
+    // Session restore / agent relaunch may have rewritten the viewport
+    // without data flowing through onData.
+    this.invalidateSimpleSnapshotCache();
 
     if (this.skipInitialStateEmit) {
       this.bootDetector.hasExitedBootState = this.state === "idle";
@@ -1097,7 +1148,6 @@ export class ActivityMonitor {
     const lines = this.getVisibleLines!(scanCount);
     const cursorLine = this.getCursorLine?.() ?? null;
     const strippedText = stripAnsi(lines.join(" "));
-    const text = strippedText.toLowerCase();
     const quietForMs = now - this.lastActivityTimestamp;
     const isQuietForIdle = quietForMs >= this.IDLE_DEBOUNCE_MS;
 
@@ -1113,7 +1163,7 @@ export class ActivityMonitor {
       ? patternResult.isWorking
       : this.skipInitialStateEmit
         ? false
-        : this.isEscInterruptFallback(text);
+        : this.isEscInterruptFallback(strippedText.toLowerCase());
 
     const allowHistoryScan = quietForMs >= PROMPT_HISTORY_FALLBACK_MS;
     const promptResult = detectPrompt(lines, this.promptDetectorConfig, cursorLine, {

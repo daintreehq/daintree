@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { InputTracker, CLEAR_COMMANDS } from "../clearCommandDetection";
+import { InputTracker, CLEAR_COMMANDS, MAX_TRACKED_INPUT_LENGTH } from "../clearCommandDetection";
 
 describe("InputTracker", () => {
   let tracker: InputTracker;
@@ -185,6 +185,50 @@ describe("InputTracker", () => {
 
     it("trims whitespace from commands", () => {
       const results = tracker.process("  clear  \r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(true);
+      expect(results[0]!.command).toBe("clear");
+    });
+  });
+
+  describe("buffer length cap", () => {
+    it("caps tracked input at MAX_TRACKED_INPUT_LENGTH and keeps the prefix", () => {
+      const input = "a".repeat(MAX_TRACKED_INPUT_LENGTH * 2);
+      const results = tracker.process(input + "\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(false);
+      expect(results[0]!.command).toBe("a".repeat(MAX_TRACKED_INPUT_LENGTH));
+    });
+
+    it("caps multi-line bracketed paste content", () => {
+      const line = "x".repeat(1024) + "\n";
+      const results = tracker.process("\x1b[200~" + line.repeat(10) + "\x1b[201~\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(false);
+      expect(results[0]!.command!.length).toBeLessThanOrEqual(MAX_TRACKED_INPUT_LENGTH);
+    });
+
+    it("still detects a clear command after a capped command is submitted", () => {
+      tracker.process("b".repeat(MAX_TRACKED_INPUT_LENGTH * 2) + "\r");
+      const results = tracker.process("clear\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(true);
+    });
+
+    it("does not report a false clear when backspacing leaves overflowed chars on the real line", () => {
+      // "clear" + MAX x's: buffer holds "clear" + (MAX-5) x's, 5 chars overflow.
+      tracker.process("clear" + "x".repeat(MAX_TRACKED_INPUT_LENGTH));
+      // MAX-5 backspaces: real line is "clear" + 5 x's; pre-overflow-tracking
+      // the buffer would have been sliced to exactly "clear" (false positive).
+      const results = tracker.process("\x7f".repeat(MAX_TRACKED_INPUT_LENGTH - 5) + "\r");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isClear).toBe(false);
+      expect(results[0]!.command).toBe("clearxxxxx");
+    });
+
+    it("detects clear when an overflowed line is backspaced down to a genuine clear command", () => {
+      tracker.process("clear" + "x".repeat(MAX_TRACKED_INPUT_LENGTH));
+      const results = tracker.process("\x7f".repeat(MAX_TRACKED_INPUT_LENGTH) + "\r");
       expect(results).toHaveLength(1);
       expect(results[0]!.isClear).toBe(true);
       expect(results[0]!.command).toBe("clear");

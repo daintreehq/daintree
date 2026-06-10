@@ -451,24 +451,28 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
-    for (const paneId of session.paneIds) {
-      let groupDepth = session.groupDepthByPane.get(paneId) ?? 0;
-
-      if (cdpType === "endGroup") {
-        groupDepth = Math.max(0, groupDepth - 1);
-        session.groupDepthByPane.set(paneId, groupDepth);
-        // Don't emit a row for endGroup, just adjust depth
-        continue;
+    if (cdpType === "endGroup") {
+      // Don't emit a row for endGroup, just adjust depth per pane
+      for (const paneId of session.paneIds) {
+        const groupDepth = session.groupDepthByPane.get(paneId) ?? 0;
+        session.groupDepthByPane.set(paneId, Math.max(0, groupDepth - 1));
       }
+      return;
+    }
 
-      const args: CdpRemoteArg[] = Array.isArray(p.args)
-        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          p.args.map((a: any) => normalizeRemoteObject(a))
-        : [];
+    // Normalization is pane-independent — hoisted so multi-pane sessions
+    // don't repeat the recursive remote-object walks per pane.
+    const args: CdpRemoteArg[] = Array.isArray(p.args)
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        p.args.map((a: any) => normalizeRemoteObject(a))
+      : [];
 
-      const level = cdpTypeToLevel(cdpType);
-      const summaryText = buildSummaryText(args);
-      const stackTrace = normalizeStackTrace(p.stackTrace);
+    const level = cdpTypeToLevel(cdpType);
+    const summaryText = buildSummaryText(args);
+    const stackTrace = normalizeStackTrace(p.stackTrace);
+
+    for (const paneId of session.paneIds) {
+      const groupDepth = session.groupDepthByPane.get(paneId) ?? 0;
 
       trackObjectIds(session, paneId, args);
 

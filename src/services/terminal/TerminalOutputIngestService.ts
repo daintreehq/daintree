@@ -225,9 +225,17 @@ export class TerminalOutputIngestService {
 
     const stringData = typeof data === "string" ? data : "";
     if (stringData) {
-      const scanWindow = queue.recentChars + stringData;
-      const containsInkErase = scanWindow.includes(INK_ERASE_LINE_PATTERN);
-      queue.recentChars = scanWindow.slice(-IPC_LOOKBACK_CHARS);
+      // Scan the chunk and the boundary window separately — concatenating
+      // recentChars with the full chunk would flatten a copy of the entire
+      // chunk just to find an 8-char pattern. A straddling occurrence uses at
+      // most the first pattern-length-minus-one chars of the new chunk.
+      const boundary = queue.recentChars + stringData.slice(0, INK_ERASE_LINE_PATTERN.length - 1);
+      const containsInkErase =
+        stringData.includes(INK_ERASE_LINE_PATTERN) || boundary.includes(INK_ERASE_LINE_PATTERN);
+      queue.recentChars =
+        stringData.length >= IPC_LOOKBACK_CHARS
+          ? stringData.slice(-IPC_LOOKBACK_CHARS)
+          : (queue.recentChars + stringData).slice(-IPC_LOOKBACK_CHARS);
 
       if (containsInkErase && !queue.drainScheduled) {
         queue.drainScheduled = true;

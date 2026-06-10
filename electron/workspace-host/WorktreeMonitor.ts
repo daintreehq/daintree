@@ -15,10 +15,7 @@ import type { GitHubPRCIStatus } from "../../shared/types/github.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
-import {
-  isRepoOperationInProgress,
-  getRepoOperationStateSync,
-} from "../utils/gitRepoOperationState.js";
+import { getRepoOperationStateSync } from "../utils/gitRepoOperationState.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
@@ -205,6 +202,7 @@ export class WorktreeMonitor {
   // simple-git fork-exec. null = no baseline yet (first poll, or post-error).
   private lastStatBaseline: GitFileStatBaseline | null = null;
   private lastStatBaselineAt: number = 0;
+  private cachedCommonDir: string | null = null;
   // Timer used to defer the initial `updateGitStatus` call for background
   // monitors so N monitors starting together don't fork git simultaneously.
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
@@ -1493,8 +1491,9 @@ export class WorktreeMonitor {
 
     // Detect blocking git operation state from sentinel files so the renderer
     // can surface it even when git status is skipped.
+    let opState: import("../../shared/types/git.js").RepoState | undefined;
     if (gitDir) {
-      const opState = getRepoOperationStateSync(gitDir);
+      opState = getRepoOperationStateSync(gitDir);
       if (opState !== this._repoState) {
         this._repoState = opState;
         if (this._hasInitialStatus) {
@@ -1505,7 +1504,7 @@ export class WorktreeMonitor {
       this._repoState = undefined;
     }
 
-    if (gitDir && isRepoOperationInProgress(gitDir)) {
+    if (gitDir && opState !== undefined) {
       // If we're skipping the very first poll (e.g. app started mid-rebase),
       // emit a default snapshot so the renderer can still display the worktree.
       // Mirrors startWithoutGitStatus()'s contract.
@@ -1796,6 +1795,10 @@ export class WorktreeMonitor {
    * Mirrors `GitFileWatcher.resolveCommonDir` but uses async `readFile`.
    */
   private async resolveCommonDirAsync(gitDir: string): Promise<string> {
+    // The commondir pointer is immutable for the lifetime of a worktree, so
+    // a successful resolve is cached for the monitor's lifetime. Fallback
+    // paths (missing file, timeout) stay uncached so transient errors retry.
+    if (this.cachedCommonDir !== null) return this.cachedCommonDir;
     const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this._pollAbortController.signal);
     try {
       const commondirContent = await readFile(pathJoin(gitDir, "commondir"), {
@@ -1804,7 +1807,8 @@ export class WorktreeMonitor {
       });
       const trimmed = commondirContent.trim();
       if (!trimmed) return gitDir;
-      return isAbsolute(trimmed) ? trimmed : pathJoin(gitDir, trimmed);
+      this.cachedCommonDir = isAbsolute(trimmed) ? trimmed : pathJoin(gitDir, trimmed);
+      return this.cachedCommonDir;
     } catch {
       // Missing file, timeout, or poll abort — fall back to gitDir. A timeout
       // here just degrades the next poll to a full git check rather than the
@@ -1984,9 +1988,12 @@ export class WorktreeMonitor {
       let matchesUpstream = false;
       if (hasUpstream) {
         try {
-          const upstreamCommit = await git.raw(["rev-parse", "@{u}"]);
-          const baseCommit = await git.raw(["rev-parse", resolvedRef]);
-          matchesUpstream = upstreamCommit.trim() === baseCommit.trim();
+          // One invocation resolves both revs — rev-parse prints one OID per
+          // line, and either failing exits non-zero (caught below), matching
+          // the previous two-call error semantics.
+          const out = await git.raw(["rev-parse", "@{u}", resolvedRef]);
+          const [upstreamCommit, baseCommit] = out.trim().split("\n");
+          matchesUpstream = baseCommit !== undefined && upstreamCommit.trim() === baseCommit.trim();
         } catch {
           matchesUpstream = false;
         }

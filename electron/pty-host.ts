@@ -138,6 +138,7 @@ let visualSignalView: Int32Array | null = null;
 let analysisBuffer: SharedRingBuffer | null = null;
 const packetFramer = new PacketFramer();
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
 
 // Throughput-rate gauge: accumulates per-terminal raw PTY byte/packet counts
 // between ResourceGovernor ticks. Double-buffer swap at tick boundary avoids
@@ -483,7 +484,7 @@ function disconnectWindow(windowId: number, reason: string): void {
 const resourceGovernor = new ResourceGovernor({
   getTerminalIds: () => ptyManager.getAll().map((t) => t.id),
   getPauseCoordinator,
-  getTerminalPids: () => ptyManager.getAll().map((t) => ({ id: t.id, pid: t.ptyProcess.pid })),
+  getTerminalCount: () => ptyManager.getActiveTerminalIds().length,
   incrementPauseCount: (count) => {
     backpressureManager.stats.pauseCount += count;
   },
@@ -638,15 +639,6 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     rendererConnections.size > 0 &&
     !isSmokeTestTerminalId(id)
   ) {
-    // Carry raw bytes on the hot MessagePort path so the renderer receives a
-    // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
-    // Wrap with `new Uint8Array(...)` to escape node-pty's Buffer pool slab —
-    // each batcher will copy these chunks into a fresh isolated buffer at
-    // flush time before they land in the postMessage transfer list.
-    const chunk =
-      typeof data === "string" ? new Uint8Array(Buffer.from(data, "utf8")) : new Uint8Array(data);
-    const byteCount = chunk.byteLength;
-
     const termProject = terminalInfo?.projectId ?? null;
     const targets: RendererConnection[] = [];
     for (const [windowId, conn] of rendererConnections) {
@@ -656,52 +648,66 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       targets.push(conn);
     }
 
-    // The chunk's ArrayBuffer can only be transferred zero-copy when exactly one
-    // batcher receives it: a transfer detaches the buffer, and per-batcher flush
-    // timing is independent, so with 2+ targets any flush would neuter the chunk
-    // out from under siblings still waiting to copy it. Sole target → owned.
-    const owned = targets.length === 1;
-    const saturated: RendererConnection[] = [];
-    for (const conn of targets) {
-      if (conn.batcher.write(id, chunk, byteCount, owned)) {
-        visualWritten = true;
-      } else {
-        saturated.push(conn);
-      }
-    }
+    // Encode only when a target window remains after project filtering — a
+    // fully-filtered chunk falls through to the IPC fallback's original string.
+    if (targets.length > 0) {
+      // Carry raw bytes on the hot MessagePort path so the renderer receives a
+      // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
+      // TextEncoder encodes strings into a standalone, exactly-sized buffer in
+      // one pass; the `new Uint8Array(...)` wrap on the bytes branch escapes
+      // node-pty's Buffer pool slab — each batcher will copy these chunks into
+      // a fresh isolated buffer at flush time before they land in the
+      // postMessage transfer list.
+      const chunk = typeof data === "string" ? textEncoder.encode(data) : new Uint8Array(data);
+      const byteCount = chunk.byteLength;
 
-    // A window whose batcher rejected this chunk only truly loses it when a
-    // SIBLING window's batcher accepted it — i.e. `visualWritten` is now true,
-    // which suppresses the shared SAB/IPC fallback below. If NO window accepted,
-    // `visualWritten` stays false and the IPC fallback broadcasts the chunk to
-    // every window (the renderer's onData subscribes to both the MessagePort and
-    // the IPC path), so nothing is actually lost — no pulse needed there.
-    //
-    // For the genuinely-starved windows we can't lean on the IPC fallback:
-    // `sendEvent` broadcasts to every window and would falsely flag the ones
-    // that received the data on their own port (issue #9891). So account the
-    // loss and deliver a `data-loss` pulse on each starved window's own port,
-    // FIFO-ordered with its data, letting the next wake snapshot resync it.
-    //
-    // Skip mirrored terminals: the IPC data mirror below broadcasts the chunk to
-    // every window (the renderer's onData also listens on IPC), so a starved
-    // window still receives it — a pulse here would be a spurious discontinuity.
-    if (visualWritten && saturated.length > 0 && !ipcDataMirrorTerminals.has(id)) {
-      for (const conn of saturated) {
-        // Counter is unconditional — regression detection must work even when
-        // metrics are gated off (mirrors the IPC at-capacity path).
-        dropAccumulator.droppedBytes += byteCount;
-        dropAccumulator.dataLossCount += 1;
-        try {
-          conn.port.postMessage({
-            type: "terminal-status",
-            id,
-            status: "data-loss",
-            droppedBytes: byteCount,
-            timestamp: Date.now(),
-          });
-        } catch {
-          // Port closing between iteration and post — disconnect handles cleanup.
+      // The chunk's ArrayBuffer can only be transferred zero-copy when exactly one
+      // batcher receives it: a transfer detaches the buffer, and per-batcher flush
+      // timing is independent, so with 2+ targets any flush would neuter the chunk
+      // out from under siblings still waiting to copy it. Sole target → owned.
+      const owned = targets.length === 1;
+      const saturated: RendererConnection[] = [];
+      for (const conn of targets) {
+        if (conn.batcher.write(id, chunk, byteCount, owned)) {
+          visualWritten = true;
+        } else {
+          saturated.push(conn);
+        }
+      }
+
+      // A window whose batcher rejected this chunk only truly loses it when a
+      // SIBLING window's batcher accepted it — i.e. `visualWritten` is now true,
+      // which suppresses the shared SAB/IPC fallback below. If NO window accepted,
+      // `visualWritten` stays false and the IPC fallback broadcasts the chunk to
+      // every window (the renderer's onData subscribes to both the MessagePort and
+      // the IPC path), so nothing is actually lost — no pulse needed there.
+      //
+      // For the genuinely-starved windows we can't lean on the IPC fallback:
+      // `sendEvent` broadcasts to every window and would falsely flag the ones
+      // that received the data on their own port (issue #9891). So account the
+      // loss and deliver a `data-loss` pulse on each starved window's own port,
+      // FIFO-ordered with its data, letting the next wake snapshot resync it.
+      //
+      // Skip mirrored terminals: the IPC data mirror below broadcasts the chunk to
+      // every window (the renderer's onData also listens on IPC), so a starved
+      // window still receives it — a pulse here would be a spurious discontinuity.
+      if (visualWritten && saturated.length > 0 && !ipcDataMirrorTerminals.has(id)) {
+        for (const conn of saturated) {
+          // Counter is unconditional — regression detection must work even when
+          // metrics are gated off (mirrors the IPC at-capacity path).
+          dropAccumulator.droppedBytes += byteCount;
+          dropAccumulator.dataLossCount += 1;
+          try {
+            conn.port.postMessage({
+              type: "terminal-status",
+              id,
+              status: "data-loss",
+              droppedBytes: byteCount,
+              timestamp: Date.now(),
+            });
+          } catch {
+            // Port closing between iteration and post — disconnect handles cleanup.
+          }
         }
       }
     }

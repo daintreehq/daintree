@@ -27,10 +27,7 @@ function cell(partial: Partial<VisibleContentCell> = {}): VisibleContentCell {
     width: partial.width ?? 1,
     fgColorMode: partial.fgColorMode ?? 0,
     fgColor: partial.fgColor ?? 0,
-    bgColorMode: partial.bgColorMode ?? 0,
-    bgColor: partial.bgColor ?? 0,
     attributes: partial.attributes ?? 0,
-    defaultVisual: partial.defaultVisual ?? true,
   };
 }
 
@@ -102,12 +99,8 @@ describe("visible content normalization", () => {
   });
 
   it("includes color changes in cell snapshots", () => {
-    const before = createVisibleCellContentSnapshot([
-      row("●●●", { fgColorMode: 1, fgColor: 1, defaultVisual: false }),
-    ]);
-    const after = createVisibleCellContentSnapshot([
-      row("●●●", { fgColorMode: 1, fgColor: 2, defaultVisual: false }),
-    ]);
+    const before = createVisibleCellContentSnapshot([row("●●●", { fgColorMode: 1, fgColor: 1 })]);
+    const after = createVisibleCellContentSnapshot([row("●●●", { fgColorMode: 1, fgColor: 2 })]);
 
     expect(measureVisibleContentDelta(before, after)).toEqual({
       changed: true,
@@ -116,12 +109,8 @@ describe("visible content normalization", () => {
   });
 
   it("ignores styled whitespace in cell snapshots", () => {
-    const before = createVisibleCellContentSnapshot([
-      row("   ", { bgColorMode: 1, bgColor: 1, defaultVisual: false }),
-    ]);
-    const after = createVisibleCellContentSnapshot([
-      row("   ", { bgColorMode: 1, bgColor: 2, defaultVisual: false }),
-    ]);
+    const before = createVisibleCellContentSnapshot([row("   ")]);
+    const after = createVisibleCellContentSnapshot([row("   ", { attributes: 1 << 2 })]);
 
     expect(measureVisibleContentDelta(before, after)).toEqual({
       changed: false,
@@ -131,7 +120,7 @@ describe("visible content normalization", () => {
 
   it("ignores cells without actual character content", () => {
     const before = createVisibleCellContentSnapshot([
-      [cell({ chars: "", code: 47, bgColorMode: 1, bgColor: 1, defaultVisual: false })],
+      [cell({ chars: "", code: 47 })],
       row("/exit"),
     ]);
     const after = createVisibleCellContentSnapshot([row("/exit")]);
@@ -144,12 +133,8 @@ describe("visible content normalization", () => {
   });
 
   it("ignores background row-bar changes on visible text cells", () => {
-    const before = createVisibleCellContentSnapshot([
-      row("/exit", { bgColorMode: 1, bgColor: 1, defaultVisual: false }),
-    ]);
-    const after = createVisibleCellContentSnapshot([
-      row("/exit", { bgColorMode: 1, bgColor: 2, attributes: 1 << 5, defaultVisual: false }),
-    ]);
+    const before = createVisibleCellContentSnapshot([row("/exit")]);
+    const after = createVisibleCellContentSnapshot([row("/exit", { attributes: 1 << 5 })]);
 
     expect(after.hash).toBe(before.hash);
     expect(measureVisibleContentDelta(before, after)).toEqual({
@@ -162,7 +147,7 @@ describe("visible content normalization", () => {
     const before = createVisibleCellContentSnapshot([
       [
         ...row("Captures the regression in fcbb3f765 plus the race window"),
-        ...row("     ", { bgColorMode: 1, bgColor: 4, defaultVisual: false }),
+        ...row("     ", { attributes: 1 << 5 }),
       ],
       row("between addPanel resolving and setTerminal(newId) firing"),
     ]);
@@ -170,7 +155,7 @@ describe("visible content normalization", () => {
       row("Captures the regression in fcbb3f765 plus the race"),
       [
         ...row("window between addPanel resolving and setTerminal(newId)"),
-        ...row("     ", { bgColorMode: 1, bgColor: 5, defaultVisual: false }),
+        ...row("     ", { attributes: (1 << 5) | 1 }),
       ],
       row("firing"),
     ]);
