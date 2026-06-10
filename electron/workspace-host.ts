@@ -506,7 +506,8 @@ port.on("message", async (rawMsg: any) => {
           request.requestId,
           request.cwd,
           request.filePath,
-          request.status
+          request.status,
+          request.ignoreWhitespace
         );
         break;
 

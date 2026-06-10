@@ -1613,7 +1613,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "git",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get the git diff for a single file. Args: \`cwd\` (optional) — repo working directory, defaults to the active worktree path; \`filePath\` (required) — repo-relative path; \`status\` (required) — the file's git status (from a \`git.getStagingStatus\` entry). Returns { content } — the unified diff text. Errors when \`cwd\` is omitted and no worktree is active.",
+    "description": "Get the git diff for a single file. Args: \`cwd\` (optional) — repo working directory, defaults to the active worktree path; \`filePath\` (required) — repo-relative path; \`status\` (required) — the file's git status (from a \`git.getStagingStatus\` entry); \`ignoreWhitespace\` (optional) — omit whitespace-only changes. Returns { content } — the unified diff text. Errors when \`cwd\` is omitted and no worktree is active.",
     "examples": [
       {
         "args": {

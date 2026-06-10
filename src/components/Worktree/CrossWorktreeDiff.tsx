@@ -11,6 +11,7 @@ import { sortWorktreesForComparison } from "./crossWorktreeDiffUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 interface CrossWorktreeDiffProps {
   isOpen: boolean;
@@ -181,6 +182,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     }
   }, [leftId, rightId, fetchComparison]);
 
+  const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+
   const fetchFileDiff = useCallback(
     async (file: CrossWorktreeFile) => {
       if (!leftWorktree?.branch || !rightWorktree?.branch) return;
@@ -197,7 +200,9 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           leftWorktree.path,
           leftWorktree.branch,
           rightWorktree.branch,
-          file.path
+          file.path,
+          undefined,
+          ignoreWhitespace
         );
         if (token !== fileDiffTokenRef.current) return; // stale response
         setFileDiff(typeof diff === "string" ? diff : null);
@@ -210,7 +215,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         if (token === fileDiffTokenRef.current) setFileDiffLoading(false);
       }
     },
-    [leftWorktree, rightWorktree]
+    [leftWorktree, rightWorktree, ignoreWhitespace]
   );
 
   return (
@@ -322,16 +327,32 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             </div>
           )}
           {selectedFile && !fileDiffLoading && fileDiffError && (
-            <div className="flex items-center justify-center gap-2 h-full text-status-error text-sm">
-              <AlertCircle className="w-4 h-4" />
-              Failed to load diff
+            <div className="flex flex-col items-center justify-center gap-3 h-full">
+              <div className="flex items-center gap-2 text-status-error text-sm">
+                <AlertCircle className="w-4 h-4" />
+                Couldn't load diff
+              </div>
+              <button
+                type="button"
+                onClick={() => void fetchFileDiff(selectedFile)}
+                className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
+              >
+                Retry
+              </button>
             </div>
           )}
           {selectedFile && !fileDiffLoading && !fileDiffError && fileDiff !== null && (
             // Split view is required here — the inline cross-worktree split-pane
             // layout depends on it, so this is not driven by the persisted
-            // diffViewType preference.
-            <DiffViewer diff={fileDiff} filePath={selectedFile.path} viewType="split" />
+            // diffViewType preference. rootPath is the RIGHT worktree's checkout:
+            // the new side of the A..B comparison, i.e. the file the user is
+            // inspecting.
+            <DiffViewer
+              diff={fileDiff}
+              viewType="split"
+              rootPath={rightWorktree?.path}
+              onRetry={() => void fetchFileDiff(selectedFile)}
+            />
           )}
         </div>
       </div>

@@ -39,11 +39,38 @@ declare module "react-diff-view" {
   export const tokenize: (hunks: HunkData[], options: TokenizeOptions) => HunkTokens;
   export const markEdits: (hunks: HunkData[], options?: { type: string }) => any;
 
+  export type Source = string | string[];
+  export const expandFromRawCode: (
+    hunks: HunkData[],
+    source: Source,
+    start: number,
+    end: number
+  ) => HunkData[];
+  export const getCollapsedLinesCountBetween: (
+    previousHunk: HunkData | null,
+    nextHunk: HunkData
+  ) => number;
+
+  export type Side = "old" | "new";
+
+  export interface GutterOptions {
+    change: ChangeData;
+    side: Side;
+    inHoverState: boolean;
+    renderDefault: () => ReactNode;
+    wrapInAnchor: (element: ReactNode) => ReactNode;
+  }
+
+  export type RenderGutter = (options: GutterOptions) => ReactNode;
+
   export interface DiffProps {
     viewType: ViewType;
     diffType: DiffType;
     hunks: HunkData[];
     tokens?: HunkTokens;
+    renderGutter?: RenderGutter;
+    /** Split view only: isolate text selection to the side the drag started on */
+    optimizeSelection?: boolean;
     children: (hunks: HunkData[]) => ReactNode;
   }
 
@@ -54,6 +81,15 @@ declare module "react-diff-view" {
   }
 
   export const Hunk: ComponentType<HunkProps>;
+
+  export interface DecorationProps {
+    className?: string;
+    gutterClassName?: string;
+    contentClassName?: string;
+    children: ReactNode | [ReactNode, ReactNode];
+  }
+
+  export const Decoration: ComponentType<DecorationProps>;
 }
 
 declare module "refractor" {

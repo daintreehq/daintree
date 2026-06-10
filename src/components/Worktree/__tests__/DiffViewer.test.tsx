@@ -85,7 +85,7 @@ describe("DiffViewer", () => {
   });
 
   it("shows Plain text badge when refractor chunk load fails", async () => {
-    render(wrap(<DiffViewer diff={rustDiff} filePath="main.rs" />));
+    render(wrap(<DiffViewer diff={rustDiff} />));
     await waitFor(() => {
       expect(screen.getByTestId("diff-plain-text-badge")).toBeTruthy();
     });
@@ -93,7 +93,7 @@ describe("DiffViewer", () => {
   });
 
   it("does not show Plain text badge for built-in languages", async () => {
-    render(wrap(<DiffViewer diff={jsDiff} filePath="app.js" />));
+    render(wrap(<DiffViewer diff={jsDiff} />));
     await waitFor(() => {
       expect(screen.getByText("app.js")).toBeTruthy();
     });
@@ -108,7 +108,7 @@ index 000..111 100644
 @@ -1,1 +1,1 @@
 -old
 +new`;
-    render(wrap(<DiffViewer diff={unknownDiff} filePath="foo.xyz" />));
+    render(wrap(<DiffViewer diff={unknownDiff} />));
     await waitFor(() => {
       expect(screen.getByText("foo.xyz")).toBeTruthy();
     });
@@ -116,57 +116,57 @@ index 000..111 100644
   });
 
   it("renders NO_CHANGES sentinel", () => {
-    render(wrap(<DiffViewer diff="NO_CHANGES" filePath="src/index.ts" />));
+    render(wrap(<DiffViewer diff="NO_CHANGES" />));
     expect(screen.getByText("No changes detected")).toBeTruthy();
   });
 
   it("renders BINARY_FILE sentinel", () => {
-    render(wrap(<DiffViewer diff="BINARY_FILE" filePath="src/index.ts" />));
-    expect(screen.getByText("Binary file - cannot display diff")).toBeTruthy();
+    render(wrap(<DiffViewer diff="BINARY_FILE" />));
+    expect(screen.getByText("Binary file")).toBeTruthy();
   });
 
   it("renders FILE_TOO_LARGE sentinel", () => {
-    render(wrap(<DiffViewer diff="FILE_TOO_LARGE" filePath="src/index.ts" />));
-    expect(screen.getByText(/File too large to display diff/)).toBeTruthy();
+    render(wrap(<DiffViewer diff="FILE_TOO_LARGE" />));
+    expect(screen.getByText("File too large")).toBeTruthy();
   });
 
   it("renders ERROR sentinel with error message", () => {
-    render(wrap(<DiffViewer diff="ERROR" filePath="src/index.ts" />));
-    expect(screen.getByText("Failed to load diff")).toBeTruthy();
+    render(wrap(<DiffViewer diff="ERROR" />));
+    expect(screen.getByText("Couldn't load diff")).toBeTruthy();
   });
 
   it("does not render parse-failure fallback for ERROR sentinel", () => {
-    render(wrap(<DiffViewer diff="ERROR" filePath="src/index.ts" />));
+    render(wrap(<DiffViewer diff="ERROR" />));
     // ERROR sentinel is checked before files.length, so we get the error UI
-    expect(screen.getByText("Failed to load diff")).toBeTruthy();
+    expect(screen.getByText("Couldn't load diff")).toBeTruthy();
     expect(screen.queryByText("Unable to parse diff")).toBeNull();
   });
 
   it("renders retry button when onRetry is provided", () => {
     const onRetry = vi.fn();
-    render(wrap(<DiffViewer diff="ERROR" filePath="src/index.ts" onRetry={onRetry} />));
+    render(wrap(<DiffViewer diff="ERROR" onRetry={onRetry} />));
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("does not render retry button when onRetry is omitted", () => {
-    render(wrap(<DiffViewer diff="ERROR" filePath="src/index.ts" />));
+    render(wrap(<DiffViewer diff="ERROR" />));
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("calls onRetry when retry button is clicked", () => {
     const onRetry = vi.fn();
-    render(wrap(<DiffViewer diff="ERROR" filePath="src/index.ts" onRetry={onRetry} />));
+    render(wrap(<DiffViewer diff="ERROR" onRetry={onRetry} />));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("renders empty diff sentinel", () => {
-    render(wrap(<DiffViewer diff="" filePath="src/index.ts" />));
+    render(wrap(<DiffViewer diff="" />));
     expect(screen.getByText("No changes detected")).toBeTruthy();
   });
 
   it("renders parse failure when diff is unparseable", () => {
-    render(wrap(<DiffViewer diff="not a real diff" filePath="src/index.ts" />));
+    render(wrap(<DiffViewer diff="not a real diff" />));
     expect(screen.getByText("Unable to parse diff")).toBeTruthy();
   });
 });
@@ -177,19 +177,19 @@ describe("DiffViewer sentinel messages", () => {
   });
 
   it("shows NO_CHANGES message", () => {
-    render(wrap(<DiffViewer diff="NO_CHANGES" filePath="a.ts" />));
+    render(wrap(<DiffViewer diff="NO_CHANGES" />));
     expect(screen.getByText("No changes detected")).toBeTruthy();
   });
 
   it("shows BINARY_FILE message", () => {
-    render(wrap(<DiffViewer diff="BINARY_FILE" filePath="icon.png" />));
-    expect(screen.getByText("Binary file - cannot display diff")).toBeTruthy();
+    render(wrap(<DiffViewer diff="BINARY_FILE" />));
+    expect(screen.getByText("Binary file")).toBeTruthy();
   });
 
   it("shows FILE_TOO_LARGE message with 1MB threshold", () => {
-    render(wrap(<DiffViewer diff="FILE_TOO_LARGE" filePath="big.ts" />));
+    render(wrap(<DiffViewer diff="FILE_TOO_LARGE" />));
     expect(screen.getByText(/File too large/)).toBeTruthy();
-    expect(screen.getByText(/1MB/)).toBeTruthy();
+    expect(screen.getByText(/over 1 MB/)).toBeTruthy();
   });
 });
 
@@ -199,7 +199,7 @@ describe("DiffViewer collapse behavior", () => {
   });
 
   it("collapses lockfile diff by default with toggle", () => {
-    render(wrap(<DiffViewer diff={LOCKFILE_DIFF} filePath="package-lock.json" />));
+    render(wrap(<DiffViewer diff={LOCKFILE_DIFF} />));
 
     expect(screen.getByText("Generated file collapsed")).toBeTruthy();
     expect(screen.getByText("Show diff")).toBeTruthy();
@@ -210,14 +210,14 @@ describe("DiffViewer collapse behavior", () => {
   });
 
   it("renders small normal file without collapse", () => {
-    render(wrap(<DiffViewer diff={SMALL_DIFF} filePath="src/a.ts" />));
+    render(wrap(<DiffViewer diff={SMALL_DIFF} />));
 
     expect(screen.queryByText("Show diff")).toBeNull();
     expect(screen.queryByText("Generated file collapsed")).toBeNull();
   });
 
   it("toggles collapse state — expand then collapse again", () => {
-    render(wrap(<DiffViewer diff={LOCKFILE_DIFF} filePath="package-lock.json" />));
+    render(wrap(<DiffViewer diff={LOCKFILE_DIFF} />));
 
     expect(screen.queryByTestId("diff-element")).toBeNull();
 
@@ -234,15 +234,7 @@ describe("DiffViewer collapse behavior", () => {
   // both expand and collapse — once per transition.
   it("fires onToggleCollapse on each expand and collapse transition", () => {
     const onToggleCollapse = vi.fn();
-    render(
-      wrap(
-        <DiffViewer
-          diff={LOCKFILE_DIFF}
-          filePath="package-lock.json"
-          onToggleCollapse={onToggleCollapse}
-        />
-      )
-    );
+    render(wrap(<DiffViewer diff={LOCKFILE_DIFF} onToggleCollapse={onToggleCollapse} />));
 
     expect(onToggleCollapse).not.toHaveBeenCalled();
 

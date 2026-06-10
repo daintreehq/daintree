@@ -332,6 +332,41 @@ describe("GitService", () => {
         expect.arrayContaining(["refs/heads/main...refs/heads/feature/test", "--", "src/app.ts"])
       );
     });
+
+    it("passes --ignore-all-space on the per-file diff when ignoreWhitespace is true", async () => {
+      gitClientMock.raw.mockResolvedValue("diff --git a/src/app.ts b/src/app.ts\n+new line");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", "src/app.ts", false, true);
+
+      const args = gitClientMock.raw.mock.calls[0][0] as string[];
+      expect(args).toContain("--ignore-all-space");
+      expect(args.indexOf("--ignore-all-space")).toBeLessThan(args.indexOf("--end-of-options"));
+    });
+
+    it("omits --ignore-all-space on the per-file diff by default", async () => {
+      gitClientMock.raw.mockResolvedValue("diff --git a/src/app.ts b/src/app.ts\n+new line");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", "src/app.ts");
+
+      expect(gitClientMock.raw).not.toHaveBeenCalledWith(
+        expect.arrayContaining(["--ignore-all-space"])
+      );
+    });
+
+    it("passes --ignore-all-space on the file-listing diffs when ignoreWhitespace is true", async () => {
+      gitClientMock.raw.mockResolvedValue("");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", undefined, false, true);
+
+      const listingCalls = gitClientMock.raw.mock.calls.map((call) => call[0] as string[]);
+      const nameStatusArgs = listingCalls.find((args) => args.includes("--name-status"));
+      const numstatArgs = listingCalls.find((args) => args.includes("--numstat"));
+      expect(nameStatusArgs).toContain("--ignore-all-space");
+      expect(numstatArgs).toContain("--ignore-all-space");
+    });
   });
 
   describe("createWorktree hardening", () => {

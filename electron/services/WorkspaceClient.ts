@@ -565,7 +565,12 @@ export class WorkspaceClient extends EventEmitter {
     throw lastError ?? new Error(`Worktree not found: ${worktreeId}`);
   }
 
-  async getFileDiff(cwd: string, filePath: string, status: string): Promise<string> {
+  async getFileDiff(
+    cwd: string,
+    filePath: string,
+    status: string,
+    ignoreWhitespace?: boolean
+  ): Promise<string> {
     const host = this.pool.resolveHostForPath(cwd);
     if (!host) throw new Error("No workspace host for path");
     const requestId = host.generateRequestId();
@@ -575,6 +580,7 @@ export class WorkspaceClient extends EventEmitter {
       cwd,
       filePath,
       status,
+      ignoreWhitespace,
     });
     return result.diff;
   }

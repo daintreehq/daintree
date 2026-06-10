@@ -2,7 +2,7 @@
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { GitStatus } from "@shared/types";
-import { FileDiffModal } from "../FileDiffModal";
+import { FileDiffModal, _resetDiffCacheForTests } from "../FileDiffModal";
 
 // Capture the `diff` prop the lazy FileViewerModal receives so we can assert
 // what `fetchDiff` resolves to for each dispatch outcome.
@@ -54,6 +54,7 @@ const baseProps = {
 
 describe("FileDiffModal", () => {
   beforeEach(() => {
+    _resetDiffCacheForTests();
     mockDispatch.mockReset();
     capturedProps.diff = undefined;
     capturedProps.restoreFocusTo = undefined;
@@ -70,7 +71,7 @@ describe("FileDiffModal", () => {
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "git.getFileDiff",
-      { cwd: "/repo", filePath: "src/index.ts", status: "modified" },
+      { cwd: "/repo", filePath: "src/index.ts", status: "modified", ignoreWhitespace: false },
       { source: "user" }
     );
   });

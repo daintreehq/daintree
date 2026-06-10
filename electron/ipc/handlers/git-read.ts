@@ -16,13 +16,14 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     branch2: string;
     filePath?: string;
     useMergeBase?: boolean;
+    ignoreWhitespace?: boolean;
   }) => {
     checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, branch1, branch2, filePath, useMergeBase } = payload;
+    const { cwd, branch1, branch2, filePath, useMergeBase, ignoreWhitespace } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -39,9 +40,12 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     if (useMergeBase !== undefined && typeof useMergeBase !== "boolean") {
       throw new Error("Invalid useMergeBase");
     }
+    if (ignoreWhitespace !== undefined && typeof ignoreWhitespace !== "boolean") {
+      throw new Error("Invalid ignoreWhitespace");
+    }
 
     const gitService = gitServiceCache.getGitService(cwd);
-    return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
+    return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase, ignoreWhitespace);
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees));
 
@@ -49,13 +53,14 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     cwd: string;
     filePath: string;
     status: string;
+    ignoreWhitespace?: boolean;
   }): Promise<string> => {
-    checkRateLimit(CHANNELS.GIT_GET_FILE_DIFF, 10, 10_000);
+    checkRateLimit(CHANNELS.GIT_GET_FILE_DIFF, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, filePath, status } = payload;
+    const { cwd, filePath, status, ignoreWhitespace } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -66,13 +71,16 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     if (typeof status !== "string" || !status) {
       throw new Error("Invalid file status");
     }
+    if (ignoreWhitespace !== undefined && typeof ignoreWhitespace !== "boolean") {
+      throw new Error("Invalid ignoreWhitespace");
+    }
 
     if (!deps.worktreeService) {
       throw new Error("WorkspaceClient not initialized");
     }
 
     try {
-      return await deps.worktreeService.getFileDiff(cwd, filePath, status);
+      return await deps.worktreeService.getFileDiff(cwd, filePath, status, ignoreWhitespace);
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to get file diff");
       console.error("[Git] Failed to get file diff via WorkspaceClient:", errorMessage);

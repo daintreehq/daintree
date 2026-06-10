@@ -26,6 +26,10 @@ interface PreferencesState {
   setReduceAnimations: (value: boolean) => void;
   diffViewType: DiffViewType;
   setDiffViewType: (value: DiffViewType) => void;
+  diffWrapLines: boolean;
+  setDiffWrapLines: (value: boolean) => void;
+  diffIgnoreWhitespace: boolean;
+  setDiffIgnoreWhitespace: (value: boolean) => void;
   lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>;
   setLastSelectedWorktreeRecipeIdByProject: (
     projectId: string,
@@ -41,6 +45,10 @@ function isDockDensity(value: unknown): value is DockDensity {
 
 function isDiffViewType(value: unknown): value is DiffViewType {
   return value === "split" || value === "unified";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 /**
@@ -59,6 +67,8 @@ function sanitizePersistedPreferences(
 
   if (!isDockDensity(sanitized.dockDensity)) sanitized.dockDensity = "normal";
   if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
+  if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
+  if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
   const skip = sanitized.skipPushConfirmByWorktreePath;
@@ -92,6 +102,10 @@ export const usePreferencesStore = create<PreferencesState>()(
       setReduceAnimations: (value) => set({ reduceAnimations: value }),
       diffViewType: "split",
       setDiffViewType: (value) => set({ diffViewType: value }),
+      diffWrapLines: false,
+      setDiffWrapLines: (value) => set({ diffWrapLines: value }),
+      diffIgnoreWhitespace: false,
+      setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: (projectId, id) =>
         set((state) => ({
@@ -123,7 +137,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     {
       name: "daintree-preferences",
       storage: createSafeJSONStorage(),
-      version: 9,
+      version: 10,
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
       // corrupt-but-parseable value is clamped even at the current version.
@@ -211,6 +225,12 @@ export const usePreferencesStore = create<PreferencesState>()(
             state.skipPushConfirmByWorktreePath = validated;
           }
         }
+        if (version < 10 && isRecord(persisted)) {
+          if (typeof persisted.diffWrapLines !== "boolean") persisted.diffWrapLines = false;
+          if (typeof persisted.diffIgnoreWhitespace !== "boolean") {
+            persisted.diffIgnoreWhitespace = false;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -221,5 +241,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean> }",
 });

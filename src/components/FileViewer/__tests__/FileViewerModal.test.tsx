@@ -560,6 +560,21 @@ describe("FileViewerModal", () => {
   describe("keyboard hunk navigation in diff mode", () => {
     const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
 
+    // jsdom has no matchMedia; without it prefersReducedMotion() defaults to
+    // true and hunk nav falls back to instant scrolling.
+    beforeEach(() => {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onchange: null,
+      }));
+    });
+
     it("scrolls to the first hunk on initial `n`", async () => {
       render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
 

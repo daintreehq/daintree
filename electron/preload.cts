@@ -1639,8 +1639,8 @@ const api: ElectronAPI = {
 
   // Git API
   git: {
-    getFileDiff: (cwd: string, filePath: string, status: GitStatus) =>
-      _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, { cwd, filePath, status }),
+    getFileDiff: (cwd: string, filePath: string, status: GitStatus, ignoreWhitespace?: boolean) =>
+      _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, { cwd, filePath, status, ignoreWhitespace }),
 
     getProjectPulse: (options: {
       worktreeId: string;
@@ -1710,7 +1710,8 @@ const api: ElectronAPI = {
       branch1: string,
       branch2: string,
       filePath?: string,
-      useMergeBase?: boolean
+      useMergeBase?: boolean,
+      ignoreWhitespace?: boolean
     ) =>
       _unwrappingInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
         cwd,
@@ -1718,6 +1719,7 @@ const api: ElectronAPI = {
         branch2,
         filePath,
         useMergeBase,
+        ignoreWhitespace,
       }),
 
     getUsername: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_USERNAME, cwd),

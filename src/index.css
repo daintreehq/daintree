@@ -2483,18 +2483,56 @@ body[data-performance-mode="true"] .forge-status-error {
   min-width: 100%;
 }
 
-/* Gutter (line numbers) styling */
+/* Wrap mode: soft-wrap long lines and let the table fill the container so
+   horizontal scrolling disappears entirely. The single-table split renderer
+   keeps row heights synced across columns by construction. */
+.diff-viewer[data-wrap="true"] .diff {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.diff-viewer[data-wrap="true"] .diff-code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Gutter (line numbers) styling.
+   Gutters are pinned (position: sticky) so a horizontal drag scrolls both
+   code columns in sync while line anchors stay visible. The second gutter
+   column (unified second column, split new-side column) docks beside the
+   first at --diff-gutter-width, which FileDiff sizes per file from the widest
+   line number plus the +/- marker. Sticky cells need opaque backgrounds and a
+   z-index above the code cells they slide over. */
 .diff-viewer .diff-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
   background: var(--color-daintree-sidebar);
   color: var(--color-state-idle);
   padding: 0 8px;
   /* width acts as a hint under table-layout:auto; min-width keeps it from
      shrinking under content-heavy code columns. */
-  width: 50px;
-  min-width: 50px;
+  width: var(--diff-gutter-width, 50px);
+  min-width: var(--diff-gutter-width, 50px);
   text-align: right;
+  cursor: default;
   user-select: none;
   border-right: 1px solid var(--color-daintree-border);
+}
+
+/* Unified second gutter column and split new-side gutter column. */
+.diff-viewer .diff td.diff-gutter:nth-child(2),
+.diff-viewer .diff[data-view-type="split"] td.diff-gutter:nth-child(3) {
+  left: var(--diff-gutter-width, 50px);
+}
+
+/* Textual insert/delete marker beside the line number (WCAG 1.4.1 — state is
+   never encoded by color alone; survives forced-colors). */
+.diff-viewer .diff-line-marker {
+  display: inline-block;
+  width: 1ch;
+  margin-left: 4px;
+  text-align: center;
 }
 
 /* Code content styling */
@@ -2515,8 +2553,16 @@ body[data-performance-mode="true"] .forge-status-error {
   background: color-mix(in oklab, var(--color-status-success) 12%, transparent);
 }
 
+/* Sticky gutter cells slide over code, so their tinted backgrounds composite
+   the tint over an opaque base via background-image instead of a transparent
+   background-color — visually identical to the previous transparent mix over
+   the sidebar surface. */
 .diff-viewer .diff-gutter-insert {
-  background: color-mix(in oklab, var(--color-status-success) 20%, transparent);
+  background-color: var(--color-daintree-sidebar);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-status-success) 20%, transparent),
+    color-mix(in oklab, var(--color-status-success) 20%, transparent)
+  );
   color: var(--color-status-success);
 }
 
@@ -2526,8 +2572,23 @@ body[data-performance-mode="true"] .forge-status-error {
 }
 
 .diff-viewer .diff-gutter-delete {
-  background: color-mix(in oklab, var(--color-status-danger) 20%, transparent);
+  background-color: var(--color-daintree-sidebar);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-status-danger) 20%, transparent),
+    color-mix(in oklab, var(--color-status-danger) 20%, transparent)
+  );
   color: var(--color-status-danger);
+}
+
+/* Split-view empty-side placeholders: dim the void so "nothing exists here"
+   reads differently from an unchanged blank line. */
+.diff-viewer .diff-code-omit,
+.diff-viewer .diff-gutter-omit {
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-daintree-bg));
+}
+
+.diff-viewer .diff-gutter-omit::before {
+  display: none;
 }
 
 /* Word-level change highlighting */
@@ -2552,7 +2613,11 @@ body[data-performance-mode="true"] .forge-status-error {
 }
 
 .light .diff-viewer .diff-gutter-insert {
-  background: color-mix(in oklab, var(--color-diff-insert-background) 70%, var(--color-surface));
+  background-color: var(--color-surface);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-diff-insert-background) 70%, transparent),
+    color-mix(in oklab, var(--color-diff-insert-background) 70%, transparent)
+  );
   color: var(--color-diff-gutter-insert);
 }
 
@@ -2561,7 +2626,11 @@ body[data-performance-mode="true"] .forge-status-error {
 }
 
 .light .diff-viewer .diff-gutter-delete {
-  background: color-mix(in oklab, var(--color-diff-delete-background) 70%, var(--color-surface));
+  background-color: var(--color-surface);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-diff-delete-background) 70%, transparent),
+    color-mix(in oklab, var(--color-diff-delete-background) 70%, transparent)
+  );
   color: var(--color-diff-gutter-delete);
 }
 
@@ -2573,8 +2642,15 @@ body[data-performance-mode="true"] .forge-status-error {
   background: var(--color-diff-delete-edit-background);
 }
 
-/* Hunk header styling */
-.diff-viewer .diff-hunk-header {
+.light .diff-viewer .diff-code-omit,
+.light .diff-viewer .diff-gutter-omit {
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-surface));
+}
+
+/* Hunk header rows (react-diff-view <Decoration>): the @@ context line plus
+   expand-hidden-lines controls. The inner block is sticky against horizontal
+   scroll so the header text stays readable on wide tables. */
+.diff-viewer .diff-decoration-content {
   background: var(--color-surface);
   color: var(--color-status-info);
   padding: 4px 12px;
@@ -2583,28 +2659,59 @@ body[data-performance-mode="true"] .forge-status-error {
   border-bottom: 1px solid var(--color-daintree-border);
 }
 
+.diff-viewer .diff-decoration-gutter {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-daintree-border);
+  border-bottom: 1px solid var(--color-daintree-border);
+}
+
+.diff-viewer .diff-hunk-header-inner {
+  position: sticky;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: max-content;
+}
+
+.diff-viewer .diff-hunk-header-text {
+  white-space: pre;
+  opacity: 0.85;
+}
+
+.diff-viewer .diff-hunk-header-hidden-count {
+  color: var(--color-text-muted, var(--color-daintree-text));
+  opacity: 0.6;
+}
+
+.diff-viewer .diff-hunk-header-expanders {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-viewer .diff-hunk-header-expanders button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-daintree-text);
+  background: var(--color-daintree-border);
+  font-size: 11px;
+  transition-property: color, background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+.diff-viewer .diff-hunk-header-expanders button:hover {
+  background: color-mix(in oklab, var(--color-daintree-border) 80%, var(--color-daintree-text));
+}
+
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
    header when scrollIntoView lands a hunk at block: "start". */
 .diff-viewer tbody.diff-hunk {
   scroll-margin-top: 56px;
-}
-
-.diff-viewer .diff-hunk-header-gutter {
-  background: var(--color-surface);
-}
-
-.diff-viewer .diff-hunk-header-content {
-  background: var(--color-surface);
-}
-
-/* Split view specific styling */
-.diff-viewer .diff[data-view-type="split"] .diff-gutter {
-  min-width: 40px;
-}
-
-/* Line number hover effect */
-.diff-viewer .diff-gutter:hover {
-  background: var(--color-surface);
 }
 
 /* Selection styling */
@@ -2701,9 +2808,12 @@ body[data-performance-mode="true"] .forge-status-error {
   color: var(--color-syntax-number);
 }
 
-/* Ensure proper table layout */
+/* border-collapse: collapse breaks position: sticky cells in Chromium (cell
+   borders detach during horizontal scroll); separate + zero spacing keeps the
+   1px gutter border traveling with the pinned cells. */
 .diff-viewer table.diff {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 /* Per-file horizontal scroll wrapper — gives each file its own scrollbar
@@ -3016,6 +3126,20 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
     border: 1px solid CanvasText;
   }
+
+  /* Diff viewer: author backgrounds are stripped to Canvas, so insert/delete
+     state rides on the gutter's textual +/- markers plus a system-color edge
+     on the code cells. Highlight/LinkText only mark which side changed — the
+     marker glyphs carry the add/remove meaning. */
+  .diff-viewer .diff-code-insert {
+    border-left: 3px solid Highlight;
+  }
+  .diff-viewer .diff-code-delete {
+    border-left: 3px solid LinkText;
+  }
+  .diff-viewer .diff-gutter {
+    border-right: 1px solid CanvasText;
+  }
 }
 
 /* Increased contrast mode — heavier borders for visibility.
@@ -3078,6 +3202,37 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-width: 1px;
     border-style: solid;
     border-color: var(--color-daintree-text);
+  }
+
+  /* Diff viewer fills are low-alpha tints by default; raise the mixes and add
+   * a status-colored edge so insert/delete bands stay legible when the user
+   * has explicitly asked for more contrast (keeps theme colors per the
+   * block's intent — no system-color repaint). */
+  .diff-viewer .diff-code-insert {
+    background: color-mix(in oklab, var(--color-status-success) 25%, transparent);
+    border-left: 2px solid var(--color-status-success);
+  }
+  .diff-viewer .diff-code-delete {
+    background: color-mix(in oklab, var(--color-status-danger) 25%, transparent);
+    border-left: 2px solid var(--color-status-danger);
+  }
+  .diff-viewer .diff-gutter-insert {
+    background-image: linear-gradient(
+      color-mix(in oklab, var(--color-status-success) 40%, transparent),
+      color-mix(in oklab, var(--color-status-success) 40%, transparent)
+    );
+  }
+  .diff-viewer .diff-gutter-delete {
+    background-image: linear-gradient(
+      color-mix(in oklab, var(--color-status-danger) 40%, transparent),
+      color-mix(in oklab, var(--color-status-danger) 40%, transparent)
+    );
+  }
+  .diff-viewer .diff-code-edit .diff-code-insert-edit {
+    background: color-mix(in oklab, var(--color-status-success) 50%, transparent);
+  }
+  .diff-viewer .diff-code-edit .diff-code-delete-edit {
+    background: color-mix(in oklab, var(--color-status-danger) 50%, transparent);
   }
 }
 
