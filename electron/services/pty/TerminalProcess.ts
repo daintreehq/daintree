@@ -53,6 +53,8 @@ import {
 import type { IBufferCell, IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
+  isSessionPersistSuppressed,
+  persistSessionSnapshotSync,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
 import { SessionSnapshotter, type SessionSnapshotterHost } from "./SessionSnapshotter.js";
@@ -560,6 +562,56 @@ export class TerminalProcess {
     }
     terminal.headlessTerminal = undefined;
     terminal.serializeAddon = undefined;
+  }
+
+  /**
+   * Preserved exited terminals don't need a live headless xterm — the buffer
+   * is final. Serialize it once, cache the string on `terminalInfo`, and
+   * dispose the headless instance (Unicode11 + SerializeAddon + scrollback
+   * CircularList, ~15-30 MB per exited terminal). Serialization runs inside a
+   * sentinel `write("")` callback so xterm's async parser queue is fully
+   * drained first — the tail of the output must land in the buffer, and
+   * disposing with queued writes throws against the torn-down core.
+   *
+   * On serialize failure the live headless instance is kept: serving the
+   * existing buffer beats serving nothing, at the cost of the memory.
+   */
+  private snapshotAndDisposePreserved(): void {
+    const terminal = this.terminalInfo;
+    const headless = terminal.headlessTerminal;
+    if (!headless || !terminal.serializeAddon) {
+      return;
+    }
+    headless.write("", () => {
+      if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
+        return;
+      }
+      let snapshot: string;
+      try {
+        snapshot = terminal.serializeAddon.serialize();
+      } catch (error) {
+        console.error(`[TerminalProcess] Failed to snapshot preserved terminal ${this.id}:`, error);
+        return;
+      }
+      // sessionSnapshotter.dispose() already ran in the onExit handler,
+      // cancelling any debounced write — flush the final state to disk
+      // directly so crash recovery sees the post-exit buffer (#3177).
+      // Banner-aware like flushSyncOnKill; same gates (agent sessions are
+      // never replayed by crash recovery).
+      if (
+        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
+        !isSessionPersistSuppressed() &&
+        !terminal.launchAgentId
+      ) {
+        try {
+          persistSessionSnapshotSync(this.id, this.serializeForPersistence() ?? snapshot);
+        } catch {
+          // best-effort only
+        }
+      }
+      terminal.preservedSnapshot = snapshot;
+      this.disposeHeadless();
+    });
   }
 
   /**
@@ -1812,6 +1864,7 @@ export class TerminalProcess {
         terminal.exitCode = exitCode ?? 0;
         terminal.isExited = true;
         this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
+        this.snapshotAndDisposePreserved();
         return;
       }
 
