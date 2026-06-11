@@ -1270,6 +1270,8 @@ const api: ElectronAPI = {
 
     forceQuit: () => _unwrappingInvoke(CHANNELS.APP_FORCE_QUIT),
 
+    dismissRosettaWarning: () => _unwrappingInvoke(CHANNELS.APP_DISMISS_ROSETTA_WARNING),
+
     resetAndRelaunch: () => _unwrappingInvoke(CHANNELS.APP_RESET_AND_RELAUNCH),
 
     clearQuarantinedPanel: (panelId: string) =>

@@ -202,6 +202,12 @@ export interface StoreSchema {
    * hides the suggestion banner without enabling. Only meaningful on Windows.
    */
   wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }>;
+  /**
+   * Permanent dismissal of the Rosetta translation warning banner. Machine-level
+   * (the installed binary's architecture never changes via auto-update), so a
+   * single global flag rather than per-project state.
+   */
+  rosettaWarningDismissed: boolean;
   appTheme: Partial<AppThemeConfig>;
   privacy: {
     telemetryLevel: "off" | "errors" | "full";
@@ -508,6 +514,7 @@ const storeOptions = {
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},
+    rosettaWarningDismissed: false,
     appTheme: {},
     privacy: {
       telemetryLevel: "off" as const,

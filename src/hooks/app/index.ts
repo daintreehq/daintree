@@ -5,6 +5,7 @@ export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useCloudSyncWarning } from "./useCloudSyncWarning";
+export { useRosettaWarning } from "./useRosettaWarning";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
 export { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 export { useUnloadCleanup } from "./useUnloadCleanup";

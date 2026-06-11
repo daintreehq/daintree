@@ -3,6 +3,7 @@ import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 
 export type GlobalBannerSlot =
   | "host-crash"
@@ -11,6 +12,7 @@ export type GlobalBannerSlot =
   | "restore-confirmation"
   | "forge-token"
   | "cloud-sync"
+  | "rosetta"
   | null;
 
 // Precedence (highest first):
@@ -20,6 +22,7 @@ export type GlobalBannerSlot =
 //   restore-confirmation — informational "session recovered" toast-banner
 //   forge-token        — a forge provider's credentials expired; auth failure, panel data broken
 //   cloud-sync         — project sits in a synced folder; environmental warning
+//   rosetta            — x64 build translated on Apple Silicon; permanent perf warning
 // Watchdog sits below host-crash because a live host failure is more urgent
 // than a downed monitor, and above safe-mode because the watchdog protects
 // against the next crash whereas safe-mode is a consequence of the previous
@@ -35,7 +38,10 @@ export type GlobalBannerSlot =
 // banner is mounted, so it must keep that window when both conditions coexist.
 // forge-token outranks cloud-sync because an expired token is an active
 // failure (forge data is broken now) whereas cloud-sync is a persistent
-// environmental condition with no acute failure.
+// environmental condition with no acute failure. rosetta sits last: like
+// cloud-sync it's environmental with no acute failure, but it's even more
+// static — nothing in the app can change it, only reinstalling the native
+// build — so any more actionable banner deserves the slot first.
 export function useGlobalBannerPriority(): GlobalBannerSlot {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
@@ -46,6 +52,7 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
     Object.values(s.providers).some((p) => p.tokenUnhealthy)
   );
   const cloudSyncService = useCloudSyncBannerStore((s) => s.service);
+  const rosettaVisible = useRosettaBannerStore((s) => s.visible);
 
   if (backendStatus !== "connected") return "host-crash";
   if (watchdogStatus === "disabled") return "watchdog-disabled";
@@ -53,5 +60,6 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   if (restoreVisible) return "restore-confirmation";
   if (tokenUnhealthy) return "forge-token";
   if (cloudSyncService !== null) return "cloud-sync";
+  if (rosettaVisible) return "rosetta";
   return null;
 }

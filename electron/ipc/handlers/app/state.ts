@@ -27,6 +27,7 @@ export const CRASH_CRITICAL_FIELDS = new Set([
 ]);
 
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
+import { isRunningUnderRosetta } from "../../../utils/rosettaDetection.js";
 import {
   isGpuDisabledByFlag,
   isGpuAngleFallbackApplied,
@@ -421,6 +422,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       safeMode: inSafeMode,
       isWindowsStore:
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
+      runningUnderRosetta: isRunningUnderRosetta(),
+      rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
       skippedPanelCount,
       quarantinedPanels,
       crashCount: guard.getCrashCount(),
@@ -804,6 +807,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     app.exit(0);
   };
   handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
+
+  const handleAppDismissRosettaWarning = async () => {
+    store.set("rosettaWarningDismissed", true);
+  };
+  handlers.push(typedHandle(CHANNELS.APP_DISMISS_ROSETTA_WARNING, handleAppDismissRosettaWarning));
 
   const handleAppResetAndRelaunch = async () => {
     // Clear the crash-loop sentinel before relaunch so the next boot starts

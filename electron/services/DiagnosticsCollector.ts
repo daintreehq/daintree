@@ -7,6 +7,7 @@ import { logBuffer } from "./LogBuffer.js";
 import type { PtyClient } from "./PtyClient.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
+import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -167,6 +168,7 @@ async function collectRuntime() {
   return {
     platform: process.platform,
     arch: process.arch,
+    runningUnderRosetta: isRunningUnderRosetta(),
     execPath: sanitizePath(app.getPath("exe")),
     appPath: sanitizePath(app.getAppPath()),
     userData: sanitizePath(app.getPath("userData")),

@@ -163,6 +163,16 @@ export interface HydrateResult {
    * the main process and is `false` for NSIS installs and non-Windows builds.
    */
   isWindowsStore: boolean;
+  /**
+   * True when this is an x64 build translated by Rosetta on an Apple Silicon
+   * Mac. Darwin-only by construction — the equivalent Windows-ARM translation
+   * is deliberately excluded so the renderer's "download the Apple Silicon
+   * build" warning never shows on Windows. Optional for backward compat with
+   * older main processes.
+   */
+  runningUnderRosetta?: boolean;
+  /** True when the user permanently dismissed the Rosetta translation warning. */
+  rosettaWarningDismissed?: boolean;
   /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
   skippedPanelCount?: number;
   /**

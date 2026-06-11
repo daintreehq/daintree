@@ -44,6 +44,7 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   "restore-confirmation": true,
   "forge-token": false,
   "cloud-sync": false,
+  rosetta: false,
 };
 
 function isSuppressedByGlobalCause(cause: GlobalBannerSlot, category: LocalErrorCategory): boolean {
