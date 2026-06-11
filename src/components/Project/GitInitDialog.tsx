@@ -100,14 +100,17 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     hasFinalizedSuccessRef.current = false;
 
     try {
-      await projectClient.initGitGuided({
+      const result = await projectClient.initGitGuided({
         directoryPath,
         createInitialCommit,
         initialCommitMessage: initialCommitMessage.trim(),
         createGitignore: gitignoreTemplate !== "none",
         gitignoreTemplate,
       });
-      if (!sawTerminalEventRef.current) {
+      if (result.outcome === "success") {
+        setError(null);
+        setIsComplete(true);
+      } else if (!sawTerminalEventRef.current) {
         setError(
           "Initialization finished without a status update — check the repository to confirm the result."
         );

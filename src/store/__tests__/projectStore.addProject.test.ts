@@ -17,7 +17,7 @@ const projectClientMock = {
   close: vi.fn(),
   getStats: vi.fn(),
   initGit: vi.fn().mockResolvedValue(undefined),
-  initGitGuided: vi.fn().mockResolvedValue({ success: true, completedSteps: [] }),
+  initGitGuided: vi.fn().mockResolvedValue({ outcome: "success", completedSteps: [] }),
   onInitGitProgress: vi.fn(() => () => {}),
 };
 

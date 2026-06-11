@@ -169,14 +169,14 @@ export function registerGitInitHandlers(): () => void {
               "Repository initialized — initial commit skipped",
               identityHelp
             );
-            return { completedSteps };
+            return { outcome: "error" as const, completedSteps };
           }
           throw commitError;
         }
       }
 
       emitProgress("complete", "success", "Git initialization complete");
-      return { completedSteps };
+      return { outcome: "success" as const, completedSteps };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Git initialization failed");
       emitProgress("error", "error", "Git initialization failed", errorMessage);
