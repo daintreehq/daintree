@@ -367,7 +367,7 @@ export function setupBrowserWindow(
     // skips the synchronous config.json re-reads; later dom-ready events
     // (crash auto-reloads) rebuild it so the skeleton reflects current
     // theme/sidebar/focus state.
-    const precomputedSkeletonCss = buildSkeletonCss();
+    const precomputedSkeletonCss = buildSkeletonCss(undefined, themeConfig);
     let firstDomReady = true;
     appWebContents.on("dom-ready", () => {
       if (firstDomReady) {

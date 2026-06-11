@@ -129,6 +129,10 @@ const terminalResourceMonitor = new TerminalResourceMonitor(
   sendEvent
 );
 let ptyPool: PtyPool | null = null;
+// True when the boot-time homedir pool warm was deferred because main
+// signalled an imminent project restore (DAINTREE_PTY_DEFER_POOL_WARM).
+// Consumed by the first set-active-project / project-switch handler.
+let initialPoolWarmDeferred = false;
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
 // Visual buffers: consumed by renderer (xterm.js) - critical path, sharded for isolation
@@ -1286,6 +1290,12 @@ const hostContext: HostContext = {
   set ptyPool(value: PtyPool | null) {
     ptyPool = value;
   },
+  get initialPoolWarmDeferred() {
+    return initialPoolWarmDeferred;
+  },
+  set initialPoolWarmDeferred(value: boolean) {
+    initialPoolWarmDeferred = value;
+  },
   sendEvent,
   getPauseCoordinator,
   getOrCreatePauseCoordinator,
@@ -1380,17 +1390,26 @@ async function initialize(): Promise<void> {
 
     if (shouldEnablePtyPool()) {
       ptyPool = getPtyPool({ poolSize: 2, maxEntries: 8 });
-      const homedir = os.homedir();
 
-      // Warm pool in background
-      ptyPool
-        .warmPool(homedir)
-        .then(() => {
-          console.log("[PtyHost] PTY pool warmed in background");
-        })
-        .catch((err) => {
-          console.error("[PtyHost] Failed to warm pool:", err);
-        });
+      if (process.env.DAINTREE_PTY_DEFER_POOL_WARM === "1") {
+        // Project-restoring boot: the set-active-project that follows ready
+        // drains the pool to the project path, so a homedir warm here would
+        // only spawn shells for the drain to kill. The set-active-project
+        // handler performs the warm instead — project drain, or a homedir
+        // fallback when the restore fell through (#10393).
+        initialPoolWarmDeferred = true;
+        console.log("[PtyHost] Initial pool warm deferred to set-active-project");
+      } else {
+        // Warm pool in background
+        ptyPool
+          .warmPool(os.homedir())
+          .then(() => {
+            console.log("[PtyHost] PTY pool warmed in background");
+          })
+          .catch((err) => {
+            console.error("[PtyHost] Failed to warm pool:", err);
+          });
+      }
 
       ptyManager.setPtyPool(ptyPool);
     } else {

@@ -57,6 +57,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     visualSignalView: null,
     analysisBuffer: null,
     ptyPool: null,
+    initialPoolWarmDeferred: false,
     sendEvent: vi.fn(),
     getPauseCoordinator: vi.fn(() => undefined),
     getOrCreatePauseCoordinator: vi.fn(),

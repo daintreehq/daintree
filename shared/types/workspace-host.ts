@@ -522,19 +522,7 @@ export type WorkspaceHostEvent =
   | { type: "pong" }
   | { type: "error"; error: string; requestId?: string }
   // Project lifecycle responses
-  | {
-      type: "load-project-result";
-      requestId: string;
-      success: boolean;
-      error?: string;
-      /**
-       * Whether `git lfs` is available on PATH for this machine. Probed during
-       * load-project via `git lfs version`. `undefined` means the probe did not
-       * run (e.g. project load failed before the probe) and the renderer should
-       * treat it as unknown rather than unavailable.
-       */
-      lfsAvailable?: boolean;
-    }
+  | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
   | { type: "sync-result"; requestId: string; success: boolean; error?: string }
   | { type: "update-monitor-config-result"; requestId: string; success: boolean; error?: string }
   | { type: "project-switch-result"; requestId: string; success: boolean }

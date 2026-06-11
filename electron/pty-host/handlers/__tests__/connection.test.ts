@@ -48,6 +48,7 @@ function makeCtx(stateRef: {
       stateRef.analysisBuffer = value;
     },
     ptyPool: null,
+    initialPoolWarmDeferred: false,
     sendEvent: vi.fn(),
     getPauseCoordinator: vi.fn(),
     getOrCreatePauseCoordinator: vi.fn(),
@@ -254,6 +255,76 @@ describe("set-active-project pool warming (#9774)", () => {
       })
     ).not.toThrow();
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
+  });
+});
+
+describe("deferred boot pool warm (#10393)", () => {
+  interface FakePool {
+    drainAndRefill: ReturnType<typeof vi.fn>;
+    warmPool: ReturnType<typeof vi.fn>;
+    warmForKey: ReturnType<typeof vi.fn>;
+    getMaxEntries: () => number;
+    getMaxPoolSize: () => number;
+  }
+
+  function makeDeferredCtx(deferred: boolean) {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const pool: FakePool = {
+      drainAndRefill: vi.fn(() => Promise.resolve()),
+      warmPool: vi.fn(() => Promise.resolve()),
+      warmForKey: vi.fn(),
+      getMaxEntries: () => 8,
+      getMaxPoolSize: () => 2,
+    };
+    const ctx = makeCtx(stateRef);
+    ctx.ptyPool = pool as unknown as HostContext["ptyPool"];
+    ctx.initialPoolWarmDeferred = deferred;
+    return { ctx, pool };
+  }
+
+  it("runs the fallback warm when the restore fell through (no projectPath)", () => {
+    const { ctx, pool } = makeDeferredCtx(true);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-active-project"]({ windowId: 1, projectId: null });
+
+    expect(pool.warmPool).toHaveBeenCalledTimes(1);
+    expect(pool.drainAndRefill).not.toHaveBeenCalled();
+    expect(ctx.initialPoolWarmDeferred).toBe(false);
+  });
+
+  it("does not fallback-warm when the boot warm was not deferred", () => {
+    const { ctx, pool } = makeDeferredCtx(false);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-active-project"]({ windowId: 1, projectId: null });
+
+    expect(pool.warmPool).not.toHaveBeenCalled();
+  });
+
+  it("consumes the deferral via the project drain when a projectPath arrives", () => {
+    const { ctx, pool } = makeDeferredCtx(true);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-active-project"]({ windowId: 1, projectId: "proj-a", projectPath: "/repo" });
+
+    expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
+    expect(pool.warmPool).not.toHaveBeenCalled();
+    expect(ctx.initialPoolWarmDeferred).toBe(false);
+  });
+
+  it("consumes the deferral on project-switch", () => {
+    const { ctx, pool } = makeDeferredCtx(true);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["project-switch"]({ windowId: 1, projectId: "proj-a", projectPath: "/repo" });
+
+    expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
+    expect(ctx.initialPoolWarmDeferred).toBe(false);
   });
 });
 
