@@ -337,6 +337,8 @@ class TerminalInstanceService {
       unhibernate: (id) => this.unhibernate(id),
       forceReflow: (element) => forceXtermReflow(element),
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
+      isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,
+      repairStoreVisibility: (id) => usePanelStore.getState().updateVisibility(id, true),
     });
 
     // If JetBrains Mono loads after the startup timeout already opened terminals

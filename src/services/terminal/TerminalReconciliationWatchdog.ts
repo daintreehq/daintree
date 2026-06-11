@@ -65,6 +65,10 @@ export interface ReconciliationWatchdogDeps {
   unhibernate: (id: string) => void;
   forceReflow: (element: HTMLElement) => void;
   isStoreBackgrounded: (id: string) => boolean;
+  /** Store-side panel.isVisible === false — the one store state DOM geometry can prove wrong. */
+  isStoreHidden: (id: string) => boolean;
+  /** Repair: store visibility poisoned to false for a genuinely on-screen terminal. */
+  repairStoreVisibility: (id: string) => void;
 }
 
 /**
@@ -221,15 +225,25 @@ export class TerminalReconciliationWatchdog {
       computedTier === TerminalRefreshTier.BACKGROUND ||
       appliedTier === TerminalRefreshTier.BACKGROUND
     ) {
+      const storeHidden = this.deps.isStoreHidden(id);
+      // A BACKGROUND computed tier with store visibility intact is store
+      // policy (completed/exited agent, exited process, PTY-less panel) —
+      // hibernation eligibility, not divergence. Repairing it would fight
+      // the policy on every tick, forever (#10416).
+      if (computedTier === TerminalRefreshTier.BACKGROUND && !storeHidden) return 0;
       if (heavyBudget <= 0) return 0;
-      // A misclassified computed tier can't be corrected here (it lives in
-      // the panel store) — floor the repair to VISIBLE and log loudly so the
-      // store-side root cause surfaces.
-      const repairTier =
-        computedTier !== undefined && computedTier !== TerminalRefreshTier.BACKGROUND
-          ? computedTier
-          : TerminalRefreshTier.VISIBLE;
       managed.lastWatchdogRepairAt = now;
+      // DOM geometry and service state prove the terminal on-screen, so a
+      // store-side isVisible=false is a stale write (e.g. an unguarded
+      // cleanup racing a warm-swap reattach) — repair it at the source so
+      // the computed tier re-derives and reconciliation converges instead
+      // of re-detecting the same divergence every tick (#10416).
+      if (storeHidden) this.deps.repairStoreVisibility(id);
+      const refreshedTier = storeHidden ? managed.getRefreshTier?.() : computedTier;
+      const repairTier =
+        refreshedTier !== undefined && refreshedTier !== TerminalRefreshTier.BACKGROUND
+          ? refreshedTier
+          : TerminalRefreshTier.VISIBLE;
       logWarn(
         "[TerminalReconciliationWatchdog] on-screen terminal at BACKGROUND tier — repairing",
         {
@@ -237,6 +251,7 @@ export class TerminalReconciliationWatchdog {
           computedTier,
           appliedTier,
           repairTier,
+          storeHidden,
         }
       );
       this.deps.applyRendererPolicy(id, repairTier);
@@ -324,6 +339,7 @@ export class TerminalReconciliationWatchdog {
       id,
       serviceVisible: managed.isVisible,
       storeBackgrounded: this.deps.isStoreBackgrounded(id),
+      storeHidden: this.deps.isStoreHidden(id),
       computedTier: managed.getRefreshTier?.(),
       appliedTier: managed.lastAppliedTier,
       pendingTier: managed.pendingTier,
