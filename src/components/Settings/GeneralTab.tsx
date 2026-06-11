@@ -699,7 +699,7 @@ export function GeneralTab({
               <ChevronRight
                 data-animated-chevron
                 className={cn(
-                  "w-4 h-4 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  "w-3.5 h-3.5 transition-transform duration-150",
                   isShortcutsOpen && "rotate-90"
                 )}
               />
@@ -710,7 +710,7 @@ export function GeneralTab({
               <div id="keyboard-shortcuts-content" className="space-y-4">
                 {shortcuts.map((category) => (
                   <div key={category.category} className="space-y-2">
-                    <h5 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                    <h5 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider">
                       {category.category}
                     </h5>
                     <dl className="space-y-1">

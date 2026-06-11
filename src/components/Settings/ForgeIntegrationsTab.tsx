@@ -256,7 +256,7 @@ export function ForgeIntegrationsTab() {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <SettingsSection
         icon={GitBranch}
         title="Default forge provider"

@@ -312,7 +312,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     <div
       className={cn(
         "absolute top-2 right-2 z-20",
-        "flex items-center gap-1 px-2 py-1.5",
+        "flex items-center gap-1 px-2 py-1",
         "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]",
         className
       )}
@@ -334,7 +334,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "w-44 px-2 py-1 text-sm rounded transition-colors",
               "bg-daintree-bg border",
               "focus:outline-hidden focus:ring-1",
-              "text-daintree-text placeholder:text-text-muted",
+              "text-daintree-text placeholder:text-text-placeholder",
               searchStatus === "invalidRegex"
                 ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
                 : "border-daintree-border focus:ring-status-info"
@@ -354,7 +354,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "px-1.5 py-1 text-xs rounded transition-colors",
               caseSensitive
                 ? "bg-status-info text-daintree-bg"
-                : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
             )}
             aria-label="Toggle case sensitivity"
             aria-pressed={caseSensitive}
@@ -373,7 +373,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "px-1.5 py-1 text-xs font-mono rounded transition-colors",
               regexEnabled
                 ? "bg-status-info text-daintree-bg"
-                : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
             )}
             aria-label="Toggle regex mode"
             aria-pressed={regexEnabled}
@@ -392,7 +392,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "px-1.5 py-1 text-xs rounded transition-colors",
               wholeWord
                 ? "bg-status-info text-daintree-bg"
-                : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
             )}
             aria-label="Toggle whole word"
             aria-pressed={wholeWord}
@@ -445,12 +445,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               disabled={!searchTerm}
               className={cn(
                 "p-1 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
-                "disabled:opacity-30 disabled:cursor-not-allowed"
+                "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium",
+                "disabled:opacity-40 disabled:pointer-events-none"
               )}
               aria-label="Previous match"
             >
-              <ChevronUp className="w-4 h-4" />
+              <ChevronUp className="w-3.5 h-3.5" />
             </button>
           </span>
         </TooltipTrigger>
@@ -465,12 +465,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               disabled={!searchTerm}
               className={cn(
                 "p-1 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
-                "disabled:opacity-30 disabled:cursor-not-allowed"
+                "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium",
+                "disabled:opacity-40 disabled:pointer-events-none"
               )}
               aria-label="Next match"
             >
-              <ChevronDown className="w-4 h-4" />
+              <ChevronDown className="w-3.5 h-3.5" />
             </button>
           </span>
         </TooltipTrigger>
@@ -483,11 +483,11 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             onClick={handleClose}
             className={cn(
               "p-1 rounded transition-colors",
-              "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
+              "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
             )}
             aria-label="Close search"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom">Close (Esc)</TooltipContent>

@@ -807,7 +807,7 @@ export function HelpPanel({
                 className={cn(
                   "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
                   "rounded-[var(--radius-md)]",
-                  "bg-status-warning/10 border border-status-warning/40",
+                  "bg-status-warning/10 border border-status-warning/20",
                   "text-xs text-daintree-text/85"
                 )}
                 data-testid="help-dropped-agent-banner"

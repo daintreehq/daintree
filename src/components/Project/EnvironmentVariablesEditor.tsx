@@ -334,7 +334,7 @@ export function EnvironmentVariablesEditor({
         <div className="flex items-center gap-2 pt-3">
           <Button onClick={handleSave} disabled={isSaving} size="sm">
             <Save className="h-4 w-4" />
-            {isSaving ? "Saving..." : "Save"}
+            {isSaving ? "Saving…" : "Save"}
           </Button>
           <Button variant="outline" onClick={handleDiscard} size="sm">
             Discard

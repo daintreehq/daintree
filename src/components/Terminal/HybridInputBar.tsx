@@ -738,7 +738,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             ref={inputShellRef}
             className={cn(
               "group/shell relative",
-              "flex w-full items-center gap-1.5 rounded-sm border py-2 transition-[border-color,background-color,box-shadow] duration-150",
+              "flex w-full items-center gap-1.5 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
@@ -785,12 +785,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }
             />
             {isDragOverFiles && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-daintree-bg/80 pointer-events-none">
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-daintree-bg/80 pointer-events-none">
                 <span className="text-xs font-medium text-daintree-accent">Drop to attach</span>
               </div>
             )}
             {isVoiceSubmitting && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-daintree-bg/80 pointer-events-none">
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-daintree-bg/80 pointer-events-none">
                 <Loader2 className="h-4 w-4 animate-spin text-daintree-accent" />
               </div>
             )}
@@ -879,7 +879,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         <AppDialog
           isOpen={isExpanded}
           onClose={collapseEditor}
-          size="xl"
+          size="5xl"
           maxHeight="max-h-[70vh]"
           dismissible
         >

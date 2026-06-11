@@ -1540,7 +1540,7 @@ export function ReviewHubContent({
                         "inline-flex items-center justify-center p-0.5 rounded",
                         "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
                         "transition-colors cursor-pointer",
-                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                       )}
                       aria-label={`View pull request #${worktreePR.prNumber}`}
                     >
@@ -1568,7 +1568,7 @@ export function ReviewHubContent({
                 onClick={() => handleDiffModeChange("working-tree")}
                 className={cn(
                   "px-2 py-1 transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                   diffMode === "working-tree"
                     ? "bg-filter-selected-bg-strong text-daintree-text"
                     : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
@@ -1582,7 +1582,7 @@ export function ReviewHubContent({
                 disabled={!status?.currentBranch || status.currentBranch === mainBranch}
                 className={cn(
                   "px-2 py-1 transition-colors border-l border-tint/[0.08]",
-                  "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                   "disabled:opacity-40 disabled:cursor-not-allowed",
                   diffMode === "base-branch"
                     ? "bg-filter-selected-bg-strong text-daintree-text"
@@ -1979,7 +1979,7 @@ export function ReviewHubContent({
                                 className={cn(
                                   "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
                                   "bg-tint/[0.04] border border-tint/[0.08]",
-                                  "text-daintree-text placeholder:text-daintree-text/25",
+                                  "text-daintree-text placeholder:text-text-placeholder",
                                   "focus:outline-hidden focus:border-daintree-accent/40",
                                   "hover:bg-tint/[0.06] transition-colors"
                                 )}
@@ -2217,7 +2217,7 @@ export function ReviewHubContent({
                                 className={cn(
                                   "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
                                   "bg-tint/[0.04] border border-tint/[0.08]",
-                                  "text-daintree-text placeholder:text-daintree-text/25",
+                                  "text-daintree-text placeholder:text-text-placeholder",
                                   "focus:outline-hidden focus:border-daintree-accent/40",
                                   "hover:bg-tint/[0.06] transition-colors"
                                 )}

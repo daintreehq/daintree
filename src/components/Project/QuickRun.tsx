@@ -417,7 +417,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   placeholder="Execute command..."
                   aria-label="Command input"
                   className={cn(
-                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-daintree-text placeholder:text-text-muted",
+                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-daintree-text placeholder:text-text-placeholder",
                     "focus:outline-hidden min-w-0"
                   )}
                   autoComplete="off"

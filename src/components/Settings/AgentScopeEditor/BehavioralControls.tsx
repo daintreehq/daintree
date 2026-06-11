@@ -117,7 +117,7 @@ export function BehavioralControls({
           )}
         </div>
         <input
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
+          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
           value={customArgsValue}
           onChange={(e) => onCustomFlagsChange(e.target.value)}
           placeholder={customArgsPlaceholder}

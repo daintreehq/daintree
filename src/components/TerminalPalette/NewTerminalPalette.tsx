@@ -138,7 +138,7 @@ export function NewTerminalPalette({
                   "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
                   "border border-transparent text-daintree-text/70",
                   "hover:bg-overlay-subtle hover:text-daintree-text",
-                  "aria-selected:bg-overlay-soft aria-selected:border-overlay aria-selected:text-daintree-text",
+                  "aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text",
                   "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2",
                   "aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']"
                 )}

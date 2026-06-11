@@ -1010,7 +1010,7 @@ export function FileViewerModal({
             the diff; Enter / Shift+Enter cycle matches. */}
         {searchActive && (
           <div
-            className="absolute top-2 right-7 z-20 flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-lg focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            className="absolute top-2 right-7 z-20 flex items-center gap-1 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-[var(--theme-shadow-floating)] focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
             data-testid="diff-search-bar"
           >
             <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
@@ -1021,7 +1021,7 @@ export function FileViewerModal({
               onKeyDown={handleSearchKeyDown}
               placeholder="Find in diff"
               aria-label="Find in diff"
-              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
+              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
             />
             <span
               className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-0"
@@ -1041,7 +1041,7 @@ export function FileViewerModal({
               onClick={() => stepSearchMatch(-1)}
               disabled={searchMatchCount === 0}
               aria-label="Previous match"
-              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
             >
               <ChevronUp className="w-3.5 h-3.5" />
             </button>
@@ -1050,7 +1050,7 @@ export function FileViewerModal({
               onClick={() => stepSearchMatch(1)}
               disabled={searchMatchCount === 0}
               aria-label="Next match"
-              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
             >
               <ChevronDown className="w-3.5 h-3.5" />
             </button>
@@ -1058,7 +1058,7 @@ export function FileViewerModal({
               type="button"
               onClick={closeSearch}
               aria-label="Close search"
-              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium"
             >
               <X className="w-3.5 h-3.5" />
             </button>

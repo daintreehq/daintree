@@ -228,9 +228,11 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
         timeout: T_SHORT,
       });
 
-      // Cancel without saving (dirty → confirm dialog).
-      window.once("dialog", (d) => d.accept());
+      // Cancel without saving (dirty → discard-changes confirm dialog).
       await editor.locator(SEL.recipeEditor.cancelButton).click();
+      const discardDialog = window.getByRole("alertdialog").filter({ hasText: "Discard changes" });
+      await expect(discardDialog).toBeVisible({ timeout: T_SHORT });
+      await discardDialog.locator(SEL.confirmDialog.confirm).click();
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
       await expect(window.locator('[role="dialog"]')).toHaveCount(0, { timeout: T_MEDIUM });
     });

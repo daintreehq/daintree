@@ -66,7 +66,20 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
     <div data-testid="palette-footer">{children}</div>
   );
 
-  const Dialog = () => null;
+  const Dialog = ({
+    isOpen,
+    children,
+    ariaLabel,
+  }: {
+    isOpen: boolean;
+    children: React.ReactNode;
+    ariaLabel: string;
+  }) =>
+    isOpen ? (
+      <div role="dialog" aria-modal="true" aria-label={ariaLabel}>
+        {children}
+      </div>
+    ) : null;
   Dialog.Header = Header;
   Dialog.Input = Input;
   Dialog.Body = Body;
@@ -260,7 +273,7 @@ describe("ProjectSwitcherPalette clone repo button", () => {
       <ProjectSwitcherPalette {...baseProps} onCloneRepo={vi.fn()} results={[makeProject()]} />
     );
     expect(screen.getByTestId("project-clone-button")).toBeTruthy();
-    expect(screen.getByText("Clone Repository...")).toBeTruthy();
+    expect(screen.getByText("Clone Repository…")).toBeTruthy();
   });
 
   it("calls onCloneRepo when Clone Repository button is clicked", () => {
@@ -332,10 +345,10 @@ describe("ProjectSwitcherPalette modal mode", () => {
 
   it("does not show management action buttons in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
-    expect(screen.queryByText("Project Settings...")).toBeNull();
-    expect(screen.queryByText("Add Project...")).toBeNull();
-    expect(screen.queryByText("Clone Repository...")).toBeNull();
-    expect(screen.queryByText("Create New Folder...")).toBeNull();
+    expect(screen.queryByText("Project Settings…")).toBeNull();
+    expect(screen.queryByText("Add Project…")).toBeNull();
+    expect(screen.queryByText("Clone Repository…")).toBeNull();
+    expect(screen.queryByText("Create New Folder…")).toBeNull();
   });
 
   it("shows Right-click hint but not Remove shortcut in modal mode footer", () => {

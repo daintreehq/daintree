@@ -135,7 +135,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               readOnly
               aria-readonly="true"
               value={parentPath}
-              className="flex-1 rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-2 text-sm font-mono text-daintree-text/70 truncate"
+              className="flex-1 rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm font-mono text-daintree-text/70 truncate"
               placeholder="Select parent directory..."
             />
             <Button
@@ -167,7 +167,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             onKeyDown={handleKeyDown}
             aria-invalid={error != null}
             aria-describedby={error ? errorId : undefined}
-            className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
+            className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
             placeholder="my-project"
             disabled={isCreating}
           />
@@ -182,16 +182,16 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             </p>
           )}
         </div>
-
-        <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={onClose} disabled={isCreating}>
-            Cancel
-          </Button>
-          <Button onClick={handleCreate} disabled={isCreating || !parentPath || !folderName.trim()}>
-            {isCreating ? "Creating…" : "Create"}
-          </Button>
-        </div>
       </AppDialog.Body>
+
+      <AppDialog.Footer>
+        <Button variant="outline" onClick={onClose} disabled={isCreating}>
+          Cancel
+        </Button>
+        <Button onClick={handleCreate} disabled={isCreating || !parentPath || !folderName.trim()}>
+          {isCreating ? "Creating…" : "Create"}
+        </Button>
+      </AppDialog.Footer>
     </AppDialog>
   );
 }

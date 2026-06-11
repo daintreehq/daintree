@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { render, act, screen } from "@testing-library/react";
+import { render, act, screen, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
 import { _resetForTests } from "@/lib/escapeStack";
+import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
 vi.mock("@/hooks", async (importOriginal) => {
@@ -68,6 +69,45 @@ describe("AppPaletteDialog ARIA placement", () => {
     for (const el of scrims) {
       expect(el.getAttribute("role")).not.toBe("dialog");
     }
+  });
+});
+
+describe("AppPaletteDialog focus trap", () => {
+  function renderTrapPalette() {
+    render(
+      <>
+        <Dispatcher />
+        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Trap palette">
+          <input type="text" placeholder="Palette input" />
+          <button type="button">Middle action</button>
+          <button type="button">Last action</button>
+        </AppPaletteDialog>
+      </>
+    );
+    const dialog = screen.getByRole("dialog", { name: "Trap palette" });
+    const focusable = dialog.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR);
+    expect(focusable.length).toBeGreaterThanOrEqual(2);
+    return focusable;
+  }
+
+  it("wraps focus from the last tabbable to the first on Tab", () => {
+    const focusable = renderTrapPalette();
+    const lastEl = focusable[focusable.length - 1]!;
+    lastEl.focus();
+    expect(document.activeElement).toBe(lastEl);
+
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(focusable[0]);
+  });
+
+  it("wraps focus from the first tabbable to the last on Shift+Tab", () => {
+    const focusable = renderTrapPalette();
+    const firstEl = focusable[0]!;
+    firstEl.focus();
+    expect(document.activeElement).toBe(firstEl);
+
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 });
 

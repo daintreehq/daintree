@@ -18,10 +18,10 @@ const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof AlertCircle
 };
 
 const SEVERITY_CLASS: Record<NotificationHistoryEntry["type"], string> = {
-  error: "text-red-400",
-  warning: "text-amber-400",
-  info: "text-blue-400",
-  success: "text-green-400",
+  error: "text-status-error",
+  warning: "text-status-warning",
+  info: "text-status-info",
+  success: "text-status-success",
 };
 
 export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {

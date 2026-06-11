@@ -949,7 +949,7 @@ function PanelHeaderComponent({
                   }
                   data-testid="panel-redraw"
                 >
-                  <RefreshCw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <RefreshCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Redraw
                 </DropdownMenuItem>
               )}
@@ -967,7 +967,7 @@ function PanelHeaderComponent({
                       : "Restart Session"
                   }
                 >
-                  <RotateCcw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   {armedRestartId === id
                     ? `Confirm Restart (${countdown ?? 0}s)`
                     : "Restart Session"}
@@ -984,7 +984,7 @@ function PanelHeaderComponent({
                     )
                   }
                 >
-                  <FolderGit2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Move to New Worktree…
                 </DropdownMenuItem>
               )}
@@ -993,7 +993,7 @@ function PanelHeaderComponent({
               {((canRestart && onRestart) || hasPty || agentId) && <DropdownMenuSeparator />}
               {location === "dock" && onRestore && (
                 <DropdownMenuItem onSelect={() => onRestore()}>
-                  <PanelTopClose className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <PanelTopClose className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Move to grid
                 </DropdownMenuItem>
               )}
@@ -1006,7 +1006,7 @@ function PanelHeaderComponent({
                   )
                 }
               >
-                <Pencil className="w-3 h-3 mr-2" aria-hidden="true" />
+                <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Rename
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -1018,7 +1018,7 @@ function PanelHeaderComponent({
                   )
                 }
               >
-                <CopyPlus className="w-3 h-3 mr-2" aria-hidden="true" />
+                <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Duplicate
               </DropdownMenuItem>
               {hasPty && (
@@ -1032,9 +1032,9 @@ function PanelHeaderComponent({
                   }
                 >
                   {isInputLocked ? (
-                    <Unlock className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <Unlock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   ) : (
-                    <Lock className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   )}
                   {isInputLocked ? "Unlock Input" : "Lock Input"}
                 </DropdownMenuItem>
@@ -1042,9 +1042,9 @@ function PanelHeaderComponent({
               {showWatchButton && (
                 <DropdownMenuItem onSelect={handleWatchToggle}>
                   {isWatched ? (
-                    <BellOff className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <BellOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   ) : (
-                    <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   )}
                   {isWatched ? "Cancel Watch" : "Watch"}
                 </DropdownMenuItem>
@@ -1066,7 +1066,7 @@ function PanelHeaderComponent({
                   )
                 }
               >
-                <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Trash
               </DropdownMenuItem>
             </DropdownMenuContent>

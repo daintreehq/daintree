@@ -976,7 +976,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onClose();
                   }}
                 >
-                  <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Clear all
                 </DropdownMenuItem>
               </DropdownMenuContent>

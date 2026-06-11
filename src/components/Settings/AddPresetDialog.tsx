@@ -125,7 +125,7 @@ export function AddPresetDialog({
             <select
               value={selectedTemplateId}
               onChange={(e) => setSelectedTemplateId(e.target.value)}
-              className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
+              className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
               data-testid="template-select"
             >
               {templates.map((t) => (

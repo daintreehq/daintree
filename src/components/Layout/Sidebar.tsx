@@ -208,7 +208,7 @@ export function Sidebar({
       <ContextMenuContent>
         <ContextMenuActionItem actionId="worktree.createDialog.open">
           <GitBranchPlus className={ICON_CLASS} />
-          New Worktree...
+          New Worktree…
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="worktree.refresh">
           <RefreshCw className={ICON_CLASS} />
@@ -225,7 +225,7 @@ export function Sidebar({
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="project.settings.open" disabled={!currentProject}>
           <Settings className={ICON_CLASS} />
-          Project Settings...
+          Project Settings…
         </ContextMenuActionItem>
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="ui.sidebar.resetWidth">
@@ -234,7 +234,7 @@ export function Sidebar({
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
           <SlidersHorizontal className={ICON_CLASS} />
-          Worktree Settings...
+          Worktree Settings…
         </ContextMenuActionItem>
       </ContextMenuContent>
     </ContextMenu>

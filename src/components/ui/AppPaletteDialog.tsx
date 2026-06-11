@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { KbdChord } from "@/components/ui/Kbd";
+import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
@@ -31,8 +31,7 @@ import {
   getUiPaletteTransitionDuration,
 } from "@/lib/animationUtils";
 
-export const KBD_CLASS =
-  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/75";
+export { KBD_CLASS };
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
@@ -185,7 +184,7 @@ export function AppPaletteDialog({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-sm backdrop-saturate-[1.25]",
+        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-sm backdrop-saturate-[var(--theme-material-saturation)]",
         "transition-opacity",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"
@@ -205,7 +204,7 @@ export function AppPaletteDialog({
         aria-label={ariaLabel}
         tabIndex={-1}
         className={cn(
-          "w-full max-w-xl mx-4 bg-surface-dialog border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden origin-top",
+          "w-full max-w-xl mx-4 bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] overflow-hidden origin-top",
           "transition-[opacity,transform]",
           "motion-reduce:transition-opacity motion-reduce:scale-100",
           isVisible ? "opacity-100 scale-100" : "opacity-0 scale-[0.96]",
@@ -439,7 +438,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
           type="text"
           className={cn(
             "flex-1 min-w-0 bg-transparent px-0 py-0 text-sm",
-            "text-daintree-text placeholder:text-text-muted",
+            "text-daintree-text placeholder:text-text-placeholder",
             "focus:outline-hidden focus:border-transparent focus:ring-0",
             className
           )}
@@ -455,7 +454,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
       className={cn(
         "w-full px-3 py-2 text-sm",
         "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
-        "text-daintree-text placeholder:text-text-muted",
+        "text-daintree-text placeholder:text-text-placeholder",
         "focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
         className
       )}

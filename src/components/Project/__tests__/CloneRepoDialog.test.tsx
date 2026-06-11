@@ -91,6 +91,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: AppDialogSectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children, className: _ }: AppDialogSectionProps) => <div>{children}</div>;
+  AppDialog.Footer = ({ children, className: _ }: AppDialogSectionProps) => <div>{children}</div>;
 
   return { AppDialog };
 });

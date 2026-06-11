@@ -183,7 +183,7 @@ export function ColorSchemePicker() {
               }}
               placeholder="Filter schemes..."
               aria-label="Filter color schemes"
-              className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden"
+              className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
             />
           </div>
           <div className="flex rounded-[var(--radius-md)] border border-daintree-border overflow-hidden shrink-0">

@@ -304,7 +304,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
           aria-label="Filter console messages"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-daintree-text/30"
+          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-text-placeholder"
         />
 
         <div className="flex-1" />

@@ -134,7 +134,7 @@ function ActionPaletteItemInner({
         "aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text",
         "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2",
         "aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
-        !item.enabled && "opacity-40"
+        !item.enabled && "opacity-50"
       )}
       id={`action-option-${item.id}`}
       role="option"

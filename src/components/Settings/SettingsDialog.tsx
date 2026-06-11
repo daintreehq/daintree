@@ -673,8 +673,8 @@ function SettingsDialogInner({
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-daintree-border shrink-0">
-            <h3 className="text-lg font-medium text-daintree-text flex items-center gap-2">
+          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-border-strong shrink-0">
+            <h3 className="text-lg font-semibold text-daintree-text flex items-center gap-2">
               {isSearching ? (
                 <>
                   <Search className="w-5 h-5 text-text-secondary" />
@@ -689,7 +689,7 @@ function SettingsDialogInner({
             </h3>
             <button
               onClick={handleClose}
-              className="text-daintree-text/60 hover:text-daintree-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
               aria-label="Close settings"
             >
               <X className="h-5 w-5" />

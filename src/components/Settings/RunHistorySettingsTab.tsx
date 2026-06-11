@@ -15,8 +15,8 @@ function CountPill({ tone, label }: { tone: "success" | "danger" | "muted"; labe
     <span
       className={cn(
         "inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium",
-        tone === "success" && "bg-emerald-500/15 text-emerald-400",
-        tone === "danger" && "bg-red-500/15 text-red-400",
+        tone === "success" && "bg-status-success/15 text-status-success",
+        tone === "danger" && "bg-status-error/15 text-status-error",
         tone === "muted" && "bg-overlay-subtle text-daintree-text/70"
       )}
     >
@@ -54,7 +54,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
         </time>
       </div>
       {failed.length > 0 ? (
-        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-red-400/90">
+        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-status-error/90">
           {failed.map((f) => (
             <li key={f.index} className="truncate">
               #{f.index}: {f.error}
@@ -93,7 +93,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
         </time>
       </div>
       {rejected.length > 0 ? (
-        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-red-400/90">
+        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-status-error/90">
           {rejected.map((t) => (
             <li key={t.terminalId} className="truncate">
               {t.title ?? t.terminalId}

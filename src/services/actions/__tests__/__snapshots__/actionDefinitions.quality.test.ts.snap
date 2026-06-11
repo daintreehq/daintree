@@ -596,10 +596,11 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "colors",
       "scheme",
       "browse",
+      "change",
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Change Theme...",
+    "title": "Browse Themes…",
   },
   {
     "category": "app",
@@ -616,7 +617,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Pick Theme...",
+    "title": "Pick Theme…",
   },
   {
     "category": "app",

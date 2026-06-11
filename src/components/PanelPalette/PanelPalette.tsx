@@ -126,7 +126,7 @@ export function PanelPalette({
         className={cn(
           "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
           index === selectedIndex
-            ? "bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+            ? "bg-overlay-raised border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:bg-daintree-accent before:content-['']"
             : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
           isUnavailable && "opacity-50"
         )}
@@ -166,7 +166,7 @@ export function PanelPalette({
       elements.push(
         <div
           key={`header-${key}`}
-          className="px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-daintree-text/40 select-none"
+          className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none"
           aria-hidden="true"
         >
           {SECTION_LABELS[key]}

@@ -3,24 +3,16 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { parseChord } from "@/lib/kbdShortcut";
 
+export const KBD_CLASS =
+  "px-1.5 py-0.5 rounded-sm text-xs font-mono tabular-nums leading-none bg-overlay-subtle text-daintree-text/70 border border-border-subtle";
+
 export interface KbdProps {
   children: React.ReactNode;
   className?: string;
 }
 
 export function Kbd({ children, className }: KbdProps) {
-  return (
-    <kbd
-      className={cn(
-        "px-1.5 py-0.5 rounded text-xs font-mono tabular-nums",
-        "bg-daintree-border text-daintree-text/70",
-        "border border-daintree-border/60",
-        className
-      )}
-    >
-      {children}
-    </kbd>
-  );
+  return <kbd className={cn(KBD_CLASS, className)}>{children}</kbd>;
 }
 
 export interface KbdChordProps {
@@ -32,7 +24,7 @@ export interface KbdChordProps {
 }
 
 /**
- * Renders a keyboard chord as per-key pills using the neutral overlay surface.
+ * Renders a keyboard chord as per-key chips using the neutral overlay surface.
  * macOS uses glyph keys with no `+` separator; Win/Linux uses spelled-out keys
  * separated by a small `+` character. Two-step chords (`Cmd+K T`) are joined
  * by a comma+space.
@@ -65,14 +57,7 @@ export function KbdChord({
                     +
                   </span>
                 )}
-                <kbd
-                  aria-hidden="true"
-                  className={cn(
-                    "px-1.5 py-0.5 rounded text-xs font-mono tabular-nums leading-none",
-                    "bg-overlay-subtle text-daintree-text/70",
-                    "border border-border-subtle"
-                  )}
-                >
+                <kbd aria-hidden="true" className={KBD_CLASS}>
                   {token}
                 </kbd>
               </Fragment>

@@ -307,7 +307,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                   void action.onClick();
                 }}
                 className={cn(
-                  "h-7 rounded-[var(--radius-sm)] px-3 text-xs font-medium transition-colors",
+                  "h-7 rounded-[var(--radius-xs)] px-3 text-xs font-medium transition-colors",
                   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
                   action.variant === "secondary"
                     ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-daintree-text"
@@ -327,7 +327,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
             type="button"
             onClick={() => removeNotification(displayedNotification.id)}
             className={cn(
-              "h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
+              "h-7 shrink-0 rounded-[var(--radius-xs)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
               buttonPointerClass
             )}
             {...interactionGuard}

@@ -77,7 +77,7 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await window.waitForTimeout(T_SETTLE);
 
     // Verify save button disappears (isDirty becomes false)
-    await expect(window.locator("button", { hasText: "Saving..." })).not.toBeVisible({
+    await expect(window.locator("button", { hasText: "Saving…" })).not.toBeVisible({
       timeout: T_MEDIUM,
     });
 

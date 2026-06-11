@@ -319,10 +319,10 @@ export function ResourceEnvironmentsSection({
             <button
               type="button"
               onClick={() => setPendingDeleteEnvironment(currentEnvName)}
-              className="p-1.5 rounded hover:bg-status-error/15 transition-colors"
+              className="p-1 rounded hover:bg-status-error/15 transition-colors"
               aria-label={`Remove ${currentEnvName} environment`}
             >
-              <X className="h-4 w-4 text-status-error/60" />
+              <X className="h-4 w-4 text-status-error" />
             </button>
           )}
           <button

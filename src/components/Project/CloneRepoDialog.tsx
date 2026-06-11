@@ -282,7 +282,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             onKeyDown={handleKeyDown}
             placeholder="owner/repo or repository URL"
             disabled={isCloning || isComplete}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           />
         </div>
 
@@ -295,7 +295,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               value={parentPath}
               readOnly
               placeholder="Select a directory..."
-              className="flex-1 rounded-md border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 disabled:opacity-50 select-all"
+              className="flex-1 rounded-md border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder disabled:opacity-50 select-all"
             />
             <Button
               variant="outline"
@@ -325,7 +325,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             onKeyDown={handleKeyDown}
             disabled={isCloning || isComplete}
             aria-invalid={folderNameError != null}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error"
           />
           {folderNameError && (
             <p role="alert" className="text-xs text-status-error">
@@ -453,38 +453,37 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               </div>
             );
           })()}
-
-        {/* Actions */}
-        <div className="flex justify-end gap-2">
-          {isComplete ? (
-            <Button onClick={handleClose} className="gap-2">
-              <Check className="h-4 w-4" />
-              Open Project
-            </Button>
-          ) : error ? (
-            <>
-              <Button variant="outline" onClick={onCancel}>
-                Close
-              </Button>
-              <Button onClick={() => void startClone()} disabled={isCloning}>
-                Retry
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                onClick={isCloning ? () => void projectClient.cancelClone() : onCancel}
-              >
-                {isCloning ? "Stop clone" : "Cancel"}
-              </Button>
-              <Button onClick={() => void startClone()} disabled={!canClone} loading={isCloning}>
-                Clone
-              </Button>
-            </>
-          )}
-        </div>
       </AppDialog.Body>
+
+      <AppDialog.Footer>
+        {isComplete ? (
+          <Button onClick={handleClose} className="gap-2">
+            <Check className="h-4 w-4" />
+            Open Project
+          </Button>
+        ) : error ? (
+          <>
+            <Button variant="outline" onClick={onCancel}>
+              Close
+            </Button>
+            <Button onClick={() => void startClone()} disabled={isCloning}>
+              Retry
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              variant="outline"
+              onClick={isCloning ? () => void projectClient.cancelClone() : onCancel}
+            >
+              {isCloning ? "Stop clone" : "Cancel"}
+            </Button>
+            <Button onClick={() => void startClone()} disabled={!canClone} loading={isCloning}>
+              Clone
+            </Button>
+          </>
+        )}
+      </AppDialog.Footer>
     </AppDialog>
   );
 }

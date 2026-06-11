@@ -571,7 +571,7 @@ export function BrowserToolbar({
         {longPressDir === "back" && recentBackEntries.length > 0 && (
           <div
             ref={longPressDropdownRef}
-            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
           >
             {recentBackEntries.map((entry) => (
               <button
@@ -617,7 +617,7 @@ export function BrowserToolbar({
         {longPressDir === "forward" && recentForwardEntries.length > 0 && (
           <div
             ref={longPressDropdownRef}
-            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
           >
             {recentForwardEntries.map((entry) => (
               <button
@@ -906,7 +906,7 @@ export function BrowserToolbar({
                 "bg-daintree-bg border border-overlay",
                 "focus:outline-hidden focus:border-border-strong",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                "text-daintree-text placeholder:text-daintree-text/40",
+                "text-daintree-text placeholder:text-text-placeholder",
                 error && "border-status-error/50"
               )}
               placeholder="localhost:3000"
@@ -924,7 +924,7 @@ export function BrowserToolbar({
             ref={dropdownRef}
             id={listboxId}
             role="listbox"
-            className="absolute left-0 right-0 top-full mt-1 z-50 bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
           >
             {suggestions.map((entry, index) => (
               <div

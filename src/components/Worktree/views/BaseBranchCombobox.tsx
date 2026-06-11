@@ -97,7 +97,7 @@ export function BaseBranchCombobox({
             <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
             <input
               ref={branchInputRef}
-              className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-daintree-accent/40"
+              className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-daintree-accent/40"
               placeholder="Search branches..."
               value={branchQuery}
               onChange={(e) => onQueryChange(e.target.value)}
@@ -149,7 +149,7 @@ export function BaseBranchCombobox({
                       <div
                         key={`section-${row.label}`}
                         role="presentation"
-                        className="px-2 py-1 text-xs font-medium text-daintree-text/50 uppercase tracking-wider"
+                        className="px-2 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50"
                       >
                         {row.label}
                       </div>

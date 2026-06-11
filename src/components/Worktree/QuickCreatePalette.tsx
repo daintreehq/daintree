@@ -41,7 +41,7 @@ function RecipeListItem({
           "border-daintree-border/40 hover:border-daintree-border/60",
           "bg-daintree-bg hover:bg-surface transition-colors",
           isSelected &&
-            "border-overlay bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+            "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
         )}
         aria-selected={isSelected}
         role="option"
@@ -68,7 +68,7 @@ function RecipeListItem({
         "border-daintree-border/40 hover:border-daintree-border/60",
         "bg-daintree-bg hover:bg-surface transition-colors",
         isSelected &&
-          "border-overlay bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          "border-overlay bg-overlay-raised text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
       )}
       aria-selected={isSelected}
       role="option"
