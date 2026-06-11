@@ -1021,7 +1021,7 @@ export function FileViewerModal({
               onKeyDown={handleSearchKeyDown}
               placeholder="Find in diff"
               aria-label="Find in diff"
-              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-muted-foreground focus:outline-none"
+              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
             />
             <span
               className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-0"
