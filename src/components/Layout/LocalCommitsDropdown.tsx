@@ -238,6 +238,12 @@ export function LocalCommitsDropdown({
   const [cursorIndex, setCursorIndex] = useState(-1);
   const [expandedHashes, setExpandedHashes] = useState<Set<string>>(() => new Set());
   const inputRef = useRef<HTMLInputElement>(null);
+  // Monotonic fetch generation. Every fresh (non-append) fetch and every
+  // effect teardown bumps it; in-flight requests — including appends — compare
+  // their captured generation before touching state, so a late "Load more"
+  // can't splice an old page into a newer search's results.
+  const fetchGenRef = useRef(0);
+  const loadingMoreRef = useRef(false);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -275,18 +281,22 @@ export function LocalCommitsDropdown({
   }, [cursorIndex, activeCommitId, isLoadMoreActive]);
 
   const fetchData = useCallback(
-    async (currentSkip: number, append: boolean, cancelled?: { current: boolean }) => {
+    async (currentSkip: number, append: boolean) => {
       if (!cwd) return;
 
       if (append) {
+        loadingMoreRef.current = true;
         setLoadingMore(true);
         setLoadMoreError(null);
       } else {
+        fetchGenRef.current += 1;
+        loadingMoreRef.current = false;
         setCursorIndex(-1);
         setLoading(true);
         setError(null);
         setLoadMoreError(null);
       }
+      const gen = fetchGenRef.current;
 
       try {
         const result = await window.electron.git.listCommits({
@@ -297,7 +307,7 @@ export function LocalCommitsDropdown({
           limit: PAGE_SIZE,
         });
 
-        if (cancelled?.current) return;
+        if (gen !== fetchGenRef.current) return;
 
         if (append) {
           setData((prev) => [...prev, ...result.items]);
@@ -307,7 +317,7 @@ export function LocalCommitsDropdown({
         setSkip(currentSkip + result.items.length);
         setHasMore(result.hasMore);
       } catch (err) {
-        if (cancelled?.current) return;
+        if (gen !== fetchGenRef.current) return;
         const message = formatErrorMessage(err, "Failed to fetch commits");
         if (append) {
           setLoadMoreError(message);
@@ -315,7 +325,8 @@ export function LocalCommitsDropdown({
           setError(message);
         }
       } finally {
-        if (!cancelled?.current) {
+        if (gen === fetchGenRef.current) {
+          if (append) loadingMoreRef.current = false;
           setLoading(false);
           setLoadingMore(false);
         }
@@ -324,24 +335,35 @@ export function LocalCommitsDropdown({
     [cwd, branch, debouncedSearch]
   );
 
+  // Stale rows from another repo or branch must not linger under the next
+  // scope's skeleton or error state. Same-scope search refetches keep the
+  // previous results visible while loading instead (matching the provider
+  // dropdown's behavior).
+  const scopeKey = `${cwd} ${branch ?? ""}`;
+  const lastScopeRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!open) return;
-    const cancelled = { current: false };
+
+    if (lastScopeRef.current !== null && lastScopeRef.current !== scopeKey) {
+      setData([]);
+    }
+    lastScopeRef.current = scopeKey;
 
     setSkip(0);
     setHasMore(false);
-    fetchData(0, false, cancelled);
+    fetchData(0, false);
 
     return () => {
-      cancelled.current = true;
+      fetchGenRef.current += 1;
     };
-  }, [open, fetchData]);
+  }, [open, scopeKey, fetchData]);
 
   const handleLoadMore = useCallback(() => {
-    if (!loadingMore && hasMore) {
+    if (!loadingMoreRef.current && hasMore) {
       fetchData(skip, true);
     }
-  }, [loadingMore, hasMore, fetchData, skip]);
+  }, [hasMore, fetchData, skip]);
 
   const handleRetry = () => {
     setSkip(0);

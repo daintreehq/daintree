@@ -206,13 +206,77 @@ describe("LocalCommitsDropdown", () => {
 
     const row = (await findAllByText("commit message 1"))[0].closest('[role="option"]');
     expect(row?.getAttribute("aria-expanded")).toBe("false");
+    const bodyBefore = (await findByText("Detailed body text")).closest("div[aria-hidden]");
+    expect(bodyBefore?.getAttribute("aria-hidden")).toBe("true");
+
     fireEvent.click(row!);
+
     // The mocked m.div remounts its subtree on re-render, so re-query rather
-    // than asserting on the pre-click node.
+    // than asserting on the pre-click nodes.
     await waitFor(() => {
       const rowAfter = document.querySelector('[role="option"][aria-expanded="true"]');
       expect(rowAfter?.textContent).toContain("commit message 1");
     });
-    expect(await findByText("Detailed body text")).toBeTruthy();
+    const bodyAfter = (await findByText("Detailed body text")).closest("div[aria-hidden]");
+    expect(bodyAfter?.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("clears rows from the previous repo when cwd changes while open", async () => {
+    listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1)]));
+
+    const { rerender, findAllByText, queryByText } = render(
+      <LocalCommitsDropdown cwd="/repo-a" open initialCount={1} />
+    );
+    await findAllByText("commit message 1");
+
+    listCommitsMock.mockImplementationOnce(() => new Promise(() => {}));
+    rerender(<LocalCommitsDropdown cwd="/repo-b" open initialCount={1} />);
+
+    await waitFor(() => expect(queryByText("commit message 1")).toBeNull());
+  });
+
+  it("discards an in-flight load-more page when a new search starts", async () => {
+    const firstPage = Array.from({ length: 30 }, (_, i) => makeCommit(i));
+    listCommitsMock.mockResolvedValueOnce(makeResponse(firstPage, { hasMore: true, total: 60 }));
+    let resolveLoadMore: (value: GitCommitListResponse) => void = () => {};
+    listCommitsMock.mockImplementationOnce(
+      () => new Promise<GitCommitListResponse>((resolve) => (resolveLoadMore = resolve))
+    );
+    listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(100)]));
+
+    const { getByRole, findByText, findAllByText, queryByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={60} />
+    );
+
+    fireEvent.click(await findByText("Load more"));
+    fireEvent.change(getByRole("combobox"), { target: { value: "needle" } });
+    await findAllByText("commit message 100");
+
+    resolveLoadMore(makeResponse([makeCommit(200)], { hasMore: true, total: 60 }));
+    await waitFor(() => expect(listCommitsMock).toHaveBeenCalledTimes(3));
+
+    expect(queryByText("commit message 200")).toBeNull();
+    expect((await findAllByText("commit message 100")).length).toBeGreaterThan(0);
+  });
+
+  it("keeps loaded rows when load-more fails and retries with the same skip", async () => {
+    const firstPage = Array.from({ length: 30 }, (_, i) => makeCommit(i));
+    listCommitsMock.mockResolvedValueOnce(makeResponse(firstPage, { hasMore: true, total: 31 }));
+    listCommitsMock.mockRejectedValueOnce(new Error("page two broke"));
+    listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(30)]));
+
+    const { findByText, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={31} />
+    );
+
+    fireEvent.click(await findByText("Load more"));
+
+    expect(await findByText("page two broke")).toBeTruthy();
+    expect((await findAllByText("commit message 0")).length).toBeGreaterThan(0);
+
+    fireEvent.click(await findByText("Retry"));
+
+    expect((await findAllByText("commit message 30")).length).toBeGreaterThan(0);
+    expect(listCommitsMock).toHaveBeenLastCalledWith(expect.objectContaining({ skip: 30 }));
   });
 });
