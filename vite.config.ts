@@ -919,8 +919,18 @@ export default defineConfig(({ command, mode }) => {
                 // chunk made `vendor` statically import vendor-editor (via
                 // @lezer/lr -> @lezer/common), dragging CodeMirror back into
                 // the entry's eager closure after the vendor-react pin.
+                // `entriesAware` + `entriesAwareMergeThreshold: 0` (see
+                // vendor-motion above) keep packages reachable only through
+                // dynamic imports (react-diff-view, frimousse, react-colorful,
+                // …) in deferred subgroup chunks instead of being swept into
+                // the eager entry vendor chunk. Both flags are required: the
+                // threshold disables small-subgroup re-merging, without which
+                // the deferred split silently collapses back into the eager
+                // chunk.
                 name: "vendor",
                 test: /node_modules[\\/](?!(refractor[\\/]lang[\\/]|@codemirror[\\/](lang-|legacy-modes)|@lezer[\\/](?!(common|highlight)[\\/])))/,
+                entriesAware: true,
+                entriesAwareMergeThreshold: 0,
                 priority: 10,
               },
             ],

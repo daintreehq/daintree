@@ -51,12 +51,14 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
+// Renders children unconditionally so the button's own keep-mounted gate (not
+// the dropdown's open state) is what the lazy-mount tests observe.
 vi.mock("@/components/ui/fixed-dropdown", () => ({
-  FixedDropdown: () => null,
+  FixedDropdown: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/Notifications/NotificationCenter", () => ({
-  NotificationCenter: () => null,
+  NotificationCenter: () => <div data-testid="notification-center" />,
 }));
 
 vi.mock("@/services/ActionService", async () => {
@@ -147,6 +149,41 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  describe("lazy NotificationCenter mount (issue #10389)", () => {
+    it("mounts NotificationCenter on first open and keeps it mounted after close", async () => {
+      const { queryByTestId } = render(<NotificationCenterToolbarButton />);
+      // Never opened — the lazy chunk's component must not be in the tree.
+      expect(queryByTestId("notification-center")).toBeNull();
+
+      // Materialize the vi.mock module from the test-file context before the
+      // first open. The component's own import() calls (preload effect + the
+      // lazy() factory) don't receive the factory mock until an import of the
+      // mocked specifier has been initiated from this test file — without
+      // this priming import the suspended boundary resolves to the REAL
+      // NotificationCenter and the mock's testid never appears. Order
+      // matters: priming must come after render(), otherwise the component's
+      // mount-time preload import of the already-materialized mock never
+      // settles and the boundary never commits at all.
+      await import("@/components/Notifications/NotificationCenter");
+
+      act(() => {
+        useUIStore.getState().toggleNotificationCenter();
+      });
+      // waitFor polling can't observe vitest's dynamic-import pipeline —
+      // dynamicImportSettled is what resolves the suspended lazy() boundary.
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      expect(queryByTestId("notification-center")).toBeTruthy();
+
+      act(() => {
+        useUIStore.setState({ notificationCenterOpen: false });
+      });
+      // Keep-mounted latch: closing must not unmount (no re-suspend on reopen).
+      expect(queryByTestId("notification-center")).toBeTruthy();
+    });
   });
 
   describe("icon", () => {

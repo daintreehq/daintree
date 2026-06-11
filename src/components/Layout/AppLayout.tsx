@@ -7,7 +7,6 @@ import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
-import { HelpPanel } from "../HelpPanel";
 import { ThemeBrowser } from "../ThemeBrowser";
 import { ProjectSwitchOverlay } from "@/components/Project";
 import { FleetArmingRibbon } from "@/components/Fleet";
@@ -48,6 +47,16 @@ const LazyGlobalBannerCoordinator = lazy(() =>
 // Fetch eagerly: `safeMode` is set synchronously during hydration, so the
 // first post-hydration render can suspend before the idle preload fires.
 void preloadGlobalBannerCoordinator();
+
+function preloadHelpPanel() {
+  return import("../HelpPanel");
+}
+// Named `HelpPanel` (not Lazy*) because AppLayout.sidebar.test.ts asserts on
+// the `<HelpPanel ...>` JSX shape. The render below is unconditional (panel
+// visibility is CSS-width driven), so the chunk is always needed — fetch it
+// eagerly to run in parallel with hydration instead of after first mount.
+const HelpPanel = lazy(() => preloadHelpPanel().then((m) => ({ default: m.HelpPanel })));
+void preloadHelpPanel();
 
 // Demo-mode tooling is dev/recording-only and never reachable in production
 // (the `window.electron?.demo` gate is undefined unless launched with
@@ -691,13 +700,15 @@ export function AppLayout({
                 className="absolute top-0 right-0 h-full"
                 style={{ width: layout.helpPanelWidth }}
               >
-                <HelpPanel
-                  width={layout.helpPanelWidth}
-                  isVisible={showAssistant}
-                  isReadyToLaunch={isHydrated}
-                  onResizeStart={handleAssistantResizeStart}
-                  onResizeEnd={handleAssistantResizeEnd}
-                />
+                <Suspense fallback={null}>
+                  <HelpPanel
+                    width={layout.helpPanelWidth}
+                    isVisible={showAssistant}
+                    isReadyToLaunch={isHydrated}
+                    onResizeStart={handleAssistantResizeStart}
+                    onResizeEnd={handleAssistantResizeEnd}
+                  />
+                </Suspense>
               </div>
             </div>
           </ErrorBoundary>
