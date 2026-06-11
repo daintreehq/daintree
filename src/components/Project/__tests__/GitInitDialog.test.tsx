@@ -180,6 +180,9 @@ describe("GitInitDialog", () => {
   });
 
   it("clears the missing-status warning when a late success event arrives", async () => {
+    // The invoke resolves without a "success" outcome and no terminal event,
+    // so the dialog shows the missing-status warning until a late event arrives.
+    initGitGuidedMock.mockResolvedValueOnce({ outcome: "error", completedSteps: [] });
     renderDialog();
 
     fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
@@ -297,6 +300,88 @@ describe("GitInitDialog", () => {
     });
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
+  });
+
+  it("auto-continues from a completion event while the invoke is still pending", async () => {
+    initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
+    const onSuccess = vi.fn();
+    renderDialog({ onSuccess });
+
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+
+    act(() => {
+      progressHandler?.({
+        step: "complete",
+        status: "success",
+        message: "Git initialization complete",
+        timestamp: Date.now(),
+      });
+    });
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
+  });
+
+  it("ignores a stray success event after an error event", async () => {
+    initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
+    renderDialog();
+
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+
+    act(() => {
+      progressHandler?.({
+        step: "complete",
+        status: "error",
+        message: "Repository initialized — initial commit skipped",
+        error: "identity not configured",
+        timestamp: Date.now(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+    });
+
+    act(() => {
+      progressHandler?.({
+        step: "complete",
+        status: "success",
+        message: "Git initialization complete",
+        timestamp: Date.now(),
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+  });
+
+  it("recovers cleanly when a retry succeeds", async () => {
+    initGitGuidedMock.mockResolvedValueOnce({ outcome: "error", completedSteps: [] });
+    renderDialog();
+
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: init" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/finished without a status update/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+    });
+    expect(screen.queryByText(/finished without a status update/i)).toBeNull();
+    expect(screen.queryByText(/initialization failed/i)).toBeNull();
   });
 
   it("completes from the invoke result when no progress events arrive", async () => {
