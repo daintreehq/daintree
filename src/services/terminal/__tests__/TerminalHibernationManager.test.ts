@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Terminal } from "@xterm/xterm";
 import { TerminalHibernationManager, HibernationManagerDeps } from "../TerminalHibernationManager";
+import { setupTerminalAddons } from "../TerminalAddonManager";
 import type { ManagedTerminal } from "../types";
 import { AGENT_IDLE_SILENCE_MS } from "../types";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
@@ -123,6 +125,7 @@ function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTermi
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: { dispose: vi.fn() } as unknown as ManagedTerminal["fileLinksDisposable"],
     webLinksAddon: { dispose: vi.fn() } as unknown as ManagedTerminal["webLinksAddon"],
+    imageLinksDisposable: null,
     hostElement: document.createElement("div"),
     isOpened: true,
     isVisible: true,
@@ -376,12 +379,87 @@ describe("TerminalHibernationManager", () => {
       expect(managed.webLinksAddon).toBeNull();
     });
 
+    it("should dispose imageLinksDisposable and null it so wake rebuilds it (#10387)", () => {
+      const linksDispose = vi.fn();
+      managed.imageLinksDisposable = { dispose: linksDispose };
+
+      manager.hibernate("t1");
+
+      // The null matters as much as the dispose: ensureDeferredAddons() only
+      // rebuilds when the field is null.
+      expect(linksDispose).toHaveBeenCalled();
+      expect(managed.imageLinksDisposable).toBeNull();
+    });
+
     it("should not throw when addons are already null", () => {
       managed.imageAddon = null;
       managed.fileLinksDisposable = null;
       managed.webLinksAddon = null;
+      managed.imageLinksDisposable = null;
 
       expect(() => manager.hibernate("t1")).not.toThrow();
+    });
+
+    it("should replace the disposed terminal with a fresh un-opened placeholder (#10387)", () => {
+      const oldTerminal = managed.terminal;
+
+      manager.hibernate("t1");
+
+      // Keeping the disposed instance referenced would retain its entire
+      // buffer graph for the hibernation window — the placeholder swap is the
+      // actual memory release.
+      expect(oldTerminal.dispose).toHaveBeenCalled();
+      expect(managed.terminal).not.toBe(oldTerminal);
+      expect(freshTerminalOpenMock).not.toHaveBeenCalled();
+    });
+
+    it("should re-point eager addons at the placeholder so the old terminal stays unreachable (#10387)", () => {
+      const oldFit = managed.fitAddon;
+      const oldSerialize = managed.serializeAddon;
+      const oldSearch = managed.searchAddon;
+
+      manager.hibernate("t1");
+
+      // loadAddon() leaves each eager addon holding a _terminal reference, so
+      // stale addon instances on `managed` would keep the disposed terminal's
+      // buffer graph alive even after the placeholder swap.
+      expect(setupTerminalAddons).toHaveBeenCalledWith(managed.terminal);
+      expect(managed.fitAddon).not.toBe(oldFit);
+      expect(managed.serializeAddon).not.toBe(oldSerialize);
+      expect(managed.searchAddon).not.toBe(oldSearch);
+    });
+
+    it("should snapshot options before dispose so dispose-time nulling cannot reach the placeholder (#10387)", () => {
+      // xterm's real `options` is a live getter proxy and dispose() nulls
+      // rawOptions.linkHandler — simulate that with a dispose that mutates the
+      // shared options object.
+      const linkHandler = { activate: vi.fn() };
+      const terminal = managed.terminal as unknown as {
+        options: { scrollback: number; linkHandler: unknown };
+        dispose: ReturnType<typeof vi.fn>;
+      };
+      terminal.options = { scrollback: 5000, linkHandler };
+      terminal.dispose = vi.fn(() => {
+        terminal.options.linkHandler = null;
+      });
+
+      manager.hibernate("t1");
+
+      const ctorArgs = vi.mocked(Terminal).mock.calls.at(-1)?.[0] as
+        | { linkHandler?: unknown }
+        | undefined;
+      expect(ctorArgs?.linkHandler).toBe(linkHandler);
+    });
+
+    it("should clear the cached selection (#10387)", () => {
+      manager.hibernate("t1");
+      expect(deps.deleteCachedSelection).toHaveBeenCalledWith("t1");
+    });
+
+    it("should not clear the cached selection when the call short-circuits", () => {
+      managed.isHibernated = true;
+      manager.hibernate("t1");
+      expect(deps.deleteCachedSelection).not.toHaveBeenCalled();
     });
 
     it("should clear hibernation timer", () => {
