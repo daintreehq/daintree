@@ -74,7 +74,7 @@ interface BrowserToolbarProps {
   onOpenExternal: () => void;
   onPromoteToPortal?: () => void;
   onZoomChange?: (zoomFactor: number) => void;
-  onCaptureScreenshot?: () => void | Promise<void>;
+  onCaptureScreenshot?: () => Promise<boolean>;
   onToggleConsole?: () => void;
   onToggleDevTools?: () => void;
   onViewportPresetChange?: (preset: ViewportPresetId | undefined) => void;
@@ -462,9 +462,18 @@ export function BrowserToolbar({
 
   const handleCaptureScreenshot = useCallback(async () => {
     if (!onCaptureScreenshot) return;
-    await onCaptureScreenshot();
-    setScreenshotCopied(true);
+    let success = false;
+    try {
+      success = await onCaptureScreenshot();
+    } catch (err) {
+      logError("Failed to capture screenshot", err);
+    }
     if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
+    if (!success) {
+      setScreenshotCopied(false);
+      return;
+    }
+    setScreenshotCopied(true);
     screenshotCopiedTimerRef.current = setTimeout(
       () => setScreenshotCopied(false),
       COPIED_FEEDBACK_RESET_MS

@@ -1051,6 +1051,131 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
   });
 
+  describe("screenshot capture via toolbar prop", () => {
+    const getToolbarCapture = () => {
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
+        onCaptureScreenshot: () => Promise<boolean>;
+      };
+      return props.onCaptureScreenshot;
+    };
+
+    it("resolves true after a successful capture and clipboard write", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).electron.clipboard.writeImage).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves false and notifies when the clipboard write fails", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.clipboard.writeImage.mockRejectedValueOnce(
+        new Error("clipboard unavailable")
+      );
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+    });
+
+    it("resolves false without notifying when the URL is about:blank", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.getURL.mockReturnValue("about:blank");
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).electron.clipboard.writeImage).not.toHaveBeenCalled();
+    });
+
+    it("resolves false and notifies when capturePage rejects", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.capturePage.mockRejectedValueOnce(new Error("capture failed"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).electron.clipboard.writeImage).not.toHaveBeenCalled();
+    });
+
+    it("resolves false for a second capture while the first is still in flight", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let resolveCapture: (value: { toPNG: () => Uint8Array }) => void;
+      webview.capturePage.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        })
+      );
+
+      let first: Promise<boolean>;
+      let second: boolean | undefined;
+      await act(async () => {
+        first = getToolbarCapture()();
+        second = await getToolbarCapture()();
+        resolveCapture!({ toPNG: () => new Uint8Array([0x89]) });
+        await first;
+      });
+
+      expect(second).toBe(false);
+      await expect(first!).resolves.toBe(true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).electron.clipboard.writeImage).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("stale URL detection on initial load", () => {
     it("shows stale URL message on ERR_CONNECTION_REFUSED during initial restored load", () => {
       const { container } = render(<BrowserPane {...baseProps} />);

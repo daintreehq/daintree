@@ -6,7 +6,8 @@ export type BrowserActionCallbacks = {
   onBack: () => void;
   onForward: () => void;
   onSetZoom: (rawZoom: number) => void;
-  onCaptureScreenshot: () => void;
+  // Result is discarded on this path; the toolbar prop is where it matters.
+  onCaptureScreenshot: () => void | Promise<boolean>;
   onToggleConsole?: () => void;
   onClearConsole?: () => void;
   onToggleDevTools: () => void;
@@ -53,7 +54,7 @@ export function useBrowserActionListeners(id: string, callbacks: BrowserActionCa
         if (typeof detail.zoomFactor === "number") callbacks.onSetZoom(detail.zoomFactor);
         return;
       case "daintree:browser-capture-screenshot":
-        callbacks.onCaptureScreenshot();
+        void callbacks.onCaptureScreenshot();
         return;
       case "daintree:browser-toggle-console":
         callbacks.onToggleConsole?.();

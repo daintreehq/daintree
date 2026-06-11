@@ -27,6 +27,7 @@ type MockWebviewElement = HTMLElement & {
   executeJavaScript: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
   getWebContents: () => MockWebContents;
+  capturePage: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -63,6 +64,9 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     disableDeviceEmulation: vi.fn(),
   };
   webview.getWebContents = vi.fn(() => mockWc);
+  webview.capturePage = vi.fn(() =>
+    Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
+  );
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -249,8 +253,14 @@ vi.mock("@/hooks/useFindInPage", () => ({
   }),
 }));
 
+const { browserToolbarPropsSpy } = vi.hoisted(() => ({
+  browserToolbarPropsSpy: vi.fn(),
+}));
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
-  BrowserToolbar: () => <div data-testid="browser-toolbar" />,
+  BrowserToolbar: (props: Record<string, unknown>) => {
+    browserToolbarPropsSpy(props);
+    return <div data-testid="browser-toolbar" />;
+  },
 }));
 
 vi.mock("@/components/Panel", () => ({
@@ -385,6 +395,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       },
       clipboard: {
         writeText: vi.fn().mockResolvedValue(undefined),
+        writeImage: vi.fn().mockResolvedValue(undefined),
       },
       webview: {
         registerPanel: vi.fn(() => Promise.resolve()),
@@ -1825,6 +1836,132 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).not.toContain("Taking longer than usual");
+    });
+  });
+
+  describe("screenshot capture", () => {
+    const getToolbarCapture = () => {
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
+        onCaptureScreenshot: () => Promise<boolean>;
+      };
+      return props.onCaptureScreenshot;
+    };
+
+    const getWriteImageMock = () => {
+      const electron = (window as unknown as { electron: { clipboard: Record<string, unknown> } })
+        .electron;
+      return electron.clipboard.writeImage as ReturnType<typeof vi.fn>;
+    };
+
+    it("resolves true after a successful capture and clipboard write", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(true);
+      expect(getWriteImageMock()).toHaveBeenCalledTimes(1);
+      expect(getWriteImageMock().mock.calls[0]![0]).toBeInstanceOf(Uint8Array);
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("resolves false without notifying when the URL is about:blank", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.getURL.mockReturnValue("about:blank");
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(getWriteImageMock()).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("resolves false and notifies when the clipboard write fails", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      getWriteImageMock().mockRejectedValueOnce(new Error("clipboard unavailable"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+    });
+
+    it("resolves false and notifies when capturePage rejects", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.capturePage.mockRejectedValueOnce(new Error("capture failed"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+      expect(getWriteImageMock()).not.toHaveBeenCalled();
+    });
+
+    it("resolves false for a second capture while the first is still in flight", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let resolveCapture: (value: { toPNG: () => Uint8Array }) => void;
+      webview.capturePage.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        })
+      );
+
+      let first: Promise<boolean>;
+      let second: boolean | undefined;
+      await act(async () => {
+        first = getToolbarCapture()();
+        second = await getToolbarCapture()();
+        resolveCapture!({ toPNG: () => new Uint8Array([0x89]) });
+        await first;
+      });
+
+      expect(second).toBe(false);
+      await expect(first!).resolves.toBe(true);
+      expect(getWriteImageMock()).toHaveBeenCalledTimes(1);
     });
   });
 
