@@ -70,6 +70,7 @@ import {
   estimateFileDiffBytes,
 } from "./diffCollapseUtils";
 import { detectMovedLines } from "./diffMovedUtils";
+import { suppressFullLineEdits } from "./diffEditSuppression";
 import { computeSearchRanges, computeTrailingWsRanges } from "./diffTokenRanges";
 import type { SideRanges } from "./diffTokenRanges";
 import { formatBytes } from "@/lib/formatBytes";
@@ -251,6 +252,9 @@ export const renderTokenWithInvisibles: RenderToken = (token, renderDefault, ind
   );
 };
 
+/** Changed-line budget above which word-level edit marking is skipped. */
+const MAX_INTRALINE_CHANGES = 3000;
+
 function useTokens(
   hunks: HunkData[],
   language: string,
@@ -297,13 +301,25 @@ function useTokens(
       return;
     }
     let cancelled = false;
+    // Past the budget, intra-line diffing (diff-match-patch per change block)
+    // is churn-on-churn: the marks stop being review signal and the per-block
+    // diffs get slow. Whole-line fills only — the same large-hunk fallback
+    // git diff-highlight and VS Code apply.
+    let changedLines = 0;
+    for (const hunk of hunks) {
+      for (const change of hunk.changes) {
+        if (change.type !== "normal") changedLines++;
+      }
+    }
+    const intraLineEdits = changedLines <= MAX_INTRALINE_CHANGES;
     const options: TokenizeOptions = {
       highlight,
       refractor: refractorAdapter,
       language,
-      enhancers: extraRanges
-        ? [markEdits(hunks, { type: "block" }), pickRanges(extraRanges.old, extraRanges.new)]
-        : [markEdits(hunks, { type: "block" })],
+      enhancers: [
+        ...(intraLineEdits ? [markEdits(hunks, { type: "block" }), suppressFullLineEdits()] : []),
+        ...(extraRanges ? [pickRanges(extraRanges.old, extraRanges.new)] : []),
+      ],
     };
     startTransition(() => {
       if (cancelled) return;

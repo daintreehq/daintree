@@ -750,6 +750,7 @@ export default tseslint.config(
     files: [
       "src/components/FileViewer/FileViewerModal.tsx",
       "src/components/Worktree/DiffViewer.tsx",
+      "src/components/Worktree/diffEditSuppression.ts",
       "src/components/Worktree/diffMovedUtils.ts",
       "src/components/Worktree/diffTokenRanges.ts",
     ],

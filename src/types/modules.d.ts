@@ -63,6 +63,16 @@ declare module "react-diff-view" {
     properties?: { className?: string };
     children?: TokenNode[];
   }
+  /**
+   * Root-to-leaf node path used inside tokenize enhancers. The leaf is always
+   * a text node ({ type: "text", value }); range nodes (markEdits' "edit",
+   * pickRanges' custom types) wrap at the front of the path.
+   */
+  export type TokenPath = TokenNode[];
+  export type TokenizeEnhancer = (
+    input: [TokenPath[][], TokenPath[][]]
+  ) => [TokenPath[][], TokenPath[][]];
+
   export type DefaultRenderToken = (token: TokenNode, index: number) => ReactNode;
   export type RenderToken = (
     token: TokenNode,

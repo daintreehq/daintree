@@ -77,7 +77,7 @@ index 0000001..0000002 100644
     expect(moved.size).toBe(0);
   });
 
-  it("requires exact content — re-indented copies are not moves", () => {
+  it("detects re-indented moves (git --color-moved-ws=allow-indentation-change)", () => {
     const diff = `diff --git a/a.ts b/a.ts
 index 0000001..0000002 100644
 --- a/a.ts
@@ -90,8 +90,50 @@ index 0000001..0000002 100644
  const tail = 3;
 +  const value = computeExpensiveValue(top);
  const end = 4;`;
-    const moved = detectMovedLines(hunksOf(diff));
-    expect(moved.size).toBe(0);
+    const hunks = hunksOf(diff);
+    const moved = detectMovedLines(hunks);
+    const changed = [...changesOfType(hunks, "delete"), ...changesOfType(hunks, "insert")];
+    expect(changed).toHaveLength(2);
+    for (const change of changed) {
+      expect(moved.has(getChangeKey(change))).toBe(true);
+    }
+  });
+
+  it("requires a uniform indentation delta across the run", () => {
+    // Each line carries ~12 alphanumerics — below MIN_MOVED_ALNUM alone, so
+    // only the full two-line run qualifies. Uniform shift: detected.
+    const uniform = `diff --git a/a.ts b/a.ts
+index 0000001..0000002 100644
+--- a/a.ts
++++ b/a.ts
+@@ -1,4 +1,2 @@
+ const top = 1;
+-callSiteOne(a);
+-callSiteTwo(b);
+ const after = 2;
+@@ -20,2 +18,4 @@
+ const tail = 3;
++  callSiteOne(a);
++  callSiteTwo(b);
+ const end = 4;`;
+    expect(detectMovedLines(hunksOf(uniform)).size).toBe(4);
+
+    // Mixed per-line deltas break the run into sub-threshold fragments.
+    const mixed = `diff --git a/a.ts b/a.ts
+index 0000001..0000002 100644
+--- a/a.ts
++++ b/a.ts
+@@ -1,4 +1,2 @@
+ const top = 1;
+-callSiteOne(a);
+-callSiteTwo(b);
+ const after = 2;
+@@ -20,2 +18,4 @@
+ const tail = 3;
++  callSiteOne(a);
++    callSiteTwo(b);
+ const end = 4;`;
+    expect(detectMovedLines(hunksOf(mixed)).size).toBe(0);
   });
 
   it("matches each deleted block at most once", () => {
