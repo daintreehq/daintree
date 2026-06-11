@@ -279,20 +279,20 @@ describe("projectClient getSettings caching", () => {
     expect(r2).toBe(settingsB);
   });
 
-  it("re-fetches after the 150ms TTL expires", async () => {
+  it("re-fetches after the TTL expires", async () => {
     vi.setSystemTime(new Date(0));
     getSettingsMock.mockResolvedValue(settingsA);
 
     await projectClient.getSettings("proj-1");
     expect(getSettingsMock).toHaveBeenCalledTimes(1);
 
-    // Within TTL: cached
-    vi.setSystemTime(new Date(149));
+    // Within TTL: cached (wide enough to outlive the serialized startup queue, #10390)
+    vi.setSystemTime(new Date(499));
     await projectClient.getSettings("proj-1");
     expect(getSettingsMock).toHaveBeenCalledTimes(1);
 
     // After TTL: fresh fetch
-    vi.setSystemTime(new Date(200));
+    vi.setSystemTime(new Date(600));
     getSettingsMock.mockResolvedValue(settingsB);
     const r3 = await projectClient.getSettings("proj-1");
     expect(getSettingsMock).toHaveBeenCalledTimes(2);

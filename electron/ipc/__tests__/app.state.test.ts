@@ -52,6 +52,7 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
+    getAllProjects: vi.fn(() => []),
     getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
     saveProjectState: vi.fn(),
