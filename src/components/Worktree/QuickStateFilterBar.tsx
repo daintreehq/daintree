@@ -14,11 +14,21 @@ const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
 
 const FILTER_VISUALS: Record<
   Exclude<QuickStateFilter, "all">,
-  { Icon: React.ComponentType<{ className?: string }>; color: string }
+  { Icon: React.ComponentType<{ className?: string }>; color: string; colorFaded: string }
 > = {
-  working: { Icon: SpinnerCircle, color: STATE_COLORS.working },
-  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting },
-  finished: { Icon: CheckCircle2, color: "text-category-blue" },
+  // colorFaded must stay a complete class literal — Tailwind's scanner can't
+  // see dynamically assembled `${color}/40` strings.
+  working: {
+    Icon: SpinnerCircle,
+    color: STATE_COLORS.working,
+    colorFaded: "text-state-working/40",
+  },
+  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting, colorFaded: "text-state-waiting/40" },
+  finished: {
+    Icon: CheckCircle2,
+    color: "text-category-blue",
+    colorFaded: "text-category-blue/40",
+  },
 };
 
 interface QuickStateFilterBarProps {
@@ -50,6 +60,9 @@ export function QuickStateFilterBar({
         const isActive = option.value === value;
         const rawCount = counts ? counts[option.value] : undefined;
         const hasCount = rawCount !== undefined;
+        // An empty bucket keeps its icon and "0" digit but mutes the icon so
+        // the zero registers at a glance; no counts at all means no fade.
+        const shouldFadeIcon = hasCount && rawCount === 0;
         const visual = option.value === "all" ? null : FILTER_VISUALS[option.value];
         const isSpinningWorking = option.value === "working" && workingActive;
         const Icon = isSpinningWorking ? SpinnerCircle : visual?.Icon;
@@ -82,8 +95,8 @@ export function QuickStateFilterBar({
                 {Icon && visual ? (
                   <Icon
                     className={cn(
-                      "w-3 h-3 shrink-0",
-                      visual.color,
+                      "w-3 h-3 shrink-0 transition-colors",
+                      shouldFadeIcon ? visual.colorFaded : visual.color,
                       isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
                     )}
                   />

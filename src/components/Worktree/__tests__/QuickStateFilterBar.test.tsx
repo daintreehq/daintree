@@ -269,6 +269,45 @@ describe("QuickStateFilterBar", () => {
     expect(inactiveClass).toContain("text-daintree-text/60");
   });
 
+  it("fades the icon of every empty bucket — issue #10353", () => {
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 9, working: 0, waiting: 0, finished: 0 }}
+      />
+    );
+    for (const name of [/Working/, /Waiting/, /Finished/]) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").toContain("/40");
+    }
+  });
+
+  it("keeps icons at full color when their count is positive", () => {
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 9, working: 3, waiting: 1, finished: 2 }}
+      />
+    );
+    for (const name of [/Working/, /Waiting/, /Finished/]) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").not.toContain("/40");
+    }
+  });
+
+  it("does not fade icons when the counts prop is omitted", () => {
+    renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
+    for (const name of ["Working", "Waiting", "Finished"]) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").not.toContain("/40");
+    }
+  });
+
   it("renders the optional trailing slot past a divider", () => {
     renderBar(
       <QuickStateFilterBar
