@@ -203,13 +203,24 @@ module.exports = async function () {
         { target: "dmg", arch: ["arm64", "x64", "universal"] },
         { target: "zip", arch: ["arm64", "x64", "universal"] },
       ],
+      // A user-specified artifactName forces ${arch} to render for x64 too
+      // (bypassing electron-builder's default-arch suffix stripping), so no
+      // macOS artifact looks like "the" Mac download (#10380). This pattern
+      // covers the zip target — a root-level `zip` block is rejected by the
+      // config schema — while the dmg block's artifactName takes precedence
+      // for DMGs.
+      artifactName: "${productName}-${version}-${arch}-${os}.${ext}",
       hardenedRuntime: true,
       gatekeeperAssess: false,
       entitlements: "build/entitlements.mac.plist",
       entitlementsInherit: "build/entitlements.mac.plist",
     },
+    // Explicit dmg block override; the dmg pattern drops the ${os} token.
+    // Unpacked dirs (release/mac/, release/mac-arm64/, release/mac-universal/)
+    // are unaffected by artifactName.
     dmg: {
       icon: "build/icon.icns",
+      artifactName: "${productName}-${version}-${arch}.${ext}",
       contents: [
         { x: 130, y: 220 },
         { x: 410, y: 220, type: "link", path: "/Applications" },
