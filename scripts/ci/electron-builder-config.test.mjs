@@ -35,11 +35,17 @@ describe("electron-builder config — macOS artifact naming (#10380)", () => {
     // key (e.g. a root-level `zip` block) fails validateConfiguration() at
     // packaging time and breaks the release build before any artifact exists.
     const scheme = JSON.parse(
-      await readFile(new URL("../../node_modules/app-builder-lib/scheme.json", import.meta.url), "utf8")
+      await readFile(
+        new URL("../../node_modules/app-builder-lib/scheme.json", import.meta.url),
+        "utf8"
+      )
     );
     const allowedKeys = new Set(Object.keys(scheme.properties));
     for (const key of Object.keys(config)) {
-      expect(allowedKeys, `root config key "${key}" is not in the electron-builder schema`).toContain(key);
+      expect(
+        allowedKeys,
+        `root config key "${key}" is not in the electron-builder schema`
+      ).toContain(key);
     }
   });
 });
