@@ -1234,6 +1234,32 @@ describe("WorktreeStoreProvider visibilitychange (#8066 consolidation)", () => {
 });
 
 describe("WorktreeStoreProvider resume event (#9702)", () => {
+  const rafQueue: FrameRequestCallback[] = [];
+  const realRaf = globalThis.requestAnimationFrame;
+
+  beforeEach(() => {
+    rafQueue.length = 0;
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
+      rafQueue.push(cb);
+      return rafQueue.length;
+    }) as typeof globalThis.requestAnimationFrame;
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = realRaf;
+  });
+
+  // The wake fan-out is deferred behind a double-rAF so it runs after the
+  // unfrozen renderer's first settled layout pass (#10362).
+  function flushWakeFrames(): void {
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        const pending = rafQueue.splice(0, rafQueue.length);
+        for (const cb of pending) cb(0);
+      });
+    }
+  }
+
   function setVisibility(state: "visible" | "hidden"): void {
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -1249,10 +1275,7 @@ describe("WorktreeStoreProvider resume event (#9702)", () => {
     act(() => {
       document.dispatchEvent(new Event("resume"));
     });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    flushWakeFrames();
 
     expect(wakeMock).not.toHaveBeenCalled();
   });
@@ -1265,10 +1288,7 @@ describe("WorktreeStoreProvider resume event (#9702)", () => {
     act(() => {
       document.dispatchEvent(new Event("resume"));
     });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    flushWakeFrames();
 
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });
@@ -1284,10 +1304,7 @@ describe("WorktreeStoreProvider resume event (#9702)", () => {
       document.dispatchEvent(new Event("resume"));
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    flushWakeFrames();
 
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });

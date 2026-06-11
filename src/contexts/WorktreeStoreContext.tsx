@@ -687,17 +687,27 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // triggers redundant `get-all-states` fetches.
     // De-dupe guard: on warm reactivation Chromium fires the Page Lifecycle
     // `resume` event immediately before `visibilitychange` in the same turn
-    // (#9702). Coalesce both into a single wake fan-out via a microtask so a
-    // resume+visibilitychange pair doesn't run the fan-out twice.
+    // (#9702). Coalesce both into a single wake fan-out.
+    // Double-rAF, not a microtask: a microtask runs before the unfrozen
+    // renderer's first layout pass, so the wake's geometry reads and
+    // terminal.refresh() execute while xterm's IntersectionObserver hasn't
+    // re-fired and its render service is still paused — leaving agent
+    // terminals garbled until a click re-fits them (#10362). The first rAF
+    // fires before ResizeObserver/IntersectionObserver callbacks and paint;
+    // the second is post-paint with settled layout (same idiom as
+    // warmReactivationGate). Visibility is re-checked at execution time in
+    // case the view was re-hidden between scheduling and the second frame.
     let wakePending = false;
     function scheduleWake() {
       if (wakePending) return;
       wakePending = true;
-      void Promise.resolve().then(() => {
-        wakePending = false;
-        if (document.visibilityState === "visible") {
-          void wakeActiveWorktreeTerminals();
-        }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          wakePending = false;
+          if (document.visibilityState === "visible") {
+            void wakeActiveWorktreeTerminals();
+          }
+        });
       });
     }
 
