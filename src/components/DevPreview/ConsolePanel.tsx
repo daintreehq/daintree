@@ -1,6 +1,6 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { Trash2, ChevronDown } from "lucide-react";
+import { Trash2, ChevronDown, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   useConsoleCaptureStore,
@@ -10,6 +10,8 @@ import {
   ZERO_COUNTS,
 } from "@/store/consoleCaptureStore";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ObjectInspector } from "./ObjectInspector";
 import { StackTrace } from "./StackTrace";
@@ -51,6 +53,34 @@ const FILTER_BUTTONS: { filter: LevelFilter; label: string }[] = [
   { filter: "log", label: "Log" },
 ];
 
+// Each line is sanitized individually — sanitizeForClipboard strips newlines
+// along with the other C0 controls, so sanitizing the joined output would
+// collapse the intentional row/frame line structure. Multi-line summaries
+// (e.g. exception text with embedded frames) are split first so their line
+// structure survives sanitization, matching the whitespace-pre-wrap display.
+export function serializeConsoleMessage(msg: ConsoleMessage): string {
+  const [firstLine = "", ...restLines] = msg.summaryText.split("\n");
+  const lines = [
+    sanitizeForClipboard(`[${msg.timeLabel}] [${LEVEL_STYLES[msg.level].label}] ${firstLine}`),
+    ...restLines.map((line) => sanitizeForClipboard(line)),
+  ];
+  if (msg.stackTrace) {
+    for (const frame of msg.stackTrace.callFrames) {
+      const name = frame.functionName || "(anonymous)";
+      const location = frame.url ? ` (${frame.url}:${frame.lineNumber}:${frame.columnNumber})` : "";
+      lines.push(sanitizeForClipboard(`  at ${name}${location}`));
+    }
+  }
+  return lines.join("\n");
+}
+
+export function serializeConsoleMessages(messages: ConsoleMessage[]): string {
+  return messages.map(serializeConsoleMessage).join("\n");
+}
+
+const COPY_REVEAL_CLASS =
+  "shrink-0 invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto motion-reduce:transition-none";
+
 const ConsoleRow = memo(function ConsoleRow({
   msg,
   webContentsId,
@@ -65,11 +95,18 @@ const ConsoleRow = memo(function ConsoleRow({
   const style = LEVEL_STYLES[msg.level];
   const indentPx = msg.groupDepth * 12;
   const handleToggle = useCallback(() => onToggleGroup?.(msg.id), [onToggleGroup, msg.id]);
+  const { copied, copy } = useCopyWithFeedback();
+  const handleCopy = useCallback(() => {
+    void copy(serializeConsoleMessage(msg));
+  }, [copy, msg]);
 
   return (
+    // tabIndex makes the row itself focusable so keyboard users can reach the
+    // focus-within-revealed copy button on rows with no other focusable child.
     <div
+      tabIndex={0}
       className={cn(
-        "flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle",
+        "group/row flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle",
         style.row
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
@@ -110,6 +147,25 @@ const ConsoleRow = memo(function ConsoleRow({
           )}
         </div>
         {msg.stackTrace && <StackTrace stackTrace={msg.stackTrace} />}
+      </div>
+      <div className={COPY_REVEAL_CLASS}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="p-0.5 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              aria-label="Copy console message"
+            >
+              {copied ? (
+                <Check className="w-3 h-3 text-status-success animate-badge-bump" />
+              ) : (
+                <Copy className="w-3 h-3" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Copy message</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
@@ -248,6 +304,11 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     setIsAtBottom(true);
   }, []);
 
+  const { copied: allCopied, copy: copyAll } = useCopyWithFeedback();
+  const handleCopyVisible = useCallback(() => {
+    void copyAll(serializeConsoleMessages(filtered));
+  }, [copyAll, filtered]);
+
   const toggleGroup = useCallback((msgId: number) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -325,6 +386,26 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
             <TooltipContent side="bottom">Scroll to bottom</TooltipContent>
           </Tooltip>
         )}
+
+        {/* Copy visible */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCopyVisible}
+              disabled={filtered.length === 0}
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-daintree-text/50"
+              aria-label="Copy visible console messages"
+            >
+              {allCopied ? (
+                <Check className="w-3.5 h-3.5 text-status-success animate-badge-bump" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Copy visible messages</TooltipContent>
+        </Tooltip>
 
         {/* Clear */}
         <Tooltip>
