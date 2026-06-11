@@ -179,6 +179,45 @@ describe("Forge stats persistThroughChildOverlays — issue #3556", () => {
   });
 });
 
+describe("Commits pill opens without a forge provider — issue #10414", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(FORGE_STATS_PATH, "utf-8");
+  });
+
+  it("imports the local commits fallback view", () => {
+    expect(source).toMatch(/import \{ LocalCommitsDropdown \} from "\.\/LocalCommitsDropdown"/);
+  });
+
+  it("renders LocalCommitsDropdown as the commits dropdown fallback when no provider view exists", () => {
+    const commitsPill = source.slice(
+      source.indexOf("buttonRef={commitsButtonRef}"),
+      source.indexOf("buttonRef={commitsButtonRef}") + 3500
+    );
+    expect(commitsPill).toContain("LocalCommitsDropdown");
+    expect(commitsPill).toContain("open={commitsOpen}");
+  });
+
+  it("the commits click handler no longer early-returns without a provider", () => {
+    const commitsPill = source.slice(
+      source.indexOf("buttonRef={commitsButtonRef}"),
+      source.indexOf("buttonRef={commitsButtonRef}") + 3500
+    );
+    expect(commitsPill).not.toContain("if (!DropdownView || !providerId) return;");
+  });
+
+  it("the local fallback carries no forge references", async () => {
+    const localSource = await fs.readFile(
+      path.resolve(__dirname, "../LocalCommitsDropdown.tsx"),
+      "utf-8"
+    );
+    expect(localSource).not.toContain("GitHub");
+    expect(localSource).not.toContain("forgeClient");
+    expect(localSource).not.toContain("providerId");
+  });
+});
+
 describe("Forge neutrality — host carries no GitHub references", () => {
   it("ForgeStatsToolbarButton has no GitHub-specific imports or strings", async () => {
     const source = await fs.readFile(FORGE_STATS_PATH, "utf-8");
