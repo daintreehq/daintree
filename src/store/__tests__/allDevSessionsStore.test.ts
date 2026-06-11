@@ -28,6 +28,7 @@ let unsubscribe: ReturnType<typeof vi.fn>;
 let onAllSessionsChanged: ReturnType<typeof vi.fn>;
 let getAllSessions: ReturnType<typeof vi.fn>;
 let resolveGetAll: (value: DevPreviewSessionState[]) => void;
+let rejectGetAll: (err: unknown) => void;
 
 beforeEach(() => {
   pushCallback = null;
@@ -38,8 +39,9 @@ beforeEach(() => {
   });
   getAllSessions = vi.fn(
     () =>
-      new Promise<DevPreviewSessionState[]>((resolve) => {
+      new Promise<DevPreviewSessionState[]>((resolve, reject) => {
         resolveGetAll = resolve;
+        rejectGetAll = reject;
       })
   );
   (globalThis as unknown as { window: unknown }).window = {
@@ -63,6 +65,37 @@ describe("allDevSessionsStore", () => {
       expect(useAllDevSessionsStore.getState().hydrated).toBe(true);
     });
     expect(useAllDevSessionsStore.getState().sessions).toHaveLength(1);
+    expect(useAllDevSessionsStore.getState().fetchError).toBe(false);
+  });
+
+  it("marks fetchError when the initial hydrate rejects", async () => {
+    acquireAllDevSessions();
+    rejectGetAll(new Error("ipc failed"));
+    await vi.waitFor(() => {
+      expect(useAllDevSessionsStore.getState().hydrated).toBe(true);
+    });
+    expect(useAllDevSessionsStore.getState().fetchError).toBe(true);
+    expect(useAllDevSessionsStore.getState().sessions).toHaveLength(0);
+  });
+
+  it("clears fetchError when a push arrives after a failed hydrate", async () => {
+    acquireAllDevSessions();
+    rejectGetAll(new Error("ipc failed"));
+    await vi.waitFor(() => expect(useAllDevSessionsStore.getState().fetchError).toBe(true));
+
+    pushCallback?.({ sessions: [makeSession()] });
+    expect(useAllDevSessionsStore.getState().fetchError).toBe(false);
+    expect(useAllDevSessionsStore.getState().sessions).toHaveLength(1);
+  });
+
+  it("resets fetchError on teardown", async () => {
+    const release = acquireAllDevSessions();
+    rejectGetAll(new Error("ipc failed"));
+    await vi.waitFor(() => expect(useAllDevSessionsStore.getState().fetchError).toBe(true));
+
+    release();
+    expect(useAllDevSessionsStore.getState().fetchError).toBe(false);
+    expect(useAllDevSessionsStore.getState().hydrated).toBe(false);
   });
 
   it("applies pushed snapshots", async () => {
