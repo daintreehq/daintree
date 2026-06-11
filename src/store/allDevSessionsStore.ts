@@ -47,7 +47,11 @@ function startSubscription(): void {
     // snapshot. Advance the token so a still-in-flight getAllSessions() that
     // resolves later can't overwrite this fresher state with stale data.
     hydrateToken++;
-    useAllDevSessionsStore.setState({ sessions: payload.sessions, hydrated: true, fetchError: false });
+    useAllDevSessionsStore.setState({
+      sessions: payload.sessions,
+      hydrated: true,
+      fetchError: false,
+    });
   });
 }
 

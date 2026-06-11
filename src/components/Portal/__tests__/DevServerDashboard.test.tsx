@@ -3,9 +3,8 @@ import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 
-const useAllDevSessions = vi.fn<
-  () => { sessions: DevPreviewSessionState[]; hydrated: boolean; fetchError: boolean }
->();
+const useAllDevSessions =
+  vi.fn<() => { sessions: DevPreviewSessionState[]; hydrated: boolean; fetchError: boolean }>();
 const useWorktreeStore = vi.fn();
 
 function mockSessions(
