@@ -1496,6 +1496,7 @@ export interface IpcEventMap {
     args: unknown;
     confirmed: boolean;
     context?: import("../actions.js").ActionContext;
+    callerInfo?: import("./mcpServer.js").McpBearerIdentity;
   };
 
   /**

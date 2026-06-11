@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
+  MAX_ARTIFACTS_PER_TERMINAL,
   removeArtifactsForTerminal,
   useArtifacts,
   __test_resetArtifactStore,
@@ -133,6 +134,130 @@ describe("useArtifacts module-level store teardown", () => {
     expect(accepted).toBe(true);
     expect(result.current.artifacts).toHaveLength(1);
     expect(result.current.artifacts[0]!.id).toBe("a-new");
+  });
+
+  it("caps a terminal's artifacts at the per-terminal limit, dropping the oldest", () => {
+    const atCap = Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) =>
+      makeArtifact({ id: `a${i}` })
+    );
+    __test_simulateArtifactDetected("t1", atCap);
+    expect(__test_getArtifactsFor("t1")).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(__test_getArtifactsFor("t1")![0]!.id).toBe("a0");
+
+    __test_simulateArtifactDetected("t1", [makeArtifact({ id: "a-overflow" })]);
+
+    const capped = __test_getArtifactsFor("t1")!;
+    expect(capped).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(capped[0]!.id).toBe("a1");
+    expect(capped[capped.length - 1]!.id).toBe("a-overflow");
+  });
+
+  it("keeps only the newest artifacts when a single bulk detection exceeds the cap", () => {
+    const bulk = Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 10 }, (_, i) =>
+      makeArtifact({ id: `a${i}` })
+    );
+    __test_simulateArtifactDetected("t1", bulk);
+
+    const stored = __test_getArtifactsFor("t1")!;
+    expect(stored).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(stored[0]!.id).toBe("a10");
+    expect(stored[stored.length - 1]!.id).toBe(`a${MAX_ARTIFACTS_PER_TERMINAL + 9}`);
+  });
+
+  it("caps terminals independently", () => {
+    const overflow = Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 5 }, (_, i) =>
+      makeArtifact({ id: `a${i}` })
+    );
+    __test_simulateArtifactDetected("t1", overflow);
+    __test_simulateArtifactDetected("t2", [makeArtifact({ id: "b1" })]);
+
+    expect(__test_getArtifactsFor("t1")).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(__test_getArtifactsFor("t2")).toHaveLength(1);
+  });
+
+  it("notifies subscribers with the capped array, not the uncapped merge", () => {
+    const listener = vi.fn();
+    const unsubscribe = __test_subscribeArtifactStore(listener);
+
+    const overflow = Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 1 }, (_, i) =>
+      makeArtifact({ id: `a${i}` })
+    );
+    __test_simulateArtifactDetected("t1", overflow);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const notified = listener.mock.calls[0]![1] as Artifact[];
+    expect(notified).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(notified[0]!.id).toBe("a1");
+    expect(notified[notified.length - 1]!.id).toBe(`a${MAX_ARTIFACTS_PER_TERMINAL}`);
+
+    unsubscribe();
+  });
+
+  it("an empty detection batch is a no-op — no store entry, no notification", () => {
+    const listener = vi.fn();
+    const unsubscribe = __test_subscribeArtifactStore(listener);
+
+    const accepted = __test_simulateArtifactDetected("ghost", []);
+
+    expect(accepted).toBe(true);
+    expect(__test_getArtifactsFor("ghost")).toBeUndefined();
+    expect(__test_getArtifactStoreSize()).toBe(0);
+    expect(listener).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  it("applies the cap from a clean slate after a live clearArtifacts", () => {
+    const { result } = renderHook(() => useArtifacts("live-cap"));
+
+    act(() => {
+      __test_simulateArtifactDetected(
+        "live-cap",
+        Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) => makeArtifact({ id: `a${i}` }))
+      );
+    });
+    act(() => {
+      result.current.clearArtifacts();
+    });
+
+    act(() => {
+      __test_simulateArtifactDetected(
+        "live-cap",
+        Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 10 }, (_, i) =>
+          makeArtifact({ id: `b${i}` })
+        )
+      );
+    });
+
+    const stored = __test_getArtifactsFor("live-cap")!;
+    expect(stored).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(stored[0]!.id).toBe("b10");
+  });
+
+  it("tombstone still blocks a late packet on a terminal that was at cap", () => {
+    __test_simulateArtifactDetected(
+      "t1",
+      Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) => makeArtifact({ id: `a${i}` }))
+    );
+
+    removeArtifactsForTerminal("t1");
+
+    const accepted = __test_simulateArtifactDetected("t1", [makeArtifact({ id: "late" })]);
+    expect(accepted).toBe(false);
+    expect(__test_getArtifactStoreSize()).toBe(0);
+    expect(__test_isTombstoned("t1")).toBe(true);
+  });
+
+  it("removeArtifactsForTerminal still clears a capped terminal", () => {
+    const overflow = Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 5 }, (_, i) =>
+      makeArtifact({ id: `a${i}` })
+    );
+    __test_simulateArtifactDetected("t1", overflow);
+
+    removeArtifactsForTerminal("t1");
+
+    expect(__test_getArtifactsFor("t1")).toBeUndefined();
+    expect(__test_isTombstoned("t1")).toBe(true);
   });
 
   it("emits a fresh empty array reference on each call (callers can rely on !==)", () => {
