@@ -20,7 +20,7 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     label: "Open your project",
     description: "Connect a local folder — everything else flows from here",
     icon: FolderOpen,
-    actionId: "project.openDialog",
+    actionId: "project.add",
   },
   {
     id: "launchedAgent",
