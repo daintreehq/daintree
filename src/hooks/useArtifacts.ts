@@ -16,6 +16,12 @@ const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
 const refState = { count: 0, unsubscribe: null as (() => void) | null };
 
+// Each artifact holds its full content string, so a long agent session would
+// otherwise grow a terminal's entry without bound. Keep the newest N; the
+// oldest are dropped FIFO. Explicit teardown (removeArtifactsForTerminal)
+// remains the primary cleanup path.
+export const MAX_ARTIFACTS_PER_TERMINAL = 50;
+
 // Tombstone for terminal ids that have been torn down. While an id is
 // tombstoned, the `onDetected` IPC handler refuses to re-insert into the
 // store — this closes the millisecond-scale race where a packet already
@@ -27,6 +33,25 @@ const removedTerminals = new Set<string>();
 
 function notifyListeners(terminalId: string, artifacts: Artifact[]) {
   listeners.forEach((listener) => listener(terminalId, artifacts));
+}
+
+/**
+ * Append detected artifacts for a terminal, honoring the teardown tombstone
+ * (#10023) and the per-terminal cap. Single implementation shared by the
+ * production `onDetected` handler and `__test_simulateArtifactDetected` so
+ * the two paths cannot drift. Returns false when the id is tombstoned.
+ */
+function appendArtifacts(terminalId: string, artifacts: Artifact[]): boolean {
+  if (removedTerminals.has(terminalId)) {
+    return false;
+  }
+  const currentArtifacts = artifactStore.get(terminalId) || [];
+  const merged = [...currentArtifacts, ...artifacts];
+  const newArtifacts =
+    merged.length > MAX_ARTIFACTS_PER_TERMINAL ? merged.slice(-MAX_ARTIFACTS_PER_TERMINAL) : merged;
+  artifactStore.set(terminalId, newArtifacts);
+  notifyListeners(terminalId, newArtifacts);
+  return true;
 }
 
 /**
@@ -88,14 +113,7 @@ export function __test_simulateArtifactDetected(
   terminalId: string,
   artifacts: Artifact[]
 ): boolean {
-  if (removedTerminals.has(terminalId)) {
-    return false;
-  }
-  const currentArtifacts = artifactStore.get(terminalId) || [];
-  const newArtifacts = [...currentArtifacts, ...artifacts];
-  artifactStore.set(terminalId, newArtifacts);
-  notifyListeners(terminalId, newArtifacts);
-  return true;
+  return appendArtifacts(terminalId, artifacts);
 }
 
 /** Test-only: subscribe a listener to the artifact store. Returns unsubscribe. */
@@ -151,15 +169,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     if (refState.count === 1 && !refState.unsubscribe) {
       refState.unsubscribe = artifactClient.onDetected((payload: ArtifactDetectedPayload) => {
-        // Drop packets for terminal ids that have been torn down — closes the
-        // millisecond-scale race where a packet already queued by the main
-        // process lands on a now-removed terminal (#10023).
-        if (removedTerminals.has(payload.terminalId)) return;
-        const currentArtifacts = artifactStore.get(payload.terminalId) || [];
-        const newArtifacts = [...currentArtifacts, ...payload.artifacts];
-        artifactStore.set(payload.terminalId, newArtifacts);
-
-        notifyListeners(payload.terminalId, newArtifacts);
+        appendArtifacts(payload.terminalId, payload.artifacts);
       });
     }
 
