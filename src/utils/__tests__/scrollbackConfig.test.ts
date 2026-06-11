@@ -52,10 +52,18 @@ describe("getScrollbackForType", () => {
   });
 
   it("scales agent scrollback proportionally below the cap and clamps above it", () => {
-    const atLowBase = getScrollbackForType(true, 500);
-    const atDefaultBase = getScrollbackForType(true, 1000);
-    const atHighBase = getScrollbackForType(true, 5000);
-    expect(atLowBase).toBeLessThan(atDefaultBase);
-    expect(atDefaultBase).toBe(atHighBase);
+    // base=500 is the realistic memory-pressure restore base (SCROLLBACK_BACKGROUND)
+    expect(getScrollbackForType(true, 500)).toBe(2500);
+    expect(getScrollbackForType(true, 1000)).toBe(5000);
+    expect(getScrollbackForType(true, 5000)).toBe(5000);
+  });
+
+  it("keeps plain terminals on the small policy at the default base", () => {
+    expect(getScrollbackForType(false, 1000)).toBe(300);
+  });
+
+  it("applies the minLines floor for tiny bases", () => {
+    expect(getScrollbackForType(true, 1)).toBe(500);
+    expect(getScrollbackForType(false, 1)).toBe(200);
   });
 });
