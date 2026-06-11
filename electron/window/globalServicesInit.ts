@@ -778,6 +778,15 @@ export async function initGlobalServices(
       name: "mcp-server",
       run: async () => {
         try {
+          // The server defaults to disabled, and `httpLifecycle.start()` would
+          // just no-op after we paid the ~637KB module load to find that out.
+          // Mirror its enabled check with a synchronous store read and skip
+          // the import entirely. Safe to skip: every mid-session enable path
+          // (settings IPC, help-session provision, agent-spawn `ensureReady`)
+          // dynamically imports the service itself, and
+          // `HelpSessionService.ensureMcpServerReady()` re-wires the help-token
+          // validators this task would have wired.
+          if (!store.get("mcpServer").enabled) return;
           const { mcpServerService } = await import("../services/McpServerService.js");
           const { helpSessionService } = await import("../services/HelpSessionService.js");
           // Register the help-token validator before start() so the very first

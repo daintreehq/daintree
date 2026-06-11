@@ -39,6 +39,7 @@ import type {
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
+import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
 
 // Re-export types for backward compatibility with existing importers.
 export type { HelpTokenValidator } from "./mcp-server/shared.js";
@@ -686,3 +687,11 @@ export class McpServerService {
 }
 
 export const mcpServerService = new McpServerService();
+
+// The connectivity registry deliberately never imports this module (it sits on
+// the eager boot path; this stack does not). Wiring here, at module scope,
+// covers every load path — deferred boot task, help-session provision,
+// agent-spawn `ensureReady`, settings IPC — before any caller can `start()`
+// the server, so the registry's onStatusChange subscription always lands
+// before the first status event.
+wireMcpServerToConnectivityRegistry(mcpServerService);

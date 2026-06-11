@@ -1,5 +1,8 @@
 import http from "node:http";
-import { ACTIONS_LIST_TOOL } from "./shared.js";
+// From the allowlists config, not `./shared.js` — this module is on the eager
+// boot path (HelpSessionService value-imports it) and `shared.js` value-imports
+// the MCP SDK's `types.js`, which builds the full zod protocol schemas.
+import { ACTIONS_LIST_TOOL } from "../../../shared/config/helpAssistantTierAllowlists.js";
 
 export const PROBE_MAX_ATTEMPTS = 3;
 export const PROBE_BASE_DELAY_MS = 50;

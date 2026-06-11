@@ -24,9 +24,17 @@ import {
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import {
   ACTION_TIER_ADDONS as ACTION_TIER_ADDONS_LIST,
+  ACTIONS_LIST_TOOL,
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
+
+// Re-exported for SDK-free consumers that historically imported from here.
+// `readinessProbe.ts` and `pluginMcpHash.ts` import from the standalone homes
+// directly — this module value-imports the MCP SDK's `types.js` above, so an
+// eager import edge into it drags zod schema construction onto the boot path.
+export { ACTIONS_LIST_TOOL, safeSerializeToolResult };
 
 export {
   type WaitUntilIdleResult,
@@ -130,8 +138,6 @@ export const MCP_DENIAL_SILENCE_THRESHOLD = 2;
 
 export const MCP_MANIFEST_REQUEST_TIMEOUT_MS = 5_000;
 export const MCP_DISPATCH_TIMEOUT_MS = 30_000;
-
-export const ACTIONS_LIST_TOOL = "actions.list";
 
 export const MAX_RESTART_ATTEMPTS = 5;
 export const RESTART_BASE_DELAY_MS = 500;
@@ -834,54 +840,6 @@ export function readStringField(value: unknown, keys: readonly string[]): string
     if (typeof v === "string" && v.length > 0) return v;
   }
   return undefined;
-}
-
-export function safeSerializeToolResult(value: unknown): string {
-  const seen = new WeakSet<object>();
-
-  try {
-    const serialized = JSON.stringify(
-      value,
-      (_key, currentValue) => {
-        if (typeof currentValue === "bigint") {
-          return currentValue.toString();
-        }
-        if (typeof currentValue === "symbol") {
-          return currentValue.toString();
-        }
-        if (typeof currentValue === "function") {
-          return `[Function: ${currentValue.name || "anonymous"}]`;
-        }
-        if (currentValue instanceof Error) {
-          return {
-            name: currentValue.name,
-            message: currentValue.message,
-            stack: currentValue.stack,
-          };
-        }
-        if (currentValue !== null && typeof currentValue === "object") {
-          if (seen.has(currentValue)) {
-            return "[Circular]";
-          }
-          seen.add(currentValue);
-        }
-        return currentValue;
-      },
-      2
-    );
-
-    if (serialized !== undefined) {
-      return serialized;
-    }
-  } catch {
-    // Fall through to string coercion.
-  }
-
-  try {
-    return String(value);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
 }
 
 export type {
