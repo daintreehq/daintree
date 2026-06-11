@@ -1948,6 +1948,74 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
   });
 
+  describe("crash banner persistence (#10363)", () => {
+    it("keeps the crash banner visible while the URL is unchanged", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      // The clearing effect must not self-reset crash state while currentUrl
+      // is unchanged — the banner has to survive the post-crash render flush
+      // so its Reload / Hard restart actions stay reachable.
+      expect(container.textContent).toContain("Preview process crashed");
+      expect(container.textContent).toContain("Reason: crashed (exit code 1)");
+    });
+
+    it("keeps the unresponsive banner visible while the URL is unchanged", () => {
+      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        unresponsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      getWebviewElement(container);
+
+      expect(unresponsiveCb).toBeDefined();
+
+      act(() => {
+        unresponsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      expect(container.textContent).toContain("Preview is not responding");
+    });
+
+    it("clears the unresponsive banner when the guest becomes responsive again", () => {
+      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
+      let responsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        unresponsiveCb = cb;
+        return vi.fn();
+      });
+      electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        responsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      getWebviewElement(container);
+
+      act(() => {
+        unresponsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+      expect(container.textContent).toContain("Preview is not responding");
+
+      act(() => {
+        responsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+      expect(container.textContent).not.toContain("Preview is not responding");
+    });
+  });
+
   describe("header script picker", () => {
     beforeEach(() => {
       projectClientGetSettingsMock.mockResolvedValue({
