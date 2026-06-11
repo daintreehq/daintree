@@ -362,7 +362,7 @@ describe("BrowserToolbar ARIA semantics", () => {
   });
 
   it("screenshot capture announces success in a polite live region and flips to a check", async () => {
-    const onCaptureScreenshot = vi.fn(() => Promise.resolve());
+    const onCaptureScreenshot = vi.fn(() => Promise.resolve(true));
     const { container, getByRole } = renderToolbar({
       onCaptureScreenshot,
       isWebviewReady: true,
@@ -378,6 +378,40 @@ describe("BrowserToolbar ARIA semantics", () => {
       const texts = Array.from(liveRegions).map((node) => node.textContent);
       expect(texts).toContain("Screenshot copied to clipboard");
     });
+  });
+
+  it("screenshot capture shows no success feedback when the handler reports failure", async () => {
+    const onCaptureScreenshot = vi.fn(() => Promise.resolve(false));
+    const { container, getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
+    });
+
+    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+    const liveRegions = container.querySelectorAll('[role="status"]');
+    const texts = Array.from(liveRegions).map((node) => node.textContent);
+    expect(texts).not.toContain("Screenshot copied to clipboard");
+  });
+
+  it("screenshot capture shows no success feedback when the handler rejects", async () => {
+    const onCaptureScreenshot = vi.fn(() => Promise.reject(new Error("capture failed")));
+    const { container, getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+
+    await act(async () => {
+      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
+    });
+
+    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+    const liveRegions = container.querySelectorAll('[role="status"]');
+    const texts = Array.from(liveRegions).map((node) => node.textContent);
+    expect(texts).not.toContain("Screenshot copied to clipboard");
   });
 
   it("Shift+Delete on a highlighted suggestion announces removal", async () => {

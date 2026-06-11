@@ -398,6 +398,7 @@ export function DevPreviewPane({
   } | null>(null);
   const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
+  const screenshotInFlightRef = useRef(false);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   const CLIPBOARD_FEEDBACK_MS = 2000;
   const [certCopied, setCertCopied] = useState(false);
@@ -811,20 +812,32 @@ export function DevPreviewPane({
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
+    if (!webview || !isWebviewReady) return false;
     let url: string;
     try {
       url = webview.getURL();
     } catch {
-      return;
+      return false;
     }
-    if (!url || url === "about:blank") return;
+    if (!url || url === "about:blank") return false;
+    if (screenshotInFlightRef.current) return false;
+    screenshotInFlightRef.current = true;
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
       await window.electron.clipboard.writeImage(pngData);
+      return true;
     } catch (err) {
       logError("[DevPreviewPane] Screenshot capture failed", err);
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Screenshot failed",
+        message: "Couldn't copy the screenshot to clipboard",
+      });
+      return false;
+    } finally {
+      screenshotInFlightRef.current = false;
     }
   }, [isWebviewReady]);
 
