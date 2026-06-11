@@ -123,6 +123,7 @@ function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTermi
     searchAddon: {} as ManagedTerminal["searchAddon"],
     fileLinksDisposable: { dispose: vi.fn() } as unknown as ManagedTerminal["fileLinksDisposable"],
     webLinksAddon: { dispose: vi.fn() } as unknown as ManagedTerminal["webLinksAddon"],
+    imageLinksDisposable: null,
     hostElement: document.createElement("div"),
     isOpened: true,
     isVisible: true,
@@ -376,12 +377,49 @@ describe("TerminalHibernationManager", () => {
       expect(managed.webLinksAddon).toBeNull();
     });
 
+    it("should dispose imageLinksDisposable and null it so wake rebuilds it (#10387)", () => {
+      const linksDispose = vi.fn();
+      managed.imageLinksDisposable = { dispose: linksDispose };
+
+      manager.hibernate("t1");
+
+      // The null matters as much as the dispose: ensureDeferredAddons() only
+      // rebuilds when the field is null.
+      expect(linksDispose).toHaveBeenCalled();
+      expect(managed.imageLinksDisposable).toBeNull();
+    });
+
     it("should not throw when addons are already null", () => {
       managed.imageAddon = null;
       managed.fileLinksDisposable = null;
       managed.webLinksAddon = null;
+      managed.imageLinksDisposable = null;
 
       expect(() => manager.hibernate("t1")).not.toThrow();
+    });
+
+    it("should replace the disposed terminal with a fresh un-opened placeholder (#10387)", () => {
+      const oldTerminal = managed.terminal;
+
+      manager.hibernate("t1");
+
+      // Keeping the disposed instance referenced would retain its entire
+      // buffer graph for the hibernation window — the placeholder swap is the
+      // actual memory release.
+      expect(oldTerminal.dispose).toHaveBeenCalled();
+      expect(managed.terminal).not.toBe(oldTerminal);
+      expect(freshTerminalOpenMock).not.toHaveBeenCalled();
+    });
+
+    it("should clear the cached selection (#10387)", () => {
+      manager.hibernate("t1");
+      expect(deps.deleteCachedSelection).toHaveBeenCalledWith("t1");
+    });
+
+    it("should not clear the cached selection when the call short-circuits", () => {
+      managed.isHibernated = true;
+      manager.hibernate("t1");
+      expect(deps.deleteCachedSelection).not.toHaveBeenCalled();
     });
 
     it("should clear hibernation timer", () => {

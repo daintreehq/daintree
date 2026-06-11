@@ -107,6 +107,15 @@ export class TerminalHibernationManager {
       /* ignore */
     }
     managed.webLinksAddon = null;
+    try {
+      managed.imageLinksDisposable?.dispose();
+    } catch {
+      /* ignore */
+    }
+    // Null is load-bearing: ensureDeferredAddons() only rebuilds when the
+    // field is null, so a stale reference here would leave the woken terminal
+    // wired to the old disposed instance.
+    managed.imageLinksDisposable = null;
 
     // Dispose terminal-bound listeners (keep IPC listeners at the beginning)
     const terminalBoundListeners = managed.listeners.splice(managed.ipcListenerCount);
@@ -117,6 +126,10 @@ export class TerminalHibernationManager {
         /* ignore — terminal already disposing */
       }
     }
+
+    // The selection listener is gone now, so the cached selection can only go
+    // stale — clear it instead of letting it survive until destroy().
+    this.deps.deleteCachedSelection(id);
 
     // Dispose parser handler
     try {
@@ -137,11 +150,17 @@ export class TerminalHibernationManager {
     // Dispose terminal instance — this removes xterm's injected DOM elements
     // from the hostElement but leaves the hostElement itself in the DOM
     // so XtermAdapter's container ref stays valid for reattachment
+    const options = managed.terminal.options;
     try {
       managed.terminal.dispose();
     } catch {
       /* ignore — terminal already disposing */
     }
+    // Swap in a fresh un-opened placeholder so the disposed instance — and
+    // with it the whole scrollback buffer graph — becomes GC-eligible for the
+    // duration of hibernation. The placeholder exists only to carry options
+    // for unhibernate(); it must never be open()-ed or given addons/listeners.
+    managed.terminal = new Terminal(options);
 
     managed.isHibernated = true;
     managed.isOpened = false;

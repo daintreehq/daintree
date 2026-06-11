@@ -294,22 +294,26 @@ describe("TerminalInstanceService - Hibernation", () => {
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
+      const terminalDispose = managed.terminal.dispose;
       service.hibernate("t1");
 
       expect(managed.isHibernated).toBe(true);
-      expect(managed.terminal.dispose).toHaveBeenCalled();
+      expect(terminalDispose).toHaveBeenCalled();
     });
 
     it("should be idempotent — second call is a no-op", () => {
       const managed = makeMockManaged();
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
+      const originalDispose = managed.terminal.dispose;
       service.hibernate("t1");
-      const disposeCalls = (managed.terminal.dispose as ReturnType<typeof vi.fn>).mock.calls.length;
+      // hibernate() swaps in a fresh placeholder terminal (#10387) — spy on
+      // it so the no-op second call can be observed on the live reference.
+      const placeholderDispose = vi.spyOn(managed.terminal, "dispose");
 
       service.hibernate("t1");
-      // dispose should not be called again
-      expect(managed.terminal.dispose).toHaveBeenCalledTimes(disposeCalls);
+      expect(originalDispose).toHaveBeenCalledTimes(1);
+      expect(placeholderDispose).not.toHaveBeenCalled();
     });
 
     it("should clear pending hibernation timer", () => {

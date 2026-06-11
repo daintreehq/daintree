@@ -386,9 +386,10 @@ describe("TerminalHibernationManager adversarial", () => {
 
     // With the counter cleared, the terminal is hibernatable again.
     expect(manager.isHibernationEligible(TerminalRefreshTier.BACKGROUND, managed, "t1")).toBe(true);
+    const wokenTerminal = managed.terminal;
     manager.hibernate("t1");
     expect(managed.isHibernated).toBe(true);
-    expect(managed.terminal.dispose).toHaveBeenCalledTimes(1);
+    expect(wokenTerminal.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("BACKGROUNDED_BYPASS_DROPPED_WHEN_RESTORED_BETWEEN_SCHEDULE_AND_FIRE", () => {
