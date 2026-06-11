@@ -140,6 +140,12 @@ interface RendererCpuProfileSession {
    */
   capture: Promise<unknown> | null;
   stopping: boolean;
+  /**
+   * Set on cleanup. An in-flight capture from a discarded session must not
+   * fire its trailing `Profiler.disable` — the renderer may have started a
+   * new recording on the same debugger, and the stale disable would kill it.
+   */
+  discarded: boolean;
   onDetach: () => void;
   onDestroyed: () => void;
 }
@@ -150,6 +156,7 @@ function cleanupCpuProfileSession(webContentsId: number): void {
   const session = cpuProfileSessions.get(webContentsId);
   if (!session) return;
   cpuProfileSessions.delete(webContentsId);
+  session.discarded = true;
   if (session.timer) {
     clearTimeout(session.timer);
     session.timer = null;
@@ -168,7 +175,9 @@ function beginCpuProfileCapture(session: RendererCpuProfileSession): Promise<unk
     };
     // The debugger attachment is shared with webContentsLifecycle (freeze/
     // throttle), so only disable the Profiler domain — never detach.
-    session.wc.debugger.sendCommand("Profiler.disable").catch(() => {});
+    if (!session.discarded) {
+      session.wc.debugger.sendCommand("Profiler.disable").catch(() => {});
+    }
     return result.profile;
   })();
   return session.capture;
@@ -420,6 +429,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       // A finished-but-uncollected session (auto-stop fired while Settings was
       // closed, so no stop IPC ever arrived) must not block re-recording.
       if (existing.timer === null && !existing.stopping) {
+        if (existing.capture) {
+          console.warn(
+            `[diagnostics] Discarding uncollected renderer CPU profile for webContents ${wc.id}`
+          );
+        }
         cleanupCpuProfileSession(wc.id);
       } else {
         return { status: "failed", reason: "already-recording" };
@@ -434,6 +448,14 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       });
       await wc.debugger.sendCommand("Profiler.start");
     } catch (err) {
+      // Don't leave the Profiler domain enabled after a partial start.
+      try {
+        if (!wc.isDestroyed()) {
+          wc.debugger.sendCommand("Profiler.disable").catch(() => {});
+        }
+      } catch {
+        // detached between failure and cleanup — nothing left to disable
+      }
       return {
         status: "failed",
         reason: "cdp-error",
@@ -446,6 +468,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       timer: null,
       capture: null,
       stopping: false,
+      discarded: false,
       onDetach: () => {
         // DevTools (or another client) stole the CDP session — an in-flight
         // recording is unrecoverable. Stop the timer and poison the capture so
@@ -510,9 +533,19 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       defaultPath: `daintree-renderer-profile-${timestamp}.cpuprofile`,
       filters: [{ name: "CPU Profile", extensions: ["cpuprofile"] }],
     };
-    const { filePath, canceled } = win
-      ? await dialog.showSaveDialog(win, dialogOpts)
-      : await dialog.showSaveDialog(dialogOpts);
+    let filePath: string | undefined;
+    let canceled: boolean;
+    try {
+      ({ filePath, canceled } = win
+        ? await dialog.showSaveDialog(win, dialogOpts)
+        : await dialog.showSaveDialog(dialogOpts));
+    } catch (err) {
+      return {
+        status: "failed",
+        reason: "save-failed",
+        message: formatErrorMessage(err, "Couldn't open the save dialog"),
+      };
+    }
     if (canceled || !filePath) return { status: "canceled" };
 
     try {

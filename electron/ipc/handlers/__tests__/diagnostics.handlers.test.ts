@@ -799,6 +799,101 @@ describe("registerDiagnosticsHandlers", () => {
       ).toHaveLength(2);
     });
 
+    it("a discarded session's in-flight capture never disables the profiler for a new recording", async () => {
+      const { event, sendCommand } = makeProfilerEvent(713);
+      let resolveStop: ((value: unknown) => void) | undefined;
+      sendCommand.mockImplementation((method: string) => {
+        if (method === "Profiler.stop") {
+          return new Promise((resolve) => {
+            resolveStop = resolve;
+          });
+        }
+        return Promise.resolve({});
+      });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+
+      await start(event);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(profilerStopCalls(sendCommand)).toBe(1);
+
+      const second = (await start(event)) as { status: string };
+      expect(second.status).toBe("started");
+
+      resolveStop?.({ profile: PROFILE_FIXTURE });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const disables = sendCommand.mock.calls.filter((c: unknown[]) => c[0] === "Profiler.disable");
+      expect(disables).toHaveLength(0);
+    });
+
+    it("partial CDP start failure disables the profiler and leaves no session", async () => {
+      const { event, sendCommand } = makeProfilerEvent(714);
+      sendCommand.mockImplementation((method: string) => {
+        if (method === "Profiler.start") return Promise.reject(new Error("boom"));
+        if (method === "Profiler.stop") return Promise.resolve({ profile: PROFILE_FIXTURE });
+        return Promise.resolve({});
+      });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      const result = (await start(event)) as { status: string; reason: string };
+
+      expect(result.status).toBe("failed");
+      expect(result.reason).toBe("cdp-error");
+      expect(sendCommand).toHaveBeenCalledWith("Profiler.disable");
+      expect(await stop(event)).toEqual({ status: "failed", reason: "not-recording" });
+
+      sendCommand.mockImplementation((method: string) =>
+        method === "Profiler.stop"
+          ? Promise.resolve({ profile: PROFILE_FIXTURE })
+          : Promise.resolve({})
+      );
+      const retry = (await start(event)) as { status: string };
+      expect(retry.status).toBe("started");
+    });
+
+    it("write failure returns save-failed without revealing, then allows re-recording", async () => {
+      const { event } = makeProfilerEvent(715);
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/fail.cpuprofile",
+        canceled: false,
+      });
+      resilientAtomicWriteFileMock.mockRejectedValueOnce(new Error("disk full"));
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      const result = (await stop(event)) as { status: string; reason: string };
+
+      expect(result.status).toBe("failed");
+      expect(result.reason).toBe("save-failed");
+      expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+
+      const retry = (await start(event)) as { status: string };
+      expect(retry.status).toBe("started");
+    });
+
+    it("sessions are isolated per webContents", async () => {
+      const a = makeProfilerEvent(716);
+      const b = makeProfilerEvent(717);
+      dialogMock.showSaveDialog.mockResolvedValue({ filePath: undefined, canceled: true });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(a.event);
+      await start(b.event);
+
+      expect(await stop(a.event)).toEqual({ status: "canceled" });
+      expect(await stop(a.event)).toEqual({ status: "failed", reason: "not-recording" });
+      expect(await stop(b.event)).toEqual({ status: "canceled" });
+    });
+
     it("destroyed event cleans up the session so stop reports not-recording", async () => {
       const { event, emit } = makeProfilerEvent(712);
       registerDiagnosticsHandlers(deps);
