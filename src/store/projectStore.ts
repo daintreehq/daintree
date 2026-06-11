@@ -95,6 +95,14 @@ interface ProjectState {
   isLoading: boolean;
   error: string | null;
   /**
+   * True once the batched boot payload has seeded `projects` + `currentProject`
+   * (#10390). The Toolbar's mount effect uses this to skip its redundant
+   * initial `loadProjects()` + `getCurrentProject()` IPC pair during the boot
+   * window; post-switch refetches are unaffected. Never reset — boot seeding
+   * happens once per renderer context.
+   */
+  isBootstrapped: boolean;
+  /**
    * Set when a project switch committed to the new project but its worktree
    * load threw (#8400). Surfaced as a Tier 3 inline recovery banner. Transient
    * — never persisted, cleared on the next switch start or a successful retry.
@@ -319,6 +327,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   projects: [],
   currentProject: null,
   isLoading: false,
+  isBootstrapped: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
   createFolderDialogOpen: false,

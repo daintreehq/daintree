@@ -68,24 +68,33 @@ class KeybindingService {
     });
   }
 
+  /**
+   * Replace the in-memory overrides with an already-fetched payload — same
+   * validation as `loadOverrides()` minus the IPC round-trip. Used by the
+   * hydration bootstrap to seed overrides from the batched `app:boot` payload.
+   */
+  applyOverrides(overrides: Record<string, string[]> | undefined): void {
+    this.overrides.clear();
+    if (overrides && typeof overrides === "object") {
+      for (const [actionId, combos] of Object.entries(overrides)) {
+        if (!Array.isArray(combos)) continue;
+        if (!builtInActionIdSet.has(actionId) && !this.bindings.has(actionId)) {
+          console.warn(
+            `[KeybindingService] Dropping override for unknown action "${actionId}" — not a built-in or registered binding.`
+          );
+          continue;
+        }
+        this.overrides.set(actionId, combos as string[]);
+      }
+    }
+    this.notifyListeners();
+  }
+
   async loadOverrides(): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
       try {
         const overrides = await window.electron.keybinding.getOverrides();
-        this.overrides.clear();
-        if (overrides && typeof overrides === "object") {
-          for (const [actionId, combos] of Object.entries(overrides)) {
-            if (!Array.isArray(combos)) continue;
-            if (!builtInActionIdSet.has(actionId) && !this.bindings.has(actionId)) {
-              console.warn(
-                `[KeybindingService] Dropping override for unknown action "${actionId}" — not a built-in or registered binding.`
-              );
-              continue;
-            }
-            this.overrides.set(actionId, combos as string[]);
-          }
-        }
-        this.notifyListeners();
+        this.applyOverrides(overrides);
       } catch (error) {
         // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
         // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor).

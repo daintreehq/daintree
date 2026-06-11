@@ -988,6 +988,9 @@ const api: ElectronAPI = {
 
     reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 
+    reconnectBulk: (terminalIds: string[]) =>
+      _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT_BULK, terminalIds),
+
     replayHistory: (terminalId: string, maxLines?: number) =>
       _unwrappingInvoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
 

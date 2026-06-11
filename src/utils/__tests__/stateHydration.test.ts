@@ -277,16 +277,61 @@ describe("hydrateAppState", () => {
     });
 
     const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as
-      | ((state: { projects: (typeof project)[]; currentProject: typeof project | null }) => {
+      | ((state: {
           projects: (typeof project)[];
           currentProject: typeof project | null;
+          isBootstrapped: boolean;
+        }) => {
+          projects: (typeof project)[];
+          currentProject: typeof project | null;
+          isBootstrapped: boolean;
         })
       | undefined;
 
     expect(updater).toBeTypeOf("function");
-    expect(updater?.({ projects: [], currentProject: null })).toEqual({
+    expect(updater?.({ projects: [], currentProject: null, isBootstrapped: false })).toEqual({
       projects: [project],
       currentProject: project,
+      // The payload carried no `projects` list (older main process), so the
+      // bootstrap flag stays down and the Toolbar's IPC fallback still fires.
+      isBootstrapped: false,
+    });
+  });
+
+  it("seeds the full project list and bootstrap flag when the payload carries projects (#10390)", async () => {
+    const otherProject = { id: "project-2", path: "/other" };
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+      },
+      terminalConfig,
+      project,
+      projects: [project, otherProject],
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+
+    await hydrateAppState({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as (state: {
+      projects: (typeof project)[];
+      currentProject: typeof project | null;
+      isBootstrapped: boolean;
+    }) => {
+      projects: (typeof project)[];
+      currentProject: typeof project | null;
+      isBootstrapped: boolean;
+    };
+
+    expect(updater({ projects: [], currentProject: null, isBootstrapped: false })).toEqual({
+      projects: [project, otherProject],
+      currentProject: project,
+      isBootstrapped: true,
     });
   });
 

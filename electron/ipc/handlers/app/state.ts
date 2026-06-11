@@ -44,6 +44,8 @@ import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrat
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
+import { getValidatedOverrides } from "../keybinding.js";
+import { loadSanitizedUserAgentRegistry } from "../../../services/UserAgentRegistryService.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
@@ -98,6 +100,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // Crash-loop quarantine notifications are gated on safe mode; the
         // fast path runs only when safe mode is inactive, so clear the field.
         crashLoopStateRecovery: null,
+        // Ride-along synchronous reads not covered by the prefetch cache —
+        // always read fresh so the toolbar/bootstrap dedup never sees a stale
+        // snapshot from the hover-prefetch window.
+        projects: projectStore.getAllProjects(),
+        keybindingOverrides: getValidatedOverrides(),
+        userAgentRegistry: loadSanitizedUserAgentRegistry(),
       };
     }
 
@@ -445,6 +453,13 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       terminalSizes: terminalSizesToUse,
       draftInputs: draftInputsToUse,
       projectPresets: projectPresetsPromise ? await projectPresetsPromise : undefined,
+      // Folded into the payload so the Toolbar mount and the hydration
+      // bootstrap skip their standalone round-trips during the boot window
+      // (project:get-all / project:get-current, keybinding:get-overrides,
+      // user-agent-registry:get). All three are synchronous reads.
+      projects: projectStore.getAllProjects(),
+      keybindingOverrides: getValidatedOverrides(),
+      userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));

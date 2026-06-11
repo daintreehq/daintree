@@ -35,7 +35,12 @@ let subscribed = false;
 // dedup the IPC and let the cached result satisfy follow-on calls within
 // SETTINGS_TTL_MS. Invalidated synchronously by saveSettings() and by
 // project switch (so a stale cache cannot bleed across project boundaries).
-const SETTINGS_TTL_MS = 150;
+// 500ms (up from 150ms) so the cache survives the gaps between attach-gated
+// spawn tasks in the serialized startup queue (#10390) — at 150ms every spawn
+// after the first refetched identical bytes. Stale reads stay impossible for
+// the cases that matter: saveSettings() and project switch both invalidate
+// synchronously.
+const SETTINGS_TTL_MS = 500;
 const settingsInflight: Map<string, Promise<ProjectSettings>> = new Map();
 const settingsCache: Map<string, { value: ProjectSettings; expiresAt: number }> = new Map();
 

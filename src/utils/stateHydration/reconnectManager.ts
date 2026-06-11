@@ -1,7 +1,8 @@
 import { terminalClient } from "@/clients";
+import type { TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { logWarn } from "@/utils/logger";
 
-const RECONNECT_TIMEOUT_MS = 2000;
+export const RECONNECT_TIMEOUT_MS = 2000;
 
 export type ReconnectOutcome =
   | { status: "found"; terminal: NonNullable<Awaited<ReturnType<typeof terminalClient.reconnect>>> }
@@ -11,8 +12,22 @@ export type ReconnectOutcome =
 
 export async function reconnectWithTimeout(
   terminalId: string,
-  logHydrationInfo: (message: string, context?: Record<string, unknown>) => void
+  logHydrationInfo: (message: string, context?: Record<string, unknown>) => void,
+  prefetchedResult?: TerminalReconnectResult
 ): Promise<ReconnectOutcome> {
+  // A bulk-prefetched probe result (#10390) replaces the per-panel IPC: same
+  // decision logic, no round-trip inside the serialized spawn queue.
+  if (prefetchedResult !== undefined) {
+    if (prefetchedResult.exists && prefetchedResult.hasPty) {
+      logHydrationInfo(`Reconnect prefetch hit for ${terminalId} - terminal exists in backend`);
+      return { status: "found", terminal: prefetchedResult };
+    }
+    logHydrationInfo(
+      `Reconnect prefetch: terminal ${terminalId} not found (exists=${prefetchedResult.exists}, hasPty=${prefetchedResult.hasPty})`
+    );
+    return { status: "not_found" };
+  }
+
   try {
     logHydrationInfo(`Trying reconnect fallback for ${terminalId}`);
 

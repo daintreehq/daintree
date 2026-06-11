@@ -506,8 +506,25 @@ export function Toolbar({
   );
 
   useEffect(() => {
-    loadProjects();
-    getCurrentProject();
+    // When the boot payload already seeded the store (#10390), skip the
+    // redundant initial getAll/getCurrent pair and only run the background
+    // missing-directory validation that boot data can't replace. The
+    // getCurrentProject() escape hatch covers project-scoped views that boot
+    // before main binds them to a project (retry loop in projectStore).
+    const {
+      isBootstrapped,
+      currentProject: seededProject,
+      checkMissingProjects,
+    } = useProjectStore.getState();
+    if (isBootstrapped) {
+      if (!seededProject) {
+        getCurrentProject();
+      }
+      void checkMissingProjects();
+    } else {
+      loadProjects();
+      getCurrentProject();
+    }
 
     const cleanup = projectClient.onSwitch(() => {
       getCurrentProject();

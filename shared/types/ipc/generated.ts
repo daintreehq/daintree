@@ -1165,6 +1165,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: import("./terminal.js").TerminalReconnectResult;
   };
+  "terminal:reconnect-bulk": {
+    args: [terminalIds: string[]];
+    result: Record<string, import("./terminal.js").TerminalReconnectResult>;
+  };
   "terminal:replay-history": {
     args: [__0: { terminalId: string; maxLines: number }];
     result: { replayed: number };

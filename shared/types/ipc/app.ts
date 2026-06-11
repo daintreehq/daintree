@@ -224,4 +224,27 @@ export interface HydrateResult {
    * standalone IPC call.
    */
   projectPresets?: Record<string, import("../../config/agentRegistry.js").AgentPreset[]>;
+  /**
+   * Full project list folded into the hydrate payload so the Toolbar's mount
+   * effect skips its `project:get-all` + `project:get-current` round-trips
+   * during the boot window. Optional for backward compatibility: when absent
+   * (older main process, or the safe-boot fallback), the renderer falls back
+   * to the standalone IPC calls.
+   */
+  projects?: import("../project.js").Project[];
+  /**
+   * Persisted keybinding overrides folded into the hydrate payload so the
+   * hydration bootstrap skips the standalone `keybinding:get-overrides`
+   * round-trip. Same validation as the standalone handler. Undefined on older
+   * payloads and the safe-boot fallback, where the renderer falls back to IPC.
+   */
+  keybindingOverrides?: Record<string, string[]>;
+  /**
+   * Sanitized user-agent registry folded into the hydrate payload so the
+   * hydration bootstrap skips the standalone `user-agent-registry:get`
+   * round-trip. Same sanitization as the standalone handler. Undefined on
+   * older payloads and the safe-boot fallback, where the renderer falls back
+   * to IPC.
+   */
+  userAgentRegistry?: import("../userAgentRegistry.js").UserAgentRegistry;
 }

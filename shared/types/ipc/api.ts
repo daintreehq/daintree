@@ -248,6 +248,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
     searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchMatch[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
+    reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
     getSerializedState(terminalId: string): Promise<string | null>;
     getSerializedStates(terminalIds: string[]): Promise<Record<string, string | null>>;

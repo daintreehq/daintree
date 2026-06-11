@@ -41,6 +41,7 @@ export const CHANNELS = {
   TERMINAL_GET_ALL: "terminal:get-all",
   TERMINAL_SEARCH_SEMANTIC_BUFFERS: "terminal:search-semantic-buffers",
   TERMINAL_RECONNECT: "terminal:reconnect",
+  TERMINAL_RECONNECT_BULK: "terminal:reconnect-bulk",
   TERMINAL_REPLAY_HISTORY: "terminal:replay-history",
   TERMINAL_GET_SERIALIZED_STATE: "terminal:get-serialized-state",
   TERMINAL_GET_SERIALIZED_STATES: "terminal:get-serialized-states",
