@@ -43,6 +43,13 @@ const projectViewDestroyListeners = new Map<
   { webContents: WebContents; listener: () => void }
 >();
 
+// Cached (deactivated) project views. High-frequency, replayable streams (log
+// batches) skip these renderers — a CPU-throttled/frozen renderer has no
+// backpressure, so pushed messages pile up in its task queue. State broadcasts
+// (project added/updated/removed, etc.) must NOT consult this set: cached views
+// have no replay path on warm reactivation (#9490).
+const cachedViewWebContents = new Set<number>();
+
 // Memoized getAllAppWebContents() result. broadcastToRenderer() calls it on
 // every relayed event (terminal data/status/activity, events:push), but the
 // recipient set only changes on view register/unregister/destroy — every
@@ -264,6 +271,7 @@ export function registerProjectView(projectId: string, webContents: WebContents)
   if (!projectViewDestroyListeners.has(wcId)) {
     const onDestroyed = () => {
       viewToProject.delete(wcId);
+      cachedViewWebContents.delete(wcId);
       projectViewDestroyListeners.delete(wcId);
       invalidateAllAppWebContentsCache();
     };
@@ -277,6 +285,7 @@ export function registerProjectView(projectId: string, webContents: WebContents)
  */
 export function unregisterProjectView(webContentsId: number): void {
   viewToProject.delete(webContentsId);
+  cachedViewWebContents.delete(webContentsId);
   invalidateAllAppWebContentsCache();
 
   const registration = projectViewDestroyListeners.get(webContentsId);
@@ -284,6 +293,28 @@ export function unregisterProjectView(webContentsId: number): void {
     removeDestroyedListener(registration);
     projectViewDestroyListeners.delete(webContentsId);
   }
+}
+
+/**
+ * Mark a project view's webContents as cached (deactivated). Maintained by
+ * every ProjectViewManager instance, so the set spans all windows.
+ */
+export function registerCachedViewWebContents(webContents: WebContents): void {
+  cachedViewWebContents.add(webContents.id);
+}
+
+/**
+ * Clear the cached mark — call on reactivation. Idempotent.
+ */
+export function unregisterCachedViewWebContents(webContentsId: number): void {
+  cachedViewWebContents.delete(webContentsId);
+}
+
+/**
+ * Whether a webContents is a cached (deactivated) project view.
+ */
+export function isCachedViewWebContents(webContentsId: number): boolean {
+  return cachedViewWebContents.has(webContentsId);
 }
 
 /**

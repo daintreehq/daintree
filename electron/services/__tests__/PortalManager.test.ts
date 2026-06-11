@@ -70,6 +70,13 @@ vi.mock("../utils/openExternal.js", () => ({
   openExternalUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
+const lifecycleMocks = vi.hoisted(() => ({
+  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+  unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../utils/webContentsLifecycle.js", () => lifecycleMocks);
+
 describe("PortalManager", () => {
   let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
@@ -191,6 +198,48 @@ describe("PortalManager", () => {
       expect(mockWindow.contentView.removeChildView).not.toHaveBeenCalled();
       expect(mockWindow.contentView.addChildView).toHaveBeenCalledTimes(2);
     });
+
+    it("throttles the parked previous tab and unthrottles the shown tab on switch", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.createTab("tab-a", "http://localhost:3000");
+      manager.createTab("tab-b", "http://localhost:4000");
+      const wcA = createdWebContents[0];
+      const wcB = createdWebContents[1];
+
+      manager.showTab("tab-a", { x: 0, y: 0, width: 800, height: 600 });
+      expect(lifecycleMocks.throttleCpuWebContents).not.toHaveBeenCalled();
+      expect(lifecycleMocks.unthrottleCpuWebContents).toHaveBeenCalledWith(wcA);
+
+      manager.showTab("tab-b", { x: 0, y: 0, width: 800, height: 600 });
+      expect(lifecycleMocks.throttleCpuWebContents).toHaveBeenCalledWith(wcA);
+      expect(lifecycleMocks.throttleCpuWebContents).not.toHaveBeenCalledWith(wcB);
+      expect(lifecycleMocks.unthrottleCpuWebContents).toHaveBeenCalledWith(wcB);
+    });
+
+    it("does not throttle when re-showing the already-active tab", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.createTab("tab-a", "http://localhost:3000");
+      manager.showTab("tab-a", { x: 0, y: 0, width: 800, height: 600 });
+      manager.showTab("tab-a", { x: 0, y: 0, width: 900, height: 700 });
+
+      expect(lifecycleMocks.throttleCpuWebContents).not.toHaveBeenCalled();
+    });
+
+    it("skips throttling a destroyed parked webContents", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.createTab("tab-a", "http://localhost:3000");
+      manager.createTab("tab-b", "http://localhost:4000");
+      const wcA = createdWebContents[0];
+
+      manager.showTab("tab-a", { x: 0, y: 0, width: 800, height: 600 });
+      wcA.isDestroyed.mockReturnValue(true);
+
+      manager.showTab("tab-b", { x: 0, y: 0, width: 800, height: 600 });
+      expect(lifecycleMocks.throttleCpuWebContents).not.toHaveBeenCalledWith(wcA);
+    });
   });
 
   describe("bounds validation", () => {
@@ -273,6 +322,36 @@ describe("PortalManager", () => {
       // test name to refer to "view" semantics even though webContents-level
       // assertions aren't needed here.
       expect(view).toBeDefined();
+    });
+
+    it("throttles the parked view's webContents and showTab restores it", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.createTab("tab-hide-throttle", "http://localhost:3000");
+      const wc = createdWebContents[0];
+
+      manager.showTab("tab-hide-throttle", { x: 0, y: 0, width: 800, height: 600 });
+      expect(lifecycleMocks.throttleCpuWebContents).not.toHaveBeenCalled();
+
+      manager.hideAll();
+      expect(lifecycleMocks.throttleCpuWebContents).toHaveBeenCalledWith(wc);
+
+      lifecycleMocks.unthrottleCpuWebContents.mockClear();
+      manager.showTab("tab-hide-throttle", { x: 0, y: 0, width: 800, height: 600 });
+      expect(lifecycleMocks.unthrottleCpuWebContents).toHaveBeenCalledWith(wc);
+    });
+
+    it("does not throttle a destroyed webContents on hideAll", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.createTab("tab-hide-destroyed", "http://localhost:3000");
+      const wc = createdWebContents[0];
+
+      manager.showTab("tab-hide-destroyed", { x: 0, y: 0, width: 800, height: 600 });
+      wc.isDestroyed.mockReturnValue(true);
+
+      manager.hideAll();
+      expect(lifecycleMocks.throttleCpuWebContents).not.toHaveBeenCalled();
     });
 
     it("re-showing the same tab after hideAll does not call addChildView again", () => {

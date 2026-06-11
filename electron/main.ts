@@ -78,7 +78,7 @@ import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
-import { broadcastToRenderer } from "./ipc/utils.js";
+import { broadcastToVisibleRenderers } from "./ipc/utils.js";
 import {
   initializeCrashRecoveryService,
   getCrashRecoveryService,
@@ -182,7 +182,12 @@ if (!gotTheLock) {
   // receive the same map after their first `ready` event.
   setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
 
-  registerLoggerTransport(broadcastToRenderer, () => BrowserWindow.getAllWindows().length > 0);
+  // Visible-only: log batches are high-frequency and replayable (LOGS_GET_ALL),
+  // so cached/frozen project views skip them instead of queueing every flush.
+  registerLoggerTransport(
+    broadcastToVisibleRenderers,
+    () => BrowserWindow.getAllWindows().length > 0
+  );
 
   crashReporter.start({ uploadToServer: false });
   initializeCrashLoopGuard();

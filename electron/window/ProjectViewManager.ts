@@ -14,6 +14,8 @@ import {
   unregisterWebContents,
   registerProjectView,
   unregisterProjectView,
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
 } from "./webContentsRegistry.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
@@ -52,7 +54,6 @@ import {
   unthrottleCpuWebContents,
 } from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
-import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
   beginWindowRecreating,
   endWindowRecreating,
@@ -305,22 +306,35 @@ export class ProjectViewManager {
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
 
-    // Outer try/catch is load-bearing: `setAlignedInterval` calls the callback
-    // synchronously on the first aligned tick BEFORE installing the recurring
-    // `setInterval`. If the first tick throws, the recurring interval is never
-    // installed and all subsequent sampling is silently lost. Any uncaught throw
-    // also reaches `uncaughtException`. Sampling failures are pure telemetry
-    // and must never destabilise the manager.
-    this.cachedMemoryTimerCleanup = setAlignedInterval(() => {
-      if (this.disposed) return;
-      try {
-        this.sampleCachedViewMemory();
-      } catch (error) {
-        logWarn("projectview.cached-memory.error", {
-          error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
-        });
+    // Per-instance random phase offset: every window has its own sampler, and
+    // app.getAppMetrics() costs 5–50ms of synchronous main-thread work. A
+    // wall-clock-aligned interval would collapse all windows onto the same
+    // tick and stack those costs; the jittered first delay spreads them across
+    // the sample window. try/catch is load-bearing: an uncaught throw would
+    // stop rescheduling and reach `uncaughtException`. Sampling failures are
+    // pure telemetry and must never destabilise the manager.
+    let sampleTimer: NodeJS.Timeout | null = null;
+    const scheduleSample = (delayMs: number) => {
+      sampleTimer = setTimeout(() => {
+        if (this.disposed) return;
+        try {
+          this.sampleCachedViewMemory();
+        } catch (error) {
+          logWarn("projectview.cached-memory.error", {
+            error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
+          });
+        }
+        scheduleSample(CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
+      }, delayMs);
+      sampleTimer.unref?.();
+    };
+    scheduleSample(Math.random() * CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
+    this.cachedMemoryTimerCleanup = () => {
+      if (sampleTimer) {
+        clearTimeout(sampleTimer);
+        sampleTimer = null;
       }
-    }, CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
+    };
   }
 
   /**
@@ -991,6 +1005,9 @@ export class ProjectViewManager {
     // Throttle background view to reduce CPU and allow Chromium to reclaim memory
     if (!current.view.webContents.isDestroyed()) {
       const cachedWcId = current.view.webContents.id;
+      // Mark cached so visible-only broadcasts (log batches) skip this
+      // renderer — pushed messages have no backpressure once throttled/frozen.
+      registerCachedViewWebContents(current.view.webContents);
       // Close live producer ports BEFORE applying CPU throttle. Once throttled,
       // Chromium can freeze the renderer after ~5 min hidden or under memory
       // pressure; any messages still posted by main/utility processes
@@ -1054,6 +1071,10 @@ export class ProjectViewManager {
 
   private activateView(entry: ViewEntry, insertBehind = false): void {
     registerAppView(this.win, entry.view);
+
+    if (!entry.view.webContents.isDestroyed()) {
+      unregisterCachedViewWebContents(entry.view.webContents.id);
+    }
 
     // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
     // view activations are async, so an activating view may still be frozen
