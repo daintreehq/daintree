@@ -457,6 +457,38 @@ describe("listPRs ciStatus", () => {
     expect("ciStatus" in page.items[0]).toBe(false);
     expect("ciStatus" in page.items[1]).toBe(false);
   });
+
+  it("tolerates malformed commits shapes without throwing or emitting ciStatus", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([
+        makePRNode(1, "feature/a", undefined, { nodes: [null] }),
+        makePRNode(2, "feature/b", undefined, { nodes: [{ commit: null }] }),
+        makePRNode(3, "feature/c", undefined, makeCommitsRollup("SUCCESS")),
+      ])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect("ciStatus" in page.items[0]).toBe(false);
+    expect("ciStatus" in page.items[1]).toBe(false);
+    expect(page.items[2].ciStatus).toBe("success");
+  });
+
+  it("drops unrecognized rollup states instead of guessing a mapping", async () => {
+    // Non-string and unknown-enum states fall through to "absent" — the
+    // conservative behavior if GitHub ever widens the rollup enum.
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([
+        makePRNode(1, "feature/a", undefined, makeCommitsRollup("NEUTRAL")),
+        makePRNode(2, "feature/b", undefined, {
+          nodes: [{ commit: { statusCheckRollup: { state: 123 } } }],
+        }),
+      ])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect("ciStatus" in page.items[0]).toBe(false);
+    expect("ciStatus" in page.items[1]).toBe(false);
+  });
 });
 
 function issueListResponse(totalCount?: number) {
