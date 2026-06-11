@@ -455,6 +455,15 @@ export const terminalClient = {
   },
 
   /**
+   * Probe reconnect state for many terminals in a single round-trip.
+   * Returns a map keyed by terminal ID; missing/failed IDs report
+   * `{ exists: false }`. Used by the cold-boot panel-restore prefetch.
+   */
+  reconnectBulk: (terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>> => {
+    return window.electron.terminal.reconnectBulk(terminalIds);
+  },
+
+  /**
    * Replay terminal history from backend semantic buffer.
    * Used after reconnecting to restore terminal output.
    */

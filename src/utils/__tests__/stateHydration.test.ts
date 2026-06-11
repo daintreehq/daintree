@@ -10,6 +10,7 @@ const getTmpDirMock = vi.fn().mockResolvedValue("/tmp");
 const terminalClientMock = {
   getForProject: vi.fn(),
   reconnect: vi.fn(),
+  reconnectBulk: vi.fn(),
   getSerializedStates: vi.fn(),
 };
 
@@ -178,6 +179,7 @@ describe("hydrateAppState", () => {
     });
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
+    terminalClientMock.reconnectBulk.mockResolvedValue({});
     terminalClientMock.getSerializedStates.mockRejectedValue(
       new Error("Batch serialized state endpoint unavailable")
     );
@@ -277,16 +279,101 @@ describe("hydrateAppState", () => {
     });
 
     const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as
-      | ((state: { projects: (typeof project)[]; currentProject: typeof project | null }) => {
+      | ((state: {
           projects: (typeof project)[];
           currentProject: typeof project | null;
+          isBootstrapped: boolean;
+        }) => {
+          projects: (typeof project)[];
+          currentProject: typeof project | null;
+          isBootstrapped: boolean;
         })
       | undefined;
 
     expect(updater).toBeTypeOf("function");
-    expect(updater?.({ projects: [], currentProject: null })).toEqual({
+    expect(updater?.({ projects: [], currentProject: null, isBootstrapped: false })).toEqual({
       projects: [project],
       currentProject: project,
+      // The payload carried no `projects` list (older main process), so the
+      // bootstrap flag stays down and the Toolbar's IPC fallback still fires.
+      isBootstrapped: false,
+    });
+  });
+
+  it("prefetches reconnect probes in one bulk IPC for saved PTY panels missing from the backend (#10390)", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          { id: "term-1", kind: "terminal", title: "T1", cwd: "/project", location: "grid" },
+          {
+            id: "browser-1",
+            kind: "browser",
+            title: "Browser",
+            cwd: "/project",
+            location: "grid",
+            browserUrl: "http://localhost:5173",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+    terminalClientMock.reconnectBulk.mockResolvedValue({
+      "term-1": { exists: false },
+    });
+
+    await hydrateAppState({
+      addPanel: vi.fn().mockResolvedValue("term-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Only the PTY-kind panel missing from the backend is probed; the
+    // non-PTY browser panel is excluded from the bulk payload.
+    expect(terminalClientMock.reconnectBulk).toHaveBeenCalledTimes(1);
+    expect(terminalClientMock.reconnectBulk).toHaveBeenCalledWith(["term-1"]);
+    // The prefetched result satisfies the probe — no per-panel reconnect IPC.
+    expect(terminalClientMock.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("seeds the full project list and bootstrap flag when the payload carries projects (#10390)", async () => {
+    const otherProject = { id: "project-2", path: "/other" };
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+      },
+      terminalConfig,
+      project,
+      projects: [project, otherProject],
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+
+    await hydrateAppState({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as (state: {
+      projects: (typeof project)[];
+      currentProject: typeof project | null;
+      isBootstrapped: boolean;
+    }) => {
+      projects: (typeof project)[];
+      currentProject: typeof project | null;
+      isBootstrapped: boolean;
+    };
+
+    expect(updater({ projects: [], currentProject: null, isBootstrapped: false })).toEqual({
+      projects: [project, otherProject],
+      currentProject: project,
+      isBootstrapped: true,
     });
   });
 

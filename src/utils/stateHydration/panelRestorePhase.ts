@@ -2,7 +2,11 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logWarn } from "@/utils/logger";
-import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type {
+  TerminalState,
+  BackendTerminalInfo,
+  TerminalReconnectResult,
+} from "@shared/types/ipc/terminal";
 import type { AgentSettings } from "@shared/types/agentSettings";
 import type { WorktreeState } from "@shared/types";
 import type { AgentPreset } from "@/config/agents";
@@ -32,6 +36,13 @@ export interface PanelRestoreContext {
   addPanel: AddPanelFn;
   withHydrationBatch: (run: () => Promise<void>) => Promise<void>;
   backendTerminalMap: Map<string, BackendTerminalInfo>;
+  /**
+   * Bulk-prefetched `terminal:reconnect` probe results keyed by saved panel id
+   * (#10390). When a saved id is present here, `reconnectWithTimeout` consumes
+   * the prefetched result instead of firing a per-panel IPC inside the
+   * serialized spawn queue. Absent ids fall back to the individual probe.
+   */
+  prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   terminalSizes: Record<string, { cols: number; rows: number }>;
   activeWorktreeId: string | null;
   projectRoot: string;
@@ -70,6 +81,7 @@ export async function restorePanelsPhase(
     addPanel,
     withHydrationBatch,
     backendTerminalMap,
+    prefetchedReconnectResults,
     terminalSizes,
     activeWorktreeId,
     projectRoot,
@@ -220,7 +232,11 @@ export async function restorePanelsPhase(
             const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
             if (panelKindHasPty(kind)) {
-              const reconnectOutcome = await reconnectWithTimeout(saved.id, logHydrationInfo);
+              const reconnectOutcome = await reconnectWithTimeout(
+                saved.id,
+                logHydrationInfo,
+                prefetchedReconnectResults?.[saved.id]
+              );
               const reconnectTimedOut = reconnectOutcome.status === "timeout";
               const reconnectedTerminal =
                 reconnectOutcome.status === "found" ? reconnectOutcome.terminal : null;

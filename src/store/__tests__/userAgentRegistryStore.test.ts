@@ -77,6 +77,45 @@ describe("userAgentRegistryStore", () => {
     expect(singleton).toHaveProperty("newAgent");
   });
 
+  it("seeds the registry from a boot payload without IPC and syncs the singleton", () => {
+    useUserAgentRegistryStore
+      .getState()
+      .seedRegistry({ bootAgent: { id: "bootAgent", name: "Boot Agent" } as never });
+
+    const state = useUserAgentRegistryStore.getState();
+    expect(state.isInitialized).toBe(true);
+    expect(state.isLoading).toBe(false);
+    expect(state.registry).toEqual({ bootAgent: { id: "bootAgent", name: "Boot Agent" } });
+    expect(getMock).not.toHaveBeenCalled();
+    expect(getUserRegistry()).toEqual({ bootAgent: { id: "bootAgent", name: "Boot Agent" } });
+  });
+
+  it("seedRegistry no-ops once the store is already initialized", async () => {
+    getMock.mockResolvedValue({ myAgent: { id: "myAgent", name: "My Agent" } });
+    await useUserAgentRegistryStore.getState().initialize();
+
+    useUserAgentRegistryStore
+      .getState()
+      .seedRegistry({ lateAgent: { id: "lateAgent", name: "Too Late" } as never });
+
+    expect(useUserAgentRegistryStore.getState().registry).toEqual({
+      myAgent: { id: "myAgent", name: "My Agent" },
+    });
+  });
+
+  it("initialize no-ops after seedRegistry has already seeded the store", async () => {
+    useUserAgentRegistryStore
+      .getState()
+      .seedRegistry({ bootAgent: { id: "bootAgent", name: "Boot Agent" } as never });
+
+    await useUserAgentRegistryStore.getState().initialize();
+
+    expect(getMock).not.toHaveBeenCalled();
+    expect(useUserAgentRegistryStore.getState().registry).toEqual({
+      bootAgent: { id: "bootAgent", name: "Boot Agent" },
+    });
+  });
+
   it("clears the userRegistry singleton on cleanup", () => {
     useUserAgentRegistryStore.setState({
       registry: { test: { id: "test", name: "Test Agent" } as never },

@@ -122,6 +122,9 @@ export function releaseBootPayload(): void {
     result.draftInputs = undefined;
     result.projectPresets = undefined;
     result.appTheme = undefined;
+    result.projects = undefined;
+    result.keybindingOverrides = undefined;
+    result.userAgentRegistry = undefined;
   };
 
   releaseFrom((bootPromise as ReactThenable<BootResult> | null)?.value);

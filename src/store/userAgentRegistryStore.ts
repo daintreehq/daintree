@@ -14,6 +14,12 @@ interface UserAgentRegistryState {
 
 interface UserAgentRegistryActions {
   initialize: () => Promise<void>;
+  /**
+   * Seed the registry from an already-fetched payload (the batched `app:boot`
+   * hydrate result) without an IPC round-trip. No-ops when the store is
+   * already initialized so a late seed can't clobber fresher data.
+   */
+  seedRegistry: (registry: UserAgentRegistry) => void;
   addAgent: (config: UserAgentConfig) => Promise<{ success: boolean; error?: string }>;
   updateAgent: (
     id: string,
@@ -56,6 +62,11 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()(
       })();
 
       return initPromise;
+    },
+
+    seedRegistry: (registry: UserAgentRegistry) => {
+      if (get().isInitialized) return;
+      set({ registry, isLoading: false, error: null, isInitialized: true });
     },
 
     addAgent: async (config: UserAgentConfig) => {
