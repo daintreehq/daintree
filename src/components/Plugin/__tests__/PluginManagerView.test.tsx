@@ -153,11 +153,10 @@ describe("PluginManagerView", () => {
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
     // role="region" doesn't trap focus; the view must steal it on open so
     // Escape (and Cmd+W) route through the view rather than a background panel.
+    // Search is a permanent fixture now, so it's the preferred focus target.
     renderDialog();
     await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByRole("button", { name: "Close plugin manager" })
-      )
+      expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
     );
   });
 
@@ -171,9 +170,7 @@ describe("PluginManagerView", () => {
   it("lists installed plugins with a toggle", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => {
-      expect(screen.getByText("Acme Demo")).toBeTruthy();
-    });
+    await screen.findAllByText("Acme Demo");
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
   });
@@ -183,9 +180,7 @@ describe("PluginManagerView", () => {
       makePlugin({ disabled: true }),
     ]);
     renderDialog();
-    await waitFor(() => {
-      expect(screen.getByText("Acme Demo")).toBeTruthy();
-    });
+    await screen.findAllByText("Acme Demo");
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
@@ -197,7 +192,7 @@ describe("PluginManagerView", () => {
     renderDialog();
     // Settings are not rendered until the plugin is selected — no layout shift
     // from inline expansion (#9555).
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
     // Before selection there is no detail pane, so no Settings tab or form.
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
     expect(window.electron.plugin.getSettingValues).not.toHaveBeenCalled();
@@ -220,7 +215,7 @@ describe("PluginManagerView", () => {
       makePluginWithSettings({ disabled: true }),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
     // Settings persist independently of the plugin's runtime, so the form is
     // available even with the plugin toggled off.
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
@@ -244,7 +239,7 @@ describe("PluginManagerView", () => {
   it("shows a no-settings note in the detail pane when a plugin contributes none", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
 
     await selectPlugin();
     // Navigate to the Settings tab to confirm no-settings note.
@@ -257,15 +252,15 @@ describe("PluginManagerView", () => {
       makePluginWithSettings(),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    expect(screen.getByText("Select a plugin")).toBeTruthy();
+    await screen.findAllByText("Acme Demo");
+    expect(screen.getByText("Explore plugins")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
   it("marks the selected row with aria-selected", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
 
     const option = screen.getByRole("option", { name: /Acme Demo/i });
     expect(option.getAttribute("aria-selected")).toBe("false");
@@ -282,7 +277,7 @@ describe("PluginManagerView", () => {
       makePluginWithSettings(),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
 
     // First click selects and fills the detail pane — Settings tab appears.
     await selectPlugin();
@@ -298,7 +293,7 @@ describe("PluginManagerView", () => {
         "false"
       )
     );
-    expect(screen.getByText("Select a plugin")).toBeTruthy();
+    expect(screen.getByText("Explore plugins")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
   });
 
@@ -342,7 +337,7 @@ describe("PluginManagerView", () => {
   it("toggling the enable switch does not select the row", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
 
     // The switch is a sibling of the selection button, not nested — clicking it
     // must not populate the detail pane.
@@ -353,7 +348,7 @@ describe("PluginManagerView", () => {
     expect(screen.getByRole("option", { name: /Acme Demo/i }).getAttribute("aria-selected")).toBe(
       "false"
     );
-    expect(screen.getByText("Select a plugin")).toBeTruthy();
+    expect(screen.getByText("Explore plugins")).toBeTruthy();
   });
 
   it("re-hydrates settings for the newly selected plugin when switching", async () => {
@@ -417,9 +412,7 @@ describe("PluginManagerView", () => {
   it("calls setEnabled(false) and shows a restart badge when disabling", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => {
-      expect(screen.getByText("Acme Demo")).toBeTruthy();
-    });
+    await screen.findAllByText("Acme Demo");
 
     fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
 
@@ -449,9 +442,7 @@ describe("PluginManagerView", () => {
       new Error("disk full")
     );
     renderDialog();
-    await waitFor(() => {
-      expect(screen.getByText("Acme Demo")).toBeTruthy();
-    });
+    await screen.findAllByText("Acme Demo");
 
     fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
 
@@ -466,9 +457,7 @@ describe("PluginManagerView", () => {
   it("clears the restart badge when toggled back to the startup state", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
-    await waitFor(() => {
-      expect(screen.getByText("Acme Demo")).toBeTruthy();
-    });
+    await screen.findAllByText("Acme Demo");
     const toggle = () => screen.getByRole("switch", { name: "Enable Acme Demo" });
 
     fireEvent.click(toggle());
@@ -494,7 +483,7 @@ describe("PluginManagerView", () => {
       makePlugin({ source: "sideload", installedAt: Date.now() - 60_000 }),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
     // Source badge is scannable in the list row.
     expect(screen.getByText("File")).toBeTruthy();
     // Install time lives in the detail pane.
@@ -515,7 +504,7 @@ describe("PluginManagerView", () => {
       makePlugin({ loadError: { message: "boom", at: 1 } }),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+    await screen.findAllByText("Acme Demo");
     await selectPlugin();
     // Load error is on the Overview tab (default) — no tab click needed.
     expect(await screen.findByText(/Failed to load: boom/)).toBeTruthy();
@@ -526,16 +515,16 @@ describe("PluginManagerView", () => {
       makePlugin({ isBuiltin: true, source: "builtin" }),
     ]);
     renderDialog();
-    await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-    // The section header row (aria-disabled option) and the row badge both say
-    // "Built-in". The listbox contains the row; assert the badge by scoping to
-    // the listbox, which excludes the section header label outside it.
+    await screen.findAllByText("Acme Demo");
+    // Built-in is the catalog default, so the row shows no provenance badge
+    // (only non-builtin sources earn one); the detail pane still carries the
+    // full "Built-in" source badge.
     const listbox = screen.getByRole("listbox");
-    const builtinBadges = within(listbox).getAllByText("Built-in");
-    expect(builtinBadges.length).toBeGreaterThanOrEqual(1);
+    expect(within(listbox).queryByText("Built-in")).toBeNull();
     // Uninstall lives in the detail pane now — select and confirm it's absent
     // for a built-in.
     await selectPlugin();
+    expect(await screen.findByText("Built-in")).toBeTruthy();
     // Navigate to Settings tab to check "no settings" note (built-in has no settings).
     fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
     expect(await screen.findByText("This plugin has no settings.")).toBeTruthy();
@@ -995,7 +984,7 @@ describe("PluginManagerView", () => {
     it("hides the bar when no plugin is pending a restart", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      await screen.findAllByText("Acme Demo");
       expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
     });
 
@@ -1013,7 +1002,7 @@ describe("PluginManagerView", () => {
     it("appears after a toggle flips a plugin into the pending-restart state", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
+      await screen.findAllByText("Acme Demo");
       expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
 
       fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
@@ -1167,125 +1156,112 @@ describe("PluginManagerView", () => {
       return within(listbox).queryByRole("option", { name: sectionLabel }) !== null;
     };
 
-    it("places an enabled built-in plugin in the Built-in section", async () => {
+    it("places a plugin with a declared category in that category's section", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({
-          manifest: { name: "core.tools", displayName: "Core Tools" },
+          manifest: { name: "core.github", displayName: "Core GitHub", category: "forge" },
           isBuiltin: true,
           source: "builtin",
         }),
       ]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
-      expect(pluginInSection("Built-in", "Core Tools")).toBeTruthy();
-      expect(sectionExists("Disabled")).toBe(false);
-      expect(sectionExists("Installed")).toBe(false);
+      await screen.findAllByText("Core GitHub");
+      expect(pluginInSection("Forge providers", "Core GitHub")).toBeTruthy();
+      expect(sectionExists("Other")).toBe(false);
     });
 
-    it("places an enabled user plugin in the Installed section", async () => {
+    it("derives the fallback section for a plugin with no category or defining contribution", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, source: "sideload" }),
       ]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(pluginInSection("Installed", "Acme Demo")).toBeTruthy();
-      expect(sectionExists("Built-in")).toBe(false);
+      await screen.findAllByText("Acme Demo");
+      expect(pluginInSection("Other", "Acme Demo")).toBeTruthy();
+      expect(sectionExists("Forge providers")).toBe(false);
     });
 
-    it("places a disabled built-in in the Disabled section, not Built-in", async () => {
+    it("keeps a disabled plugin in its category section with a Disabled badge", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({
-          manifest: { name: "core.tools", displayName: "Core Tools" },
+          manifest: { name: "core.github", displayName: "Core GitHub", category: "forge" },
           isBuiltin: true,
           source: "builtin",
           disabled: true,
         }),
       ]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
-      expect(pluginInSection("Disabled", "Core Tools")).toBeTruthy();
-      expect(sectionExists("Built-in")).toBe(false);
+      await screen.findAllByText("Core GitHub");
+      // No quarantine section — disabled plugins dim in place (#9554 successor).
+      expect(pluginInSection("Forge providers", "Core GitHub")).toBeTruthy();
+      expect(sectionExists("Disabled")).toBe(false);
+      const listbox = screen.getByRole("listbox");
+      expect(within(listbox).getByText("Disabled")).toBeTruthy();
     });
 
-    it("places a disabled user plugin in the Disabled section", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, disabled: true }),
-      ]);
-      renderDialog();
-      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(pluginInSection("Disabled", "Acme Demo")).toBeTruthy();
-    });
-
-    it("renders all three sections for a mixed list and hides none", async () => {
+    it("renders category sections in registry order for a mixed list", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({
-          manifest: { name: "core.tools", displayName: "Core Tools" },
+          manifest: { name: "core.github", displayName: "Core GitHub", category: "forge" },
           isBuiltin: true,
           source: "builtin",
         }),
-        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, source: "sideload" }),
+        named({
+          manifest: { name: "acme.notes", displayName: "Acme Notes", category: "workspace" },
+        }),
         named({ manifest: { name: "old.thing", displayName: "Old Thing" }, disabled: true }),
       ]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Core Tools")).toBeTruthy());
-      expect(pluginInSection("Built-in", "Core Tools")).toBeTruthy();
-      expect(pluginInSection("Installed", "Acme Demo")).toBeTruthy();
-      expect(pluginInSection("Disabled", "Old Thing")).toBeTruthy();
-      // Each plugin lands in exactly one section.
-      expect(screen.getAllByText("Core Tools").length).toBe(1);
-      expect(screen.getAllByText("Acme Demo").length).toBe(1);
-      expect(screen.getAllByText("Old Thing").length).toBe(1);
-      // Sections render in the order Built-in → Installed → Disabled.
-      // The section headers are aria-disabled options with aria-labelledby
-      // pointing to their id. Verify DOM order by checking option ids.
+      await screen.findAllByText("Core GitHub");
+      expect(pluginInSection("Forge providers", "Core GitHub")).toBeTruthy();
+      expect(pluginInSection("Workspace", "Acme Notes")).toBeTruthy();
+      expect(pluginInSection("Other", "Old Thing")).toBeTruthy();
+      // Each plugin lands in exactly one section (the second match per name is
+      // its catalog card in the detail pane, outside the listbox).
       const listbox = screen.getByRole("listbox");
+      expect(within(listbox).getAllByText("Core GitHub").length).toBe(1);
+      expect(within(listbox).getAllByText("Acme Notes").length).toBe(1);
+      expect(within(listbox).getAllByText("Old Thing").length).toBe(1);
+      // Sections render in PLUGIN_CATEGORIES order with empty ones omitted.
       const sectionHeaders = within(listbox)
         .getAllByRole("option", { hidden: true })
         .filter((el) => el.getAttribute("aria-disabled") === "true")
         .map((el) => el.getAttribute("aria-label"));
-      expect(sectionHeaders).toEqual(["Built-in", "Installed", "Disabled"]);
+      expect(sectionHeaders).toEqual(["Forge providers", "Workspace", "Other"]);
     });
 
-    it("omits the Disabled section when every plugin is enabled", async () => {
+    it("omits categories with no plugins", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({ manifest: { name: "acme.demo", displayName: "Acme Demo" } }),
       ]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(sectionExists("Disabled")).toBe(false);
+      await screen.findAllByText("Acme Demo");
+      expect(sectionExists("Forge providers")).toBe(false);
+      expect(sectionExists("AI & agents")).toBe(false);
+      expect(sectionExists("Workspace")).toBe(false);
+      expect(sectionExists("Other")).toBe(true);
     });
 
-    it("omits the Built-in and Installed sections when every plugin is disabled", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, disabled: true }),
-      ]);
-      renderDialog();
-      await waitFor(() => expect(screen.getByText("Acme Demo")).toBeTruthy());
-      expect(sectionExists("Built-in")).toBe(false);
-      expect(sectionExists("Installed")).toBe(false);
-      expect(sectionExists("Disabled")).toBe(true);
-    });
-
-    it("preserves alphabetical order within a section", async () => {
+    it("preserves alphabetical order within a section regardless of enabled state", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({ manifest: { name: "z.plugin", displayName: "Zebra" } }),
-        named({ manifest: { name: "a.plugin", displayName: "Alpha" } }),
+        named({ manifest: { name: "a.plugin", displayName: "Alpha" }, disabled: true }),
       ]);
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+      await screen.findAllByText("Alpha");
       const listbox = screen.getByRole("listbox");
-      const sectionHeader = within(listbox).getByRole("option", { name: "Installed" });
+      const sectionHeader = within(listbox).getByRole("option", { name: "Other" });
       const sectionContainer = sectionHeader.closest("[role='presentation']") as HTMLElement;
       const labels = within(sectionContainer)
-        .getAllByText(/Alpha|Zebra/)
+        .getAllByText(/^(Alpha|Zebra)$/)
         .map((el) => el.textContent);
       expect(labels).toEqual(["Alpha", "Zebra"]);
     });
   });
 
   describe("search (#9557)", () => {
-    // The search box only appears once the list is long enough to need it
-    // (PLUGIN_SEARCH_MIN_ITEMS = 10). Generate distinct, addressable plugins.
+    // Search is a permanent fixture of the catalog (the former 10-item
+    // visibility threshold went with the marketplace redesign). Generate
+    // distinct, addressable plugins.
     const make = (
       name: string,
       overrides: Partial<Omit<LoadedPluginInfo, "manifest">> & {
@@ -1308,17 +1284,11 @@ describe("PluginManagerView", () => {
     const manyPlugins = (count: number) =>
       Array.from({ length: count }, (_, i) => make(`Plugin${String(i).padStart(2, "0")}`));
 
-    it("hides the filter input below the item threshold", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(9));
+    it("shows the search input even with a single plugin", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(1));
       renderDialog();
-      await waitFor(() => expect(screen.getByText("Plugin00")).toBeTruthy());
-      expect(screen.queryByLabelText("Filter plugins")).toBeNull();
-    });
-
-    it("shows the filter input at the item threshold", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
-      renderDialog();
-      await waitFor(() => expect(screen.getByLabelText("Filter plugins")).toBeTruthy());
+      await screen.findAllByText("Plugin00");
+      expect(screen.getByLabelText("Search plugins")).toBeTruthy();
     });
 
     it("filters the list by free text", async () => {
@@ -1328,49 +1298,71 @@ describe("PluginManagerView", () => {
       ];
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
       renderDialog();
-      const input = await screen.findByLabelText("Filter plugins");
+      const input = await screen.findByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "Notepad" } });
-      await waitFor(() => expect(screen.getByText("Notepad")).toBeTruthy());
+      await screen.findAllByText("Notepad");
       expect(screen.queryByText("Plugin00")).toBeNull();
     });
 
-    it("injects an operator token when a filter chip is clicked", async () => {
+    it("injects a category operator token and highlights the chip when clicked", async () => {
       const plugins = [
         ...manyPlugins(10),
         make("CoreThing", {
-          manifest: { name: "pkg.core", displayName: "CoreThing" },
+          manifest: { name: "pkg.core", displayName: "CoreThing", category: "forge" },
           isBuiltin: true,
           source: "builtin",
         }),
       ];
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
       renderDialog();
-      await screen.findByLabelText("Filter plugins");
-      fireEvent.click(screen.getByRole("button", { name: "Built-in" }));
-      const input = screen.getByLabelText<HTMLInputElement>("Filter plugins");
-      expect(input.value).toBe("@builtin");
-      await waitFor(() => expect(screen.getByText("CoreThing")).toBeTruthy());
+      await screen.findByLabelText("Search plugins");
+      const chip = screen.getByRole("button", { name: "Forge providers" });
+      expect(chip.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(chip);
+      const input = screen.getByLabelText<HTMLInputElement>("Search plugins");
+      expect(input.value).toBe("@cat:forge");
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+      await screen.findAllByText("CoreThing");
       expect(screen.queryByText("Plugin00")).toBeNull();
     });
 
     it("appends an operator chip after existing free text", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
       renderDialog();
-      const input = await screen.findByLabelText<HTMLInputElement>("Filter plugins");
+      const input = await screen.findByLabelText<HTMLInputElement>("Search plugins");
       fireEvent.change(input, { target: { value: "notes" } });
-      fireEvent.click(screen.getByRole("button", { name: "Installed" }));
-      expect(screen.getByLabelText<HTMLInputElement>("Filter plugins").value).toBe(
-        "notes @installed"
+      fireEvent.click(screen.getByRole("button", { name: "Disabled" }));
+      expect(screen.getByLabelText<HTMLInputElement>("Search plugins").value).toBe(
+        "notes @disabled"
       );
     });
 
-    it("does not duplicate an operator that is already present (case-insensitive)", async () => {
+    it("toggles a chip off when its token is already present (case-insensitive)", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
       renderDialog();
-      const input = await screen.findByLabelText<HTMLInputElement>("Filter plugins");
-      fireEvent.change(input, { target: { value: "@BUILTIN" } });
-      fireEvent.click(screen.getByRole("button", { name: "Built-in" }));
-      expect(screen.getByLabelText<HTMLInputElement>("Filter plugins").value).toBe("@BUILTIN");
+      const input = await screen.findByLabelText<HTMLInputElement>("Search plugins");
+      // A hand-typed token in any case marks the chip active; clicking the
+      // active chip removes the token instead of duplicating it.
+      fireEvent.change(input, { target: { value: "@CAT:FORGE" } });
+      const chip = screen.getByRole("button", { name: "Forge providers" });
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+      fireEvent.click(chip);
+      expect(screen.getByLabelText<HTMLInputElement>("Search plugins").value).toBe("");
+      expect(chip.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("removes only the chip's token, keeping other tokens and free text", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
+      renderDialog();
+      const input = await screen.findByLabelText<HTMLInputElement>("Search plugins");
+      fireEvent.change(input, { target: { value: "notes @cat:forge @disabled" } });
+      fireEvent.click(screen.getByRole("button", { name: "Forge providers" }));
+      expect(screen.getByLabelText<HTMLInputElement>("Search plugins").value).toBe(
+        "notes @disabled"
+      );
+      expect(screen.getByRole("button", { name: "Disabled" }).getAttribute("aria-pressed")).toBe(
+        "true"
+      );
     });
 
     it("filters by the @cap operator with a colon-bearing value", async () => {
@@ -1386,32 +1378,32 @@ describe("PluginManagerView", () => {
       ];
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
       renderDialog();
-      const input = await screen.findByLabelText("Filter plugins");
+      const input = await screen.findByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "@cap:network:fetch" } });
-      await waitFor(() => expect(screen.getByText("NetPlugin")).toBeTruthy());
+      await screen.findAllByText("NetPlugin");
       expect(screen.queryByText("Plugin00")).toBeNull();
     });
 
     it("renders a flat list with no group sections while filtering", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
       renderDialog();
-      const input = await screen.findByLabelText("Filter plugins");
+      const input = await screen.findByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "Plugin00" } });
       await waitFor(() => expect(screen.queryByText("Plugin01")).toBeNull());
-      expect(screen.getByText("Plugin00")).toBeTruthy();
+      expect(screen.getAllByText("Plugin00").length).toBeGreaterThan(0);
       // When filtering, section header options are gone.
       const listbox = screen.getByRole("listbox");
-      expect(within(listbox).queryByRole("option", { name: "Installed" })).toBeNull();
+      expect(within(listbox).queryByRole("option", { name: "Other" })).toBeNull();
     });
 
     it("shows a zero-result state with a Clear search control", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(10));
       renderDialog();
-      const input = await screen.findByLabelText("Filter plugins");
+      const input = await screen.findByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "zzzznomatch" } });
       await waitFor(() => expect(screen.getByText("No matching plugins")).toBeTruthy());
       fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
-      await waitFor(() => expect(screen.getByText("Plugin00")).toBeTruthy());
+      await screen.findAllByText("Plugin00");
     });
 
     it("clears the selected plugin when the filter hides it", async () => {
@@ -1421,14 +1413,14 @@ describe("PluginManagerView", () => {
       ];
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
       renderDialog();
-      await screen.findByLabelText("Filter plugins");
+      await screen.findByLabelText("Search plugins");
       fireEvent.click(await screen.findByRole("option", { name: /Plugin00/ }));
       // Detail pane now shows the selected plugin's uninstall control.
       await waitFor(() => expect(screen.getByRole("button", { name: /uninstall/i })).toBeTruthy());
-      const input = screen.getByLabelText("Filter plugins");
+      const input = screen.getByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "Notepad" } });
       // Plugin00 is filtered out, so the detail pane falls back to its empty state.
-      await waitFor(() => expect(screen.getByText("Select a plugin")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("Explore plugins")).toBeTruthy());
     });
   });
 });

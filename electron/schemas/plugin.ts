@@ -2,7 +2,7 @@ import path from "node:path";
 import ipaddr from "ipaddr.js";
 import * as semver from "semver";
 import { z } from "zod";
-import { BUILT_IN_PLUGIN_CAPABILITIES } from "../../shared/types/plugin.js";
+import { BUILT_IN_PLUGIN_CAPABILITIES, PLUGIN_CATEGORY_IDS } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
 import type {
   PluginManifest,
@@ -605,6 +605,8 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
         }),
       displayName: z.string().optional(),
       description: z.string().optional(),
+      tagline: z.string().trim().min(1).max(120).optional(),
+      category: z.enum(PLUGIN_CATEGORY_IDS).optional(),
       main: z.string().optional(),
       engines: z
         .object({

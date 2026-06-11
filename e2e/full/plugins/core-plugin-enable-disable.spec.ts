@@ -10,9 +10,10 @@ import {
 
 /**
  * Plugin enable/disable lifecycle + restart gating (#9284, #9558). Toggling a
- * plugin is restart-gated: the desired state flips optimistically (the row moves
- * to the "Disabled" group) but the running plugin keeps its contributions until
- * the app relaunches, so a "Restart required" banner surfaces. This spec asserts
+ * plugin is restart-gated: the desired state flips optimistically (the row dims
+ * in place and gains a "Disabled" badge) but the running plugin keeps its
+ * contributions until the app relaunches, so a "Restart required" banner
+ * surfaces. This spec asserts
  * that gating — and that the restart itself is guarded behind a confirm dialog —
  * without ever relaunching (which would tear down the app mid-suite).
  */
@@ -31,21 +32,22 @@ test.describe.serial("Core: Plugin enable/disable", () => {
     fixtureCleanup?.();
   });
 
-  test("disabling moves the plugin to Disabled and surfaces the restart banner", async () => {
+  test("disabling dims the row in place and surfaces the restart banner", async () => {
     const { window } = ctx;
     await openPluginManager(window);
 
-    const list = window.locator(SEL.plugin.list);
     const toggle = window.getByRole("switch", { name: `Enable ${SAMPLE_PLUGIN_LABEL}` });
     await expect(toggle).toBeChecked();
 
-    // No restart pending and no Disabled group on a clean start.
-    await expect(list.getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
+    // No restart pending and no Disabled badge on a clean start.
+    const sampleRow = window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL });
+    await expect(sampleRow.getByText("Disabled", { exact: true })).toHaveCount(0);
 
     await toggle.click();
 
-    // Desired state flips: the row re-groups under Disabled.
-    await expect(list.getByRole("option", { name: "Disabled", exact: true })).toBeVisible({
+    // Desired state flips: the row stays in its category section (disabled
+    // plugins dim in place, never relocate) and gains the Disabled badge.
+    await expect(sampleRow.getByText("Disabled", { exact: true })).toBeVisible({
       timeout: T_MEDIUM,
     });
     await expect(toggle).not.toBeChecked();

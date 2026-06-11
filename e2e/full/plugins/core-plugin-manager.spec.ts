@@ -35,25 +35,26 @@ test.describe.serial("Core: Plugin manager view", () => {
     fixtureCleanup?.();
   });
 
-  test("opens the manager and lists the sample plugin under Built-in", async () => {
+  test("opens the manager and lists the sample plugin under its category", async () => {
     const { window } = ctx;
     await openPluginManager(window);
 
-    // The sample is sideloaded as a built-in, so it lands in the Built-in group.
-    // Match the section-header option exactly — plugin rows carry a "Built-in"
-    // source badge in their accessible name, so a substring match is ambiguous.
+    // The list groups by catalog category. The sample declares no `category`
+    // and contributes only toolbar buttons / menu items / file decorations, so
+    // it derives to the "Other" fallback (see resolvePluginCategory). The
+    // header carries a trailing count, so match on the aria-label, not text.
     const list = window.locator(SEL.plugin.list);
-    await expect(list.getByRole("option", { name: "Built-in", exact: true })).toBeVisible({
+    await expect(list.getByRole("option", { name: "Other", exact: true })).toBeVisible({
       timeout: T_MEDIUM,
     });
     // SEL.plugin.option already scopes to the listbox, so don't re-nest it under
     // `list` (that yields a `listbox listbox option` selector matching nothing).
-    await expect(
-      window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL })
-    ).toBeVisible({ timeout: T_MEDIUM });
+    const sampleRow = window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL });
+    await expect(sampleRow).toBeVisible({ timeout: T_MEDIUM });
 
-    // Nothing is disabled yet, so the Disabled group header is absent.
-    await expect(list.getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
+    // Nothing is disabled yet, so no row carries the Disabled badge — disabled
+    // plugins dim in place now instead of moving to a quarantine section.
+    await expect(sampleRow.getByText("Disabled", { exact: true })).toHaveCount(0);
 
     await closePluginManager(window);
   });

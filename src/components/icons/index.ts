@@ -12,7 +12,9 @@ export {
   BellDot, // watch alert / notify on completion
   FolderGit2, // git worktree (single)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
+  GitPullRequest, // forge provider / code-host plugin category
   Layers, // worktree overview (multiple worktrees, stacked)
+  LayoutPanelTop, // workspace plugin category (panels, notes)
   Plug, // agent (integration that plugs into the host system)
   Sprout, // origin / first step (main worktree, first agent launch)
   Workflow, // terminal recipe / scripted command sequence

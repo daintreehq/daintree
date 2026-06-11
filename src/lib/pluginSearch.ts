@@ -1,4 +1,5 @@
 import type { LoadedPluginInfo } from "@shared/types/plugin";
+import { resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
 import { scoreSubsequence } from "./actionPaletteSearch";
 
 const NAME_WEIGHT = 3;
@@ -7,11 +8,10 @@ const DESCRIPTION_WEIGHT = 0.5;
 /**
  * Filter operators recognized by the plugin manager search (#9557). VS
  * Code–style `@token` flags that narrow the list before free-text scoring.
- * `@cap:<value>` carries a value (a capability id); the boolean flags don't.
- * `@category:` is intentionally absent — `PluginManifest` has no category
- * field, so the operator would always match nothing.
+ * `@cap:<value>` and `@cat:<value>` carry a value (a capability id / a
+ * category id from `PLUGIN_CATEGORY_IDS`); the boolean flags don't.
  */
-export type PluginFilterOperator = "builtin" | "installed" | "enabled" | "disabled" | "cap";
+export type PluginFilterOperator = "builtin" | "installed" | "enabled" | "disabled" | "cap" | "cat";
 
 const KNOWN_OPERATORS: ReadonlySet<string> = new Set([
   "builtin",
@@ -19,6 +19,7 @@ const KNOWN_OPERATORS: ReadonlySet<string> = new Set([
   "enabled",
   "disabled",
   "cap",
+  "cat",
 ]);
 
 function isKnownOperator(key: unknown): key is PluginFilterOperator {
@@ -96,6 +97,10 @@ function matchesOperator(
       if (!op.value) return false; // `@cap:` with no value matches nothing
       return (plugin.manifest.capabilities ?? []).some((c) => c.toLowerCase() === op.value);
     }
+    case "cat": {
+      if (!op.value) return false; // `@cat:` with no value matches nothing
+      return resolvePluginCategory(plugin.manifest) === op.value;
+    }
   }
 }
 
@@ -111,7 +116,11 @@ export function scorePlugin(plugin: LoadedPluginInfo, freeText: string): number 
   const name = plugin.manifest.displayName ?? plugin.manifest.name;
   const nameScore = scoreSubsequence(lowerQuery, name, name.toLowerCase());
 
-  const description = plugin.manifest.description ?? "";
+  // Tagline and description score as one secondary field — the tagline is just
+  // the short form of the same copy, so it shouldn't out-rank or double-count.
+  const description = [plugin.manifest.tagline, plugin.manifest.description]
+    .filter(Boolean)
+    .join(" ");
   const descriptionScore =
     description.length > 0
       ? scoreSubsequence(lowerQuery, description, description.toLowerCase())

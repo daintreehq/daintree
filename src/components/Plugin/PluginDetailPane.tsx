@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { AlertCircle, AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
+import {
+  getPluginCategoryMeta,
+  resolvePluginCategory,
+} from "@shared/config/pluginCategoryRegistry";
+import { PluginIconTile } from "./pluginIcons";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import {
@@ -247,6 +252,7 @@ export function PluginDetailPane({
   const label = pluginLabel(plugin);
   const restartRequired = plugin.pendingRestart === true;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
+  const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
 
@@ -271,30 +277,38 @@ export function PluginDetailPane({
   return (
     <div className="text-daintree-text">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <h3 className="text-base font-medium truncate">{label}</h3>
-            <span className="text-xs font-normal text-daintree-text/40">
-              v{plugin.manifest.version}
-            </span>
-            <span className={BADGE_CLASS}>{sourceLabel}</span>
-            {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
-            {restartRequired && (
-              <span className={`${BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+        <div className="flex items-start gap-3.5 min-w-0">
+          <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className="text-base font-medium truncate">{label}</h3>
+              <span className="text-xs font-normal text-daintree-text/40">
+                v{plugin.manifest.version}
+              </span>
+              <span className={BADGE_CLASS}>{categoryLabel}</span>
+              <span className={BADGE_CLASS}>{sourceLabel}</span>
+              {plugin.disabled === true && <span className={BADGE_CLASS}>Disabled</span>}
+              {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
+              {restartRequired && (
+                <span className={`${BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+              )}
+            </div>
+            {plugin.manifest.tagline && (
+              <p className="text-sm text-daintree-text/60 mt-1">{plugin.manifest.tagline}</p>
+            )}
+            {!plugin.isBuiltin && plugin.installedAt > 0 && (
+              <div className="text-[11px] text-daintree-text/40 mt-1">
+                {plugin.updatedAt
+                  ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
+                  : `Installed ${formatRelativeTime(plugin.installedAt)}`}
+              </div>
+            )}
+            {upToDate && (
+              <div className="text-[11px] text-daintree-text/50 mt-1" role="status">
+                Already up to date
+              </div>
             )}
           </div>
-          {!plugin.isBuiltin && plugin.installedAt > 0 && (
-            <div className="text-[11px] text-daintree-text/40 mt-1">
-              {plugin.updatedAt
-                ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
-                : `Installed ${formatRelativeTime(plugin.installedAt)}`}
-            </div>
-          )}
-          {upToDate && (
-            <div className="text-[11px] text-daintree-text/50 mt-1" role="status">
-              Already up to date
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
