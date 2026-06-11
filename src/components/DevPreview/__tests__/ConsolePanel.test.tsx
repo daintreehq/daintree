@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConsolePanel, serializeConsoleMessage, serializeConsoleMessages } from "../ConsolePanel";
 import { useConsoleCaptureStore, type ConsoleMessage } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
@@ -124,12 +124,20 @@ describe("serializeConsoleMessage", () => {
     const out = serializeConsoleMessage(msg);
     expect(out).not.toContain("\u001b");
     expect(out).not.toContain("\u202e");
-    // Untrusted newlines inside summaryText are stripped; the serializer's own
-    // row/frame line structure survives.
+    // Multi-line summaries keep their line structure (matching the
+    // whitespace-pre-wrap display); other controls are stripped per line.
     expect(out.split("\n")).toEqual([
-      "[12:34:56.789] [ERR] safe[31mtextsecond",
+      "[12:34:56.789] [ERR] safe[31mtext",
+      "second",
       "  at fn (http://x/a.js:1:2)",
     ]);
+  });
+
+  it("preserves multi-line exception text without a stack trace", () => {
+    const msg = makeMessage({ summaryText: "TypeError: x\n  at foo (app.js:1:1)" });
+    expect(serializeConsoleMessage(msg)).toBe(
+      "[12:34:56.789] [ERR] TypeError: x\n  at foo (app.js:1:1)"
+    );
   });
 
   it("joins multiple messages with newlines", () => {
@@ -171,6 +179,43 @@ describe("per-row copy", () => {
     expect(writeText).toHaveBeenCalledWith(
       expect.stringContaining("with stack\n  at handler (http://x/main.js:3:7)")
     );
+  });
+
+  it("copies the clicked row, not another row", () => {
+    seedConsoleRow({ summaryText: "first row" });
+    seedConsoleRow({ summaryText: "second row" });
+    seedConsoleRow({ summaryText: "third row" });
+    renderPanel();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Copy console message" })[1]!);
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const text = writeText.mock.calls[0]![0];
+    expect(text).toContain("second row");
+    expect(text).not.toContain("first row");
+    expect(text).not.toContain("third row");
+  });
+
+  it("shows the copied check after a successful copy", async () => {
+    seedConsoleRow({ summaryText: "feedback" });
+    renderPanel();
+
+    const button = screen.getByRole("button", { name: "Copy console message" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.querySelector(".animate-badge-bump")).toBeTruthy());
+  });
+
+  it("does not show the copied check when the clipboard write fails", async () => {
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    seedConsoleRow({ summaryText: "rejected" });
+    renderPanel();
+
+    const button = screen.getByRole("button", { name: "Copy console message" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(button.querySelector(".animate-badge-bump")).toBeNull();
   });
 });
 
@@ -238,6 +283,34 @@ describe("toolbar copy visible", () => {
     const text = writeText.mock.calls[0]![0];
     expect(text).toContain("group header");
     expect(text).not.toContain("hidden child");
+  });
+
+  it("excludes the whole nested subtree of a collapsed group but keeps siblings", () => {
+    seedConsoleRow({ cdpType: "startGroupCollapsed", summaryText: "outer group" });
+    seedConsoleRow({ cdpType: "startGroup", summaryText: "inner group", groupDepth: 1 });
+    seedConsoleRow({ summaryText: "grandchild", groupDepth: 2 });
+    seedConsoleRow({ summaryText: "sibling after" });
+    renderPanel();
+
+    fireEvent.click(getCopyVisibleButton());
+
+    const text = writeText.mock.calls[0]![0];
+    expect(text).toContain("outer group");
+    expect(text).toContain("sibling after");
+    expect(text).not.toContain("inner group");
+    expect(text).not.toContain("grandchild");
+  });
+
+  it("is disabled and copies nothing when the filter matches no rows", () => {
+    seedConsoleRow({ level: "error", summaryText: "only an error" });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Warn" }));
+
+    const button = getCopyVisibleButton();
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
 

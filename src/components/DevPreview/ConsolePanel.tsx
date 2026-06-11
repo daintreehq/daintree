@@ -55,12 +55,14 @@ const FILTER_BUTTONS: { filter: LevelFilter; label: string }[] = [
 
 // Each line is sanitized individually — sanitizeForClipboard strips newlines
 // along with the other C0 controls, so sanitizing the joined output would
-// collapse the intentional row/frame line structure.
+// collapse the intentional row/frame line structure. Multi-line summaries
+// (e.g. exception text with embedded frames) are split first so their line
+// structure survives sanitization, matching the whitespace-pre-wrap display.
 export function serializeConsoleMessage(msg: ConsoleMessage): string {
+  const [firstLine = "", ...restLines] = msg.summaryText.split("\n");
   const lines = [
-    sanitizeForClipboard(
-      `[${msg.timeLabel}] [${LEVEL_STYLES[msg.level].label}] ${msg.summaryText}`
-    ),
+    sanitizeForClipboard(`[${msg.timeLabel}] [${LEVEL_STYLES[msg.level].label}] ${firstLine}`),
+    ...restLines.map((line) => sanitizeForClipboard(line)),
   ];
   if (msg.stackTrace) {
     for (const frame of msg.stackTrace.callFrames) {
@@ -99,7 +101,10 @@ const ConsoleRow = memo(function ConsoleRow({
   }, [copy, msg]);
 
   return (
+    // tabIndex makes the row itself focusable so keyboard users can reach the
+    // focus-within-revealed copy button on rows with no other focusable child.
     <div
+      tabIndex={0}
       className={cn(
         "group/row flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-overlay-subtle",
         style.row
