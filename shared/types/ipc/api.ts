@@ -381,6 +381,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getHeapStats(): Promise<import("./system.js").HeapStats>;
     getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
     getReportEnrichment(): Promise<import("./system.js").ReportIssueEnrichment>;
+    startRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStartResult>;
+    stopRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStopResult>;
     installAgent(payload: {
       agentId: string;
       methodIndex?: number;

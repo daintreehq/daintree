@@ -8,7 +8,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { CHANNELS } from "../channels.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
-import type { HandlerDependencies } from "../types.js";
+import { ensureAttached } from "../../utils/webContentsLifecycle.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   AppMetricsSummary,
   HardwareInfo,
@@ -18,6 +20,8 @@ import type {
   DiagnosticsReviewPayload,
   DiagnosticsBundleSavePayload,
   ReportIssueEnrichment,
+  RendererCpuProfileStartResult,
+  RendererCpuProfileStopResult,
 } from "../../../shared/types/ipc/system.js";
 import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
@@ -119,6 +123,55 @@ async function writeBundleZip(
   if (process.platform !== "win32") {
     await fs.chmod(zipPath, 0o600);
   }
+}
+
+const CPU_PROFILE_DURATION_MS = 15_000;
+// 1000µs sampling keeps profiling overhead at ~1-2%; finer intervals cause
+// observable stuttering in the renderer being measured.
+const CPU_PROFILE_SAMPLING_INTERVAL_US = 1000;
+
+interface RendererCpuProfileSession {
+  wc: Electron.WebContents;
+  timer: NodeJS.Timeout | null;
+  /**
+   * Memoized `Profiler.stop` call. Both the auto-stop timer and the renderer's
+   * stop IPC funnel through this so the profiler is stopped exactly once even
+   * when they race; the stop handler awaits whichever capture won.
+   */
+  capture: Promise<unknown> | null;
+  stopping: boolean;
+  onDetach: () => void;
+  onDestroyed: () => void;
+}
+
+const cpuProfileSessions = new Map<number, RendererCpuProfileSession>();
+
+function cleanupCpuProfileSession(webContentsId: number): void {
+  const session = cpuProfileSessions.get(webContentsId);
+  if (!session) return;
+  cpuProfileSessions.delete(webContentsId);
+  if (session.timer) {
+    clearTimeout(session.timer);
+    session.timer = null;
+  }
+  const { wc } = session;
+  if (!wc.isDestroyed()) {
+    wc.debugger.removeListener("detach", session.onDetach);
+    wc.removeListener("destroyed", session.onDestroyed);
+  }
+}
+
+function beginCpuProfileCapture(session: RendererCpuProfileSession): Promise<unknown> {
+  session.capture ??= (async () => {
+    const result = (await session.wc.debugger.sendCommand("Profiler.stop")) as {
+      profile: unknown;
+    };
+    // The debugger attachment is shared with webContentsLifecycle (freeze/
+    // throttle), so only disable the Profiler domain — never detach.
+    session.wc.debugger.sendCommand("Profiler.disable").catch(() => {});
+    return result.profile;
+  })();
+  return session.capture;
 }
 
 function ensureEventLoopHistogram(): IntervalHistogram {
@@ -353,6 +406,130 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     return true;
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_SAVE_DIAGNOSTICS_BUNDLE, handleSaveDiagnosticsBundle));
+
+  const handleRendererCpuProfileStart = async (
+    ctx: IpcContext
+  ): Promise<RendererCpuProfileStartResult> => {
+    const wc = ctx.event.sender;
+    if (wc.isDestroyed()) {
+      return { status: "failed", reason: "webcontents-destroyed" };
+    }
+
+    const existing = cpuProfileSessions.get(wc.id);
+    if (existing) {
+      // A finished-but-uncollected session (auto-stop fired while Settings was
+      // closed, so no stop IPC ever arrived) must not block re-recording.
+      if (existing.timer === null && !existing.stopping) {
+        cleanupCpuProfileSession(wc.id);
+      } else {
+        return { status: "failed", reason: "already-recording" };
+      }
+    }
+
+    try {
+      ensureAttached(wc);
+      await wc.debugger.sendCommand("Profiler.enable");
+      await wc.debugger.sendCommand("Profiler.setSamplingInterval", {
+        interval: CPU_PROFILE_SAMPLING_INTERVAL_US,
+      });
+      await wc.debugger.sendCommand("Profiler.start");
+    } catch (err) {
+      return {
+        status: "failed",
+        reason: "cdp-error",
+        message: formatErrorMessage(err, "CPU profiler failed to start"),
+      };
+    }
+
+    const session: RendererCpuProfileSession = {
+      wc,
+      timer: null,
+      capture: null,
+      stopping: false,
+      onDetach: () => {
+        // DevTools (or another client) stole the CDP session — an in-flight
+        // recording is unrecoverable. Stop the timer and poison the capture so
+        // the stop handler reports the failure; an already-completed capture
+        // is kept (??=) since its data was extracted before the detach.
+        if (session.timer) {
+          clearTimeout(session.timer);
+          session.timer = null;
+        }
+        session.capture ??= Promise.reject(new Error("Debugger detached during recording"));
+        session.capture.catch(() => {});
+      },
+      onDestroyed: () => cleanupCpuProfileSession(wc.id),
+    };
+    session.timer = setTimeout(() => {
+      session.timer = null;
+      beginCpuProfileCapture(session).catch(() => {});
+    }, CPU_PROFILE_DURATION_MS);
+    wc.debugger.on("detach", session.onDetach);
+    wc.once("destroyed", session.onDestroyed);
+    cpuProfileSessions.set(wc.id, session);
+
+    return { status: "started", expiresAt: Date.now() + CPU_PROFILE_DURATION_MS };
+  };
+  handlers.push(
+    typedHandleWithContext(
+      CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_START,
+      handleRendererCpuProfileStart
+    )
+  );
+
+  const handleRendererCpuProfileStop = async (
+    ctx: IpcContext
+  ): Promise<RendererCpuProfileStopResult> => {
+    const session = cpuProfileSessions.get(ctx.webContentsId);
+    if (!session) return { status: "failed", reason: "not-recording" };
+    if (session.stopping) return { status: "failed", reason: "already-stopping" };
+    session.stopping = true;
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+
+    let profile: unknown;
+    try {
+      profile = await beginCpuProfileCapture(session);
+    } catch (err) {
+      cleanupCpuProfileSession(ctx.webContentsId);
+      return {
+        status: "failed",
+        reason: "devtools-detached",
+        message: formatErrorMessage(err, "Profiler stopped unexpectedly"),
+      };
+    }
+    cleanupCpuProfileSession(ctx.webContentsId);
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const win =
+      ctx.senderWindow ?? deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
+    const dialogOpts = {
+      title: "Save CPU Profile",
+      defaultPath: `daintree-renderer-profile-${timestamp}.cpuprofile`,
+      filters: [{ name: "CPU Profile", extensions: ["cpuprofile"] }],
+    };
+    const { filePath, canceled } = win
+      ? await dialog.showSaveDialog(win, dialogOpts)
+      : await dialog.showSaveDialog(dialogOpts);
+    if (canceled || !filePath) return { status: "canceled" };
+
+    try {
+      await resilientAtomicWriteFile(filePath, JSON.stringify(profile), "utf-8", { mode: 0o600 });
+    } catch (err) {
+      return {
+        status: "failed",
+        reason: "save-failed",
+        message: formatErrorMessage(err, "Couldn't save the profile"),
+      };
+    }
+    shell.showItemInFolder(filePath);
+    return { status: "saved" };
+  };
+  handlers.push(
+    typedHandleWithContext(CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_STOP, handleRendererCpuProfileStop)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

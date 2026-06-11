@@ -114,6 +114,16 @@ export const systemClient = {
     return window.electron.system.getDiagnosticsInfo();
   },
 
+  startRendererCpuProfile: (): ReturnType<
+    typeof window.electron.system.startRendererCpuProfile
+  > => {
+    return window.electron.system.startRendererCpuProfile();
+  },
+
+  stopRendererCpuProfile: (): ReturnType<typeof window.electron.system.stopRendererCpuProfile> => {
+    return window.electron.system.stopRendererCpuProfile();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {

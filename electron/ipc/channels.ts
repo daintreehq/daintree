@@ -122,6 +122,8 @@ export const CHANNELS = {
   SYSTEM_GET_REPORT_ENRICHMENT: "system:get-report-enrichment",
   SYSTEM_REPORT_BLINK_MEMORY: "system:report-blink-memory",
   SYSTEM_REPORT_RENDERER_ELU: "system:report-renderer-elu",
+  SYSTEM_RENDERER_CPU_PROFILE_START: "system:renderer-cpu-profile-start",
+  SYSTEM_RENDERER_CPU_PROFILE_STOP: "system:renderer-cpu-profile-stop",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",

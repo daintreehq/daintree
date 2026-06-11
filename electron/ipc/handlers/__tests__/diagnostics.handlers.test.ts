@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -202,6 +202,8 @@ describe("registerDiagnosticsHandlers", () => {
     expect(channels).toContain("system:report-blink-memory");
     expect(channels).toContain("system:report-renderer-elu");
     expect(channels).toContain("system:get-report-enrichment");
+    expect(channels).toContain("system:renderer-cpu-profile-start");
+    expect(channels).toContain("system:renderer-cpu-profile-stop");
     cleanup();
   });
 
@@ -567,6 +569,247 @@ describe("registerDiagnosticsHandlers", () => {
       } finally {
         Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
       }
+    });
+  });
+
+  describe("renderer CPU profile", () => {
+    const PROFILE_FIXTURE = { nodes: [], startTime: 0, endTime: 15, samples: [1, 2] };
+
+    function makeProfilerEvent(id: number) {
+      const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+      const sendCommand = vi.fn((method: string) => {
+        if (method === "Profiler.stop") return Promise.resolve({ profile: PROFILE_FIXTURE });
+        return Promise.resolve({});
+      });
+      const sender = {
+        id,
+        isDestroyed: vi.fn(() => false),
+        once: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+          (listeners[`wc:${event}`] ??= []).push(fn);
+        }),
+        removeListener: vi.fn(),
+        debugger: {
+          isAttached: vi.fn(() => false),
+          attach: vi.fn(),
+          sendCommand,
+          on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+            (listeners[`dbg:${event}`] ??= []).push(fn);
+          }),
+          removeListener: vi.fn(),
+        },
+      };
+      const emit = (key: string, ...args: unknown[]) => {
+        listeners[key]?.forEach((fn) => fn(...args));
+      };
+      return { event: { sender }, sender, sendCommand, emit };
+    }
+
+    function profilerStopCalls(sendCommand: ReturnType<typeof vi.fn>): number {
+      return sendCommand.mock.calls.filter((c: unknown[]) => c[0] === "Profiler.stop").length;
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("start attaches the debugger and sends Profiler commands in order", async () => {
+      const { event, sender, sendCommand } = makeProfilerEvent(701);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+
+      const result = (await start(event)) as { status: string; expiresAt: number };
+
+      expect(result.status).toBe("started");
+      expect(result.expiresAt).toBeGreaterThan(Date.now());
+      expect(sender.debugger.attach).toHaveBeenCalledWith("1.3");
+      expect(sendCommand.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+        "Profiler.enable",
+        "Profiler.setSamplingInterval",
+        "Profiler.start",
+      ]);
+      expect(sendCommand).toHaveBeenCalledWith("Profiler.setSamplingInterval", { interval: 1000 });
+    });
+
+    it("does not re-attach when the debugger is already attached", async () => {
+      const { event, sender } = makeProfilerEvent(702);
+      sender.debugger.isAttached.mockReturnValue(true);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+
+      await start(event);
+
+      expect(sender.debugger.attach).not.toHaveBeenCalled();
+    });
+
+    it("duplicate start while recording returns already-recording", async () => {
+      const { event } = makeProfilerEvent(703);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+
+      await start(event);
+      const second = (await start(event)) as { status: string; reason: string };
+
+      expect(second).toEqual({ status: "failed", reason: "already-recording" });
+    });
+
+    it("start on a destroyed sender fails without CDP calls", async () => {
+      const { event, sender, sendCommand } = makeProfilerEvent(704);
+      sender.isDestroyed.mockReturnValue(true);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+
+      const result = await start(event);
+
+      expect(result).toEqual({ status: "failed", reason: "webcontents-destroyed" });
+      expect(sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("stop without a recording returns not-recording", async () => {
+      const { event } = makeProfilerEvent(705);
+      registerDiagnosticsHandlers(deps);
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      const result = await stop(event);
+
+      expect(result).toEqual({ status: "failed", reason: "not-recording" });
+    });
+
+    it("stop writes the raw profile JSON to a .cpuprofile path and reveals it", async () => {
+      const { event } = makeProfilerEvent(706);
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/profile.cpuprofile",
+        canceled: false,
+      });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      const result = await stop(event);
+
+      expect(result).toEqual({ status: "saved" });
+      const dialogArgs = dialogMock.showSaveDialog.mock.calls[0] as unknown[];
+      const opts = dialogArgs[dialogArgs.length - 1] as {
+        defaultPath: string;
+        filters: Array<{ extensions: string[] }>;
+      };
+      expect(opts.defaultPath).toMatch(/^daintree-renderer-profile-.+\.cpuprofile$/);
+      expect(opts.filters[0].extensions).toEqual(["cpuprofile"]);
+      expect(resilientAtomicWriteFileMock).toHaveBeenCalledWith(
+        "/tmp/profile.cpuprofile",
+        JSON.stringify(PROFILE_FIXTURE),
+        "utf-8",
+        { mode: 0o600 }
+      );
+      expect(shellMock.showItemInFolder).toHaveBeenCalledWith("/tmp/profile.cpuprofile");
+    });
+
+    it("dialog cancel returns canceled without writing", async () => {
+      const { event } = makeProfilerEvent(707);
+      dialogMock.showSaveDialog.mockResolvedValueOnce({ filePath: undefined, canceled: true });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      const result = await stop(event);
+
+      expect(result).toEqual({ status: "canceled" });
+      expect(resilientAtomicWriteFileMock).not.toHaveBeenCalled();
+      expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
+    });
+
+    it("manual stop clears the auto-stop timer", async () => {
+      const { event, sendCommand } = makeProfilerEvent(708);
+      dialogMock.showSaveDialog.mockResolvedValueOnce({ filePath: undefined, canceled: true });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      await stop(event);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(profilerStopCalls(sendCommand)).toBe(1);
+    });
+
+    it("auto-stop captures at 15s; a later stop saves it without a second Profiler.stop", async () => {
+      const { event, sendCommand } = makeProfilerEvent(709);
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/auto.cpuprofile",
+        canceled: false,
+      });
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      expect(profilerStopCalls(sendCommand)).toBe(0);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(profilerStopCalls(sendCommand)).toBe(1);
+
+      const result = await stop(event);
+
+      expect(result).toEqual({ status: "saved" });
+      expect(profilerStopCalls(sendCommand)).toBe(1);
+      expect(resilientAtomicWriteFileMock).toHaveBeenCalledWith(
+        "/tmp/auto.cpuprofile",
+        JSON.stringify(PROFILE_FIXTURE),
+        "utf-8",
+        { mode: 0o600 }
+      );
+    });
+
+    it("detach during recording fails the stop and cancels the auto-stop", async () => {
+      const { event, sendCommand, emit } = makeProfilerEvent(710);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      emit("dbg:detach");
+      const result = (await stop(event)) as { status: string; reason: string };
+
+      expect(result.status).toBe("failed");
+      expect(result.reason).toBe("devtools-detached");
+      expect(resilientAtomicWriteFileMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(profilerStopCalls(sendCommand)).toBe(0);
+    });
+
+    it("start after an uncollected auto-stopped session records again", async () => {
+      const { event, sendCommand } = makeProfilerEvent(711);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+
+      await start(event);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(profilerStopCalls(sendCommand)).toBe(1);
+
+      const second = (await start(event)) as { status: string };
+
+      expect(second.status).toBe("started");
+      expect(
+        sendCommand.mock.calls.filter((c: unknown[]) => c[0] === "Profiler.start")
+      ).toHaveLength(2);
+    });
+
+    it("destroyed event cleans up the session so stop reports not-recording", async () => {
+      const { event, emit } = makeProfilerEvent(712);
+      registerDiagnosticsHandlers(deps);
+      const start = getHandlerFn("system:renderer-cpu-profile-start");
+      const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+      await start(event);
+      emit("wc:destroyed");
+      const result = await stop(event);
+
+      expect(result).toEqual({ status: "failed", reason: "not-recording" });
     });
   });
 });

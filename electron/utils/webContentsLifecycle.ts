@@ -39,7 +39,7 @@ const EXPECTED_CDP_ERRORS = [
 const CACHED_VIEW_CPU_THROTTLE_RATE = 4;
 const ACTIVE_VIEW_CPU_THROTTLE_RATE = 1;
 
-function ensureAttached(wc: Electron.WebContents): void {
+export function ensureAttached(wc: Electron.WebContents): void {
   if (!wc.debugger.isAttached()) {
     wc.debugger.attach("1.3");
   }

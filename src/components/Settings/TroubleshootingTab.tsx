@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  Activity,
   FileText,
   Trash2,
   Bug,
@@ -12,6 +13,7 @@ import {
   Download,
   Monitor,
   SlidersHorizontal,
+  Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient, systemClient, logsClient } from "@/clients";
@@ -119,6 +121,110 @@ function DownloadDiagnosticsSection() {
         {isCollecting ? "Collecting..." : "Download Diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
+    </SettingsSection>
+  );
+}
+
+const CPU_PROFILE_DURATION_SECONDS = 15;
+
+function RendererCpuProfileSection() {
+  const [phase, setPhase] = useState<"idle" | "recording" | "saving">("idle");
+  const [secondsLeft, setSecondsLeft] = useState(CPU_PROFILE_DURATION_SECONDS);
+  const [error, setError] = useState<string | null>(null);
+  const expiresAtRef = useRef(0);
+  const stopInFlightRef = useRef(false);
+
+  const handleStop = useCallback(async () => {
+    if (stopInFlightRef.current) return;
+    stopInFlightRef.current = true;
+    setPhase("saving");
+    try {
+      const result = await systemClient.stopRendererCpuProfile();
+      if (
+        result.status === "failed" &&
+        result.reason !== "not-recording" &&
+        result.reason !== "already-stopping"
+      ) {
+        setError(
+          result.reason === "devtools-detached"
+            ? "Recording stopped because DevTools attached to this window. Close DevTools and try again."
+            : (result.message ?? "Couldn't save the profile")
+        );
+      }
+    } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't capture the profile"));
+    } finally {
+      stopInFlightRef.current = false;
+      setPhase("idle");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "recording") return;
+    const interval = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((expiresAtRef.current - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+      if (remaining <= 0) void handleStop();
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [phase, handleStop]);
+
+  const handleRecord = async () => {
+    setError(null);
+    try {
+      const result = await systemClient.startRendererCpuProfile();
+      if (result.status === "failed") {
+        setError(
+          result.reason === "already-recording"
+            ? "A recording is already in progress. Wait for it to finish and try again."
+            : (result.message ?? "Couldn't start the profiler")
+        );
+        return;
+      }
+      expiresAtRef.current = result.expiresAt;
+      setSecondsLeft(CPU_PROFILE_DURATION_SECONDS);
+      setPhase("recording");
+    } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't start the profiler"));
+    }
+  };
+
+  return (
+    <SettingsSection
+      icon={Activity}
+      title="Record CPU profile"
+      description="Capture a 15-second CPU profile of the app's interface to diagnose lag or slow interactions. The saved .cpuprofile file opens in Chrome DevTools."
+    >
+      <div className="flex items-center gap-3">
+        {phase === "recording" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleStop()}
+            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+          >
+            <Square className="w-4 h-4" />
+            Stop recording
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleRecord()}
+            disabled={phase === "saving"}
+            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+          >
+            <Activity className="w-4 h-4" />
+            {phase === "saving" ? "Saving…" : "Record profile"}
+          </Button>
+        )}
+        {phase === "recording" && (
+          <span className="text-xs text-daintree-text/60">
+            Reproduce the slow interaction — auto-stops in {secondsLeft}s
+          </span>
+        )}
+      </div>
+      {error && <p className="text-xs text-status-error mt-3 select-text">{error}</p>}
     </SettingsSection>
   );
 }
@@ -363,6 +469,8 @@ export function TroubleshootingTab() {
       <HardwareAccelerationSection />
 
       <DownloadDiagnosticsSection />
+
+      <RendererCpuProfileSection />
 
       <SystemHealthSection />
 
