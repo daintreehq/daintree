@@ -53,6 +53,8 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterWebContents: vi.fn(),
   registerProjectView: vi.fn(),
   unregisterProjectView: vi.fn(),
+  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -117,6 +119,10 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import {
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
+} from "../webContentsRegistry.js";
 
 function createMockWindow() {
   return {
@@ -308,5 +314,127 @@ describe("ProjectViewManager — efficiency freeze", () => {
     // Re-toggle off — no unfreeze call expected (no cached views).
     manager.setEfficiencyFreeze(false);
     expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalled();
+  });
+
+  it("deactivation marks the view cached in the broadcast registry", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(vi.mocked(registerCachedViewWebContents)).toHaveBeenCalledWith(initialWc);
+    // The newly-active view must never be marked cached.
+    const activeWc = manager.getActiveView()!.webContents;
+    const cachedCalls = vi.mocked(registerCachedViewWebContents).mock.calls;
+    expect(cachedCalls.every((call) => call[0] !== activeWc)).toBe(true);
+  });
+
+  it("marks the view cached before applying the CPU throttle", async () => {
+    const { throttleCpuWebContents } = await import("../../utils/webContentsLifecycle.js");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    const markOrder = vi.mocked(registerCachedViewWebContents).mock.invocationCallOrder[0];
+    const throttleOrder = vi.mocked(throttleCpuWebContents).mock.invocationCallOrder[0];
+    expect(markOrder).toBeLessThan(throttleOrder);
+  });
+
+  it("warm reactivation clears the cached mark", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.mocked(unregisterCachedViewWebContents).mockClear();
+
+    await manager.switchTo("proj-a", "/path/a");
+
+    expect(vi.mocked(unregisterCachedViewWebContents)).toHaveBeenCalledWith(initialWc.id);
+  });
+
+  it("does not mark a destroyed webContents cached on deactivation", async () => {
+    initialWc.isDestroyed.mockReturnValue(true);
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    const cachedCalls = vi.mocked(registerCachedViewWebContents).mock.calls;
+    expect(cachedCalls.every((call) => (call[0] as unknown) !== initialWc)).toBe(true);
+  });
+});
+
+describe("ProjectViewManager — memory sampler jitter", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    nextWebContentsId = 100;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function createManagerWithSampleSpy() {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+    });
+    const sample = vi.fn();
+    (manager as unknown as { sampleCachedViewMemory: () => void }).sampleCachedViewMemory = sample;
+    return { manager, sample };
+  }
+
+  it("first sample fires after a random fraction of the interval, then at the fixed cadence", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const { sample } = createManagerWithSampleSpy();
+
+    // 0.5 × 30s jitter → first tick at 15s.
+    vi.advanceTimersByTime(14_999);
+    expect(sample).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(sample).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
+    expect(sample).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(30_000);
+    expect(sample).toHaveBeenCalledTimes(3);
+  });
+
+  it("two managers with different jitter do not sample on the same tick", () => {
+    const randomSpy = vi.spyOn(Math, "random");
+    randomSpy.mockReturnValueOnce(0);
+    const first = createManagerWithSampleSpy();
+    randomSpy.mockReturnValueOnce(0.5);
+    const second = createManagerWithSampleSpy();
+
+    vi.advanceTimersByTime(0);
+    expect(first.sample).toHaveBeenCalledTimes(1);
+    expect(second.sample).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(15_000);
+    expect(first.sample).toHaveBeenCalledTimes(1);
+    expect(second.sample).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispose stops the sampler", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.1);
+    const { manager, sample } = createManagerWithSampleSpy();
+
+    manager.dispose();
+    vi.advanceTimersByTime(120_000);
+
+    expect(sample).not.toHaveBeenCalled();
+  });
+
+  it("a sampler tick that throws does not stop subsequent ticks", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { sample } = createManagerWithSampleSpy();
+    sample.mockImplementationOnce(() => {
+      throw new Error("metrics unavailable");
+    });
+
+    vi.advanceTimersByTime(0);
+    expect(sample).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
+    expect(sample).toHaveBeenCalledTimes(2);
   });
 });

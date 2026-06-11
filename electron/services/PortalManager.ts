@@ -4,6 +4,7 @@ import { isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
+import { throttleCpuWebContents, unthrottleCpuWebContents } from "../utils/webContentsLifecycle.js";
 
 export const PORTAL_MAX_LIVE_TABS = 3;
 
@@ -369,8 +370,19 @@ export class PortalManager {
 
     // Park the previously-active view offscreen instead of detaching it —
     // keeps its renderer state (scroll, in-flight requests, sockets) alive.
+    // CPU throttle (not freeze) so its event loop and live SSE/WS streams
+    // keep running while V8/Blink CPU time drops.
     if (this.activeView && this.activeView !== view) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
+      if (this.activeView.webContents && !this.activeView.webContents.isDestroyed()) {
+        void throttleCpuWebContents(this.activeView.webContents);
+      }
+    }
+
+    // Restore full CPU rate before making visible — the view may have been
+    // throttled while parked by a previous showTab() or hideAll().
+    if (view.webContents && !view.webContents.isDestroyed()) {
+      void unthrottleCpuWebContents(view.webContents);
     }
 
     // Attach on first show only; subsequent shows just move bounds.
@@ -420,6 +432,12 @@ export class PortalManager {
     if (this.activeView) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
       this.hidden = true;
+      // CPU throttle (not freeze) the parked view — keeps SSE/WS streams and
+      // the event loop alive while cutting background CPU. showTab() restores
+      // the full rate on re-show.
+      if (this.activeView.webContents && !this.activeView.webContents.isDestroyed()) {
+        void throttleCpuWebContents(this.activeView.webContents);
+      }
       // Return focus to the main app webContents. The old removeChildView
       // path implicitly blurred the portal view; keep that behavior so
       // keyboard input goes to the overlay's focus-trap (in the renderer's
