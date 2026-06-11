@@ -14,18 +14,27 @@ function getPlatform(): Platform {
 
 export function useCloudSyncWarning(homeDir?: string) {
   const currentProject = useProjectStore((state) => state.currentProject);
-  const { settings, projectId: settingsProjectId } = useProjectSettingsStore();
+  const settingsProjectId = useProjectSettingsStore((s) => s.projectId);
+  const hasSettings = useProjectSettingsStore((s) => s.settings !== null);
+  const cloudSyncWarningDismissed = useProjectSettingsStore(
+    (s) => s.settings?.cloudSyncWarningDismissed === true
+  );
   const lastInboxedProjectRef = useRef<string | null>(null);
 
   useEffect(() => {
     const setBanner = useCloudSyncBannerStore.getState().setBanner;
 
-    if (!currentProject?.id || settingsProjectId !== currentProject.id || !settings || !homeDir) {
+    if (
+      !currentProject?.id ||
+      settingsProjectId !== currentProject.id ||
+      !hasSettings ||
+      !homeDir
+    ) {
       setBanner({ service: null, projectId: null });
       return;
     }
 
-    if (settings.cloudSyncWarningDismissed) {
+    if (cloudSyncWarningDismissed) {
       setBanner({ service: null, projectId: null });
       return;
     }
@@ -57,5 +66,12 @@ export function useCloudSyncWarning(homeDir?: string) {
         context: { eventKind: "host" },
       });
     }
-  }, [currentProject?.id, currentProject?.path, settingsProjectId, settings, homeDir]);
+  }, [
+    currentProject?.id,
+    currentProject?.path,
+    settingsProjectId,
+    hasSettings,
+    cloudSyncWarningDismissed,
+    homeDir,
+  ]);
 }

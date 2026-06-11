@@ -719,6 +719,9 @@ function AppInner() {
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
       void preloadPluginManagerView();
+      void preloadWorktreeOverviewModal();
+      void preloadShortcutReferenceDialog();
+      void preloadCrossWorktreeDiff();
       import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
       import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager

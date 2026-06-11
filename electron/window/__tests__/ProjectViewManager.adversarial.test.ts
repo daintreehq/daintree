@@ -162,6 +162,8 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 
+const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 function createMockWindow() {
   return {
     id: 1,
@@ -253,6 +255,7 @@ describe("ProjectViewManager adversarial", () => {
 
     // Switch to C — evicts A (LRU, cache limit 2)
     await manager.switchTo("proj-c", "/c");
+    await flushImmediates();
 
     expect(initialWc.close).toHaveBeenCalledTimes(1);
     // executeJavaScript was already called during deactivation — not called again on eviction

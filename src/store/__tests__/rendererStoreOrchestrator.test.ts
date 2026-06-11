@@ -24,6 +24,7 @@ vi.mock("@/clients", () => ({
   },
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue({ agents: {} }),
+    invalidate: vi.fn(),
     set: vi.fn(),
     reset: vi.fn(),
     stampVersion: vi.fn(),

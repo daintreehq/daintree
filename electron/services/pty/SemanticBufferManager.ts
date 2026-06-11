@@ -5,6 +5,8 @@ import {
   SEMANTIC_FLUSH_INTERVAL_MS,
 } from "./types.js";
 
+const PENDING_SEMANTIC_DATA_MAX_CHARS = 64 * 1024;
+
 export class SemanticBufferManager {
   private pendingSemanticData = "";
   private semanticFlushTimer: NodeJS.Timeout | null = null;
@@ -13,6 +15,9 @@ export class SemanticBufferManager {
 
   onData(data: string): void {
     this.pendingSemanticData += data;
+    if (this.pendingSemanticData.length > PENDING_SEMANTIC_DATA_MAX_CHARS) {
+      this.pendingSemanticData = this.pendingSemanticData.slice(-PENDING_SEMANTIC_DATA_MAX_CHARS);
+    }
 
     if (this.semanticFlushTimer) {
       return;
@@ -84,7 +89,7 @@ export class SemanticBufferManager {
         return line;
       });
 
-    terminal.semanticBuffer.push(...processedLines);
+    terminal.semanticBuffer.push(...processedLines.slice(-SEMANTIC_BUFFER_MAX_LINES));
 
     if (terminal.semanticBuffer.length > SEMANTIC_BUFFER_MAX_LINES) {
       terminal.semanticBuffer = terminal.semanticBuffer.slice(-SEMANTIC_BUFFER_MAX_LINES);

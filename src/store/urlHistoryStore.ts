@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { sanitizeUrlForHistory } from "@shared/utils/urlHistory";
-import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
@@ -183,7 +183,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     }),
     {
       name: "daintree-url-history",
-      storage: createSafeJSONStorage(),
+      storage: createDebouncedSafeJSONStorage(300),
       version: 1,
       migrate: (persistedState) => persistedState as UrlHistoryState,
       merge: (persistedState, currentState) => {

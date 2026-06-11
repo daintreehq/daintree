@@ -93,6 +93,11 @@ import {
   AgentActivityTemperature,
 } from "./AgentActivityTemperature.js";
 
+// Coalescing window for host→main agent:output forwarding. Pending output is
+// flushed synchronously before any agent state transition (and on exit) so
+// turn-outcome classification still sees the tail in order.
+const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
+
 type CursorBufferLine = {
   translateToString: (trimRight?: boolean) => string;
   getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
@@ -155,6 +160,10 @@ export class TerminalProcess {
   private sessionSnapshotter!: SessionSnapshotter;
   private readonly agentOutputTemperature = new AgentActivityTemperature();
   private agentOutputContentSnapshot: VisibleContentSnapshot | undefined;
+
+  private pendingAgentOutput = "";
+  private pendingAgentOutputAgentId: string | null = null;
+  private agentOutputFlushTimer: NodeJS.Timeout | null = null;
 
   private readonly terminalInfo: TerminalInfo;
 
@@ -463,6 +472,7 @@ export class TerminalProcess {
             );
             return;
           }
+          this.flushAgentOutput();
           deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
         {
@@ -473,6 +483,7 @@ export class TerminalProcess {
           }),
           processStateValidator,
           onWaitingTimeout: (_id, _spawnedAt) => {
+            this.flushAgentOutput();
             deps.agentStateService.updateAgentState(
               this.terminalInfo,
               { type: "watchdog-timeout" },
@@ -579,6 +590,7 @@ export class TerminalProcess {
     this.stopActivityMonitor();
     this.identityWatcher.stop();
     this.semanticBufferManager.flush();
+    this.flushAgentOutput();
 
     if (this.ptyDataDisposable) {
       try {
@@ -625,6 +637,7 @@ export class TerminalProcess {
    * forensics buffer, since fallback classification scans the tail.
    */
   private emitTerminalExited(args: TerminalExitArgs): void {
+    this.flushAgentOutput();
     this.exitObservers.emit(args);
   }
 
@@ -1347,6 +1360,7 @@ export class TerminalProcess {
             );
             return;
           }
+          this.flushAgentOutput();
           this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
         {
@@ -1359,6 +1373,7 @@ export class TerminalProcess {
           initialState,
           skipInitialStateEmit: preserveState,
           onWaitingTimeout: (_id, _spawnedAt) => {
+            this.flushAgentOutput();
             this.deps.agentStateService.updateAgentState(
               this.terminalInfo,
               { type: "watchdog-timeout" },
@@ -1504,6 +1519,7 @@ export class TerminalProcess {
       return;
     }
     if (result.stateHint === "busy" && this.terminalInfo.agentState === state) {
+      this.flushAgentOutput();
       this.deps.agentStateService.handleActivityState(this.terminalInfo, "busy", {
         trigger: "output",
       });
@@ -1676,15 +1692,50 @@ export class TerminalProcess {
 
       const liveId = getLiveAgentId(terminal);
       if (liveId) {
-        events.emit("agent:output", {
-          agentId: liveId,
-          data,
-          timestamp: Date.now(),
-          traceId: terminal.traceId,
-          terminalId: this.id,
-        });
+        this.queueAgentOutput(liveId, data);
       }
     }
+  }
+
+  private queueAgentOutput(agentId: string, data: string): void {
+    if (this.pendingAgentOutputAgentId !== null && this.pendingAgentOutputAgentId !== agentId) {
+      this.flushAgentOutput();
+    }
+    this.pendingAgentOutputAgentId = agentId;
+    this.pendingAgentOutput += data;
+
+    if (this.pendingAgentOutput.length >= OUTPUT_BUFFER_SIZE) {
+      this.flushAgentOutput();
+      return;
+    }
+    if (this.agentOutputFlushTimer) {
+      return;
+    }
+    this.agentOutputFlushTimer = setTimeout(() => {
+      this.agentOutputFlushTimer = null;
+      this.flushAgentOutput();
+    }, AGENT_OUTPUT_FLUSH_INTERVAL_MS);
+  }
+
+  private flushAgentOutput(): void {
+    if (this.agentOutputFlushTimer) {
+      clearTimeout(this.agentOutputFlushTimer);
+      this.agentOutputFlushTimer = null;
+    }
+    if (!this.pendingAgentOutput || this.pendingAgentOutputAgentId === null) {
+      return;
+    }
+    const agentId = this.pendingAgentOutputAgentId;
+    const data = this.pendingAgentOutput;
+    this.pendingAgentOutput = "";
+    this.pendingAgentOutputAgentId = null;
+    events.emit("agent:output", {
+      agentId,
+      data,
+      timestamp: Date.now(),
+      traceId: this.terminalInfo.traceId,
+      terminalId: this.id,
+    });
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty, dataHandoff?: PooledPtyDataHandoff): void {
@@ -1779,6 +1830,7 @@ export class TerminalProcess {
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
+    this.flushAgentOutput();
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     runHandleAgentDetection(

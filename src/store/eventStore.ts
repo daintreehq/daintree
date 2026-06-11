@@ -27,6 +27,31 @@ interface EventsState {
 
 const MAX_EVENTS = 1000;
 
+// Payloads are immutable once recorded, so the lowercase serialization used by
+// the search filter is computed once per payload instead of once per recompute.
+const payloadSearchTextCache = new WeakMap<object, string>();
+
+function safeStringifyLower(value: unknown): string {
+  try {
+    const str = JSON.stringify(value);
+    return typeof str === "string" ? str.toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+function getPayloadSearchText(payload: unknown): string {
+  if (payload === null || typeof payload !== "object") {
+    return safeStringifyLower(payload);
+  }
+  let text = payloadSearchTextCache.get(payload);
+  if (text === undefined) {
+    text = safeStringifyLower(payload);
+    payloadSearchTextCache.set(payload, text);
+  }
+  return text;
+}
+
 const createEventsStore: StateCreator<EventsState> = (set, get) => ({
   events: [],
   isOpen: false,
@@ -177,12 +202,7 @@ const createEventsStore: StateCreator<EventsState> = (set, get) => ({
         if (event.type.toLowerCase().includes(searchLower)) {
           return true;
         }
-        try {
-          const payloadStr = JSON.stringify(event.payload).toLowerCase();
-          return payloadStr.includes(searchLower);
-        } catch {
-          return false;
-        }
+        return getPayloadSearchText(event.payload).includes(searchLower);
       });
     }
 

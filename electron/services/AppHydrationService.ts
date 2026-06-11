@@ -23,6 +23,14 @@ import { inferKind } from "../../shared/utils/inferPanelKind.js";
  */
 export async function buildSwitchHydrateResult(projectId: string): Promise<HydrateResult> {
   const currentProject = projectStore.getProjectById(projectId);
+  // In-repo presets ride along in the payload; kicked off first so the disk
+  // read overlaps the rest of the hydrate work.
+  const projectPresetsPromise = currentProject
+    ? projectStore.readInRepoPresets(currentProject.path).catch((error) => {
+        console.warn("[SwitchHydrate] Failed to read in-repo presets:", error);
+        return {};
+      })
+    : undefined;
   const globalAppState = store.get("appState");
 
   let terminalsToUse: typeof globalAppState.terminals = [];
@@ -111,5 +119,6 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     tabGroups: projectState?.tabGroups ?? [],
     terminalSizes: projectState?.terminalSizes ?? {},
     draftInputs: projectState?.draftInputs ?? {},
+    projectPresets: projectPresetsPromise ? await projectPresetsPromise : undefined,
   };
 }

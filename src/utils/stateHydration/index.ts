@@ -280,13 +280,16 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       : Promise.resolve(emptyDraftInputs);
 
     const emptyProjectPresets: Record<string, AgentPreset[]> = {};
-    const projectPresetsPromise: Promise<Record<string, AgentPreset[]>> =
-      currentProjectId && typeof projectClient.getInRepoPresets === "function"
-        ? projectClient.getInRepoPresets(currentProjectId).catch((error) => {
-            logWarn("Failed to prefetch project presets during hydration", { error });
-            return emptyProjectPresets;
-          })
-        : Promise.resolve(emptyProjectPresets);
+    const projectPresetsPromise: Promise<Record<string, AgentPreset[]>> = currentProjectId
+      ? hydrateResult.projectPresets !== undefined
+        ? Promise.resolve(hydrateResult.projectPresets)
+        : typeof projectClient.getInRepoPresets === "function"
+          ? projectClient.getInRepoPresets(currentProjectId).catch((error) => {
+              logWarn("Failed to prefetch project presets during hydration", { error });
+              return emptyProjectPresets;
+            })
+          : Promise.resolve(emptyProjectPresets)
+      : Promise.resolve(emptyProjectPresets);
 
     const recipeLoadPromise = currentProjectId
       ? loadRecipes(currentProjectId).catch((error) => {

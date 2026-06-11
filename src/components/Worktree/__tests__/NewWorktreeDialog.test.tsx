@@ -71,15 +71,22 @@ vi.mock("@/store/panelStore", () => ({
 }));
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
-vi.mock("@/store/recipeStore", () => ({
-  useRecipeStore: Object.assign(() => ({ recipes: [], runRecipeWithResults: vi.fn() }), {
-    getState: () => ({
-      runRecipeWithResults: vi.fn(),
-      getRecipeById: () => null,
-      generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
-    }),
-  }),
-}));
+vi.mock("@/store/recipeStore", () => {
+  const recipeState = { recipes: [], runRecipeWithResults: vi.fn() };
+  return {
+    useRecipeStore: Object.assign(
+      (selector?: (s: typeof recipeState) => unknown) =>
+        selector ? selector(recipeState) : recipeState,
+      {
+        getState: () => ({
+          runRecipeWithResults: vi.fn(),
+          getRecipeById: () => null,
+          generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
+        }),
+      }
+    ),
+  };
+});
 
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -98,7 +105,9 @@ vi.mock("@/store/projectStore", () => ({
 
 const mockWorktreeDataMap = new Map();
 mockWorktreeDataMap.set("main-wt", {
+  id: "main-wt",
   worktreeId: "main-wt",
+  name: "main",
   branch: "main",
   path: "/test/root",
   isMainWorktree: true,
@@ -251,7 +260,11 @@ vi.mock("@/components/Worktree/worktreeCreationErrors", () => ({
 // jsdom doesn't support scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
 
-import { NewWorktreeDialog } from "../NewWorktreeDialog";
+import { NewWorktreeDialog, clearBranchListCache } from "../NewWorktreeDialog";
+
+beforeEach(() => {
+  clearBranchListCache();
+});
 
 const TEST_BRANCHES: BranchInfo[] = [
   { name: "main", current: true, commit: "abc123" },
@@ -566,6 +579,91 @@ describe("NewWorktreeDialog — pending creation wiring", () => {
       "/test/root-worktrees/feature/test",
       expect.stringContaining("permission denied")
     );
+  });
+});
+
+describe("NewWorktreeDialog — branch list cache", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("shows the skeleton on first-ever open while branches load", async () => {
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    renderDialog();
+
+    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.queryByTestId("branch-name-input")).toBeNull();
+  });
+
+  it("renders the form immediately on reopen from the cached branch list", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    cleanup();
+
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    renderDialog();
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByTestId("branch-name-input")).toBeDefined();
+    expect(document.getElementById("base-branch")?.textContent).toContain("main");
+  });
+
+  it("keeps the cached form when the background refresh fails", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    cleanup();
+
+    mockListBranches.mockRejectedValueOnce(new Error("refresh failed"));
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("branch-name-input")).toBeDefined();
+    expect(document.getElementById("base-branch")?.textContent).toContain("main");
+  });
+
+  it("bypasses the cache and keeps the skeleton for PR checkout opens", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    cleanup();
+
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    renderDialog({
+      initialPR: {
+        number: 42,
+        title: "Test PR",
+        body: "",
+        headRef: "feature/test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/42",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+
+    expect(screen.getByRole("status")).toBeDefined();
   });
 });
 

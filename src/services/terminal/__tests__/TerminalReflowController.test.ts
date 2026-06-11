@@ -191,6 +191,39 @@ describe("TerminalReflowController.maybeReflow", () => {
     expect(paddingHistory(managed).length).toBe(0);
   });
 
+  it("skips without stamping the throttle when the renderer is provably unpaused", () => {
+    const managed = makeManaged();
+    (managed.terminal as unknown as { _core: object })._core = {
+      _renderService: { _isPaused: false },
+    };
+
+    controller.maybeReflow(managed);
+    expect(managed.lastReflowAt).toBe(0);
+    expect(paddingHistory(managed).length).toBe(0);
+  });
+
+  it("reflows when the renderer is paused", () => {
+    const managed = makeManaged();
+    (managed.terminal as unknown as { _core: object })._core = {
+      _renderService: { _isPaused: true },
+    };
+
+    controller.maybeReflow(managed);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
+  it("reflows when the pause flag is missing (API drift)", () => {
+    const managed = makeManaged();
+    (managed.terminal as unknown as { _core: object })._core = {
+      _renderService: {},
+    };
+
+    controller.maybeReflow(managed);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBeGreaterThan(0);
+  });
+
   it("does not stamp the throttle while synchronized output mode is active", () => {
     const managed = makeManaged();
     (

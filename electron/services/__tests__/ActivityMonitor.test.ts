@@ -5608,16 +5608,19 @@ describe("ActivityMonitor", () => {
 
       monitor.startPolling();
       // The data path runs through onData() and triggers bootDetector.check
-      // against the rolling pattern buffer.
+      // against the rolling pattern buffer. Back-to-back chunks inside the
+      // pattern-scan throttle window are scanned by the trailing-edge timer.
       monitor.onData("starting up\nstill working\n");
       expect(onBootComplete).not.toHaveBeenCalled();
 
       monitor.onData("system ready\n");
+      vi.advanceTimersByTime(30);
       expect(onBootComplete).toHaveBeenCalledTimes(1);
       expect(onBootComplete).toHaveBeenCalledWith(expect.any(Number));
 
       // Subsequent matching data must not re-fire.
       monitor.onData("ready again ready\n");
+      vi.advanceTimersByTime(30);
       expect(onBootComplete).toHaveBeenCalledTimes(1);
 
       monitor.dispose();
@@ -5754,6 +5757,51 @@ describe("ActivityMonitor", () => {
       expect(onBootComplete).toHaveBeenCalledTimes(1);
 
       monitor.dispose();
+    });
+  });
+
+  describe("Pattern-scan throttle", () => {
+    it("scans a chunk arriving inside the throttle window via the trailing-edge timer", () => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      const monitor = new ActivityMonitor("scan-trailing", 1000, vi.fn(), {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        bootCompletePatterns: [/ready/i],
+        idleDebounceMs: 4000,
+        onBootComplete,
+      });
+
+      monitor.startPolling();
+      monitor.onData("starting up\n");
+      monitor.onData("system ready\n");
+      expect(onBootComplete).not.toHaveBeenCalled();
+
+      // No further data: the deferred run must still scan the final chunk.
+      vi.advanceTimersByTime(30);
+      expect(onBootComplete).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("dispose cancels a pending trailing-edge scan", () => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      const monitor = new ActivityMonitor("scan-dispose", 1000, vi.fn(), {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        bootCompletePatterns: [/ready/i],
+        idleDebounceMs: 4000,
+        onBootComplete,
+      });
+
+      monitor.startPolling();
+      monitor.onData("starting up\n");
+      monitor.onData("system ready\n");
+      monitor.dispose();
+
+      vi.advanceTimersByTime(100);
+      expect(onBootComplete).not.toHaveBeenCalled();
     });
   });
 

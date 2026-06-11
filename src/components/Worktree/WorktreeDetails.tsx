@@ -13,6 +13,8 @@ import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
+const MAX_VISIBLE_FILES = 100;
+
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;
   homeDir?: string;
@@ -186,7 +188,7 @@ export function WorktreeDetails({
               <FileChangeList
                 changes={worktree.worktreeChanges.changes}
                 rootPath={worktree.worktreeChanges.rootPath}
-                maxVisible={worktree.worktreeChanges.changes.length}
+                maxVisible={MAX_VISIBLE_FILES}
                 groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
                 isStale={isStale}
               />

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FileChangeDetail, GitStatus } from "../../types";
 import { cn } from "../../lib/utils";
 import { FileDiffModal } from "./FileDiffModal";
@@ -157,6 +157,15 @@ export function FileChangeList({
   const remainingFiles = useMemo(
     () => sortedChanges.slice(maxVisible, maxVisible + 2),
     [sortedChanges, maxVisible]
+  );
+
+  const getAdjacentFile = useCallback(
+    (delta: -1 | 1) => {
+      if (selectedIndex === null) return null;
+      const change = sortedChanges[selectedIndex + delta];
+      return change ? { path: change.relativePath, status: change.status } : null;
+    },
+    [selectedIndex, sortedChanges]
   );
 
   const groupedChanges = useMemo((): FolderGroup[] => {
@@ -320,6 +329,7 @@ export function FileChangeList({
           currentFileIndex={selectedIndex ?? undefined}
           totalFileCount={sortedChanges.length}
           onNavigateFile={navigateFile}
+          getAdjacentFile={getAdjacentFile}
         />
       </>
     );
@@ -359,6 +369,7 @@ export function FileChangeList({
         currentFileIndex={selectedIndex ?? undefined}
         totalFileCount={sortedChanges.length}
         onNavigateFile={navigateFile}
+        getAdjacentFile={getAdjacentFile}
       />
     </>
   );

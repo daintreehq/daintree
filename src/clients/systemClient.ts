@@ -7,6 +7,12 @@
  * const hasGit = await systemClient.checkCommand("git");
  * ```
  */
+// os.tmpdir() is session-constant, so the first resolved value is cached for
+// the app lifetime; concurrent first calls share one IPC round-trip. Pattern
+// mirrors globalEnvClient.ts (minus invalidation — the value cannot change).
+let tmpDirInflight: Promise<string> | null = null;
+let cachedTmpDir: string | null = null;
+
 export const systemClient = {
   openExternal: (url: string): Promise<void> => {
     return window.electron.system.openExternal(url);
@@ -38,7 +44,22 @@ export const systemClient = {
   },
 
   getTmpDir: (): Promise<string> => {
-    return window.electron.system.getTmpDir();
+    if (cachedTmpDir !== null) return Promise.resolve(cachedTmpDir);
+    if (tmpDirInflight) return tmpDirInflight;
+
+    const promise = window.electron.system
+      .getTmpDir()
+      .then((result) => {
+        cachedTmpDir = result;
+        return result;
+      })
+      .finally(() => {
+        if (tmpDirInflight === promise) {
+          tmpDirInflight = null;
+        }
+      });
+    tmpDirInflight = promise;
+    return promise;
   },
 
   healthCheck: (agentIds?: string[]): ReturnType<typeof window.electron.system.healthCheck> => {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderGit2, Check, AlertCircle } from "lucide-react";
@@ -46,6 +47,24 @@ import {
 
 type BranchMode = "new" | "existing";
 
+const branchListCache = new Map<string, BranchInfo[]>();
+
+export function clearBranchListCache(): void {
+  branchListCache.clear();
+}
+
+function deriveDefaultBaseBranch(branchList: BranchInfo[]): {
+  name: string;
+  fromRemote: boolean;
+} {
+  const currentBranch = branchList.find((b) => b.current);
+  const mainBranch =
+    branchList.find((b) => b.name === "main") || branchList.find((b) => b.name === "master");
+  const name = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
+  const info = branchList.find((b) => b.name === name);
+  return { name, fromRemote: !!info?.remote };
+}
+
 /** Collapse the normalized forge PR state to the workspace-host form (declined folds into closed). */
 function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged" {
   switch (state) {
@@ -92,6 +111,7 @@ export function NewWorktreeDialog({
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
   const keepEditingButtonRef = useRef<HTMLButtonElement>(null);
   const isCreatingRef = useRef(false);
+  const baseBranchTouchedRef = useRef(false);
 
   const { errors, setValidationError, clearErrors, markTouched, resetErrors } =
     useWorktreeFormErrors();
@@ -104,8 +124,17 @@ export function NewWorktreeDialog({
   const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
-  const worktreeMap = useWorktreeStore((s) => s.worktrees);
-  const { recipes, runRecipeWithResults } = useRecipeStore();
+  const inUseBranches = useWorktreeStore(
+    useShallow((s) => {
+      const names: string[] = [];
+      for (const wt of s.worktrees.values()) {
+        if (wt.branch) names.push(wt.branch);
+      }
+      return names.sort();
+    })
+  );
+  const recipes = useRecipeStore((s) => s.recipes);
+  const runRecipeWithResults = useRecipeStore((s) => s.runRecipeWithResults);
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
@@ -192,6 +221,7 @@ export function NewWorktreeDialog({
 
   const onSelectBranch = useCallback(
     (name: string, isRemote: boolean) => {
+      baseBranchTouchedRef.current = true;
       setBaseBranch(name);
       setFromRemote(isRemote);
     },
@@ -221,12 +251,9 @@ export function NewWorktreeDialog({
   });
 
   const existingBranchCandidates = useMemo(() => {
-    const inUseSet = new Set<string>();
-    for (const wt of worktreeMap.values()) {
-      if (wt.branch) inUseSet.add(wt.branch);
-    }
+    const inUseSet = new Set(inUseBranches);
     return branches.filter((b) => !b.remote && !inUseSet.has(b.name));
-  }, [branches, worktreeMap]);
+  }, [branches, inUseBranches]);
 
   const filteredExistingBranches = useMemo(() => {
     const q = existingBranchQuery.trim().toLowerCase();
@@ -313,10 +340,14 @@ export function NewWorktreeDialog({
   useEffect(() => {
     if (!isOpen) return;
 
-    setLoading(true);
+    // PR opens bypass the cache: PR-branch resolution may fetch from the
+    // remote and must run against a fresh branch list.
+    const cached = initialPR ? undefined : branchListCache.get(rootPath);
+
+    setLoading(!cached);
     resetErrors();
     setPrBranchResolved(null);
-    setBranches([]);
+    setBranches(cached ?? []);
     setBaseBranch("");
     setIsDismissing(false);
     setBranchMode("new");
@@ -324,7 +355,14 @@ export function NewWorktreeDialog({
     setExistingBranchQuery("");
     setWorktreeMode("local");
     isCreatingRef.current = false;
+    baseBranchTouchedRef.current = false;
     // resetErrors() is NOT called here — touched refs are managed by individual hooks
+
+    if (cached) {
+      const seed = deriveDefaultBaseBranch(cached);
+      setBaseBranch(seed.name);
+      setFromRemote(seed.fromRemote);
+    }
 
     let isCurrent = true;
 
@@ -342,6 +380,7 @@ export function NewWorktreeDialog({
       .then(async (branchList) => {
         if (!isCurrent) return;
 
+        branchListCache.set(rootPath, branchList);
         setBranches(branchList);
 
         if (initialPR?.headRef) {
@@ -362,6 +401,7 @@ export function NewWorktreeDialog({
               if (!isCurrent) return;
               const updatedBranches = await worktreeClient.listBranches(rootPath);
               if (!isCurrent) return;
+              branchListCache.set(rootPath, updatedBranches);
               setBranches(updatedBranches);
               const fetchedLocal = updatedBranches.find(
                 (b) => b.name === initialPR.headRef && !b.remote
@@ -389,22 +429,18 @@ export function NewWorktreeDialog({
               setFromRemote(false);
             }
           }
-        } else {
-          const currentBranch = branchList.find((b) => b.current);
-          const mainBranch =
-            branchList.find((b) => b.name === "main") ||
-            branchList.find((b) => b.name === "master");
-
-          const initialBranch =
-            currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
-          setBaseBranch(initialBranch);
-
-          const initialBranchInfo = branchList.find((b) => b.name === initialBranch);
-          setFromRemote(!!initialBranchInfo?.remote);
+        } else if (!baseBranchTouchedRef.current) {
+          const next = deriveDefaultBaseBranch(branchList);
+          setBaseBranch(next.name);
+          setFromRemote(next.fromRemote);
         }
       })
       .catch((err) => {
         if (!isCurrent) return;
+        if (cached) {
+          logError("Failed to refresh branches", err);
+          return;
+        }
         setValidationError(`Failed to load branches: ${err.message}`, null);
         setBranches([]);
         setBaseBranch("");
@@ -929,7 +965,10 @@ export function NewWorktreeDialog({
                   id="from-remote"
                   type="checkbox"
                   checked={fromRemote}
-                  onChange={(e) => setFromRemote(e.target.checked)}
+                  onChange={(e) => {
+                    baseBranchTouchedRef.current = true;
+                    setFromRemote(e.target.checked);
+                  }}
                   className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
                 />
                 <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">

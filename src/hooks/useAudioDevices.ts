@@ -20,7 +20,6 @@ let cachedDevices: AudioDevice[] | null = null;
 let cachedError: string | null = null;
 let cachedLoading = true;
 let listeners: Array<() => void> = [];
-let listenerCount = 0;
 let subscribedToDeviceChange = false;
 let enumerationGen = 0;
 let stableSnapshot: Snapshot = {
@@ -81,8 +80,9 @@ function getSnapshot(): Snapshot {
 
 function subscribe(callback: () => void): () => void {
   listeners = [...listeners, callback];
-  listenerCount++;
 
+  // App-lifetime listener: never detached, so remount cycles reuse the single
+  // subscription instead of stacking unremovable anonymous handlers.
   if (!subscribedToDeviceChange && navigator?.mediaDevices?.addEventListener) {
     subscribedToDeviceChange = true;
     navigator.mediaDevices.addEventListener("devicechange", () => {
@@ -98,10 +98,6 @@ function subscribe(callback: () => void): () => void {
 
   return () => {
     listeners = listeners.filter((l) => l !== callback);
-    listenerCount--;
-    if (listenerCount === 0 && subscribedToDeviceChange) {
-      subscribedToDeviceChange = false;
-    }
   };
 }
 
@@ -124,7 +120,6 @@ export function __resetForTesting(): void {
   cachedError = null;
   cachedLoading = true;
   listeners = [];
-  listenerCount = 0;
   subscribedToDeviceChange = false;
   enumerationGen = 0;
   stableSnapshot = {

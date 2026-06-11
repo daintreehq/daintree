@@ -116,6 +116,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const git = createHardenedGit(payload.cwd);
     await git.add(["--", ...paths]);
+    invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILES, handleStageFiles));
 
@@ -141,6 +142,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     } else {
       await git.raw(["rm", "--cached", "--", ...paths]);
     }
+    invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILES, handleUnstageFiles));
 

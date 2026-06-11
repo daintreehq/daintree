@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -69,7 +70,6 @@ import {
   type PushErrorState,
   type SectionViewState,
   DEFAULT_SECTION_STATE,
-  FILTER_DEBOUNCE_MS,
   getPushBannerConfig,
   isDensity,
   isSortKey,
@@ -320,59 +320,44 @@ export function ReviewHubContent({
   const [changesView, setChangesView] = useState<SectionViewState>(DEFAULT_SECTION_STATE);
   const stagedInputRef = useRef<HTMLInputElement | null>(null);
   const changesInputRef = useRef<HTMLInputElement | null>(null);
-  const stagedDebounceRef = useRef<{
-    (v: string): void;
-    cancel: () => void;
-    flush: () => Promise<void>;
-  } | null>(null);
-  const changesDebounceRef = useRef<{
-    (v: string): void;
-    cancel: () => void;
-    flush: () => Promise<void>;
-  } | null>(null);
 
-  useEffect(() => {
-    stagedDebounceRef.current = debounce((q: string) => {
-      setStagedView((prev) => ({ ...prev, filterQuery: q }));
-    }, FILTER_DEBOUNCE_MS);
-    changesDebounceRef.current = debounce((q: string) => {
-      setChangesView((prev) => ({ ...prev, filterQuery: q }));
-    }, FILTER_DEBOUNCE_MS);
-    return () => {
-      stagedDebounceRef.current?.cancel();
-      changesDebounceRef.current?.cancel();
-    };
+  const setStagedFilterQuery = useCallback((q: string) => {
+    setStagedView((prev) => ({ ...prev, filterQuery: q }));
+  }, []);
+
+  const setChangesFilterQuery = useCallback((q: string) => {
+    setChangesView((prev) => ({ ...prev, filterQuery: q }));
   }, []);
 
   const clearStagedFilter = useCallback(() => {
-    stagedDebounceRef.current?.cancel();
     if (stagedInputRef.current) stagedInputRef.current.value = "";
     setStagedView((prev) => ({ ...prev, filterQuery: "" }));
   }, []);
 
   const clearChangesFilter = useCallback(() => {
-    changesDebounceRef.current?.cancel();
     if (changesInputRef.current) changesInputRef.current.value = "";
     setChangesView((prev) => ({ ...prev, filterQuery: "" }));
   }, []);
+
+  const deferredStagedQuery = useDeferredValue(stagedView.filterQuery);
+  const deferredChangesQuery = useDeferredValue(changesView.filterQuery);
 
   const derivedStaged = useMemo(() => {
     if (!status) return [];
     let rows = status.staged;
     if (!stagedView.showGenerated) rows = rows.filter((f) => !isGeneratedFile(f.path));
-    if (stagedView.filterQuery)
-      rows = rows.filter((f) => matchesFilter(f.path, stagedView.filterQuery));
+    if (deferredStagedQuery) rows = rows.filter((f) => matchesFilter(f.path, deferredStagedQuery));
     return sortFiles(rows, stagedView.sortKey, stagedView.sortDir);
-  }, [status, stagedView]);
+  }, [status, stagedView, deferredStagedQuery]);
 
   const derivedUnstaged = useMemo(() => {
     if (!status) return [];
     let rows = status.unstaged;
     if (!changesView.showGenerated) rows = rows.filter((f) => !isGeneratedFile(f.path));
-    if (changesView.filterQuery)
-      rows = rows.filter((f) => matchesFilter(f.path, changesView.filterQuery));
+    if (deferredChangesQuery)
+      rows = rows.filter((f) => matchesFilter(f.path, deferredChangesQuery));
     return sortFiles(rows, changesView.sortKey, changesView.sortDir);
-  }, [status, changesView]);
+  }, [status, changesView, deferredChangesQuery]);
 
   // Flat keyboard-navigation list: staged rows first, then unstaged, matching
   // render order. Each entry carries its section so action keys (stage/unstage,
@@ -502,6 +487,15 @@ export function ReviewHubContent({
     [navigableItems, selectedFileIndex]
   );
 
+  const getAdjacentWorkingTreeFile = useCallback(
+    (delta: -1 | 1) => {
+      if (selectedFileIndex === null) return null;
+      const item = navigableItems[selectedFileIndex + delta];
+      return item ? { path: item.file.path, status: item.file.status } : null;
+    },
+    [navigableItems, selectedFileIndex]
+  );
+
   const selectedBaseBranchIndex = useMemo(() => {
     if (!selectedBaseBranchFile || !sortedBaseBranchFiles) return null;
     const idx = sortedBaseBranchFiles.findIndex((f) => f.path === selectedBaseBranchFile.path);
@@ -605,13 +599,12 @@ export function ReviewHubContent({
   }, [worktreePath]);
 
   const handleStageFiltered = useCallback(async () => {
+    const paths = derivedUnstaged.map((f) => f.path);
+    if (paths.length === 0) return;
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
-    const paths = derivedUnstaged.map((f) => f.path);
     try {
-      for (const path of paths) {
-        await window.electron.git.stageFile(worktreePath, path);
-      }
+      await window.electron.git.stageFiles(worktreePath, paths);
     } catch (err) {
       setActionError(formatErrorMessage(err, "Failed to stage files"));
     } finally {
@@ -620,13 +613,12 @@ export function ReviewHubContent({
   }, [worktreePath, refresh, derivedUnstaged]);
 
   const handleUnstageFiltered = useCallback(async () => {
+    const paths = derivedStaged.map((f) => f.path);
+    if (paths.length === 0) return;
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
-    const paths = derivedStaged.map((f) => f.path);
     try {
-      for (const path of paths) {
-        await window.electron.git.unstageFile(worktreePath, path);
-      }
+      await window.electron.git.unstageFiles(worktreePath, paths);
     } catch (err) {
       setActionError(formatErrorMessage(err, "Failed to unstage files"));
     } finally {
@@ -736,10 +728,8 @@ export function ReviewHubContent({
       // Filter state lives in `stagedView`/`changesView` rather than refs, so the
       // modal-shell path (which unmounts on close) never noticed leftover
       // filters. Once mounted as a non-modal panel, the same component instance
-      // survives close→reopen — reset the filter, sort, density, and the
-      // pending debounced writes so the next open starts from defaults.
-      stagedDebounceRef.current?.cancel();
-      changesDebounceRef.current?.cancel();
+      // survives close→reopen — reset the filter, sort, and density so the
+      // next open starts from defaults.
       if (stagedInputRef.current) stagedInputRef.current.value = "";
       if (changesInputRef.current) changesInputRef.current.value = "";
       setStagedView(DEFAULT_SECTION_STATE);
@@ -1975,7 +1965,7 @@ export function ReviewHubContent({
                                 type="text"
                                 placeholder="Filter…"
                                 defaultValue={stagedView.filterQuery}
-                                onChange={(e) => stagedDebounceRef.current?.(e.target.value)}
+                                onChange={(e) => setStagedFilterQuery(e.target.value)}
                                 className={cn(
                                   "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
                                   "bg-tint/[0.04] border border-tint/[0.08]",
@@ -2213,7 +2203,7 @@ export function ReviewHubContent({
                                 type="text"
                                 placeholder="Filter…"
                                 defaultValue={changesView.filterQuery}
-                                onChange={(e) => changesDebounceRef.current?.(e.target.value)}
+                                onChange={(e) => setChangesFilterQuery(e.target.value)}
                                 className={cn(
                                   "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
                                   "bg-tint/[0.04] border border-tint/[0.08]",
@@ -2479,6 +2469,7 @@ export function ReviewHubContent({
         currentFileIndex={selectedFileIndex ?? undefined}
         totalFileCount={navigableItems.length}
         onNavigateFile={navigateWorkingTreeFile}
+        getAdjacentFile={getAdjacentWorkingTreeFile}
       />
 
       {/* File diff modal — base-branch mode */}

@@ -56,6 +56,7 @@ vi.mock("../../services/ProjectStore.js", () => ({
     getProjectStateWithRecovery: vi.fn(),
     saveProjectState: vi.fn(),
     enqueueProjectStateUpdate: vi.fn(async () => undefined),
+    readInRepoPresets: vi.fn(async () => ({})),
   },
 }));
 
@@ -788,6 +789,83 @@ describe("app:boot handler", () => {
     expect(result.tabGroups).toBeUndefined();
     expect(result.terminalSizes).toBeUndefined();
     expect(result.draftInputs).toBeUndefined();
+  });
+
+  it("folds in-repo project presets into the payload when a project is resolved", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    const presets = { claude: [{ id: "team-preset", name: "Team" }] };
+    vi.mocked(projectStore.readInRepoPresets).mockResolvedValue(
+      presets as unknown as Awaited<ReturnType<typeof projectStore.readInRepoPresets>>
+    );
+
+    const result = await invokeBoot();
+    expect(projectStore.readInRepoPresets).toHaveBeenCalledWith("/p");
+    expect(result.projectPresets).toEqual(presets);
+  });
+
+  it("degrades projectPresets to empty when the in-repo read fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    vi.mocked(projectStore.readInRepoPresets).mockRejectedValueOnce(new Error("EACCES"));
+
+    const result = await invokeBoot();
+    expect(result.projectPresets).toEqual({});
+    warnSpy.mockRestore();
+  });
+
+  it("leaves projectPresets undefined on the no-project fallback branch", async () => {
+    const result = await invokeBoot();
+    expect(projectStore.readInRepoPresets).not.toHaveBeenCalled();
+    expect(result.projectPresets).toBeUndefined();
+  });
+
+  it("folds a fully-migrated appTheme config into the boot payload", async () => {
+    const appTheme = {
+      colorSchemeId: "daintree",
+      customSchemes: [{ id: "custom-1", name: "Custom", type: "dark", tokens: {} }],
+      accentColorOverride: "#ff0000",
+      colorVisionMode: "red-green",
+    };
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      if (key === "appTheme") return appTheme;
+      return undefined;
+    });
+
+    const result = await invokeBoot();
+    expect(result.appTheme).toEqual(appTheme);
+  });
+
+  it("leaves appTheme off the payload when the stored config still needs migration or defaulting", async () => {
+    const storeModule = await import("../../store.js");
+    for (const stored of [
+      undefined,
+      {},
+      { colorSchemeId: "" },
+      { colorSchemeId: "daintree", customSchemes: '[{"id":"legacy"}]' },
+    ]) {
+      vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+        if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+        if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+        if (key === "agentSettings") return {};
+        if (key === "appTheme") return stored;
+        return undefined;
+      });
+
+      const result = await invokeBoot();
+      expect(result.appTheme).toBeUndefined();
+    }
   });
 
   describe("APP_HYDRATE_PREFETCH perf mark", () => {

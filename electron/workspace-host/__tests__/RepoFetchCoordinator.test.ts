@@ -106,7 +106,9 @@ describe("RepoFetchCoordinator", () => {
     const firstTs = ok.lastFetchedAt;
     expect(firstTs).not.toBeNull();
 
-    // Second call: transient fetch error.
+    // Second call: transient fetch error. Advance past the recency window so
+    // the call actually fetches instead of reusing the first success.
+    vi.advanceTimersByTime(30_000);
     mockCreateBackgroundFetchGit.mockReturnValueOnce(
       makeMockGit(() => Promise.reject(new Error("the remote end hung up unexpectedly")))
     );
@@ -133,6 +135,8 @@ describe("RepoFetchCoordinator", () => {
   it("serializes fetches for sibling worktrees sharing a commondir", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
 
+    // Failing fetches never record a success, so each queued sibling still
+    // runs a real fetch — exercising the per-commondir chain itself.
     let inFlight = 0;
     let maxInFlight = 0;
     mockCreateBackgroundFetchGit.mockReturnValue(
@@ -142,6 +146,7 @@ describe("RepoFetchCoordinator", () => {
         await Promise.resolve();
         await Promise.resolve();
         inFlight--;
+        throw new Error("the remote end hung up unexpectedly");
       })
     );
 
@@ -154,6 +159,105 @@ describe("RepoFetchCoordinator", () => {
 
     expect(maxInFlight).toBe(1);
     expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(3);
+  });
+
+  it("dedups queued sibling fetches once the first one in the chain succeeds", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+
+    const onFetchSuccess = vi.fn();
+    const coord = new RepoFetchCoordinator({ onFetchSuccess });
+    const results = await Promise.all([
+      coord.fetchForWorktree({ worktreeId: "wtA", worktreePath: "/repo/a" }),
+      coord.fetchForWorktree({ worktreeId: "wtB", worktreePath: "/repo/b" }),
+      coord.fetchForWorktree({ worktreeId: "wtC", worktreePath: "/repo/c" }),
+    ]);
+
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r.status)).toEqual(["success", "success", "success"]);
+    const stamps = new Set(results.map((r) => r.lastFetchedAt));
+    expect(stamps.size).toBe(1);
+    expect(onFetchSuccess).toHaveBeenCalledTimes(1);
+    expect(onFetchSuccess).toHaveBeenCalledWith("wtA");
+  });
+
+  it("skips a fetch inside the recency window and runs a real one after it elapses", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+
+    const coord = new RepoFetchCoordinator();
+    const first = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(first.status).toBe("success");
+
+    mockCreateBackgroundFetchGit.mockClear();
+    const within = await coord.fetchForWorktree({ worktreeId: "wt2", worktreePath: "/repo" });
+    expect(within.status).toBe("success");
+    expect(within.lastFetchedAt).toBe(first.lastFetchedAt);
+    expect(mockCreateBackgroundFetchGit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(16_000);
+    const after = await coord.fetchForWorktree({ worktreeId: "wt2", worktreePath: "/repo" });
+    expect(after.status).toBe("success");
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a short recency window to force fetches (wake storm)", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+
+    const coord = new RepoFetchCoordinator();
+    const first = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+    });
+    expect(first.status).toBe("success");
+
+    mockCreateBackgroundFetchGit.mockClear();
+    const within = await coord.fetchForWorktree({
+      worktreeId: "wt2",
+      worktreePath: "/repo",
+      force: true,
+    });
+    expect(within.status).toBe("success");
+    expect(within.lastFetchedAt).toBe(first.lastFetchedAt);
+    expect(mockCreateBackgroundFetchGit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(6_000);
+    const after = await coord.fetchForWorktree({
+      worktreeId: "wt2",
+      worktreePath: "/repo",
+      force: true,
+    });
+    expect(after.status).toBe("success");
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("never serves the recency skip over a cached failure", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let attempt = 0;
+    mockCreateBackgroundFetchGit.mockReturnValue(
+      makeMockGit(() => {
+        attempt++;
+        if (attempt === 1) return Promise.resolve();
+        return Promise.reject(new Error("Could not resolve host: github.com"));
+      })
+    );
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    vi.advanceTimersByTime(6_000);
+    const failed = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+    });
+    expect(failed.status).toBe("failed");
+
+    const blocked = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(blocked.status).toBe("skipped");
+    expect(blocked.skipReason).toBe("in-failure-window");
+    expect(blocked.networkFailed).toBe(true);
   });
 
   it("allows concurrent fetches for distinct commondirs", async () => {
@@ -283,7 +387,9 @@ describe("RepoFetchCoordinator", () => {
     await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
     expect(coord.getLastSuccessfulFetch("/repo/.git")).not.toBeNull();
 
-    // Second fetch fails with 404 — now treated as auth-failed.
+    // Second fetch (past the recency window) fails with 404 — now treated as
+    // auth-failed.
+    vi.advanceTimersByTime(30_000);
     const second = await coord.fetchForWorktree({
       worktreeId: "wt1",
       worktreePath: "/repo",

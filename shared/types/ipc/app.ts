@@ -131,6 +131,14 @@ export interface BootResult extends HydrateResult {
   crashPending: import("./crashRecovery.js").PendingCrash | null;
   /** Live crash recovery configuration (auto-restore toggle, thresholds). */
   crashConfig: import("./crashRecovery.js").CrashRecoveryConfig;
+  /**
+   * Persisted app theme config folded into the boot payload so the renderer
+   * seeds custom schemes, accent override, and color-vision mode without a
+   * post-mount `app-theme:get` round-trip. Undefined when the stored config
+   * still needs first-run defaulting or legacy customSchemes migration — the
+   * renderer falls back to the live IPC call, which performs both.
+   */
+  appTheme?: import("../appTheme.js").AppThemeConfig;
 }
 
 /** Result from app hydration */
@@ -197,4 +205,13 @@ export interface HydrateResult {
   tabGroups?: import("../panel.js").TabGroup[];
   terminalSizes?: Record<string, { cols: number; rows: number }>;
   draftInputs?: Record<string, string>;
+  /**
+   * In-repo agent presets (`.daintree/presets/`) folded into the hydrate
+   * payload so the renderer skips the standalone `project:get-inrepo-presets`
+   * round-trip + repo disk read on the panel-restore critical path. Populated
+   * whenever a project is resolved; undefined on the no-project fallback
+   * branch and older payloads, where the renderer falls back to the
+   * standalone IPC call.
+   */
+  projectPresets?: Record<string, import("../../config/agentRegistry.js").AgentPreset[]>;
 }

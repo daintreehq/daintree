@@ -1040,8 +1040,10 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
       string,
       (details: unknown, callback: (response: unknown) => void) => void
     >();
+    const filtersByPartition = new Map<string, Electron.WebRequestFilter>();
     fromPartition.mockImplementation((partition: string) => {
-      const onHeadersReceived = vi.fn((listener) => {
+      const onHeadersReceived = vi.fn((filter, listener) => {
+        filtersByPartition.set(partition, filter);
         callbacksByPartition.set(partition, listener);
       });
       return {
@@ -1054,6 +1056,13 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     const daintreeListener = callbacksByPartition.get("persist:daintree");
     expect(daintreeListener).toBeDefined();
     expect(callbacksByPartition.has("persist:browser")).toBe(false);
+
+    // Electron 41+ treats an empty `urls` array as matching nothing, so an
+    // empty registration would silently strip header-only CSP directives.
+    const daintreeFilter = filtersByPartition.get("persist:daintree");
+    expect(daintreeFilter?.urls.length).toBeGreaterThan(0);
+    expect(daintreeFilter?.types).toContain("mainFrame");
+    expect(daintreeFilter?.types).toContain("script");
 
     let daintreeResponse: { responseHeaders?: Record<string, string[]> } | undefined;
     daintreeListener!({ responseHeaders: {} }, (response: unknown) => {

@@ -3130,7 +3130,7 @@ describe("ReviewHub", () => {
       });
     });
 
-    it("uses per-file stageFile when filter is active", async () => {
+    it("uses batched stageFiles when filter is active", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
       render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -3146,7 +3146,7 @@ describe("ReviewHub", () => {
       fireEvent.click(stageBtn);
 
       await waitFor(() => {
-        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/legacy.ts");
+        expect(stageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/legacy.ts"]);
         expect(window.electron.git.stageAll).not.toHaveBeenCalled();
       });
     });
