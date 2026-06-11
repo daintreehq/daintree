@@ -3,9 +3,11 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { getForgeProviderImpl, onForgeProviderRegistryChanged } from "../forgeProviderRegistry.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import type { ForgeTokenHealthState, HealthEventsCapability } from "../../../shared/types/forge.js";
-import { mcpServerService } from "../McpServerService.js";
 import { agentConnectivityService } from "./AgentConnectivityService.js";
-import { ServiceConnectivityRegistry } from "./ServiceConnectivityRegistry.js";
+import {
+  ServiceConnectivityRegistry,
+  type ServiceConnectivityRegistryOptions,
+} from "./ServiceConnectivityRegistry.js";
 import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js";
 
 export {
@@ -24,6 +26,61 @@ export { ServiceConnectivityRegistry } from "./ServiceConnectivityRegistry.js";
 export type { ServiceConnectivityRegistryOptions } from "./ServiceConnectivityRegistry.js";
 
 let registryInstance: ServiceConnectivityRegistry | null = null;
+
+type McpServerLike = ServiceConnectivityRegistryOptions["mcpServer"];
+type McpStatusListener = (running: boolean) => void;
+
+/**
+ * Lazy stand-in for `mcpServerService` so this module — on the boot path via
+ * `getServiceConnectivityRegistry()` — never imports the ~637KB MCP server
+ * stack. `ServiceConnectivityRegistry.start()` subscribes synchronously during
+ * boot, before the MCP module can have loaded, so the proxy buffers those
+ * subscriptions and forwards them when `wireMcpServerToConnectivityRegistry()`
+ * installs the real service. `McpServerService.ts` calls the wire function at
+ * module scope, which preserves the documented onStatusChange-before-first-event
+ * ordering: every subscription is forwarded before any caller can obtain the
+ * service and call `start()` on it.
+ */
+class LazyMcpServerProxy {
+  private real: McpServerLike | null = null;
+  private readonly pending = new Map<McpStatusListener, { unsubscribe: (() => void) | null }>();
+
+  get isRunning(): boolean {
+    return this.real?.isRunning ?? false;
+  }
+
+  onStatusChange(listener: McpStatusListener): () => void {
+    if (this.real) return this.real.onStatusChange(listener);
+    const entry: { unsubscribe: (() => void) | null } = { unsubscribe: null };
+    this.pending.set(listener, entry);
+    return () => {
+      entry.unsubscribe?.();
+      entry.unsubscribe = null;
+      this.pending.delete(listener);
+    };
+  }
+
+  setReal(service: McpServerLike): void {
+    if (this.real) return;
+    this.real = service;
+    for (const [listener, entry] of this.pending) {
+      entry.unsubscribe = service.onStatusChange(listener);
+    }
+  }
+}
+
+let mcpServerProxy = new LazyMcpServerProxy();
+
+/**
+ * Install the real `mcpServerService` behind the connectivity registry's lazy
+ * MCP slot. Idempotent — only the first call wires. Called from
+ * `McpServerService.ts` at module scope so every load path (deferred boot
+ * task, help-session provision, agent-spawn `ensureReady`, settings IPC) wires
+ * exactly once.
+ */
+export function wireMcpServerToConnectivityRegistry(service: McpServerLike): void {
+  mcpServerProxy.setReal(service);
+}
 
 const UNKNOWN_TOKEN_HEALTH: ForgeTokenHealthState = {
   status: "unknown",
@@ -81,7 +138,7 @@ export function getServiceConnectivityRegistry(): ServiceConnectivityRegistry {
   if (!registryInstance) {
     registryInstance = new ServiceConnectivityRegistry({
       gitHubHealth: createForgeTokenHealthSource(BUILTIN_GITHUB_PROVIDER_ID),
-      mcpServer: mcpServerService,
+      mcpServer: mcpServerProxy,
       agentConnectivity: agentConnectivityService,
       onRecovery: (_serviceKey, label) => {
         const payload: MainProcessToastPayload = {
@@ -96,10 +153,18 @@ export function getServiceConnectivityRegistry(): ServiceConnectivityRegistry {
   return registryInstance;
 }
 
-/** Test-only helper to reset the singleton between cases. */
+/**
+ * Test-only helper to reset the singleton between cases. Also replaces the
+ * lazy MCP proxy — note that `McpServerService.ts` wires its singleton at
+ * module scope, so a test that imports that module (directly or transitively)
+ * has already wired the OLD proxy; the fresh one stays unwired until the test
+ * calls `wireMcpServerToConnectivityRegistry` itself. Use fakes, not the real
+ * singleton, in tests that rely on this reset.
+ */
 export function _resetServiceConnectivityRegistryForTests(): void {
   if (registryInstance) {
     registryInstance.dispose();
     registryInstance = null;
   }
+  mcpServerProxy = new LazyMcpServerProxy();
 }

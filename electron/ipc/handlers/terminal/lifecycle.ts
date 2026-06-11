@@ -9,7 +9,7 @@ import { CHANNELS } from "../../channels.js";
 import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import { mcpServerService } from "../../../services/McpServerService.js";
+import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -22,6 +22,21 @@ import {
 } from "../../../../shared/config/agentRegistry.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
+
+// Lazy cached accessor (same pattern as `helpAssistant.ts`) — the MCP server
+// stack is ~637KB and only needed for Claude launches with a non-"off" MCP
+// tier, so keep it out of this module's static import set (it loads eagerly
+// at boot).
+type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
+
+let cachedMcpServerService: McpServerSingleton | null = null;
+async function getMcpServerService(): Promise<McpServerSingleton> {
+  if (!cachedMcpServerService) {
+    const mod = await import("../../../services/McpServerService.js");
+    cachedMcpServerService = mod.mcpServerService;
+  }
+  return cachedMcpServerService;
+}
 import {
   listAgentSessions,
   clearAgentSessions,
@@ -350,6 +365,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         const projSettings = await projectStore.getProjectSettings(projectId);
         const tier = resolveDaintreeMcpTier(projSettings);
         if (tier !== "off") {
+          const mcpServerService = await getMcpServerService();
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
             console.warn(

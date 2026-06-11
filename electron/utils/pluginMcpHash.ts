@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { safeSerializeToolResult } from "../services/mcp-server/shared.js";
+import { safeSerializeToolResult } from "./safeSerializeToolResult.js";
 
 /**
  * SHA-256 of a UTF-8 string, hex-encoded. Used by the plugin-MCP TOFU pin

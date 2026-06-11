@@ -1,7 +1,7 @@
 import type { HelpAssistantTier } from "../types/ipc/maps.js";
 import type { BuiltInActionId } from "../types/actions.js";
 
-const ACTIONS_LIST_TOOL = "actions.list";
+export const ACTIONS_LIST_TOOL = "actions.list";
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 
 export const WORKBENCH_TIER_TOOLS = [
