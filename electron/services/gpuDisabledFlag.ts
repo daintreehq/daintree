@@ -58,12 +58,16 @@ export function parseGpuDisabledFlag(raw: string): GpuDisabledFlagData {
 
 /** Stateless read of the flag file; null when absent or unreadable. */
 export function readGpuDisabledFlagData(userDataPath: string): GpuDisabledFlagData | null {
-  let raw: string;
+  let raw: unknown;
   try {
     raw = fs.readFileSync(path.join(userDataPath, GPU_DISABLED_FLAG_FILENAME), "utf8");
   } catch {
     return null;
   }
+  // Real fs with an encoding always returns a string; partially-mocked fs in
+  // tests can return undefined. Treat any non-string result as an absent flag
+  // — matching how the pre-reason `existsSync` check tolerated those mocks.
+  if (typeof raw !== "string") return null;
   return parseGpuDisabledFlag(raw);
 }
 
