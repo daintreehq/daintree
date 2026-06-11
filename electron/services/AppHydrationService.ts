@@ -7,6 +7,7 @@ import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/i
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import { isGpuDisabledByFlag, isGpuAngleFallbackApplied } from "./GpuCrashMonitorService.js";
+import { readGpuDisabledFlagData } from "./gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import type { HydrateResult } from "../../shared/types/ipc/app.js";
 import { inferKind } from "../../shared/utils/inferPanelKind.js";
@@ -104,6 +105,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     agentSettings: store.get("agentSettings"),
     gpuWebGLHardware,
     gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
+    gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
     gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
     safeMode: inSafeMode,
     isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,

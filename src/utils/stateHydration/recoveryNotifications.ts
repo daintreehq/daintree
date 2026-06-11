@@ -10,16 +10,26 @@ export function __resetGpuAccelNotifiedForTests(): void {
 }
 
 export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): void {
-  if (hydrateResult.gpuHardwareAccelerationDisabled && !gpuAccelNotifiedRef.current) {
+  // Only the crash-fallback disable warrants a boot notification — a user who
+  // toggled acceleration off in Settings > Troubleshooting already knows.
+  if (
+    hydrateResult.gpuHardwareAccelerationDisabled &&
+    hydrateResult.gpuDisabledReason === "crash" &&
+    !gpuAccelNotifiedRef.current
+  ) {
     gpuAccelNotifiedRef.current = true;
     notify({
       type: "warning",
       title: "Hardware acceleration disabled",
       message:
-        "Daintree disabled GPU acceleration after repeated GPU crashes. Performance may be reduced — re-enable it in Settings > Troubleshooting.",
+        "Daintree disabled GPU acceleration after repeated GPU crashes. Performance may be reduced. Re-enabling restarts the app.",
       priority: "watch",
       duration: 0,
       context: { eventKind: "recovery" },
+      action: {
+        label: "Re-enable",
+        onClick: () => window.electron.gpu.setHardwareAcceleration(true),
+      },
     });
   }
 

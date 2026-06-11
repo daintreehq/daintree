@@ -9,6 +9,7 @@ const fsMock = vi.hoisted(() => ({
   renameSync: vi.fn(),
   writeFileSync: vi.fn(),
   readFileSync: vi.fn<(p: string, enc: string) => string>(),
+  unlinkSync: vi.fn(),
 }));
 
 const electronMock = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const electronMock = vi.hoisted(() => ({
     isPackaged: false,
     getPath: vi.fn<(key?: string) => string>(() => "/tmp/test-appdata"),
     setPath: vi.fn(),
+    getVersion: vi.fn<() => string>(() => "9.9.9"),
     commandLine: { appendSwitch: vi.fn() },
     enableSandbox: vi.fn(),
     disableHardwareAcceleration: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock("fs", () => ({
     renameSync: fsMock.renameSync,
     writeFileSync: fsMock.writeFileSync,
     readFileSync: fsMock.readFileSync,
+    unlinkSync: fsMock.unlinkSync,
   },
   existsSync: fsMock.existsSync,
   readdirSync: fsMock.readdirSync,
@@ -48,6 +51,7 @@ vi.mock("fs", () => ({
   renameSync: fsMock.renameSync,
   writeFileSync: fsMock.writeFileSync,
   readFileSync: fsMock.readFileSync,
+  unlinkSync: fsMock.unlinkSync,
 }));
 
 vi.mock("electron", () => electronMock);
@@ -666,6 +670,19 @@ describe("Chromium feature flags", () => {
   });
 });
 
+// The disabled flag is read via readFileSync (reason-aware since #10379);
+// route its content through the fs mock, ENOENT when absent, and leave every
+// other path on the unconfigured-mock default.
+function mockDisabledFlagContent(content: string | null) {
+  fsMock.readFileSync.mockImplementation(((p: string) => {
+    if (String(p).includes("gpu-disabled.flag")) {
+      if (content !== null) return content;
+      throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+    }
+    return undefined as unknown as string;
+  }) as (p: string, enc: string) => string);
+}
+
 describe("Linux Wayland multi-GPU fallback", () => {
   function flagAwareExists(flags: { disabled?: boolean; angle?: boolean }) {
     return (p: string) => {
@@ -755,6 +772,8 @@ describe("Linux Wayland multi-GPU fallback", () => {
 
   it("does NOT append ANGLE switches when hardware acceleration is already disabled", async () => {
     fsMock.existsSync.mockImplementation(flagAwareExists({ disabled: true, angle: true }));
+    // Same-version crash flag: no version-change retry, acceleration stays off.
+    mockDisabledFlagContent(JSON.stringify({ reason: "crash", version: "9.9.9", timestamp: 1 }));
     gpuDetectionMock.isLinuxWaylandHybridGpu.mockReturnValue(true);
 
     await import("../environment.js");
@@ -793,6 +812,74 @@ describe("Linux Wayland multi-GPU fallback", () => {
 
     const mod = await import("../environment.js");
     expect(mod.gpuAngleFallbackActive).toBe(false);
+  });
+});
+
+describe("GPU disabled flag version-change retry", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+    fsMock.existsSync.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("clears a crash flag written by an older version and keeps acceleration on", async () => {
+    mockDisabledFlagContent(JSON.stringify({ reason: "crash", version: "1.0.0", timestamp: 1 }));
+
+    const mod = await import("../environment.js");
+
+    expect(mod.gpuHardwareAccelerationDisabled).toBe(false);
+    expect(electronMock.app.disableHardwareAcceleration).not.toHaveBeenCalled();
+    const unlinked = fsMock.unlinkSync.mock.calls.map(([p]) => String(p));
+    expect(unlinked.some((p) => p.includes("gpu-disabled.flag"))).toBe(true);
+    expect(unlinked.some((p) => p.includes("gpu-angle-fallback.flag"))).toBe(true);
+  });
+
+  it("keeps acceleration off for a crash flag written by the current version", async () => {
+    mockDisabledFlagContent(JSON.stringify({ reason: "crash", version: "9.9.9", timestamp: 1 }));
+
+    const mod = await import("../environment.js");
+
+    expect(mod.gpuHardwareAccelerationDisabled).toBe(true);
+    expect(electronMock.app.disableHardwareAcceleration).toHaveBeenCalled();
+    expect(fsMock.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  it("never retries a user-written flag, even across versions", async () => {
+    mockDisabledFlagContent(JSON.stringify({ reason: "user", version: "1.0.0", timestamp: 1 }));
+
+    const mod = await import("../environment.js");
+
+    expect(mod.gpuHardwareAccelerationDisabled).toBe(true);
+    expect(electronMock.app.disableHardwareAcceleration).toHaveBeenCalled();
+    expect(fsMock.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  it("treats a legacy timestamp-only flag as crash and retries it after an update", async () => {
+    mockDisabledFlagContent("1718105000000");
+
+    const mod = await import("../environment.js");
+
+    expect(mod.gpuHardwareAccelerationDisabled).toBe(false);
+    expect(electronMock.app.disableHardwareAcceleration).not.toHaveBeenCalled();
+  });
+
+  it("keeps acceleration off this session when clearing the flag fails", async () => {
+    mockDisabledFlagContent(JSON.stringify({ reason: "crash", version: "1.0.0", timestamp: 1 }));
+    fsMock.unlinkSync.mockImplementation(() => {
+      throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+    });
+
+    const mod = await import("../environment.js");
+
+    expect(mod.gpuHardwareAccelerationDisabled).toBe(true);
+    expect(electronMock.app.disableHardwareAcceleration).toHaveBeenCalled();
   });
 });
 

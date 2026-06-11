@@ -27,10 +27,17 @@ export function registerGpuHandlers(): () => void {
     const userDataPath = app.getPath("userData");
     if (enabled) {
       clearGpuDisabledFlag(userDataPath);
-      clearGpuAngleFallbackFlag(userDataPath);
+      try {
+        clearGpuAngleFallbackFlag(userDataPath);
+      } catch (err) {
+        // The disabled flag is already gone — proceed with the relaunch so the
+        // user's re-enable still lands; a stale ANGLE flag only re-applies the
+        // soft fallback switches and clears on the next successful toggle.
+        console.warn("[GPU] Failed to clear ANGLE fallback flag on re-enable:", err);
+      }
       store.set("gpu", { hardwareAccelerationDisabled: false });
     } else {
-      writeGpuDisabledFlag(userDataPath);
+      writeGpuDisabledFlag(userDataPath, "user");
       store.set("gpu", { hardwareAccelerationDisabled: true });
     }
     app.relaunch();

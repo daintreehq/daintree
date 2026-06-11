@@ -580,6 +580,7 @@ describe("app:boot handler", () => {
       agentSettings: { agents: {} },
       gpuWebGLHardware: true,
       gpuHardwareAccelerationDisabled: false,
+      gpuDisabledReason: null,
       gpuAngleFallbackActive: false,
       safeMode: false,
       isWindowsStore: false,

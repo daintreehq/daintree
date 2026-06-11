@@ -14,6 +14,7 @@ function makeBootResult(): BootResult {
     agentSettings: {} as BootResult["agentSettings"],
     gpuWebGLHardware: true,
     gpuHardwareAccelerationDisabled: false,
+    gpuDisabledReason: null,
     gpuAngleFallbackActive: false,
     safeMode: false,
     isWindowsStore: false,
