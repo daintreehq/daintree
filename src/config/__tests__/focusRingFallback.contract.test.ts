@@ -347,6 +347,13 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: wrapper at line 578 has `focus-within:border-daintree-accent focus-within:ring-1`",
   },
   {
+    file: "src/components/FileViewer/FileViewerModal.tsx",
+    fragment:
+      "w-44 bg-transparent text-xs text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+    reason:
+      "Parent shows focus: the diff search bar wrapper has `focus-within:border-daintree-accent focus-within:ring-1`",
+  },
+  {
     file: "src/components/Project/QuickRun.tsx",
     fragment: "focus:outline-hidden min-w-0",
     reason:

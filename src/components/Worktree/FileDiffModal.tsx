@@ -84,6 +84,15 @@ export function FileDiffModal({
   const branch = useBranchForPath(worktreePath);
   const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
 
+  // Toggling ignore-whitespace strands every entry built under the other flag
+  // (their keys can no longer be requested this session unless the user
+  // toggles back, and a long review can hold 20 stale diffs). Purge them.
+  useEffect(() => {
+    for (const key of [...diffCache.keys()]) {
+      if (!key.endsWith(`\u0000${ignoreWhitespace}`)) diffCache.delete(key);
+    }
+  }, [ignoreWhitespace]);
+
   const absoluteFilePath = worktreePath.endsWith("/")
     ? worktreePath + filePath
     : worktreePath + "/" + filePath;

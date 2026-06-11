@@ -38,6 +38,47 @@ declare module "react-diff-view" {
   export const parseDiff: (diff: string) => any[];
   export const tokenize: (hunks: HunkData[], options: TokenizeOptions) => HunkTokens;
   export const markEdits: (hunks: HunkData[], options?: { type: string }) => any;
+  export const getChangeKey: (change: ChangeData) => string;
+
+  /**
+   * Tokenize enhancer wrapping arbitrary per-line ranges in token nodes.
+   * lineNumber is the 1-based file line number on that side (old ranges use
+   * old line numbers, new ranges use new line numbers). Extra properties
+   * (e.g. className) survive onto the rendered span.
+   */
+  export interface RangeTokenNode {
+    type: string;
+    lineNumber: number;
+    start: number;
+    length: number;
+    className?: string;
+  }
+  export const pickRanges: (oldRanges: RangeTokenNode[], newRanges: RangeTokenNode[]) => unknown;
+
+  export interface TokenNode {
+    type: string;
+    value?: string;
+    markType?: string;
+    className?: string;
+    properties?: { className?: string };
+    children?: TokenNode[];
+  }
+  /**
+   * Root-to-leaf node path used inside tokenize enhancers. The leaf is always
+   * a text node ({ type: "text", value }); range nodes (markEdits' "edit",
+   * pickRanges' custom types) wrap at the front of the path.
+   */
+  export type TokenPath = TokenNode[];
+  export type TokenizeEnhancer = (
+    input: [TokenPath[][], TokenPath[][]]
+  ) => [TokenPath[][], TokenPath[][]];
+
+  export type DefaultRenderToken = (token: TokenNode, index: number) => ReactNode;
+  export type RenderToken = (
+    token: TokenNode,
+    renderDefault: DefaultRenderToken,
+    index: number
+  ) => ReactNode;
 
   export type Source = string | string[];
   export const expandFromRawCode: (
@@ -69,6 +110,12 @@ declare module "react-diff-view" {
     hunks: HunkData[];
     tokens?: HunkTokens;
     renderGutter?: RenderGutter;
+    renderToken?: RenderToken;
+    /** Per-row class hook; defaultGenerate() returns the stock diff-line class */
+    generateLineClassName?: (params: {
+      changes: ChangeData[];
+      defaultGenerate: () => string;
+    }) => string | undefined;
     /** Split view only: isolate text selection to the side the drag started on */
     optimizeSelection?: boolean;
     children: (hunks: HunkData[]) => ReactNode;

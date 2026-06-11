@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
 import { DiffViewer, _resetLangStateForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -8,17 +9,18 @@ vi.mock("refractor/rust", () => {
   throw new Error("Failed to fetch dynamically imported module");
 });
 
+const { capturedDiffProps } = vi.hoisted(() => ({
+  capturedDiffProps: {} as Record<string, unknown>,
+}));
+
 vi.mock("react-diff-view", async () => {
   const actual = await vi.importActual<typeof import("react-diff-view")>("react-diff-view");
   return {
     ...actual,
-    Diff: ({
-      children,
-      hunks,
-    }: {
-      children: (hunks: unknown[]) => React.ReactNode;
-      hunks: unknown[];
-    }) => <div data-testid="diff-element">{children(hunks)}</div>,
+    Diff: (props: { children: (hunks: unknown[]) => React.ReactNode; hunks: unknown[] }) => {
+      Object.assign(capturedDiffProps, props);
+      return <div data-testid="diff-element">{props.children(props.hunks)}</div>;
+    },
     Hunk: ({ hunk }: { hunk: { oldStart: number; newStart: number } }) => (
       <div data-testid="hunk">
         {hunk.oldStart}-{hunk.newStart}
@@ -243,5 +245,259 @@ describe("DiffViewer collapse behavior", () => {
 
     fireEvent.click(screen.getByText("Hide diff"));
     expect(onToggleCollapse).toHaveBeenCalledTimes(2);
+  });
+});
+
+const ADDED_FILE_DIFF = `diff --git a/new.ts b/new.ts
+new file mode 100644
+index 0000000..abcdef1
+--- /dev/null
++++ b/new.ts
+@@ -0,0 +1,2 @@
++line1
++line2`;
+
+describe("DiffViewer centered split", () => {
+  it("uses the centered-split scroll system for two-column split diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).not.toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).toBeNull();
+    expect(screen.getByTestId("diff-hscrollbar")).toBeTruthy();
+  });
+
+  it("keeps the native scroller in unified view", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller when wrapping lines", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" wrapLines />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("keeps the native scroller for single-side added-file diffs", () => {
+    const { container } = render(wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" />));
+
+    expect(container.querySelector(".diff-file-centered")).toBeNull();
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+  });
+
+  it("mirrors the scrollbar strip's scrollLeft into --diff-hscroll", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+    const region = container.querySelector<HTMLElement>(".diff-file-centered");
+    const bar = screen.getByTestId("diff-hscrollbar");
+
+    expect(region?.style.getPropertyValue("--diff-hscroll")).toBe("0px");
+
+    bar.scrollLeft = 120;
+    fireEvent.scroll(bar);
+
+    expect(region?.style.getPropertyValue("--diff-hscroll")).toBe("120px");
+  });
+
+  it("forwards horizontal wheel deltas to the scrollbar strip", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+    const region = container.querySelector<HTMLElement>(".diff-file-centered");
+    const bar = screen.getByTestId("diff-hscrollbar");
+    Object.defineProperty(bar, "scrollWidth", { value: 500, configurable: true });
+    Object.defineProperty(bar, "clientWidth", { value: 200, configurable: true });
+
+    fireEvent.wheel(region!, { deltaX: 50, deltaY: 0 });
+    expect(bar.scrollLeft).toBe(50);
+
+    // Predominantly vertical gestures stay with the vertical scroller.
+    fireEvent.wheel(region!, { deltaX: 5, deltaY: 50 });
+    expect(bar.scrollLeft).toBe(50);
+  });
+});
+
+const MOVED_DIFF = `diff --git a/src/m.ts b/src/m.ts
+index 0000001..0000002 100644
+--- a/src/m.ts
++++ b/src/m.ts
+@@ -1,5 +1,3 @@
+ const top = 1;
+-function relocated(): number {
+-  return computeExpensiveValue(top);
+-}
+ const after = 2;
+@@ -20,3 +18,6 @@
+ const tail = 3;
++function relocated(): number {
++  return computeExpensiveValue(top);
++}
+ const end = 4;`;
+
+type LineClassParams = { changes: ChangeData[]; defaultGenerate: () => string };
+type GenerateLineClassName = (params: LineClassParams) => string;
+
+function clearCapturedDiffProps() {
+  for (const key of Object.keys(capturedDiffProps)) {
+    delete capturedDiffProps[key];
+  }
+}
+
+describe("DiffViewer moved-line styling", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  it("tags relocated rows with side-specific moved classes", () => {
+    render(wrap(<DiffViewer diff={MOVED_DIFF} viewType="split" />));
+
+    const generate = capturedDiffProps.generateLineClassName as GenerateLineClassName;
+    const hunks = capturedDiffProps.hunks as HunkData[];
+    const del = hunks[0]!.changes.find((c) => c.type === "delete")!;
+    const ins = hunks[1]!.changes.find((c) => c.type === "insert")!;
+    const ctx = hunks[0]!.changes.find((c) => c.type === "normal")!;
+
+    expect(generate({ changes: [del], defaultGenerate: () => "diff-line" })).toBe(
+      "diff-line diff-line-moved-old"
+    );
+    expect(generate({ changes: [ins], defaultGenerate: () => "diff-line" })).toBe(
+      "diff-line diff-line-moved-new"
+    );
+    expect(generate({ changes: [ctx], defaultGenerate: () => "diff-line" })).toBe("diff-line");
+  });
+
+  it("leaves rows untouched when nothing moved", () => {
+    render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+
+    const generate = capturedDiffProps.generateLineClassName as GenerateLineClassName;
+    const hunks = capturedDiffProps.hunks as HunkData[];
+    const ins = hunks[0]!.changes.find((c) => c.type === "insert")!;
+
+    expect(generate({ changes: [ins], defaultGenerate: () => "diff-line" })).toBe("diff-line");
+  });
+});
+
+describe("DiffViewer whitespace visualization", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  function getRenderToken(): RenderToken {
+    render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+    return capturedDiffProps.renderToken as RenderToken;
+  }
+
+  it("renders whitespace-only edit tokens as glyph spans with the text intact", () => {
+    const renderToken = getRenderToken();
+    const renderDefault = vi.fn(() => null);
+
+    const result = renderToken(
+      { type: "edit", children: [{ type: "text", value: "  \t " }] },
+      renderDefault,
+      0
+    );
+
+    expect(renderDefault).not.toHaveBeenCalled();
+    const { container } = render(<>{result}</>);
+    expect(container.querySelectorAll(".diff-ws-space")).toHaveLength(2);
+    expect(container.querySelectorAll(".diff-ws-tab")).toHaveLength(1);
+    // The DOM text stays the real whitespace so copying is unaffected.
+    expect(container.textContent).toBe("  \t ");
+  });
+
+  it("falls back to the default renderer when the edit has visible characters", () => {
+    const renderToken = getRenderToken();
+    const renderDefault = vi.fn(() => null);
+
+    renderToken({ type: "edit", value: "foo " }, renderDefault, 0);
+
+    expect(renderDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes non-edit tokens straight through", () => {
+    const renderToken = getRenderToken();
+    const renderDefault = vi.fn(() => null);
+
+    renderToken({ type: "text", value: "   " }, renderDefault, 0);
+
+    expect(renderDefault).toHaveBeenCalledTimes(1);
+  });
+});
+
+const FAR_HUNKS_DIFF = `diff --git a/src/far.ts b/src/far.ts
+index 0000001..0000002 100644
+--- a/src/far.ts
++++ b/src/far.ts
+@@ -1,2 +1,2 @@
+ line1
+-line2
++line2-changed
+@@ -100,2 +100,2 @@
+ line100
+-line101
++line101-changed`;
+
+const FAR_HUNKS_SOURCE = Array.from({ length: 101 }, (_, i) => {
+  const line = i + 1;
+  if (line === 2) return "line2-changed";
+  if (line === 101) return "line101-changed";
+  return `line${line}`;
+}).join("\n");
+
+describe("DiffViewer directional context expansion", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  it("offers up/down/all expansion for gaps past the expand-all cap", () => {
+    render(wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="split" />));
+
+    expect(screen.getByRole("button", { name: /Expand up/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Expand down/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand all 97" })).toBeTruthy();
+  });
+
+  it("expand down reveals lines after the previous hunk and shrinks the gap", () => {
+    render(wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="split" />));
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand down/ }));
+
+    // 97 hidden - 50 revealed = 47 left, below the cap → single expander.
+    expect(screen.getByRole("button", { name: "Expand 47 lines" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Expand down/ })).toBeNull();
+  });
+
+  it("expand up reveals lines directly above the next hunk", () => {
+    render(wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="split" />));
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand up/ }));
+
+    expect(screen.getByRole("button", { name: "Expand 47 lines" })).toBeTruthy();
+  });
+});
+
+describe("DiffViewer hunk copy", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  it("copies the hunk's new-side text without +/- prefixes", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Copy hunk" })[0]!);
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("line1\nadded\nline2");
+    });
   });
 });

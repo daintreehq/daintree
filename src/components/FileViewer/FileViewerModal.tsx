@@ -16,7 +16,9 @@ import {
   ChevronUp,
   ChevronDown,
   Pilcrow,
+  Search,
   WrapText,
+  X,
 } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
@@ -149,6 +151,30 @@ function IconToggle({
   );
 }
 
+/**
+ * Horizontal reveal for search matches in the centered split view. Code cells
+ * there are overflow: clip — deliberately unscrollable, so scrollIntoView's
+ * inline axis can't desync one row from the shared offset. The reveal instead
+ * rides the file's scrollbar strip, whose scrollLeft shifts every row in
+ * lockstep. No-op outside centered split (unified/wrap scroll natively).
+ */
+function revealMatchInCenteredSplit(match: HTMLElement): void {
+  const region = match.closest<HTMLElement>(".diff-file-centered");
+  const cell = match.closest<HTMLElement>("td.diff-code");
+  const bar = region?.querySelector<HTMLElement>(".diff-hscrollbar");
+  if (!region || !cell || !bar) return;
+  const cellRect = cell.getBoundingClientRect();
+  const matchRect = match.getBoundingClientRect();
+  if (cellRect.width <= 0) return;
+  const fullyVisible = matchRect.left >= cellRect.left && matchRect.right <= cellRect.right;
+  if (fullyVisible) return;
+  // Column offset of the match within its unshifted line, then aim the shared
+  // offset so the match lands a third of the way into the pane.
+  const columnPx = matchRect.left - cellRect.left + bar.scrollLeft;
+  const target = Math.max(0, columnPx - cellRect.width / 3);
+  bar.scrollLeft = Math.min(target, bar.scrollWidth - bar.clientWidth);
+}
+
 const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
   BINARY_FILE: "Binary file — cannot display",
   FILE_TOO_LARGE: "File too large to display (> 500 KB)",
@@ -225,6 +251,21 @@ export function FileViewerModal({
   const observerGenerationRef = useRef(0);
   const observerDisposedRef = useRef(false);
 
+  // In-diff search. Match highlighting happens in DiffViewer's token pass
+  // (.diff-search-match spans); this layer owns the find bar, scans the
+  // rendered DOM for matches, and steps between them. tokensRevision bumps
+  // after every token commit — the signal that the spans are scannable.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const [searchMatchIndex, setSearchMatchIndex] = useState(-1);
+  const [searchMarkers, setSearchMarkers] = useState<number[]>([]);
+  const [tokensRevision, setTokensRevision] = useState(0);
+  const searchMatchIndexRef = useRef(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const lastSearchQueryRef = useRef("");
+  const viewportIndicatorRef = useRef<HTMLDivElement>(null);
+
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
 
@@ -249,6 +290,8 @@ export function FileViewerModal({
       requestRef.current++;
       hasSwitchedToDiffRef.current = false;
       currentHunkIndexRef.current = -1;
+      setSearchOpen(false);
+      setSearchQuery("");
       const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
       setMode(nextMode);
       return;
@@ -355,15 +398,22 @@ export function FileViewerModal({
     return { lineCount, sizeLabel: formatBytes(byteSize) };
   }, [canShowView, content]);
 
-  // Route Cmd+F (daintree:find-in-panel) and Cmd+L to CodeViewer
+  // Route Cmd+F (daintree:find-in-panel) to CodeViewer's search in view mode
+  // and the in-diff find bar in diff mode; Cmd+L (go to line) stays view-only.
   useEffect(() => {
-    if (!isOpen || isImageMode || mode !== "view") return;
+    if (!isOpen || isImageMode) return;
 
     const handleFindInPanel = () => {
-      codeViewerRef.current?.openSearch();
+      if (mode === "view") {
+        codeViewerRef.current?.openSearch();
+      } else if (hasDiff) {
+        setSearchOpen(true);
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (mode !== "view") return;
       if ((e.metaKey || e.ctrlKey) && e.key === "l") {
         const target = e.target as HTMLElement;
         if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
@@ -379,7 +429,7 @@ export function FileViewerModal({
       window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
     };
-  }, [isOpen, isImageMode, mode]);
+  }, [isOpen, isImageMode, mode, hasDiff]);
 
   // Reset hunk index whenever the diff content changes — covers refresh-after-
   // commit and any other in-place diff swap that leaves filePath unchanged.
@@ -620,6 +670,144 @@ export function FileViewerModal({
     setCollapseRevision((r) => r + 1);
   }, []);
 
+  const handleTokensRendered = useCallback(() => {
+    setTokensRevision((r) => r + 1);
+  }, []);
+
+  const searchActive = searchOpen && mode === "diff" && hasDiff;
+
+  // Re-scan rendered matches after every token commit. The active index lives
+  // in a ref (stepping must not depend on stale state), mirrored to state for
+  // the count display.
+  useEffect(() => {
+    if (!isOpen || !searchActive || !searchQuery) {
+      searchMatchIndexRef.current = -1;
+      setSearchMatchIndex(-1);
+      setSearchMatchCount(0);
+      setSearchMarkers([]);
+      lastSearchQueryRef.current = searchQuery;
+      return;
+    }
+    if (lastSearchQueryRef.current !== searchQuery) {
+      lastSearchQueryRef.current = searchQuery;
+      searchMatchIndexRef.current = -1;
+      setSearchMatchIndex(-1);
+    }
+    const container = diffViewerRef.current;
+    const scrollRoot = container?.parentElement;
+    if (!container || !scrollRoot) return;
+    const matches = container.querySelectorAll<HTMLElement>(".diff-search-match");
+    setSearchMatchCount(matches.length);
+    if (searchMatchIndexRef.current >= matches.length) {
+      searchMatchIndexRef.current = -1;
+      setSearchMatchIndex(-1);
+    }
+    if (matches.length > 0 && scrollRoot.scrollHeight > 0) {
+      const rootTop = scrollRoot.getBoundingClientRect().top;
+      const ratios: number[] = [];
+      const limit = Math.min(matches.length, 200);
+      for (let k = 0; k < limit; k++) {
+        const el = matches[k];
+        if (!el) break;
+        const top = el.getBoundingClientRect().top - rootTop + scrollRoot.scrollTop;
+        ratios.push(Math.min(1, Math.max(0, top / scrollRoot.scrollHeight)));
+      }
+      setSearchMarkers(ratios);
+    } else {
+      setSearchMarkers([]);
+    }
+  }, [isOpen, searchActive, searchQuery, tokensRevision, collapseRevision, diffViewType]);
+
+  // The current match carries diff-search-current directly on the rendered
+  // span; a token re-commit wipes it, and the tokensRevision dep re-applies.
+  useEffect(() => {
+    const container = diffViewerRef.current;
+    if (!container) return;
+    const matches = container.querySelectorAll<HTMLElement>(".diff-search-match");
+    matches.forEach((el, k) => {
+      el.classList.toggle("diff-search-current", k === searchMatchIndex);
+    });
+  }, [searchMatchIndex, tokensRevision, searchMatchCount]);
+
+  const stepSearchMatch = useCallback((delta: -1 | 1) => {
+    const container = diffViewerRef.current;
+    if (!container) return;
+    const matches = container.querySelectorAll<HTMLElement>(".diff-search-match");
+    if (!matches.length) return;
+    const current = searchMatchIndexRef.current;
+    const next =
+      current < 0
+        ? delta === 1
+          ? 0
+          : matches.length - 1
+        : (current + delta + matches.length) % matches.length;
+    searchMatchIndexRef.current = next;
+    setSearchMatchIndex(next);
+    const match = matches[next];
+    match?.scrollIntoView({
+      block: "center",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+    if (match) revealMatchInCenteredSplit(match);
+    useAnnouncerStore.getState().announce(`Match ${next + 1} of ${matches.length}`);
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, []);
+
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        stepSearchMatch(e.shiftKey ? -1 : 1);
+      } else if (e.key === "Escape") {
+        // Claim the key so the dialog's escape stack doesn't also close the modal.
+        e.preventDefault();
+        e.stopPropagation();
+        closeSearch();
+      }
+    },
+    [stepSearchMatch, closeSearch]
+  );
+
+  // Overview-rail viewport indicator: a pointer-events-free thumb mirroring
+  // the visible region. Written straight to the DOM from scroll events so
+  // scrolling never re-renders the modal tree.
+  useEffect(() => {
+    if (!isOpen || mode !== "diff") return;
+    const container = diffViewerRef.current;
+    const indicator = viewportIndicatorRef.current;
+    const scrollRoot = container?.parentElement;
+    if (!container || !indicator || !scrollRoot) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const { scrollTop, scrollHeight, clientHeight } = scrollRoot;
+      if (scrollHeight <= clientHeight + 1) {
+        indicator.style.opacity = "0";
+        return;
+      }
+      indicator.style.opacity = "1";
+      indicator.style.top = `${(scrollTop / scrollHeight) * 100}%`;
+      indicator.style.height = `${(clientHeight / scrollHeight) * 100}%`;
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    update();
+    scrollRoot.addEventListener("scroll", schedule, { passive: true });
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
+    resizeObserver?.observe(scrollRoot);
+    return () => {
+      scrollRoot.removeEventListener("scroll", schedule);
+      resizeObserver?.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [isOpen, mode, diff, hunkMarkers.length, searchMarkers.length, collapseRevision]);
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -798,11 +986,13 @@ export function FileViewerModal({
               viewType={diffViewType}
               rootPath={rootPath}
               wrapLines={diffWrapLines}
+              searchQuery={searchActive ? searchQuery : undefined}
               // Expansion needs the diff's new side to byte-match the loaded
               // file; an ignore-whitespace diff can show old-side context lines.
               source={diffMatchesFile && !diffIgnoreWhitespace && canShowView ? content : undefined}
               onRetry={onRetryDiff}
               onToggleCollapse={handleDiffToggleCollapse}
+              onTokensRendered={handleTokensRendered}
             />
           )}
 
@@ -816,13 +1006,78 @@ export function FileViewerModal({
           )}
         </AppDialog.BodyScroll>
 
+        {/* In-diff find bar (Cmd+F in diff mode). Floats over the top-right of
+            the diff; Enter / Shift+Enter cycle matches. */}
+        {searchActive && (
+          <div
+            className="absolute top-2 right-7 z-20 flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-lg focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            data-testid="diff-search-bar"
+          >
+            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Find in diff"
+              aria-label="Find in diff"
+              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
+            />
+            <span
+              className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-0"
+              data-testid="diff-search-count"
+              aria-live="polite"
+            >
+              {searchQuery
+                ? searchMatchCount === 0
+                  ? "No matches"
+                  : searchMatchIndex >= 0
+                    ? `${searchMatchIndex + 1} of ${searchMatchCount}`
+                    : `${searchMatchCount} ${searchMatchCount === 1 ? "match" : "matches"}`
+                : ""}
+            </span>
+            <button
+              type="button"
+              onClick={() => stepSearchMatch(-1)}
+              disabled={searchMatchCount === 0}
+              aria-label="Previous match"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => stepSearchMatch(1)}
+              disabled={searchMatchCount === 0}
+              aria-label="Next match"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={closeSearch}
+              aria-label="Close search"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Overview rail: one tick per hunk at its proportional position in the
-            scroll run; sits left of the body scrollbar. */}
-        {mode === "diff" && hunkMarkers.length > 1 && (
+            scroll run (plus search-match ticks and a viewport thumb); sits left
+            of the body scrollbar. */}
+        {mode === "diff" && (hunkMarkers.length > 1 || searchMarkers.length > 0) && (
           <div
             className="absolute right-2.5 top-1 bottom-1 w-2 z-10"
             data-testid="hunk-overview-rail"
           >
+            <div
+              ref={viewportIndicatorRef}
+              data-testid="rail-viewport-indicator"
+              className="absolute left-0 right-0 rounded-full bg-tint/10 pointer-events-none"
+            />
             {hunkMarkers.map((marker, index) => (
               <button
                 key={index}
@@ -838,6 +1093,14 @@ export function FileViewerModal({
                     "bg-gradient-to-r from-status-success/60 to-status-danger/60",
                   index === activeHunkIndex && "h-[5px] opacity-100"
                 )}
+              />
+            ))}
+            {searchMarkers.map((ratio, index) => (
+              <div
+                key={`search-${index}`}
+                data-testid="rail-search-tick"
+                style={{ top: `${ratio * 100}%` }}
+                className="absolute right-0 w-1 h-[2px] rounded-full bg-text-muted pointer-events-none"
               />
             ))}
           </div>
@@ -934,6 +1197,20 @@ export function FileViewerModal({
           <div className="flex items-center gap-2">
             {mode === "diff" && hasDiff && (
               <>
+                <IconToggle
+                  pressed={searchOpen}
+                  label="Find in diff"
+                  onToggle={() => {
+                    if (searchOpen) {
+                      closeSearch();
+                    } else {
+                      setSearchOpen(true);
+                      requestAnimationFrame(() => searchInputRef.current?.focus());
+                    }
+                  }}
+                >
+                  <Search className="w-4 h-4" />
+                </IconToggle>
                 <IconToggle
                   pressed={diffWrapLines}
                   label="Wrap long lines"
