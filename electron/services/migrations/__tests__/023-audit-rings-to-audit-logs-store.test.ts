@@ -143,6 +143,42 @@ describe("migration023 — audit rings to audit-logs store", () => {
     warnSpy.mockRestore();
   });
 
+  it("does not duplicate records when retried after a partial failure", () => {
+    // Simulates a prior run that copied the ring to the audit-logs store but
+    // failed before stripping the source key (or config.json was restored
+    // from backup after a later migration failed).
+    auditLogsStoreMock.get.mockImplementation((key: string) =>
+      key === "pluginAuditLog" ? [pluginRecord] : []
+    );
+    const data: Record<string, unknown> = {
+      plugins: { auditEnabled: true, auditLog: [pluginRecord] },
+    };
+    const store = makeStoreMock(data);
+
+    migration023.up(store);
+
+    expect(auditLogsStoreMock.set).not.toHaveBeenCalled();
+    // The source key is still stripped so the retry completes the move.
+    expect("auditLog" in (data.plugins as object)).toBe(false);
+  });
+
+  it("warns and strips a corrupt non-array ring without writing to the audit-logs store", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const data: Record<string, unknown> = {
+      runHistory: { records: "corrupt-string" },
+    };
+    const store = makeStoreMock(data);
+
+    migration023.up(store);
+
+    expect(auditLogsStoreMock.set).not.toHaveBeenCalled();
+    expect("records" in (data.runHistory as object)).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("runHistory.records")
+    );
+    warnSpy.mockRestore();
+  });
+
   it("tolerates a corrupt audit-logs store value when merging", () => {
     auditLogsStoreMock.get.mockReturnValue("not-an-array");
     const store = makeStoreMock({ runHistory: { records: [runRecord] } });
