@@ -64,7 +64,8 @@ beforeEach(() => {
 function makePRNode(
   number: number,
   headRefName: string,
-  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null,
+  commits?: unknown
 ) {
   return {
     number,
@@ -82,7 +83,12 @@ function makePRNode(
     mergedAt: null,
     author: { login: "user", avatarUrl: "" },
     ...(reviewDecision !== undefined ? { reviewDecision } : {}),
+    ...(commits !== undefined ? { commits } : {}),
   };
+}
+
+function makeCommitsRollup(state: string | null) {
+  return { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] };
 }
 
 describe("findPRsByBranches", () => {
@@ -385,6 +391,71 @@ describe("listPRs reviewDecision", () => {
 
     const page = await githubForgeProvider.listPRs(repo, {});
     expect(page.items[0].reviewDecision).toBeUndefined();
+  });
+});
+
+describe("listPRs ciStatus", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  function prListResponse(nodes: unknown[]) {
+    return {
+      repository: {
+        pullRequests: {
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          totalCount: nodes.length,
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    };
+  }
+
+  it("maps the statusCheckRollup state from the list shape onto ciStatus", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([
+        makePRNode(1, "feature/a", undefined, makeCommitsRollup("SUCCESS")),
+        makePRNode(2, "feature/b", undefined, makeCommitsRollup("FAILURE")),
+        makePRNode(3, "feature/c", undefined, makeCommitsRollup("ERROR")),
+        makePRNode(4, "feature/d", undefined, makeCommitsRollup("PENDING")),
+        makePRNode(5, "feature/e", undefined, makeCommitsRollup("EXPECTED")),
+      ])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+
+    expect(page.items[0].ciStatus).toBe("success");
+    expect(page.items[1].ciStatus).toBe("failure");
+    // ERROR folds into failure and EXPECTED into pending — the forge set is
+    // boolean-ish by design (see mapListCIStatus).
+    expect(page.items[2].ciStatus).toBe("failure");
+    expect(page.items[3].ciStatus).toBe("pending");
+    expect(page.items[4].ciStatus).toBe("pending");
+  });
+
+  it("omits ciStatus when the head commit has no statusCheckRollup", async () => {
+    // No rollup means "no CI configured" — the field must stay absent rather
+    // than default to a state (absence !== passing).
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([makePRNode(1, "feature/a", undefined, makeCommitsRollup(null))])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect("ciStatus" in page.items[0]).toBe(false);
+  });
+
+  it("omits ciStatus when the commits field is missing or empty", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListResponse([
+        makePRNode(1, "feature/a"),
+        makePRNode(2, "feature/b", undefined, { nodes: [] }),
+      ])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect("ciStatus" in page.items[0]).toBe(false);
+    expect("ciStatus" in page.items[1]).toBe(false);
   });
 });
 

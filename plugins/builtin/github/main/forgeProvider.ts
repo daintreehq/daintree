@@ -302,6 +302,13 @@ function restToForgeIssue(raw: Record<string, unknown>): Issue {
 function toForgePR(node: Record<string, unknown>): PR {
   const merged = node.merged === true;
   const rawState = typeof node.state === "string" ? node.state : "OPEN";
+  const commits = node.commits as
+    | { nodes?: Array<{ commit?: { statusCheckRollup?: { state?: unknown } | null } | null }> }
+    | undefined;
+  const rollupState = commits?.nodes?.[0]?.commit?.statusCheckRollup?.state;
+  const ciStatus = mapListCIStatus(
+    typeof rollupState === "string" ? (rollupState as GitHubPRCIStatus) : undefined
+  );
   return {
     number: node.number as number,
     title: (node.title as string) ?? "",
@@ -316,6 +323,7 @@ function toForgePR(node: Record<string, unknown>): PR {
     headRef: (node.headRefName as string) ?? "",
     mergeable: undefined,
     reviewDecision: node.reviewDecision as NormalizedReviewDecision | undefined,
+    ...(ciStatus ? { ciStatus } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
