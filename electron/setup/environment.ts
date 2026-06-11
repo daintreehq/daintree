@@ -102,7 +102,12 @@ if (shouldResetData) {
 const gpuFlagPath = path.join(app.getPath("userData"), GPU_DISABLED_FLAG_FILENAME);
 const gpuDisabledFlagData = readGpuDisabledFlagData(app.getPath("userData"));
 let gpuFlagClearedForRetry = false;
-if (shouldRetryGpuAfterUpdate(gpuDisabledFlagData, app.getVersion())) {
+// The null check short-circuits before app.getVersion() — the common no-flag
+// boot skips the call entirely.
+if (
+  gpuDisabledFlagData !== null &&
+  shouldRetryGpuAfterUpdate(gpuDisabledFlagData, app.getVersion())
+) {
   try {
     fs.unlinkSync(gpuFlagPath);
     gpuFlagClearedForRetry = true;
