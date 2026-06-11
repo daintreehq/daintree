@@ -107,7 +107,7 @@ describe("GitInitDialog", () => {
     const button = screen.getByRole("button", {
       name: /initialize repository/i,
     }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
 
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
@@ -124,6 +124,82 @@ describe("GitInitDialog", () => {
           initialCommitMessage: "feat: init",
         })
       );
+    });
+  });
+
+  it("pre-fills the commit message and submits the default without editing", async () => {
+    renderDialog();
+
+    const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
+    expect(input.value).toBe("Initial commit");
+
+    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+
+    await waitFor(() => {
+      expect(initGitGuidedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ initialCommitMessage: "Initial commit" })
+      );
+    });
+  });
+
+  it("disables submit when the commit message is cleared", () => {
+    renderDialog();
+
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "   " },
+    });
+
+    const button = screen.getByRole("button", {
+      name: /initialize repository/i,
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+
+    fireEvent.click(button);
+    expect(initGitGuidedMock).not.toHaveBeenCalled();
+  });
+
+  it("resets the commit message to the default when reopened", () => {
+    const onSuccess = vi.fn();
+    const onCancel = vi.fn();
+    const dialogProps = {
+      directoryPath: "/tmp/new-repo",
+      onSuccess,
+      onCancel,
+    };
+    const { rerender } = render(<GitInitDialog isOpen={true} {...dialogProps} />);
+
+    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+      target: { value: "feat: custom" },
+    });
+
+    rerender(<GitInitDialog isOpen={false} {...dialogProps} />);
+    rerender(<GitInitDialog isOpen={true} {...dialogProps} />);
+
+    const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
+    expect(input.value).toBe("Initial commit");
+  });
+
+  it("clears the missing-status warning when a late success event arrives", async () => {
+    renderDialog();
+
+    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/without a status update/i)).toBeTruthy();
+    });
+
+    act(() => {
+      progressHandler?.({
+        step: "complete",
+        status: "success",
+        message: "Git initialization complete",
+        timestamp: Date.now(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/without a status update/i)).toBeNull();
+      expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
     });
   });
 
