@@ -507,6 +507,46 @@ describe("registerAppLifecycleHandlers – activate", () => {
 
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
+
+  it("creates a window when ready with no registry and no open windows", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts();
+    registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does not touch the registry before the app is ready", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const registry = {
+      get size(): number {
+        throw new Error("registry accessed pre-ready");
+      },
+    } as AppLifecycleOptions["windowRegistry"];
+    const opts = makeOpts({ windowRegistry: registry });
+    registerAppLifecycleHandlers(opts);
+
+    expect(() => getActivateHandler()()).not.toThrow();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("re-evaluates readiness on every activation", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({ windowRegistry: makeRegistry(0) });
+    registerAppLifecycleHandlers(opts);
+    const handler = getActivateHandler();
+
+    handler();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+
+    appMock.isReady.mockReturnValue(true);
+    handler();
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
 });
 
 describe("registerWindowSessionEndHandler – Windows planned-shutdown wiring", () => {
