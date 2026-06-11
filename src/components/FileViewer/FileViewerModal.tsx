@@ -1010,7 +1010,7 @@ export function FileViewerModal({
             the diff; Enter / Shift+Enter cycle matches. */}
         {searchActive && (
           <div
-            className="absolute top-2 right-7 z-20 flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-lg"
+            className="absolute top-2 right-7 z-20 flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-lg focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
             data-testid="diff-search-bar"
           >
             <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
