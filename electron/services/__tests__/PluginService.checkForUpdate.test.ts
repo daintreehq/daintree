@@ -93,7 +93,8 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { packPluginArchive, MAX_DNTR_BYTES } from "../PluginArchive.js";
+import { packPluginArchive } from "../PluginArchive.js";
+import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
 
 const storeState = storeMock._state;
 
