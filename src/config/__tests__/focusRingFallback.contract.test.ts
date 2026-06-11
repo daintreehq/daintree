@@ -384,6 +384,13 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason:
       "Parent shows focus: wrapper at line 141 has `focus-within:border-daintree-accent focus-within:ring-1`",
   },
+  {
+    file: "src/components/Layout/LocalCommitsDropdown.tsx",
+    fragment:
+      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+    reason:
+      "Parent shows focus: wrapper at line 437 has `focus-within:border-daintree-accent focus-within:ring-1`",
+  },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
   // The new contract surfaced these standalone interactive elements that

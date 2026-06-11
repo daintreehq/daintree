@@ -507,7 +507,10 @@ export function LocalCommitsDropdown({
                   disabled={loadingMore}
                   className={cn(
                     "w-full text-muted-foreground hover:text-daintree-text",
-                    isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
+                    // Neutral cursor highlight, matching the row active state —
+                    // the search input's focus-within ring is this popover's one
+                    // accent signal (accent-restraint policy).
+                    isLoadMoreActive && "bg-muted/50 text-daintree-text"
                   )}
                 >
                   {loadingMore ? (
