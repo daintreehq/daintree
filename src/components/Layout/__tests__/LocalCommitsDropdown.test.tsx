@@ -184,7 +184,7 @@ describe("LocalCommitsDropdown", () => {
       <LocalCommitsDropdown cwd="/repo" open initialCount={2} />
     );
 
-    const row = (await findAllByText("commit message 1"))[0].closest('[role="option"]');
+    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="option"]');
     expect(row?.getAttribute("aria-expanded")).toBe("false");
     const bodyBefore = (await findByText("Detailed body text")).closest("div[aria-hidden]");
     expect(bodyBefore?.getAttribute("aria-hidden")).toBe("true");
