@@ -2075,7 +2075,8 @@ export class WorktreeMonitor {
   // 32-bit FNV-1a digest instead of the raw joined string: the previous
   // implementation retained a path+stats concatenation proportional to the
   // worktree's change count for the monitor's lifetime. A hash collision
-  // (~1 in 2^32) only delays a change event until the next poll.
+  // (~1 in 2^32 per state pair) suppresses the change event until the next
+  // non-colliding state or a forced refresh.
   private calculateStateHash(changes: WorktreeChanges): number {
     const hashInput = changes.changes
       .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)

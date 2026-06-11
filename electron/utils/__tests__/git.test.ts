@@ -739,6 +739,25 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     expect(result.changes[0].insertions).toBe(3);
   });
 
+  it("returns 0 insertions for an empty untracked file", async () => {
+    const cwd = "/text-untracked-empty/" + Math.random();
+    mockGit.revparse.mockImplementation((args: string[]) => {
+      if (Array.isArray(args) && args[0] === "HEAD") {
+        return Promise.resolve("head-oid\n");
+      }
+      return Promise.resolve(`${cwd}\n`);
+    });
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      not_added: ["empty.txt"],
+    });
+    readFileMock.mockResolvedValue(Buffer.alloc(0));
+
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.changes[0].insertions).toBe(0);
+  });
+
   it("counts a final line without a trailing newline", async () => {
     const cwd = "/text-untracked-no-eol/" + Math.random();
     mockGit.revparse.mockImplementation((args: string[]) => {

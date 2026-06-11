@@ -4,6 +4,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
+import { gitServiceCache } from "../GitServiceCache.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 
@@ -110,6 +111,11 @@ export class WorkspaceHostEventRouter {
         // The resolved worktree path is the map key (set on `worktree-update`).
         // Prune it here so removed paths don't accumulate until `dispose()`.
         this.worktreePathToProject.delete(path.resolve(event.worktreeId));
+        // Evict the GitService for the removed path — this event covers both
+        // UI-driven (worktree-port) and external removals, which the legacy
+        // WORKTREE_DELETE IPC handler's eviction does not.
+        gitServiceCache.delete(event.worktreeId);
+        gitServiceCache.delete(path.resolve(event.worktreeId));
         break;
 
       case "clear-wsl-git-opt-in": {
