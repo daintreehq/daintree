@@ -22,10 +22,14 @@ const STATUS_PRESENTATION: Record<DevPreviewSessionStatus, { label: string; dotC
 // A plain "stopped" session has no row; "restored-stopped" stays visible because
 // it is an explicit restart offer the dashboard should surface.
 const HIDDEN_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set(["stopped"]);
+// "error" is stoppable: errored sessions have no terminal, so stop() takes the
+// no-terminal branch — transitions to "stopped" and clears the error, which is
+// the only way to dismiss an errored row from the dashboard.
 const STOPPABLE_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "starting",
   "installing",
   "running",
+  "error",
 ]);
 
 function extractPort(session: DevPreviewSessionState): string | null {
@@ -111,7 +115,7 @@ function DevServerRow({
 }
 
 export function DevServerDashboard() {
-  const allSessions = useAllDevSessions();
+  const { sessions: allSessions, hydrated, fetchError } = useAllDevSessions();
   const worktrees = useWorktreeStore((s) => s.worktrees);
 
   const visibleSessions = useMemo(
@@ -127,8 +131,10 @@ export function DevServerDashboard() {
       <header className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-daintree-text/55">
         Dev servers
       </header>
-      {visibleSessions.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-daintree-text/50">No active dev servers</p>
+      {!hydrated ? null : visibleSessions.length === 0 ? (
+        <p className="px-3 pb-3 text-xs text-daintree-text/50">
+          {fetchError ? "Couldn't load dev servers" : "No active dev servers"}
+        </p>
       ) : (
         <ul className="flex flex-col pb-1">
           {visibleSessions.map((session) => (

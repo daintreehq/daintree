@@ -1,16 +1,19 @@
 import { useEffect } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { logError } from "@/utils/logger";
 
 interface AllDevSessionsState {
   sessions: DevPreviewSessionState[];
   hydrated: boolean;
+  fetchError: boolean;
 }
 
 export const useAllDevSessionsStore = create<AllDevSessionsState>(() => ({
   sessions: [],
   hydrated: false,
+  fetchError: false,
 }));
 
 // Single shared IPC subscription guarded by a reference count. React 19
@@ -31,12 +34,12 @@ function startSubscription(): void {
     .getAllSessions()
     .then((sessions) => {
       if (token !== hydrateToken) return;
-      useAllDevSessionsStore.setState({ sessions, hydrated: true });
+      useAllDevSessionsStore.setState({ sessions, hydrated: true, fetchError: false });
     })
     .catch((err) => {
       if (token !== hydrateToken) return;
       logError("Failed to load dev-server sessions", err);
-      useAllDevSessionsStore.setState({ hydrated: true });
+      useAllDevSessionsStore.setState({ hydrated: true, fetchError: true });
     });
 
   unsubscribe = window.electron.devPreview.onAllSessionsChanged((payload) => {
@@ -44,7 +47,11 @@ function startSubscription(): void {
     // snapshot. Advance the token so a still-in-flight getAllSessions() that
     // resolves later can't overwrite this fresher state with stale data.
     hydrateToken++;
-    useAllDevSessionsStore.setState({ sessions: payload.sessions, hydrated: true });
+    useAllDevSessionsStore.setState({
+      sessions: payload.sessions,
+      hydrated: true,
+      fetchError: false,
+    });
   });
 }
 
@@ -54,7 +61,7 @@ function stopSubscription(): void {
   hydrateToken++;
   unsubscribe?.();
   unsubscribe = null;
-  useAllDevSessionsStore.setState({ sessions: [], hydrated: false });
+  useAllDevSessionsStore.setState({ sessions: [], hydrated: false, fetchError: false });
 }
 
 /**
@@ -79,9 +86,15 @@ export function acquireAllDevSessions(): () => void {
  * Subscribe to the live snapshot of every dev-preview session across all
  * worktrees. Mounting drives the shared IPC subscription via the ref count.
  */
-export function useAllDevSessions(): DevPreviewSessionState[] {
+export function useAllDevSessions(): {
+  sessions: DevPreviewSessionState[];
+  hydrated: boolean;
+  fetchError: boolean;
+} {
   useEffect(() => acquireAllDevSessions(), []);
-  return useAllDevSessionsStore((s) => s.sessions);
+  return useAllDevSessionsStore(
+    useShallow((s) => ({ sessions: s.sessions, hydrated: s.hydrated, fetchError: s.fetchError }))
+  );
 }
 
 // Test-only reset so suites can start from a clean module state.
@@ -90,5 +103,5 @@ export function _resetAllDevSessionsForTests(): void {
   hydrateToken = 0;
   unsubscribe?.();
   unsubscribe = null;
-  useAllDevSessionsStore.setState({ sessions: [], hydrated: false });
+  useAllDevSessionsStore.setState({ sessions: [], hydrated: false, fetchError: false });
 }
