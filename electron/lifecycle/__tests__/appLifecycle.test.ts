@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appMock = vi.hoisted(() => ({
   isPackaged: false as boolean,
+  isReady: vi.fn(() => true),
   on: vi.fn(),
   quit: vi.fn(),
   exit: vi.fn(),
@@ -439,6 +440,72 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     isWindowRecreatingMock.mockReturnValue(false);
     handler();
     expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("registerAppLifecycleHandlers – activate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks resets call history but not mockReturnValue overrides;
+    // restore the ready-by-default baseline so per-test overrides can't leak.
+    appMock.isReady.mockReturnValue(true);
+    browserWindowMock.getAllWindows.mockReturnValue([]);
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  });
+
+  function getActivateHandler(): () => void {
+    const call = appMock.on.mock.calls.find(([event]: string[]) => event === "activate");
+    return call![1] as () => void;
+  }
+
+  function makeRegistry(size: number): AppLifecycleOptions["windowRegistry"] {
+    return { size } as AppLifecycleOptions["windowRegistry"];
+  }
+
+  it("does not create a window or enumerate windows before the app is ready", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts();
+    registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+    // The guard must sit before the window check — enumerating windows
+    // pre-ready would also be unsafe.
+    expect(browserWindowMock.getAllWindows).not.toHaveBeenCalled();
+  });
+
+  it("creates a window when ready and the registry is empty", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({ windowRegistry: makeRegistry(0) });
+    registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does not create a window when ready and the registry has windows", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({ windowRegistry: makeRegistry(1) });
+    registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("falls back to BrowserWindow.getAllWindows without a registry", async () => {
+    browserWindowMock.getAllWindows.mockReturnValue([{} as never]);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts();
+    registerAppLifecycleHandlers(opts);
+
+    getActivateHandler()();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 });
 
