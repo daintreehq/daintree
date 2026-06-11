@@ -225,6 +225,30 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.child).toBe(mockChild);
   });
 
+  it("injects DAINTREE_PTY_DEFER_POOL_WARM into the fork env per the config getter (#10393)", () => {
+    let defer = true;
+    const callbacks = createCallbacks();
+    const lifecycle = new PtyHostLifecycle(
+      { memoryLimitMb: 256, electronDir: "/tmp/electron", deferInitialPoolWarm: () => defer },
+      callbacks.callbacks
+    );
+    lifecycle.start();
+    expect(shared.forkMock.mock.calls[0][2].env.DAINTREE_PTY_DEFER_POOL_WARM).toBe("1");
+
+    // The getter is re-read on each fork, not captured at construction.
+    defer = false;
+    lifecycle.child = null;
+    lifecycle.manualRestart();
+    expect(shared.forkMock).toHaveBeenCalledTimes(2);
+    expect(shared.forkMock.mock.calls[1][2].env).not.toHaveProperty("DAINTREE_PTY_DEFER_POOL_WARM");
+  });
+
+  it("omits DAINTREE_PTY_DEFER_POOL_WARM when the config getter is absent", () => {
+    const { lifecycle } = makeLifecycle();
+    lifecycle.start();
+    expect(shared.forkMock.mock.calls[0][2].env).not.toHaveProperty("DAINTREE_PTY_DEFER_POOL_WARM");
+  });
+
   it("calls onForkFailed when utilityProcess.fork throws", async () => {
     const error = new Error("fork failed");
     shared.forkMock.mockImplementationOnce(() => {

@@ -43,7 +43,6 @@ import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { waitForPathExists } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
-  probeGitLfsAvailable,
   parseCheckedOutBranches,
   nextAvailableBranchName,
   ensureNoteFile,
@@ -581,14 +580,7 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
-      // Run the LFS probe concurrently with monitor sync so we don't add its
-      // 3s worst case on top of sync latency. The probe is a read-only CLI
-      // check (no PATH side-effects); its result travels on the load-project
-      // event so the renderer can warn proactively when a repo uses LFS.
-      const [, lfsAvailable] = await Promise.all([
-        this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true),
-        probeGitLfsAvailable(),
-      ]);
+      await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
       this.startTopologyWatcher();
       // Started independently of startTopologyWatcher() — that method no-ops
@@ -612,7 +604,7 @@ export class WorkspaceService {
       // owning project picks them up.
       this.pruneStaleWslGitEntries(worktrees);
 
-      this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
+      this.sendEvent({ type: "load-project-result", requestId, success: true });
 
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
         const [prResult, refreshResult] = results;

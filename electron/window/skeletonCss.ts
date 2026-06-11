@@ -121,14 +121,20 @@ export function resolveInitialCanvasBackgroundColor(): string {
  * persisted app state and theme config synchronously, so callers on the boot
  * critical path can precompute the string once (before loadURL) instead of
  * re-reading config.json inside the dom-ready handler that gates win.show().
+ * Accepts a pre-read theme config so callers that already hold one avoid a
+ * redundant full-store read (every `store.get()` re-reads the config file
+ * from disk).
  */
-export function buildSkeletonCss(project?: Pick<Project, "color"> | null): string {
+export function buildSkeletonCss(
+  project?: Pick<Project, "color"> | null,
+  preReadThemeConfig?: Partial<AppThemeConfig>
+): string {
   const appState = store.get("appState");
   const sidebarWidth = appState?.sidebarWidth ?? 350;
   const focusMode = appState?.focusMode ?? false;
 
   // Resolve theme
-  const themeConfig = store.get("appTheme") ?? {};
+  const themeConfig = preReadThemeConfig ?? store.get("appTheme") ?? {};
   const colorSchemeId =
     typeof themeConfig.colorSchemeId === "string" ? themeConfig.colorSchemeId : "daintree";
   // Apply lazy migration for legacy string-encoded customSchemes

@@ -196,6 +196,7 @@ export class PtyClient extends EventEmitter {
     { projectId: string | null; projectPath?: string; mode: "active" | "switch" }
   >();
   private shouldResyncProjectContext = false;
+  private deferInitialPoolWarm = false;
   private hostStartRequested = false;
   private pendingMessagePorts = new Map<number, MessagePortMain>();
   private terminalPids: Map<string, number> = new Map();
@@ -263,6 +264,7 @@ export class PtyClient extends EventEmitter {
       {
         memoryLimitMb: this.config.memoryLimitMb,
         electronDir,
+        deferInitialPoolWarm: () => this.deferInitialPoolWarm,
       },
       {
         onMessage: (event) => this.handleHostEvent(event),
@@ -347,6 +349,18 @@ export class PtyClient extends EventEmitter {
   /** Whether {@link PtyClient.start} has forked (or requested) the host yet. */
   isHostStarted(): boolean {
     return this.hostStartRequested;
+  }
+
+  /**
+   * Mark the host fork as a project-restoring boot: the host skips its
+   * boot-time homedir pool warm because the set-active-project sent right
+   * after ready drains the pool to the project path anyway (#10393). The
+   * host falls back to a homedir warm if the restore falls through, and the
+   * flag is re-read on every restart fork — context replay re-warms the pool
+   * either way. Call before {@link start}.
+   */
+  setDeferInitialPoolWarm(defer: boolean): void {
+    this.deferInitialPoolWarm = defer;
   }
 
   /** Wait for the host to be ready */

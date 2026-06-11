@@ -150,6 +150,12 @@ export async function setupWindowServices(
   const deferRendererLoadForE2E = shouldDeferRendererLoadForE2E();
 
   let rendererLoadStarted = false;
+  // True once a port pair has been distributed with a live PtyClient (the
+  // client queues ports internally until the host is running, so "client
+  // exists" is sufficient). Lets the post-services block below skip its
+  // redundant re-distribution, which would discard the pair the renderer is
+  // already holding.
+  let ptyPortsWired = false;
   const startRendererLoad = (reason: string): void => {
     if (rendererLoadStarted) return;
     rendererLoadStarted = true;
@@ -167,6 +173,9 @@ export async function setupWindowServices(
       if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
       markPerformance(PERF_MARKS.RENDERER_READY);
       createAndDistributePorts(win, ctx);
+      if (getPtyClient()) {
+        ptyPortsWired = true;
+      }
       // Re-register the renderer in directPortViews on reload so
       // sendToEntryWindows continues routing host events to it. With
       // early-renderer mode (default), workspaceClient may still be null on
@@ -253,6 +262,14 @@ export async function setupWindowServices(
     // this never double-runs the probe and guarantees the #8625 invariant holds
     // before the fork rather than silently skipping it on a null promise.
     await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
+    // Project-restoring boots send set-active-project with a project path
+    // right after the host is ready, draining the pool — tell the host to
+    // skip the homedir warm those drains would immediately kill (#10393).
+    // The host falls back to a homedir warm if the restore falls through.
+    // Keyed on initialProjectId only: path-only boots (CLI open) send
+    // set-active-project(null) before the project-switch, which would fire
+    // the fallback homedir warm and waste the deferral anyway.
+    ptyClient.setDeferInitialPoolWarm(Boolean(opts.initialProjectId));
     ptyClient.start();
   }
 
@@ -306,20 +323,36 @@ export async function setupWindowServices(
 
     // Give PluginService the WorkspaceClient reference now that it's ready.
     // initialize() is deferred and may run before or after this point — the
-    // service's pendingWorktreeSubs replay handles either ordering.
-    try {
-      const { pluginService } = await import("../services/PluginService.js");
-      pluginService.setWorkspaceClient(workspaceClient);
-    } catch (err) {
-      console.error("[MAIN] Failed to wire WorkspaceClient into PluginService:", err);
+    // service's pendingWorktreeSubs replay handles either ordering. The two
+    // imports are independent; load them concurrently with per-module error
+    // isolation.
+    const [pluginServiceResult, portBrokerResult] = await Promise.allSettled([
+      import("../services/PluginService.js"),
+      import("../services/WorktreePortBroker.js"),
+    ]);
+
+    if (pluginServiceResult.status === "fulfilled") {
+      try {
+        pluginServiceResult.value.pluginService.setWorkspaceClient(workspaceClient);
+      } catch (err) {
+        console.error("[MAIN] Failed to wire WorkspaceClient into PluginService:", err);
+      }
+    } else {
+      console.error(
+        "[MAIN] Failed to wire WorkspaceClient into PluginService:",
+        pluginServiceResult.reason
+      );
     }
 
     markPerformance(PERF_MARKS.SERVICE_INIT_WORKSPACE_READY);
 
     // Create WorktreePortBroker alongside WorkspaceClient
     if (!getWorktreePortBrokerRef()) {
-      const { WorktreePortBroker } = await import("../services/WorktreePortBroker.js");
-      setWorktreePortBrokerRef(new WorktreePortBroker());
+      if (portBrokerResult.status === "fulfilled") {
+        setWorktreePortBrokerRef(new portBrokerResult.value.WorktreePortBroker());
+      } else {
+        throw portBrokerResult.reason;
+      }
     }
 
     handlerDeps.worktreeService = workspaceClient;
@@ -471,7 +504,11 @@ export async function setupWindowServices(
   // PTY-related features
   if (ptyReady) {
     const pty = getPtyClient()!;
-    createAndDistributePorts(win, ctx);
+    // Skip when the did-finish-load handler already distributed a pair with a
+    // live PtyClient — re-distributing here would close the renderer's ports.
+    if (!ptyPortsWired) {
+      createAndDistributePorts(win, ctx);
+    }
 
     if (restoreProject) {
       pty.setActiveProject(

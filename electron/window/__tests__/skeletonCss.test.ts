@@ -17,6 +17,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  buildSkeletonCss,
   injectSkeletonCss,
   injectSkeletonProjectIdentity,
   resolveInitialCanvasBackgroundColor,
@@ -137,6 +138,35 @@ describe("injectSkeletonCss var scoping (#9716)", () => {
     const selectors = css.match(/[^\s][^{]*\{/g) ?? [];
     expect(selectors.some((s) => s.trim().startsWith("#startup-skeleton"))).toBe(true);
     expect(selectors.some((s) => s.trim().startsWith(":root"))).toBe(false);
+  });
+});
+
+describe("buildSkeletonCss pre-read theme config (#10393)", () => {
+  beforeEach(() => {
+    storeMock.get.mockReset();
+    storeMock.get.mockImplementation((key: string) => {
+      if (key === "appState") return { sidebarWidth: 350, focusMode: false };
+      if (key === "appTheme") return { colorSchemeId: "daintree" };
+      return undefined;
+    });
+  });
+
+  it("uses the passed config instead of re-reading appTheme from the store", () => {
+    const css = buildSkeletonCss(undefined, { colorSchemeId: "bondi" });
+    // The store still says "daintree" — the bondi token proves the pre-read
+    // config won, and the call log proves the disk read was skipped.
+    expect(css).toContain(
+      `--theme-surface-canvas: ${resolveAppTheme("bondi", []).tokens["surface-canvas"]};`
+    );
+    expect(storeMock.get).not.toHaveBeenCalledWith("appTheme");
+  });
+
+  it("falls back to the store read when no config is passed", () => {
+    const css = buildSkeletonCss();
+    expect(css).toContain(
+      `--theme-surface-canvas: ${resolveAppTheme("daintree", []).tokens["surface-canvas"]};`
+    );
+    expect(storeMock.get).toHaveBeenCalledWith("appTheme");
   });
 });
 

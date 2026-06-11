@@ -180,7 +180,17 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       windowProjectMap.set(msg.windowId, msg.projectId);
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
+      if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
+        // The boot-time homedir warm was deferred for a project restore that
+        // fell through (e.g. the saved project no longer exists) — run it now
+        // at the pool's default cwd (still homedir).
+        ctx.initialPoolWarmDeferred = false;
+        pool.warmPool().catch((err) => {
+          console.error("[PtyHost] Deferred pool warm failed:", err);
+        });
+      }
       if (msg.projectPath && pool) {
+        ctx.initialPoolWarmDeferred = false;
         // Bound the warm set to what the pool can hold alongside the root entry
         // without LRU-evicting the entries we just warmed. The root drain/refill
         // takes poolSize slots; each panel cwd takes up to poolSize more. Cap
@@ -224,7 +234,16 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       windowProjectMap.set(msg.windowId, msg.projectId);
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
+      if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
+        // Restart replay can carry a switch context with no recorded path —
+        // consume the deferral so the pool doesn't stay cold indefinitely.
+        ctx.initialPoolWarmDeferred = false;
+        pool.warmPool().catch((err) => {
+          console.error("[PtyHost] Deferred pool warm failed:", err);
+        });
+      }
       if (msg.projectPath && pool) {
+        ctx.initialPoolWarmDeferred = false;
         pool.drainAndRefill(msg.projectPath).catch((err) => {
           console.error("[PtyHost] drainAndRefill failed:", err);
         });
