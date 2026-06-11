@@ -1044,7 +1044,10 @@ describe("app:set-state handler", () => {
 
     await invokeSetState({ focusMode: true });
 
-    const [, written] = vi.mocked(storeModule.store.set).mock.calls[0]!;
+    // store.set is called in the (key, value) form; read through an untyped
+    // view since vi.mocked resolves the single-argument set(object) overload.
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const written = calls[0]![1];
     expect(written).toMatchObject({ sidebarWidth: 350, hasSeenWelcome: true, focusMode: true });
   });
 
@@ -1064,7 +1067,8 @@ describe("app:set-state handler", () => {
 
     const setMock = vi.mocked(storeModule.store.set);
     expect(setMock).toHaveBeenCalledTimes(1);
-    const [, written] = setMock.mock.calls[0]!;
+    const calls = setMock.mock.calls as unknown as unknown[][];
+    const written = calls[0]![1];
     expect(written).not.toHaveProperty("focusPanelState");
     expect(written).toMatchObject({ sidebarWidth: 350 });
     expect(storeModule.store.delete).not.toHaveBeenCalled();
