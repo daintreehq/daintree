@@ -326,6 +326,16 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(cachedCalls.every((call) => call[0] !== activeWc)).toBe(true);
   });
 
+  it("marks the view cached before applying the CPU throttle", async () => {
+    const { throttleCpuWebContents } = await import("../../utils/webContentsLifecycle.js");
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    const markOrder = vi.mocked(registerCachedViewWebContents).mock.invocationCallOrder[0];
+    const throttleOrder = vi.mocked(throttleCpuWebContents).mock.invocationCallOrder[0];
+    expect(markOrder).toBeLessThan(throttleOrder);
+  });
+
   it("warm reactivation clears the cached mark", async () => {
     await manager.switchTo("proj-b", "/path/b");
     vi.mocked(unregisterCachedViewWebContents).mockClear();

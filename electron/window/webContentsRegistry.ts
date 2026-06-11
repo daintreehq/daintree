@@ -238,6 +238,7 @@ export function getAllAppWebContents(): WebContents[] {
       result.push(wc);
     } else {
       viewToProject.delete(wcId);
+      cachedViewWebContents.delete(wcId);
     }
   }
 
@@ -337,6 +338,7 @@ export function getWebContentsForProject(projectId: string): WebContents[] {
       result.push(wc);
     } else {
       viewToProject.delete(wcId);
+      cachedViewWebContents.delete(wcId);
       invalidateAllAppWebContentsCache();
     }
   }
