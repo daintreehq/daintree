@@ -7,7 +7,10 @@ import { notify } from "@/lib/notify";
  * Surfaces the Rosetta translation warning from the boot payload. The
  * condition is machine-level and session-stable (the installed binary's
  * architecture can't change mid-session), so the initial boot result is the
- * only source of truth — no re-check on project-switch hydrates.
+ * only source of truth — no re-check on project-switch hydrates. Deliberate
+ * tradeoff: when `app:boot` itself fails (`bootResult` stays null) the warning
+ * is skipped for that session even if the app recovers via the live hydrate
+ * fallback — an advisory perf banner isn't worth re-plumbing the fallback path.
  */
 export function useRosettaWarning(bootResult: BootResult | null) {
   const inboxedRef = useRef(false);

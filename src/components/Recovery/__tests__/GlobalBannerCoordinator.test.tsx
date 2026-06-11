@@ -357,6 +357,16 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.getByText("Running under Rosetta")).toBeTruthy();
   });
 
+  it("suppresses the Rosetta warning while the host has crashed", () => {
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useRosettaBannerStore.setState({ visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Terminal service crashed")).toBeTruthy();
+    expect(screen.queryByText("Running under Rosetta")).toBeNull();
+  });
+
   it("prefers cloud sync over the Rosetta warning when both are active", () => {
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
     useRosettaBannerStore.setState({ visible: true });

@@ -89,6 +89,7 @@ describe("RosettaBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Rosetta warning" }));
 
     expect(useRosettaBannerStore.getState().visible).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
     await waitFor(() => {
       expect(dismissRosettaWarningMock).toHaveBeenCalledOnce();
     });
@@ -103,7 +104,9 @@ describe("RosettaBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Rosetta warning" }));
 
     await waitFor(() => {
-      expect(notifyMock).toHaveBeenCalled();
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Couldn't save preference" })
+      );
     });
     expect(useRosettaBannerStore.getState().visible).toBe(false);
   });
