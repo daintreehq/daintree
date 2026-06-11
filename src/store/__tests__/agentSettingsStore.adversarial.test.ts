@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMock = vi.hoisted(() => ({
   get: vi.fn(),
+  invalidate: vi.fn(),
   set: vi.fn(),
   reset: vi.fn(),
   stampVersion: vi.fn(),

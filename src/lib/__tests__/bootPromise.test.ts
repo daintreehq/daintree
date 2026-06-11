@@ -29,6 +29,8 @@ function makeBootResult(): BootResult {
     tabGroups: [{ id: "g1", location: "grid", activeTabId: "t1", panelIds: ["t1"] }],
     terminalSizes: { t1: { cols: 80, rows: 24 } },
     draftInputs: { t1: "secret half-typed draft" },
+    projectPresets: { claude: [{ id: "p1", name: "Preset" }] },
+    appTheme: { schemeId: "dark", customSchemes: [] },
   } as unknown as BootResult;
 }
 
@@ -59,6 +61,8 @@ describe("releaseBootPayload", () => {
     expect(result.draftInputs).toBeUndefined();
     expect(result.tabGroups).toBeUndefined();
     expect(result.terminalSizes).toBeUndefined();
+    expect(result.projectPresets).toBeUndefined();
+    expect(result.appTheme).toBeUndefined();
     // Crash fields are still read from the cached payload after hydration.
     expect(result.crashPending).toBeNull();
     expect(result.crashConfig).toEqual({ autoRestoreOnCrash: true });

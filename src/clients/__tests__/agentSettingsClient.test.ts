@@ -56,13 +56,45 @@ describe("agentSettingsClient", () => {
     expect(r2).toEqual({ claude: { pinned: true } });
   });
 
-  it("does not cache resolved values — sequential get() calls re-fetch", async () => {
+  it("caches the resolved value — sequential get() calls skip the IPC", async () => {
     getMock.mockResolvedValue({ claude: {} });
 
-    await agentSettingsClient.get();
+    const first = await agentSettingsClient.get();
+    const second = await agentSettingsClient.get();
+
+    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
+  });
+
+  it("invalidate() drops the cache so the next get() hits main", async () => {
+    getMock.mockResolvedValueOnce({ claude: {} });
     await agentSettingsClient.get();
 
+    agentSettingsClient.invalidate();
+
+    getMock.mockResolvedValueOnce({ claude: { pinned: true } });
+    const fresh = await agentSettingsClient.get();
     expect(getMock).toHaveBeenCalledTimes(2);
+    expect(fresh).toEqual({ claude: { pinned: true } });
+  });
+
+  it("does not cache a snapshot fetched across a write window", async () => {
+    let resolve!: (v: unknown) => void;
+    getMock.mockReturnValueOnce(
+      new Promise((r) => {
+        resolve = r;
+      })
+    );
+
+    const racing = agentSettingsClient.get();
+    await agentSettingsClient.set("claude", { pinned: true });
+    resolve({ claude: {} });
+    await racing;
+
+    getMock.mockResolvedValueOnce({ claude: { pinned: true } });
+    const fresh = await agentSettingsClient.get();
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(fresh).toEqual({ claude: { pinned: true } });
   });
 
   it("recovers from a rejected get() on the next call", async () => {

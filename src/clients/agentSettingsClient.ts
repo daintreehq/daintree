@@ -1,42 +1,62 @@
 import type { AgentSettings, AgentSettingsEntry } from "@shared/types";
 
-// Singleflight on get(): burst paths (bulk restart, duplicate, recipe spawns)
-// coalesce concurrent reads into one IPC round-trip. Deliberately no resolved-
-// value cache — agentSettingsStore.refresh() exists to re-pull external
-// changes (cross-window writes, config reloads) and must always hit main.
-// Writes clear the inflight read so post-write get() calls never coalesce
-// onto a pre-write fetch.
+// Value cache + singleflight on get(): burst paths (bulk restart, duplicate,
+// recipe spawns) coalesce concurrent reads into one IPC round-trip, and later
+// reads are served from the cached snapshot without touching main. Freshness
+// contract: writes through this client invalidate (at call time AND on
+// settle, so a read that raced the write window can't leave a pre-write
+// snapshot cached); external changes (cross-window writes, config reloads)
+// are re-pulled by agentSettingsStore.refresh(), which calls invalidate()
+// first so its get() always hits main.
+let cachedSettings: AgentSettings | null = null;
 let inflightGet: Promise<AgentSettings> | null = null;
 
-function clearInflightGet(): void {
+function invalidate(): void {
+  cachedSettings = null;
   inflightGet = null;
 }
 
 export const agentSettingsClient = {
   get: (): Promise<AgentSettings> => {
+    if (cachedSettings) return Promise.resolve(cachedSettings);
     if (inflightGet) return inflightGet;
 
-    const promise = window.electron.agentSettings.get().finally(() => {
-      if (inflightGet === promise) {
-        inflightGet = null;
+    const promise = window.electron.agentSettings.get().then(
+      (settings) => {
+        // Only cache if no invalidation superseded this fetch mid-flight —
+        // a write that landed while we were reading makes this snapshot stale.
+        if (inflightGet === promise) {
+          cachedSettings = settings;
+          inflightGet = null;
+        }
+        return settings;
+      },
+      (error: unknown) => {
+        if (inflightGet === promise) {
+          inflightGet = null;
+        }
+        throw error;
       }
-    });
+    );
     inflightGet = promise;
     return promise;
   },
 
+  /** Drop the cached snapshot so the next get() hits main. */
+  invalidate,
+
   set: (agentId: string, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings> => {
-    clearInflightGet();
-    return window.electron.agentSettings.set(agentId, settings);
+    invalidate();
+    return window.electron.agentSettings.set(agentId, settings).finally(invalidate);
   },
 
   reset: (agentType?: string): Promise<AgentSettings> => {
-    clearInflightGet();
-    return window.electron.agentSettings.reset(agentType);
+    invalidate();
+    return window.electron.agentSettings.reset(agentType).finally(invalidate);
   },
 
   stampVersion: (version: number): Promise<Record<string, unknown>> => {
-    clearInflightGet();
-    return window.electron.agentSettings.stampVersion(version);
+    invalidate();
+    return window.electron.agentSettings.stampVersion(version).finally(invalidate);
   },
 } as const;

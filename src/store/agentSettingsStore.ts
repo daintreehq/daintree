@@ -333,6 +333,10 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     const myEpoch = ++normalizeEpoch;
     set({ error: null });
     try {
+      // refresh() exists to re-pull external changes (cross-window writes,
+      // config reloads) — drop the client's value cache so this read and
+      // every later get() see post-change data, not a pre-change snapshot.
+      agentSettingsClient.invalidate();
       const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
       if (myEpoch !== normalizeEpoch) return;
       const { availability, hasRealData } = readAvailabilitySnapshot();
@@ -469,6 +473,7 @@ export function getPinnedAgents(): string[] {
 export function cleanupAgentSettingsStore() {
   normalizeEpoch++;
   initPromise = null;
+  agentSettingsClient.invalidate();
   useAgentSettingsStore.setState({
     settings: DEFAULT_AGENT_SETTINGS,
     isLoading: true,
