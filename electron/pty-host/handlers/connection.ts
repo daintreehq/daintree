@@ -234,6 +234,14 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       windowProjectMap.set(msg.windowId, msg.projectId);
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
+      if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
+        // Restart replay can carry a switch context with no recorded path —
+        // consume the deferral so the pool doesn't stay cold indefinitely.
+        ctx.initialPoolWarmDeferred = false;
+        pool.warmPool().catch((err) => {
+          console.error("[PtyHost] Deferred pool warm failed:", err);
+        });
+      }
       if (msg.projectPath && pool) {
         ctx.initialPoolWarmDeferred = false;
         pool.drainAndRefill(msg.projectPath).catch((err) => {

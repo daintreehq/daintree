@@ -266,7 +266,10 @@ export async function setupWindowServices(
     // right after the host is ready, draining the pool — tell the host to
     // skip the homedir warm those drains would immediately kill (#10393).
     // The host falls back to a homedir warm if the restore falls through.
-    ptyClient.setDeferInitialPoolWarm(Boolean(opts.initialProjectPath || opts.initialProjectId));
+    // Keyed on initialProjectId only: path-only boots (CLI open) send
+    // set-active-project(null) before the project-switch, which would fire
+    // the fallback homedir warm and waste the deferral anyway.
+    ptyClient.setDeferInitialPoolWarm(Boolean(opts.initialProjectId));
     ptyClient.start();
   }
 

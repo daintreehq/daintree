@@ -326,6 +326,17 @@ describe("deferred boot pool warm (#10393)", () => {
     expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
     expect(ctx.initialPoolWarmDeferred).toBe(false);
   });
+
+  it("fallback-warms on a project-switch with no recorded path (restart replay)", () => {
+    const { ctx, pool } = makeDeferredCtx(true);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["project-switch"]({ windowId: 1, projectId: "proj-a" });
+
+    expect(pool.warmPool).toHaveBeenCalledTimes(1);
+    expect(pool.drainAndRefill).not.toHaveBeenCalled();
+    expect(ctx.initialPoolWarmDeferred).toBe(false);
+  });
 });
 
 describe("set-active-project non-empty envHash warming (#9810)", () => {
