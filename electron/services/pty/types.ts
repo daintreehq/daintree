@@ -138,6 +138,13 @@ export interface TerminalInfo extends TerminalPublicState {
    * See `AgentStateService` for the suppression policy.
    */
   hysteresisLockedUntil?: number;
+  /**
+   * Final serialized buffer captured when a preserved terminal exits and its
+   * headless xterm is disposed to reclaim memory. Served by
+   * `serializeTerminal`/`serializeTerminalAsync` in place of the live buffer.
+   * Runtime-only; not persisted, not crossed over IPC.
+   */
+  preservedSnapshot?: string;
 }
 
 export interface PtyManagerEvents {
