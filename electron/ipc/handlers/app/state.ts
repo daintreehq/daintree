@@ -32,6 +32,7 @@ import {
   isGpuDisabledByFlag,
   isGpuAngleFallbackApplied,
 } from "../../../services/GpuCrashMonitorService.js";
+import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
@@ -426,6 +427,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
+      gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
       gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
       safeMode: inSafeMode,
       isWindowsStore:

@@ -104,6 +104,14 @@ export interface AppVersionInfo {
   os: string;
 }
 
+/**
+ * Why hardware acceleration is disabled: "crash" is the automatic fallback
+ * after repeated GPU crashes; "user" is the Settings > Troubleshooting toggle.
+ * Legacy timestamp-only flag files (written before reason tracking) report
+ * "crash" so the version-change auto-retry can recover them.
+ */
+export type GpuDisabledReason = "crash" | "user";
+
 /** Describes how the settings store recovered from corruption at startup */
 export type SettingsRecovery =
   | { kind: "restored-from-backup"; quarantinedPath?: string }
@@ -149,6 +157,12 @@ export interface HydrateResult {
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
+  /**
+   * Why hardware acceleration is disabled, or null when it is enabled. Lets
+   * the renderer suppress the "disabled after repeated GPU crashes" boot
+   * notification when the user disabled acceleration deliberately.
+   */
+  gpuDisabledReason: GpuDisabledReason | null;
   /**
    * True when the app is running with ANGLE/Vulkan fallback rendering after a
    * prior GPU crash (the `gpu-angle-fallback.flag` file exists in userData).

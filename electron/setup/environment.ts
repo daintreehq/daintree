@@ -25,6 +25,14 @@ import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
+// Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
+// the service here would evaluate its logger/telemetry/store import chain at
+// module load, before this file's body re-paths userData for dev instances.
+import {
+  GPU_DISABLED_FLAG_FILENAME,
+  readGpuDisabledFlagData,
+  shouldRetryGpuAfterUpdate,
+} from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isDemoMode, isSmokeTest, smokeTestStart } from "./runtimeFlags.js";
 // Side-effect import: registers the macOS `daintree://` `open-url` listener on
@@ -85,10 +93,39 @@ if (shouldResetData) {
   }
 }
 
-// GPU crash fallback: disable hardware acceleration before app.whenReady()
-// This flag is written by GpuCrashMonitorService after repeated GPU crashes.
-const gpuFlagPath = path.join(app.getPath("userData"), "gpu-disabled.flag");
-export const gpuHardwareAccelerationDisabled = fs.existsSync(gpuFlagPath);
+// GPU crash fallback: disable hardware acceleration before app.whenReady().
+// The flag is written by GpuCrashMonitorService after repeated GPU crashes or
+// by the Settings > Troubleshooting toggle (reason "user"). Crash-written
+// flags are retried once per app version — if the crashes came from an
+// Electron or driver bug, the fix would otherwise never reach affected users
+// because the flag outlives the update. User-written flags never auto-retry.
+const gpuFlagPath = path.join(app.getPath("userData"), GPU_DISABLED_FLAG_FILENAME);
+const gpuDisabledFlagData = readGpuDisabledFlagData(app.getPath("userData"));
+let gpuFlagClearedForRetry = false;
+if (shouldRetryGpuAfterUpdate(gpuDisabledFlagData, app.getVersion())) {
+  try {
+    fs.unlinkSync(gpuFlagPath);
+    gpuFlagClearedForRetry = true;
+    console.log(
+      `[GPU] Retrying hardware acceleration after update (flag written by version ${gpuDisabledFlagData!.version}, now ${app.getVersion()})`
+    );
+    // Retry from a clean slate: drop the ANGLE/Vulkan fallback flag too so the
+    // post-update session starts on the default GPU path. Best-effort — the
+    // crash monitor rewrites it if the first post-update crash recurs.
+    try {
+      fs.unlinkSync(path.join(app.getPath("userData"), "gpu-angle-fallback.flag"));
+    } catch {
+      // Usually ENOENT — the nuclear-disable path already cleared it.
+    }
+  } catch (err) {
+    // Couldn't clear the flag (read-only fs, permissions). Keep acceleration
+    // off for this session — never let a failed cleanup write flip behavior
+    // the persisted state can't back up (lesson #6350).
+    console.warn("[GPU] Failed to clear gpu-disabled flag for version retry:", err);
+  }
+}
+export const gpuHardwareAccelerationDisabled =
+  gpuDisabledFlagData !== null && !gpuFlagClearedForRetry;
 if (gpuHardwareAccelerationDisabled) {
   app.disableHardwareAcceleration();
   console.log("[GPU] Hardware acceleration disabled by crash fallback flag");

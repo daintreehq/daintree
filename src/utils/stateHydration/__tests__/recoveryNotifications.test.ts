@@ -12,13 +12,14 @@ const { dispatchRecoveryNotifications, __resetGpuAccelNotifiedForTests } =
 
 function makeHydrateResult(overrides: Partial<HydrateResult>): HydrateResult {
   // dispatchRecoveryNotifications only reads gpuHardwareAccelerationDisabled,
-  // settingsRecovery, and projectStateRecovery — the rest is fixture noise
-  // satisfied via a single boundary cast.
+  // gpuDisabledReason, settingsRecovery, and projectStateRecovery — the rest
+  // is fixture noise satisfied via a single boundary cast.
   const base: Partial<HydrateResult> = {
     appState: { terminals: [], sidebarWidth: 240 },
     project: null,
     gpuWebGLHardware: true,
     gpuHardwareAccelerationDisabled: false,
+    gpuDisabledReason: null,
     gpuAngleFallbackActive: false,
     safeMode: false,
     settingsRecovery: null,
@@ -41,7 +42,10 @@ describe("dispatchRecoveryNotifications", () => {
 
   describe("GPU hardware acceleration", () => {
     it("fires the GPU disabled toast once per renderer lifecycle", () => {
-      const result = makeHydrateResult({ gpuHardwareAccelerationDisabled: true });
+      const result = makeHydrateResult({
+        gpuHardwareAccelerationDisabled: true,
+        gpuDisabledReason: "crash",
+      });
 
       dispatchRecoveryNotifications(result);
       dispatchRecoveryNotifications(result);
@@ -61,6 +65,47 @@ describe("dispatchRecoveryNotifications", () => {
     it("does not fire when the flag is false", () => {
       dispatchRecoveryNotifications(makeHydrateResult({ gpuHardwareAccelerationDisabled: false }));
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("stays silent when the user disabled acceleration manually", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          gpuHardwareAccelerationDisabled: true,
+          gpuDisabledReason: "user",
+        })
+      );
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("stays silent when disabled with no recorded reason", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          gpuHardwareAccelerationDisabled: true,
+          gpuDisabledReason: null,
+        })
+      );
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("offers a re-enable action that calls the GPU IPC bridge", () => {
+      const setHardwareAcceleration = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("window", {
+        electron: { gpu: { setHardwareAcceleration } },
+      });
+      try {
+        dispatchRecoveryNotifications(
+          makeHydrateResult({
+            gpuHardwareAccelerationDisabled: true,
+            gpuDisabledReason: "crash",
+          })
+        );
+        const arg = notifyMock.mock.calls[0]![0];
+        expect(arg.action.label).toBe("Re-enable");
+        arg.action.onClick();
+        expect(setHardwareAcceleration).toHaveBeenCalledWith(true);
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 
@@ -154,6 +199,7 @@ describe("dispatchRecoveryNotifications", () => {
     dispatchRecoveryNotifications(
       makeHydrateResult({
         gpuHardwareAccelerationDisabled: true,
+        gpuDisabledReason: "crash",
         settingsRecovery: { kind: "restored-from-backup" },
         projectStateRecovery: { quarantinedPath: "/tmp/p" },
         crashLoopStateRecovery: { quarantinedPath: "/tmp/c" },

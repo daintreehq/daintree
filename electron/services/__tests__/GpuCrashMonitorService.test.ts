@@ -82,6 +82,7 @@ import {
   clearGpuAngleFallbackFlag,
   GPU_CRASH_WINDOW_MS,
 } from "../GpuCrashMonitorService.js";
+import { readGpuDisabledFlagData } from "../gpuDisabledFlag.js";
 
 describe("GpuCrashMonitorService", () => {
   let tmpDir: string;
@@ -115,17 +116,25 @@ describe("GpuCrashMonitorService", () => {
     });
 
     it("writeGpuDisabledFlag creates the flag file", () => {
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       expect(fs.existsSync(path.join(tmpDir, "gpu-disabled.flag"))).toBe(true);
     });
 
+    it("writeGpuDisabledFlag persists the reason and writing app version", () => {
+      appMock.getVersion.mockReturnValue("2.3.4");
+      writeGpuDisabledFlag(tmpDir, "user");
+      const data = readGpuDisabledFlagData(tmpDir);
+      expect(data).toMatchObject({ reason: "user", version: "2.3.4" });
+      expect(data!.timestamp).toBeGreaterThan(0);
+    });
+
     it("isGpuDisabledByFlag returns true after writing flag", () => {
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
     });
 
     it("clearGpuDisabledFlag removes the flag file", () => {
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       clearGpuDisabledFlag(tmpDir);
       expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
     });
@@ -155,7 +164,7 @@ describe("GpuCrashMonitorService", () => {
     });
 
     it("disable and angle fallback flags coexist independently", () => {
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       writeGpuAngleFallbackFlag(tmpDir);
       expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
       expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(true);
@@ -201,7 +210,7 @@ describe("GpuCrashMonitorService", () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       process.env.XDG_SESSION_TYPE = "wayland";
       writeGpuAngleFallbackFlag(tmpDir);
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       expect(isGpuAngleFallbackApplied(tmpDir)).toBe(false);
     });
 
@@ -343,7 +352,7 @@ describe("GpuCrashMonitorService", () => {
     });
 
     it("does not relaunch if disable flag already exists (already disabled)", async () => {
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       await loadAndInit();
       emitGpuCrash();
       emitGpuCrash();
@@ -351,6 +360,36 @@ describe("GpuCrashMonitorService", () => {
       expect(appMock.relaunch).not.toHaveBeenCalled();
       expect(appMock.exit).not.toHaveBeenCalled();
       expect(storeMock.set).not.toHaveBeenCalled();
+    });
+
+    it("keeps counting crashes while disabled and logs the software-mode crash loop at threshold", async () => {
+      writeGpuDisabledFlag(tmpDir, "crash");
+      await loadAndInit();
+      emitGpuCrash();
+      emitGpuCrash();
+      expect(loggerMethods.warn).not.toHaveBeenCalledWith(
+        "gpu-crash-loop-while-disabled",
+        expect.anything()
+      );
+      emitGpuCrash();
+      expect(loggerMethods.warn).toHaveBeenCalledWith(
+        "gpu-crash-loop-while-disabled",
+        expect.objectContaining({ crashCount: 3 })
+      );
+      expect(appMock.relaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("nuclear disable records the crash reason in the flag file", async () => {
+      writeGpuAngleFallbackFlag(tmpDir);
+      await loadAndInit();
+      emitGpuCrash();
+      emitGpuCrash();
+      emitGpuCrash();
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      expect(readGpuDisabledFlagData(tmpDir)).toMatchObject({ reason: "crash" });
     });
 
     it("counts oom, launch-failed, and abnormal-exit as crashes (first crash → soft fallback)", async () => {
@@ -950,7 +989,7 @@ describe("GpuCrashMonitorService", () => {
       });
 
       it("already-disabled path does not call the cleanup helper", async () => {
-        writeGpuDisabledFlag(tmpDir);
+        writeGpuDisabledFlag(tmpDir, "crash");
         await loadAndInit();
         emitGpuCrash();
         emitGpuCrash();
@@ -1099,7 +1138,7 @@ describe("GpuCrashMonitorService", () => {
     });
 
     it("logs disable-flag-active at init when flag exists", async () => {
-      writeGpuDisabledFlag(tmpDir);
+      writeGpuDisabledFlag(tmpDir, "crash");
       await loadAndInit();
       expect(loggerMethods.info).toHaveBeenCalledWith("gpu-crash-disable-flag-active");
     });

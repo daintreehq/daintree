@@ -30,7 +30,7 @@ export function registerGpuHandlers(): () => void {
       clearGpuAngleFallbackFlag(userDataPath);
       store.set("gpu", { hardwareAccelerationDisabled: false });
     } else {
-      writeGpuDisabledFlag(userDataPath);
+      writeGpuDisabledFlag(userDataPath, "user");
       store.set("gpu", { hardwareAccelerationDisabled: true });
     }
     app.relaunch();
