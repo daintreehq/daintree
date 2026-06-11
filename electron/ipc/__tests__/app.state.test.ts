@@ -994,3 +994,96 @@ describe("app:boot handler", () => {
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });
 });
+
+describe("app:set-state handler", () => {
+  async function invokeSetState(payload: unknown) {
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get("app:set-state");
+    if (!handler) throw new Error("app:set-state handler not registered");
+    await handler(makeInvokeEvent(), payload);
+    cleanup();
+  }
+
+  let storeModule: typeof import("../../store.js");
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ipcHandlers.clear();
+    storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    }) as never);
+  });
+
+  it("persists a multi-field update as a single merged appState write", async () => {
+    await invokeSetState({ sidebarWidth: 400, focusMode: true, activeWorktreeId: "wt-1" });
+
+    const setMock = vi.mocked(storeModule.store.set);
+    expect(setMock).toHaveBeenCalledTimes(1);
+    expect(setMock).toHaveBeenCalledWith(
+      "appState",
+      expect.objectContaining({
+        terminals: [],
+        sidebarWidth: 400,
+        focusMode: true,
+        activeWorktreeId: "wt-1",
+      })
+    );
+    expect(storeModule.store.delete).not.toHaveBeenCalled();
+  });
+
+  it("preserves unrelated persisted fields in the merged write", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350, hasSeenWelcome: true };
+      return undefined;
+    }) as never);
+
+    await invokeSetState({ focusMode: true });
+
+    // store.set is called in the (key, value) form; read through an untyped
+    // view since vi.mocked resolves the single-argument set(object) overload.
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const written = calls[0]![1];
+    expect(written).toMatchObject({ sidebarWidth: 350, hasSeenWelcome: true, focusMode: true });
+  });
+
+  it("drops cleared fields from the merged object instead of writing undefined", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [],
+          sidebarWidth: 350,
+          focusPanelState: { sidebarWidth: 300, diagnosticsOpen: false },
+        };
+      }
+      return undefined;
+    }) as never);
+
+    await invokeSetState({ focusPanelState: null });
+
+    const setMock = vi.mocked(storeModule.store.set);
+    expect(setMock).toHaveBeenCalledTimes(1);
+    const calls = setMock.mock.calls as unknown as unknown[][];
+    const written = calls[0]![1];
+    expect(written).not.toHaveProperty("focusPanelState");
+    expect(written).toMatchObject({ sidebarWidth: 350 });
+    expect(storeModule.store.delete).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when no field survives validation", async () => {
+    await invokeSetState({ sidebarWidth: 99999 });
+    expect(storeModule.store.set).not.toHaveBeenCalled();
+  });
+
+  it("schedules a crash backup only for crash-critical fields", async () => {
+    await invokeSetState({ sidebarWidth: 400 });
+    expect(crashService.scheduleBackup).not.toHaveBeenCalled();
+
+    await invokeSetState({ focusMode: true });
+    expect(crashService.scheduleBackup).toHaveBeenCalledTimes(1);
+  });
+});

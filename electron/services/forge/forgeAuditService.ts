@@ -1,13 +1,9 @@
 // eager-import-allow: reads/writes the forgeAudit store key via store.get/set inside the audit callbacks, invoked from forge IPC handlers (not at boot)
-import type {
-  ForgeAuditRecord,
-  ForgeAuditResult,
-  ForgeProviderMethodName,
-} from "../../../shared/types/ipc/forge.js";
+import type { ForgeAuditResult, ForgeProviderMethodName } from "../../../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { store } from "../../store.js";
-import { ForgeAuditService } from "./auditLog.js";
+import { auditLogsStore, store } from "../../store.js";
+import { ForgeAuditService, type ForgeAuditLogStore } from "./auditLog.js";
 
 export { summarizeForgeArgs } from "./auditLog.js";
 
@@ -31,19 +27,26 @@ function getConfig(): Record<string, unknown> {
 }
 
 function persistConfig(patch: Record<string, unknown>): void {
-  // Known-key merge guard mirrors `McpServerService.persistConfig`: a partial
-  // patch (e.g. `{ auditEnabled }`) must never drop the persisted `auditLog`.
+  // Flags only — the ring is persisted via `forgeAuditLogStore` since
+  // migration023. The spread merge keeps a legacy `auditLog` carryover intact
+  // for installs where the migration deferred (audit-logs store not durable).
   const current = store.get("forgeAudit") ?? FORGE_AUDIT_CONFIG_DEFAULTS;
-  store.set("forgeAudit", {
-    ...current,
-    ...patch,
-    auditLog: ("auditLog" in patch ? patch.auditLog : current.auditLog) as
-      | ForgeAuditRecord[]
-      | undefined,
-  });
+  store.set("forgeAudit", { ...current, ...patch });
 }
 
-export const forgeAuditService = new ForgeAuditService(persistConfig, getConfig);
+// Persists the ring in the dedicated audit-logs store so config.json stays
+// small and audit appends never re-serialize it. `auditEnabled` /
+// `auditMaxRecords` stay in config.json (`forgeAudit`).
+const forgeAuditLogStore: ForgeAuditLogStore = {
+  read: () => auditLogsStore.get("forgeAuditLog"),
+  write: (records) => auditLogsStore.set("forgeAuditLog", records),
+};
+
+export const forgeAuditService = new ForgeAuditService(
+  persistConfig,
+  getConfig,
+  forgeAuditLogStore
+);
 
 /**
  * Time and audit a single forge-provider method call. Wraps only the provider

@@ -15,7 +15,10 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../store.js", () => ({ store: storeMock }));
+vi.mock("../../../store.js", () => ({
+  store: storeMock,
+  auditLogsStore: { get: vi.fn(), set: vi.fn() },
+}));
 
 import { auditForgeCall, forgeAuditService } from "../forgeAuditService.js";
 

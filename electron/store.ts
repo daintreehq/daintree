@@ -52,6 +52,10 @@ interface WindowStatesStoreSchema {
 interface AuditLogsStoreSchema {
   mcpAuditLog: McpLogRecord[];
   mcpTurnOutcomeLog: AssistantTurnRecord[];
+  pluginAuditLog: PluginActionAuditRecord[];
+  forgeAuditLog: ForgeAuditRecord[];
+  runHistoryRecords: RunHistoryRecord[];
+  pluginMcpAuditLog: PluginMcpAuditRecord[];
 }
 
 export interface StoreSchema {
@@ -358,7 +362,7 @@ export interface StoreSchema {
     auditEnabled: boolean;
     /** Ring-buffer cap for persisted plugin-action audit records. */
     auditMaxRecords: number;
-    /** Persisted plugin-action audit ring buffer (oldest-first). */
+    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
     auditLog?: PluginActionAuditRecord[];
     installed: Record<string, InstalledPluginRecord>;
   };
@@ -393,6 +397,7 @@ export interface StoreSchema {
   forgeAudit: {
     auditEnabled: boolean;
     auditMaxRecords: number;
+    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
     auditLog?: ForgeAuditRecord[];
   };
   /**
@@ -404,6 +409,7 @@ export interface StoreSchema {
    * electron-store) — the on-disk shape is owned by `RunHistoryLog`.
    */
   runHistory: {
+    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
     records?: RunHistoryRecord[];
   };
   /**
@@ -417,6 +423,7 @@ export interface StoreSchema {
   pluginMcpAudit: {
     auditEnabled: boolean;
     auditMaxRecords: number;
+    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
     auditLog?: PluginMcpAuditRecord[];
   };
   /**
@@ -605,9 +612,7 @@ const storeOptions = {
       auditEnabled: true,
       auditMaxRecords: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
     },
-    runHistory: {
-      records: [],
-    },
+    runHistory: {},
     pluginMcpAudit: {
       auditEnabled: true,
       auditMaxRecords: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
@@ -804,6 +809,57 @@ export function _resetPendingSettingsRecovery(): void {
 
 let storeInstance: Store<StoreSchema> | undefined;
 
+/**
+ * In-memory snapshot of the on-disk store. electron-store v11 (conf) has no
+ * cache of its own — every `get()` re-reads and re-parses config.json from
+ * disk. The proxy below populates this snapshot lazily on the first read and
+ * serves all subsequent reads from memory, invalidating synchronously BEFORE
+ * any mutation is delegated (main is single-threaded, so a pre-write snapshot
+ * can never be served after the write — cf. the agentSettingsClient
+ * write-window precedent). Only the main process writes config.json (the
+ * pty-host and workspace-host subprocesses never import this module), so no
+ * cross-process invalidation channel is needed.
+ */
+let storeValueCache: Record<string, unknown> | null = null;
+
+/**
+ * Drop the cached store snapshot. The proxy invalidates automatically for all
+ * mutations routed through it; this export exists for the rare paths that
+ * replace config.json behind electron-store's back (MigrationRunner's
+ * restore-from-backup file swap) and for tests.
+ */
+export function invalidateStoreValueCache(): void {
+  storeValueCache = null;
+}
+
+/** Dot-path lookup mirroring conf's `accessPropertiesByDotNotation` reads. */
+function getCachedValue(snapshot: Record<string, unknown>, key: string): unknown {
+  let node: unknown = snapshot;
+  for (const part of key.split(".")) {
+    if (node === null || typeof node !== "object" || !Object.hasOwn(node, part)) {
+      return undefined;
+    }
+    node = (node as Record<string, unknown>)[part];
+  }
+  return node;
+}
+
+/**
+ * Refreshing the `.bak` copy (and tightening its permissions) is recovery
+ * housekeeping, not boot-critical work — but it ran synchronously inside
+ * `initializeStore()` on the bootstrap critical path. `initializeStore()` now
+ * stashes the work here and `bootstrap.ts` schedules it after main.js has
+ * loaded. Until it runs, the previous session's `.bak` remains valid for
+ * corrupt-config recovery, so the deferral window loses nothing.
+ */
+let deferredBackupTask: (() => void) | null = null;
+
+export function runDeferredStoreBackup(): void {
+  const task = deferredBackupTask;
+  deferredBackupTask = null;
+  task?.();
+}
+
 export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
   if (storeInstance) return storeInstance;
 
@@ -845,13 +901,21 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
       if (pendingSettingsRecovery === null) {
         pendingSettingsRecovery = { kind: "reset-to-defaults" };
       }
-    } else {
-      refreshBackup(created.path);
     }
     // Migrate existing 0o644 files (created before configFileMode landed) to
-    // 0o600 even when the user never triggers a write this session.
+    // 0o600 even when the user never triggers a write this session. The live
+    // config carries secrets, so this stays synchronous; the .bak refresh and
+    // its chmod are deferred off the boot path (see runDeferredStoreBackup).
     tightenFilePermissions(created.path);
-    tightenFilePermissions(`${created.path}.bak`);
+    const configFilePath = created.path;
+    deferredBackupTask = () => {
+      // Wipe detection above means the on-disk config no longer reflects the
+      // user's data — never overwrite the last-good .bak with it.
+      if (!wipedDuringConstruction) {
+        refreshBackup(configFilePath);
+      }
+      tightenFilePermissions(`${configFilePath}.bak`);
+    };
     storeInstance = created;
     return created;
   } catch (error) {
@@ -865,6 +929,8 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
 
 export function _resetStoreInstance(): void {
   storeInstance = undefined;
+  storeValueCache = null;
+  deferredBackupTask = null;
 }
 
 export function _peekStoreInstance(): Store<StoreSchema> | undefined {
@@ -926,15 +992,49 @@ export function writeWslGitMap(
   store.set("wslGitByWorktree", safe);
 }
 
+/**
+ * Methods that mutate the backing file. The proxy nulls the value cache
+ * before delegating so a same-tick read after a write always re-snapshots.
+ * Every production write goes through this proxy — it is the module's only
+ * exported handle — so proxy-level invalidation is the primary (and
+ * sufficient) path; `invalidateStoreValueCache()` covers the lone file-swap
+ * bypass in MigrationRunner.
+ */
+const STORE_MUTATING_METHODS = new Set(["set", "delete", "clear", "reset"]);
+
 export const store = new Proxy({} as Store<StoreSchema>, {
   get(_target, prop) {
     const instance = getOrLazyInitInstance();
     const value = Reflect.get(instance as object, prop, instance);
-    return typeof value === "function"
-      ? (value as (...args: unknown[]) => unknown).bind(instance)
-      : value;
+    if (typeof value !== "function") return value;
+    const bound = (value as (...args: unknown[]) => unknown).bind(instance);
+    // Cached read path. Skipped for the in-memory fallback (path === ""),
+    // whose Map-backed `store` property is always empty.
+    if (prop === "get" && instance.path !== "") {
+      return (key: string, defaultValue?: unknown) => {
+        if (storeValueCache === null) {
+          // One disk read + parse; every get until the next write is a memory hit.
+          storeValueCache = instance.store as unknown as Record<string, unknown>;
+        }
+        const resolved = getCachedValue(storeValueCache, key);
+        if (resolved === undefined) return defaultValue;
+        // conf returns a freshly-parsed object per get; clone so a caller
+        // mutating the returned value can't corrupt the shared snapshot.
+        return typeof resolved === "object" && resolved !== null
+          ? structuredClone(resolved)
+          : resolved;
+      };
+    }
+    if (STORE_MUTATING_METHODS.has(prop as string)) {
+      return (...args: unknown[]) => {
+        storeValueCache = null;
+        return bound(...args);
+      };
+    }
+    return bound;
   },
   set(_target, prop, value) {
+    storeValueCache = null;
     const instance = getOrLazyInitInstance();
     return Reflect.set(instance as object, prop, value, instance);
   },
@@ -1008,7 +1108,14 @@ function initializeAuditLogsStore(): Store<AuditLogsStoreSchema> {
     const created = new Store<AuditLogsStoreSchema>({
       name: "audit-logs",
       cwd: storeOptions.cwd,
-      defaults: { mcpAuditLog: [], mcpTurnOutcomeLog: [] },
+      defaults: {
+        mcpAuditLog: [],
+        mcpTurnOutcomeLog: [],
+        pluginAuditLog: [],
+        forgeAuditLog: [],
+        runHistoryRecords: [],
+        pluginMcpAuditLog: [],
+      },
       clearInvalidConfig: true,
       configFileMode: 0o600,
     });

@@ -1,5 +1,5 @@
 // eager-import-allow: lazily wires the plugin-MCP consent + audit services to the synchronous electron-store slices on first use (mirrors PluginActionAuditService)
-import { store } from "../../store.js";
+import { auditLogsStore, store } from "../../store.js";
 import { PluginMcpAuditService } from "./PluginMcpAuditService.js";
 import { PluginMcpConsentService } from "./PluginMcpConsentService.js";
 import { PluginMcpConsentStore } from "./PluginMcpConsentStore.js";
@@ -9,10 +9,12 @@ let consentStoreInstance: PluginMcpConsentStore | null = null;
 let consentServiceInstance: PluginMcpConsentService | null = null;
 
 /**
- * Plugin-MCP inbound audit log singleton. Wired to the `pluginMcpAudit`
- * electron-store slice. The store key was added in #9234 alongside this
- * service; reading via `?? {}` defends against forward-compat replays where
- * an older schema version omits the slice.
+ * Plugin-MCP inbound audit log singleton. Config flags are wired to the
+ * `pluginMcpAudit` electron-store slice (reading via `?? {}` defends against
+ * forward-compat replays where an older schema version omits the slice); the
+ * ring itself lives in the audit-logs store since migration023. The spread
+ * merge keeps a legacy `pluginMcpAudit.auditLog` carryover intact for
+ * installs where the migration deferred (audit-logs store not durable).
  */
 export function getPluginMcpAuditService(): PluginMcpAuditService {
   if (!auditInstance) {
@@ -21,7 +23,11 @@ export function getPluginMcpAuditService(): PluginMcpAuditService {
         const current = (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>;
         store.set("pluginMcpAudit", { ...current, ...patch });
       },
-      () => (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>
+      () => (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>,
+      {
+        read: () => auditLogsStore.get("pluginMcpAuditLog"),
+        write: (records) => auditLogsStore.set("pluginMcpAuditLog", records),
+      }
     );
   }
   return auditInstance;

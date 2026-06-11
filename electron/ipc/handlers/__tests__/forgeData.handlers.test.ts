@@ -47,7 +47,10 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../store.js", () => ({ store: storeMock }));
+vi.mock("../../../store.js", () => ({
+  store: storeMock,
+  auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
+}));
 
 import { registerForgeDataHandlers } from "../forgeData.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";

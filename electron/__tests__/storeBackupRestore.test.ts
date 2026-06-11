@@ -15,6 +15,7 @@ import {
   restoreFromBackup,
   refreshBackup,
   initializeStore,
+  runDeferredStoreBackup,
   consumePendingSettingsRecovery,
   _resetPendingSettingsRecovery,
   _resetStoreInstance,
@@ -228,6 +229,10 @@ describe("initializeStore", () => {
     expect(instance.get("_schemaVersion")).toBe(0);
     const configPath = path.join(tempDir, "config.json");
     expect(fs.existsSync(configPath)).toBe(true);
+    // The .bak refresh is deferred off the boot path; it only lands once the
+    // bootstrap-scheduled task runs.
+    expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+    runDeferredStoreBackup();
     expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
   });
 
@@ -236,6 +241,7 @@ describe("initializeStore", () => {
     fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 5 }), "utf8");
     const instance = initializeStore(testOptions(tempDir));
     expect(instance.get("_schemaVersion")).toBe(5);
+    runDeferredStoreBackup();
     expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
   });
 
@@ -248,6 +254,7 @@ describe("initializeStore", () => {
     expect(instance.get("_schemaVersion")).toBe(5);
     // A benign load must not be misreported as a silent reset.
     expect(consumePendingSettingsRecovery()).toBeNull();
+    runDeferredStoreBackup();
     expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
   });
 
@@ -300,7 +307,9 @@ describe("initializeStore", () => {
     expect(instance).toBeDefined();
     // Store has been silently reset to defaults by electron-store
     expect(instance.get("_schemaVersion")).toBe(0);
-    // Backup must remain untouched — recovery is still possible
+    // Even after the deferred backup task runs, the wipe guard must keep the
+    // last-good backup untouched — recovery is still possible.
+    runDeferredStoreBackup();
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(lastGood);
     // …and recovery state should reflect the silent reset
     expect(consumePendingSettingsRecovery()).toEqual({ kind: "reset-to-defaults" });
@@ -318,6 +327,7 @@ describe("initializeStore", () => {
     expect(instance.get("_schemaVersion")).toBe(5);
     expect(instance.get("newDefault")).toBe("added");
     // Backup must reflect the merged-on-disk content, not stay frozen
+    runDeferredStoreBackup();
     const backup = JSON.parse(fs.readFileSync(`${configPath}.bak`, "utf8"));
     expect(backup._schemaVersion).toBe(5);
     expect(backup.newDefault).toBe("added");
@@ -426,6 +436,7 @@ describe("initializeStore", () => {
       () => {
         const configPath = path.join(tempDir, "config.json");
         initializeStore(testOptions(tempDir));
+        runDeferredStoreBackup();
         const mode = fs.statSync(`${configPath}.bak`).mode & 0o777;
         expect(mode).toBe(0o600);
       }
@@ -452,6 +463,7 @@ describe("initializeStore", () => {
         fs.writeFileSync(backupPath, JSON.stringify({ _schemaVersion: 5 }), "utf8");
         fs.chmodSync(backupPath, 0o644);
         initializeStore(testOptions(tempDir));
+        runDeferredStoreBackup();
         const mode = fs.statSync(backupPath).mode & 0o777;
         expect(mode).toBe(0o600);
       }
