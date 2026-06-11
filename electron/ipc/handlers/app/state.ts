@@ -808,11 +808,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
 
-  const handleAppDismissRosettaWarning = async () => {
-    store.set("rosettaWarningDismissed", true);
-  };
-  handlers.push(typedHandle(CHANNELS.APP_DISMISS_ROSETTA_WARNING, handleAppDismissRosettaWarning));
-
   const handleAppResetAndRelaunch = async () => {
     // Clear the crash-loop sentinel before relaunch so the next boot starts
     // fresh. Mirrors the gpu.ts pattern: prepare state -> relaunch -> close

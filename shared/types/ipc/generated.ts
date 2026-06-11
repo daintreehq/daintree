@@ -44,6 +44,10 @@ export interface GeneratedIpcInvokeMap {
     args: [panelId: string];
     result: { cleared: boolean };
   };
+  "app:dismiss-rosetta-warning": {
+    args: [];
+    result: void;
+  };
   "app:get-version-info": {
     args: [];
     result: import("./app.js").AppVersionInfo;

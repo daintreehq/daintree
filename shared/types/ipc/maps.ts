@@ -439,10 +439,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
-  "app:dismiss-rosetta-warning": {
-    args: [];
-    result: void;
-  };
   "app:reset-and-relaunch": {
     args: [];
     result: void;
