@@ -398,10 +398,7 @@ describe("BrowserToolbar ARIA semantics", () => {
   });
 
   it("screenshot capture clears prior success feedback when a retry fails", async () => {
-    const onCaptureScreenshot = vi
-      .fn()
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    const onCaptureScreenshot = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const { container, getByRole } = renderToolbar({
       onCaptureScreenshot,
       isWebviewReady: true,
