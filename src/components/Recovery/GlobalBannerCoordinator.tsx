@@ -4,6 +4,7 @@ import { SafeModeBanner } from "./SafeModeBanner";
 import { RestoreConfirmationBanner } from "./RestoreConfirmationBanner";
 import { ForgeTokenBanner } from "./ForgeTokenBanner";
 import { CloudSyncBanner } from "./CloudSyncBanner";
+import { RosettaBanner } from "./RosettaBanner";
 import { useGlobalBannerPriority } from "./useGlobalBannerPriority";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 
@@ -21,6 +22,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <ForgeTokenBanner />;
     case "cloud-sync":
       return <CloudSyncBanner />;
+    case "rosetta":
+      return <RosettaBanner />;
     default:
       return null;
   }

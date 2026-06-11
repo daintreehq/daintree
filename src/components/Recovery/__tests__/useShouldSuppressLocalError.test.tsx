@@ -9,6 +9,7 @@ import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 
 function resetStores() {
   usePanelStore.setState({
@@ -27,6 +28,7 @@ function resetStores() {
   useRestoreConfirmationStore.setState({ visible: false, suspectCount: 0, crashCount: 0 });
   useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
+  useRosettaBannerStore.setState({ visible: false });
 }
 
 beforeEach(() => {
@@ -272,6 +274,16 @@ describe("useShouldSuppressLocalError", () => {
 
       act(() => {
         useCloudSyncBannerStore.setState({ service: "OneDrive", projectId: "p1" });
+      });
+      expect(result.current).toBe(false);
+    });
+
+    it("does not suppress backend-dependent banners when the Rosetta warning is active", () => {
+      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
+      expect(result.current).toBe(false);
+
+      act(() => {
+        useRosettaBannerStore.setState({ visible: true });
       });
       expect(result.current).toBe(false);
     });

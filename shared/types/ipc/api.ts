@@ -402,6 +402,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     resetAndRelaunch(): Promise<void>;
+    /** Persist the permanent dismissal of the Rosetta translation warning banner. */
+    dismissRosettaWarning(): Promise<void>;
     /**
      * Clear a single panel's quarantine entry from the suspect ledger so it
      * hydrates normally on the next launch. Returns `{ cleared: true }` if the

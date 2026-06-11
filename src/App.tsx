@@ -48,6 +48,7 @@ import {
   usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
   useCloudSyncWarning,
+  useRosettaWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
   useOrchestrationMilestones,
@@ -837,6 +838,7 @@ function AppInner() {
   usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
   useSemanticWorkerLifecycle();
   useCloudSyncWarning(homeDir);
+  useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
 
   useEffect(() => {

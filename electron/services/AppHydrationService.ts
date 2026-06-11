@@ -5,6 +5,7 @@ import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
+import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import { isGpuDisabledByFlag, isGpuAngleFallbackApplied } from "./GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import type { HydrateResult } from "../../shared/types/ipc/app.js";
@@ -106,6 +107,8 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
     safeMode: inSafeMode,
     isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
+    runningUnderRosetta: isRunningUnderRosetta(),
+    rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
     settingsRecovery: null,
     projectStateRecovery: projectStateQuarantinedPath
       ? { quarantinedPath: projectStateQuarantinedPath }
