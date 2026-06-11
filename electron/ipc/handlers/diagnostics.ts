@@ -494,6 +494,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     return { status: "started", expiresAt: Date.now() + CPU_PROFILE_DURATION_MS };
   };
   handlers.push(
+    // eslint-disable-next-line no-restricted-syntax -- legacy helper retained for consistency with existing diagnostics handlers; consider refactoring to defineIpcNamespace in #8577 unified surface
     typedHandleWithContext(
       CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_START,
       handleRendererCpuProfileStart
@@ -561,6 +562,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     return { status: "saved" };
   };
   handlers.push(
+    // eslint-disable-next-line no-restricted-syntax -- legacy helper retained for consistency with existing diagnostics handlers; consider refactoring to defineIpcNamespace in #8577 unified surface
     typedHandleWithContext(CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_STOP, handleRendererCpuProfileStop)
   );
 

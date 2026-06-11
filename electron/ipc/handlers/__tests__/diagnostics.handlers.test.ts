@@ -802,14 +802,14 @@ describe("registerDiagnosticsHandlers", () => {
     it("a discarded session's in-flight capture never disables the profiler for a new recording", async () => {
       const { event, sendCommand } = makeProfilerEvent(713);
       let resolveStop: ((value: unknown) => void) | undefined;
-      sendCommand.mockImplementation((method: string) => {
+      sendCommand.mockImplementation(((method: string) => {
         if (method === "Profiler.stop") {
           return new Promise<unknown>((resolve) => {
             resolveStop = resolve;
           });
         }
         return Promise.resolve({});
-      });
+      }) as (method: string) => Promise<Record<string, unknown>>);
       registerDiagnosticsHandlers(deps);
       const start = getHandlerFn("system:renderer-cpu-profile-start");
 

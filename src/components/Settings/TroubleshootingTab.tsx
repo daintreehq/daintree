@@ -26,6 +26,8 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
+const PROFILE_UPDATE_INTERVAL_MS = 250;
+
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
   const [isChecking, setIsChecking] = useState(false);
@@ -165,7 +167,7 @@ function RendererCpuProfileSection() {
       const remaining = Math.max(0, Math.ceil((expiresAtRef.current - Date.now()) / 1000));
       setSecondsLeft(remaining);
       if (remaining <= 0) void handleStop();
-    }, 250);
+    }, PROFILE_UPDATE_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [phase, handleStop]);
 
