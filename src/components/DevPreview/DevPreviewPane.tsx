@@ -1261,6 +1261,13 @@ export function DevPreviewPane({
 
   // Blank the webview and clear timers before React unmounts it for faster memory reclamation
   useEffect(() => {
+    if (isEvicted) {
+      // Clear crash state so a restored panel doesn't surface a stale banner.
+      // The eviction placeholder owns the visual signal in that window.
+      setCrashState("none");
+      setCrashDetails(null);
+      crashTimestampsRef.current = [];
+    }
     if (isEvicted && webviewRef.current) {
       try {
         // Save scroll position before eviction. Use the main-process CDP
@@ -1291,11 +1298,6 @@ export function DevPreviewPane({
       }
       clearLoadTimers();
       clearRetryState();
-      // Clear crash state so a restored panel doesn't surface a stale banner.
-      // The eviction placeholder owns the visual signal in that window.
-      setCrashState("none");
-      setCrashDetails(null);
-      crashTimestampsRef.current = [];
     }
   }, [isEvicted, id, setDevPreviewScrollPosition, clearLoadTimers, clearRetryState]);
 

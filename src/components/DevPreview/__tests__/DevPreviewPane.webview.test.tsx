@@ -2014,6 +2014,108 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
       expect(container.textContent).not.toContain("Preview is not responding");
     });
+
+    it("does not clear a crashed banner when a stale responsive event arrives", () => {
+      let responsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        responsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        responsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+    });
+
+    it("ignores unresponsive events targeting a different panel", () => {
+      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        unresponsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      getWebviewElement(container);
+
+      act(() => {
+        unresponsiveCb?.({ panelId: "some-other-panel" });
+      });
+      expect(container.textContent).not.toContain("Preview is not responding");
+    });
+
+    it("clears the crash banner on a confirmed navigation to a new URL", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/about" });
+      });
+      expect(container.textContent).not.toContain("Preview process crashed");
+    });
+
+    it("does not resurface a stale crash banner after eviction and restore", async () => {
+      terminalStoreState.activeDockTerminalId = "dev-preview-panel-1";
+      let destroyHandler: ((payload: { tier: 1 | 2 }) => void) | undefined;
+      const electron = (window as unknown as { electron: { window: Record<string, unknown> } })
+        .electron;
+      electron.window.onDestroyHiddenWebviews = vi.fn(
+        (handler: (payload: { tier: 1 | 2 }) => void) => {
+          destroyHandler = handler;
+          return vi.fn();
+        }
+      );
+
+      const { container, rerender } = render(<DevPreviewPane {...baseProps} location="dock" />);
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+
+      // Panel is no longer the active dock panel — eviction is now valid.
+      terminalStoreState.activeDockTerminalId = "other-panel";
+      rerender(<DevPreviewPane {...baseProps} location="dock" />);
+      await act(async () => {
+        destroyHandler?.({ tier: 1 });
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Preview process crashed");
+
+      // Reactivate the panel — eviction auto-clears and the webview remounts.
+      terminalStoreState.activeDockTerminalId = "dev-preview-panel-1";
+      rerender(<DevPreviewPane {...baseProps} location="dock" />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Preview process crashed");
+    });
   });
 
   describe("header script picker", () => {
