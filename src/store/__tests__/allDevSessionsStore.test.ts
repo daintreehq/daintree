@@ -98,6 +98,31 @@ describe("allDevSessionsStore", () => {
     expect(useAllDevSessionsStore.getState().hydrated).toBe(false);
   });
 
+  it("does not let a late rejection set fetchError after a push", async () => {
+    acquireAllDevSessions();
+    pushCallback?.({ sessions: [makeSession({ panelId: "live" })] });
+
+    rejectGetAll(new Error("ipc failed"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useAllDevSessionsStore.getState().fetchError).toBe(false);
+    expect(useAllDevSessionsStore.getState().sessions[0]?.panelId).toBe("live");
+  });
+
+  it("hydrates cleanly on re-acquire after a failed first lifecycle", async () => {
+    const release = acquireAllDevSessions();
+    rejectGetAll(new Error("ipc failed"));
+    await vi.waitFor(() => expect(useAllDevSessionsStore.getState().fetchError).toBe(true));
+    release();
+
+    acquireAllDevSessions();
+    resolveGetAll([makeSession()]);
+    await vi.waitFor(() => expect(useAllDevSessionsStore.getState().hydrated).toBe(true));
+    expect(useAllDevSessionsStore.getState().fetchError).toBe(false);
+    expect(useAllDevSessionsStore.getState().sessions).toHaveLength(1);
+  });
+
   it("applies pushed snapshots", async () => {
     acquireAllDevSessions();
     resolveGetAll([]);

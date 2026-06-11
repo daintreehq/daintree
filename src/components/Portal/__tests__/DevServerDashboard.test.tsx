@@ -151,6 +151,21 @@ describe("DevServerDashboard", () => {
     expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
   });
 
+  it("disables both buttons when the session has no worktreeId", () => {
+    mockSessions([session({ status: "error", worktreeId: undefined })]);
+    render(<DevServerDashboard />);
+    const stopButton = screen.getByLabelText("Stop dev server for panel-1") as HTMLButtonElement;
+    const restartButton = screen.getByLabelText(
+      "Restart dev server for panel-1"
+    ) as HTMLButtonElement;
+    expect(stopButton.disabled).toBe(true);
+    expect(restartButton.disabled).toBe(true);
+    fireEvent.click(stopButton);
+    fireEvent.click(restartButton);
+    expect(stopDevServerByWorktree).not.toHaveBeenCalled();
+    expect(restartByWorktree).not.toHaveBeenCalled();
+  });
+
   it("disables stop for restored-stopped sessions", () => {
     mockSessions([session({ status: "restored-stopped" })]);
     render(<DevServerDashboard />);
