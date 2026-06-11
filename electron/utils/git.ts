@@ -45,6 +45,17 @@ function makeFileStatCacheKey(
   return `${headOid}:${absolutePath}:${mtimeMs}:${size}`;
 }
 
+// Untracked-file line counts are a pure function of file content, so the key
+// deliberately excludes HEAD OID — commits must not thrash these entries. The
+// prefix keeps them disjoint from tracked-diff keys in the shared cache.
+function makeUntrackedLineCountCacheKey(
+  absolutePath: string,
+  mtimeMs: number,
+  size: number
+): string {
+  return `untracked:${absolutePath}:${mtimeMs}:${size}`;
+}
+
 // Test-only: clear the per-file diff stat cache between cases. Production code
 // relies on (HEAD OID, mtime, size) self-invalidation and TTL eviction.
 export function __clearPerFileDiffStatCacheForTesting(): void {
@@ -532,14 +543,10 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          const cacheKey = headOid
-            ? makeFileStatCacheKey(headOid, filePath, stats.mtimeMs, stats.size)
-            : "";
-          if (cacheKey) {
-            const cached = PER_FILE_DIFF_STAT_CACHE.get(cacheKey);
-            if (cached && cached.insertions !== null) {
-              return cached.insertions;
-            }
+          const cacheKey = makeUntrackedLineCountCacheKey(filePath, stats.mtimeMs, stats.size);
+          const cached = PER_FILE_DIFF_STAT_CACHE.get(cacheKey);
+          if (cached && cached.insertions !== null) {
+            return cached.insertions;
           }
 
           const buffer = await fs.readFile(filePath);
@@ -549,23 +556,18 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          const content = buffer.toString("utf-8");
-
+          // Count newline bytes directly — decoding up to 10MB to a string
+          // would double the allocation for no benefit (0x0A is unambiguous
+          // in UTF-8).
           let lineCount = 0;
-          if (content.length > 0) {
-            for (let i = 0; i < content.length; i++) {
-              if (content[i] === "\n") {
-                lineCount++;
-              }
-            }
-            if (content[content.length - 1] !== "\n") {
-              lineCount++;
-            }
+          for (let i = 0; i < buffer.length; i++) {
+            if (buffer[i] === 0x0a) lineCount++;
+          }
+          if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
+            lineCount++;
           }
 
-          if (cacheKey) {
-            PER_FILE_DIFF_STAT_CACHE.set(cacheKey, { insertions: lineCount, deletions: 0 });
-          }
+          PER_FILE_DIFF_STAT_CACHE.set(cacheKey, { insertions: lineCount, deletions: 0 });
 
           return lineCount;
         } catch (_error) {

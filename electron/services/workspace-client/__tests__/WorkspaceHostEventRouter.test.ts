@@ -17,8 +17,13 @@ vi.mock("../../events.js", () => ({
   events: { emit: vi.fn() },
 }));
 
+vi.mock("../../GitServiceCache.js", () => ({
+  gitServiceCache: { delete: vi.fn() },
+}));
+
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
+import { gitServiceCache } from "../../GitServiceCache.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
 import type { RateLimitInfo } from "../../../../shared/types/forge.js";
 
@@ -205,6 +210,18 @@ describe("WorkspaceHostEventRouter", () => {
         "sys:worktree:remove",
         expect.objectContaining({ worktreeId: "wt-deleted" })
       );
+    });
+
+    it("evicts the GitService cache entry for the removed worktree path", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "/project/test/wt-deleted",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 1,
+      });
+
+      expect(gitServiceCache.delete).toHaveBeenCalledWith("/project/test/wt-deleted");
     });
   });
 

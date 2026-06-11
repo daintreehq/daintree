@@ -132,7 +132,11 @@ export class MainProcessWatchdogClient {
         stdio: "pipe",
         // Redirect v8.setHeapSnapshotNearHeapLimit dumps and suppress env
         // from diagnostic reports (crash dumps, process.report).
-        execArgv: [`--diagnostic-dir=${app.getPath("logs")}`, "--report-exclude-env"],
+        execArgv: [
+          "--max-old-space-size=128",
+          `--diagnostic-dir=${app.getPath("logs")}`,
+          "--report-exclude-env",
+        ],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),

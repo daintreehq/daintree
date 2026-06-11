@@ -372,6 +372,7 @@ export class PluginDevWorkerHost extends EventEmitter {
         serviceName: this.serviceName,
         stdio: "pipe",
         cwd: this.pluginDir || os.homedir(),
+        execArgv: ["--max-old-space-size=256"],
         env: {
           // env REPLACES process.env in a utility process (#6081) — spread first.
           ...(process.env as Record<string, string>),

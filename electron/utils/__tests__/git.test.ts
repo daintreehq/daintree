@@ -738,6 +738,71 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     expect(result.changes).toHaveLength(1);
     expect(result.changes[0].insertions).toBe(3);
   });
+
+  it("returns 0 insertions for an empty untracked file", async () => {
+    const cwd = "/text-untracked-empty/" + Math.random();
+    mockGit.revparse.mockImplementation((args: string[]) => {
+      if (Array.isArray(args) && args[0] === "HEAD") {
+        return Promise.resolve("head-oid\n");
+      }
+      return Promise.resolve(`${cwd}\n`);
+    });
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      not_added: ["empty.txt"],
+    });
+    readFileMock.mockResolvedValue(Buffer.alloc(0));
+
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.changes[0].insertions).toBe(0);
+  });
+
+  it("counts a final line without a trailing newline", async () => {
+    const cwd = "/text-untracked-no-eol/" + Math.random();
+    mockGit.revparse.mockImplementation((args: string[]) => {
+      if (Array.isArray(args) && args[0] === "HEAD") {
+        return Promise.resolve("head-oid\n");
+      }
+      return Promise.resolve(`${cwd}\n`);
+    });
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      not_added: ["notes.txt"],
+    });
+    readFileMock.mockResolvedValue(Buffer.from("line1\nline2"));
+
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(result.changes[0].insertions).toBe(2);
+  });
+
+  it("reuses the untracked line count across a HEAD change when mtime+size are unchanged", async () => {
+    const cwd = "/text-untracked-commit/" + Math.random();
+    let headOid = "head-oid-before";
+    mockGit.revparse.mockImplementation((args: string[]) => {
+      if (Array.isArray(args) && args[0] === "HEAD") {
+        return Promise.resolve(`${headOid}\n`);
+      }
+      return Promise.resolve(`${cwd}\n`);
+    });
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      not_added: ["readme.txt"],
+    });
+    readFileMock.mockResolvedValue(Buffer.from("line1\nline2\nline3\n"));
+
+    const first = await getWorktreeChangesWithStats(cwd, true);
+    expect(first.changes[0].insertions).toBe(3);
+
+    headOid = "head-oid-after";
+    readFileMock.mockClear();
+
+    const second = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(second.changes[0].insertions).toBe(3);
+    expect(readFileMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("listCommits", () => {

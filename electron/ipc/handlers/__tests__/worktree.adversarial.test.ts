@@ -35,6 +35,7 @@ const gitServiceCacheMock = vi.hoisted(() => ({
     findAvailableBranchName: vi.fn(async (s: string) => s),
     findAvailablePath: vi.fn((p: string) => p),
   })),
+  delete: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -320,6 +321,8 @@ describe("worktree IPC adversarial", () => {
     expect(worktreeService.deleteWorktree).toHaveBeenCalledWith("wt-1", true, false);
     expect(fileSearchMock.invalidate).toHaveBeenCalledWith("/repo/w1");
     expect(fileSearchMock.invalidate).not.toHaveBeenCalledWith("/repo/w2");
+    expect(gitServiceCacheMock.delete).toHaveBeenCalledWith("/repo/w1");
+    expect(gitServiceCacheMock.delete).not.toHaveBeenCalledWith("/repo/w2");
     expect(storeMock.set).toHaveBeenCalledWith("worktreeIssueMap", {
       "wt-2": { issueNumber: 2 },
     });

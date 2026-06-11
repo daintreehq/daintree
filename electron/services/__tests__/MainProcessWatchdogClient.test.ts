@@ -85,6 +85,15 @@ describe("MainProcessWatchdogClient", () => {
     });
   });
 
+  it("forks with a V8 heap cap without dropping the diagnostic execArgv flags", () => {
+    new WatchdogClient({ mainPid: 4242 });
+
+    const execArgv: string[] = shared.forkMock.mock.calls[0][2].execArgv;
+    expect(execArgv.some((arg) => /^--max-old-space-size=\d+$/.test(arg))).toBe(true);
+    expect(execArgv.some((arg) => arg.startsWith("--diagnostic-dir="))).toBe(true);
+    expect(execArgv).toContain("--report-exclude-env");
+  });
+
   it("sends an immediate ping on fork so the watchdog arms before the first interval", () => {
     new WatchdogClient({ mainPid: 4242 });
     const pings = mockChild.postMessage.mock.calls.filter(

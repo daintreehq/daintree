@@ -101,6 +101,22 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("forks with a V8 heap cap without dropping the diagnostic execArgv flags", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
+    expect(execArgv.some((arg) => /^--max-old-space-size=\d+$/.test(arg))).toBe(true);
+    expect(execArgv.some((arg) => arg.startsWith("--diagnostic-dir="))).toBe(true);
+    expect(execArgv).toContain("--report-exclude-env");
+
+    host.dispose();
+  });
+
   it("forwards stdout lines via logger.info with [WorkspaceHost] prefix", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
