@@ -20,7 +20,10 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../store.js", () => ({ store: storeMock }));
+vi.mock("../../../store.js", () => ({
+  store: storeMock,
+  auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
+}));
 
 const registryMock = vi.hoisted(() => ({
   getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),

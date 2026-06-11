@@ -12,7 +12,7 @@ import { app, dialog } from "electron";
 import { BOOT_MIGRATIONS, runBootMigrations } from "./boot/migrations/index.js";
 import { isSafeModeActive } from "./services/CrashLoopGuardService.js";
 import { setCompileCacheEnableStatus } from "./utils/hostPerformance.js";
-import { initializeStore, _peekStoreInstance } from "./store.js";
+import { initializeStore, _peekStoreInstance, runDeferredStoreBackup } from "./store.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 const cacheDir = path.join(app.getPath("userData"), "compile-cache");
@@ -87,6 +87,14 @@ try {
 }
 
 await import("./main.js");
+
+// Refresh the config.json.bak copy (and tighten its permissions) off the
+// boot-critical path. initializeStore() used to do this synchronously before
+// main.js loaded; the previous session's .bak stays valid for corrupt-config
+// recovery until this fires, so deferring loses nothing.
+setImmediate(() => {
+  runDeferredStoreBackup();
+});
 
 // Persist any compile-cache entries written during boot. enableCompileCache()
 // only flushes on a clean process exit, so a crash or SIGKILL before the first

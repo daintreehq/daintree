@@ -771,13 +771,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const hasCriticalField = Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
 
       try {
-        for (const [field, value] of Object.entries(updates)) {
-          if (value === undefined) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (store.delete as (k: string) => void)(`appState.${field}` as any);
-          } else {
-            store.set(`appState.${field}`, value);
+        // Batch all fields into one write: every store.set() re-reads and
+        // re-serializes the whole config.json, so a per-field loop costs N×
+        // the file IO of a single merged set.
+        if (Object.keys(updates).length > 0) {
+          const current = (store.get("appState") ?? {}) as Record<string, unknown>;
+          const merged: Record<string, unknown> = { ...current };
+          for (const [field, value] of Object.entries(updates)) {
+            if (value === undefined) {
+              // electron-store v11 throws on `undefined` values — drop the
+              // key from the merged object instead (was store.delete before).
+              delete merged[field];
+            } else {
+              merged[field] = value;
+            }
           }
+          store.set("appState", merged as StoreSchema["appState"]);
         }
       } finally {
         if (hasCriticalField) {

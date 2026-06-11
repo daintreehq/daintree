@@ -11,8 +11,17 @@ function makeFixture(initialConfig: Record<string, unknown> = {}) {
   const saveConfig = vi.fn((patch: Record<string, unknown>) => {
     Object.assign(config, patch);
   });
-  const service = new ForgeAuditService(saveConfig, () => config);
-  return { service, saveConfig, config };
+  // The ring is kept under the same `auditLog` key so seeding reads
+  // naturally, but it round-trips through the injected log store (the real
+  // ring lives in the audit-logs store since migration023).
+  const writeRing = vi.fn((records: unknown[]) => {
+    config.auditLog = records;
+  });
+  const service = new ForgeAuditService(saveConfig, () => config, {
+    read: () => config.auditLog,
+    write: writeRing,
+  });
+  return { service, saveConfig, writeRing, config };
 }
 
 function append(
@@ -118,24 +127,27 @@ describe("ForgeAuditService flush", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("debounces flush to a single saveConfig call", () => {
-    const { service, saveConfig } = makeFixture();
+  it("debounces flush to a single ring write and never touches config flags", () => {
+    const { service, saveConfig, writeRing } = makeFixture();
     append(service);
     append(service);
     append(service);
-    expect(saveConfig).not.toHaveBeenCalled();
+    expect(writeRing).not.toHaveBeenCalled();
     vi.advanceTimersByTime(2000);
-    expect(saveConfig).toHaveBeenCalledTimes(1);
-    expect(saveConfig.mock.calls[0]![0]).toHaveProperty("auditLog");
+    expect(writeRing).toHaveBeenCalledTimes(1);
+    expect(writeRing.mock.calls[0]![0]).toHaveLength(3);
+    expect(saveConfig).not.toHaveBeenCalled();
   });
 
   it("swallows flush errors to console.error instead of rethrowing", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const config: Record<string, unknown> = { auditEnabled: true, auditMaxRecords: 500 };
-    const saveConfig = vi.fn(() => {
-      throw new Error("disk full");
+    const service = new ForgeAuditService(vi.fn(), () => config, {
+      read: () => undefined,
+      write: () => {
+        throw new Error("disk full");
+      },
     });
-    const service = new ForgeAuditService(saveConfig, () => config);
     append(service);
     expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
     expect(errSpy).toHaveBeenCalled();

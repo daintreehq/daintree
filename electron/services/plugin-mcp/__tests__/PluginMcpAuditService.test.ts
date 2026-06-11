@@ -9,6 +9,16 @@ function makeConfig(initial: Record<string, unknown> = {}) {
     },
     read: () => config,
     raw: () => config,
+    // The ring is kept under the same `auditLog` key so seeding and
+    // assertions read naturally, but it round-trips through the injected
+    // log store (the real ring lives in the audit-logs store since
+    // migration023).
+    logStore: {
+      read: () => config.auditLog,
+      write: (records: unknown[]) => {
+        config = { ...config, auditLog: records };
+      },
+    },
   };
 }
 
@@ -18,7 +28,7 @@ describe("PluginMcpAuditService", () => {
 
   beforeEach(() => {
     cfg = makeConfig();
-    service = new PluginMcpAuditService(cfg.save, cfg.read);
+    service = new PluginMcpAuditService(cfg.save, cfg.read, cfg.logStore);
   });
 
   afterEach(() => {
@@ -171,7 +181,7 @@ describe("PluginMcpAuditService", () => {
       descriptionRaw: "SHOULD_BE_DROPPED",
     };
     const cfgTampered = makeConfig({ auditLog: [tampered] });
-    const rebuilt = new PluginMcpAuditService(cfgTampered.save, cfgTampered.read);
+    const rebuilt = new PluginMcpAuditService(cfgTampered.save, cfgTampered.read, cfgTampered.logStore);
     rebuilt.hydrate();
     // Append a record to trigger a flush, then check the persisted JSON.
     rebuilt.append({
