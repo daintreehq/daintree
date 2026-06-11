@@ -40,13 +40,8 @@ export function NotificationCenterToolbarButton({
     }))
   );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
-  // Latch after first open so reopening never re-suspends; preload on mount so
-  // the chunk is warm before the first click (React 19 lazy still shows the
-  // fallback for one frame on a cold chunk).
+  // Latch after first open so reopening never re-suspends.
   const notificationCenterMounted = useKeepMounted(notificationCenterOpen);
-  useEffect(() => {
-    void preloadNotificationCenter();
-  }, []);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const {
@@ -68,6 +63,14 @@ export function NotificationCenterToolbarButton({
       osDndActive: s.osDndActive,
     }))
   );
+
+  // Warm the chunk before the first click (React 19 lazy still shows the
+  // fallback for one frame on a cold chunk). Skipped while notifications are
+  // disabled — the bell never renders, so the chunk can't be needed.
+  useEffect(() => {
+    if (!notificationsEnabled) return;
+    void preloadNotificationCenter();
+  }, [notificationsEnabled]);
 
   // Force re-render at session-mute expiry and at scheduled quiet-hours
   // boundaries. Without this the icon stays in its old state until something
