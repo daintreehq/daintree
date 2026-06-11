@@ -1,5 +1,5 @@
 import type { net as ElectronNet } from "electron";
-import { MAX_DNTR_BYTES } from "../services/PluginArchive.js";
+import { MAX_DNTR_BYTES } from "./pluginArchiveConstants.js";
 import { isPrivateOrLoopbackHostname } from "../schemas/plugin.js";
 
 export { MAX_DNTR_BYTES };

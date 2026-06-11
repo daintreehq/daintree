@@ -20,8 +20,8 @@ import {
 } from "../../../shared/types/ipc/pluginAudit.js";
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
-import { pluginService } from "../../services/PluginService.js";
-import { MAX_DNTR_BYTES } from "../../services/PluginArchive.js";
+import type * as PluginServiceModule from "../../services/PluginService.js";
+import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
@@ -55,7 +55,6 @@ import type { FileDecoration } from "../../../shared/types/forge.js";
 import { isTrustedRendererUrl } from "../../../shared/utils/trustedRenderer.js";
 import type {
   LoadedPluginInfo,
-  PluginIpcHandler,
   PluginIpcContext,
   PluginActionContribution,
   PluginActionDescriptor,
@@ -70,11 +69,26 @@ import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 
+type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+
+// Lazy accessor (mirrors helpAssistant.ts): PluginService is ~3,200 lines and
+// pulls semver/ajv/yauzl — a static import here would re-anchor it on the
+// eager startup path that #9285 deferred it off of.
+let cachedPluginService: PluginServiceSingleton | null = null;
+async function getPluginService(): Promise<PluginServiceSingleton> {
+  if (!cachedPluginService) {
+    const mod = await import("../../services/PluginService.js");
+    cachedPluginService = mod.pluginService;
+  }
+  return cachedPluginService;
+}
+
 async function handleList(): Promise<LoadedPluginInfo[]> {
   // Same init-race guard as `handleToolbarButtons` (#9285): a mount-time pull
   // (pluginRuntimeStore, plugin manager) before the deferred initialize()
   // populates the maps would cache an empty list — wrong `disabled` gating in
   // the renderer until the next provenance broadcast.
+  const pluginService = await getPluginService();
   await pluginService.waitForInit();
   return pluginService.listPlugins();
 }
@@ -83,6 +97,7 @@ async function handleSetEnabled(pluginId: string, enabled: boolean): Promise<voi
   // A toggle arriving mid-init finds both `plugins` and `disabledPlugins`
   // unpopulated, mis-classifies a built-in as a user plugin, and silently
   // takes the persist-only path — no live load, no provenance broadcast.
+  const pluginService = await getPluginService();
   await pluginService.waitForInit();
   await pluginService.setEnabled(pluginId, enabled);
 }
@@ -151,7 +166,7 @@ async function handleInstall(
 ): Promise<PluginInstallResult> {
   const invalid = await validateDntrArchivePath(archivePath);
   if (invalid) return invalid;
-  return pluginService.installPlugin(archivePath, opts);
+  return (await getPluginService()).installPlugin(archivePath, opts);
 }
 
 // Install-from-file owns the native-picker entry point; the selected path runs
@@ -205,7 +220,7 @@ function isAbortLikeError(err: unknown): boolean {
 export async function handleInstallFromPath(path: string): Promise<PluginInstallResult> {
   const invalid = await validateDntrArchivePath(path);
   if (invalid) return invalid;
-  return pluginService.installPlugin(path);
+  return (await getPluginService()).installPlugin(path);
 }
 
 /**
@@ -354,7 +369,10 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
       return failed("fetch_failed", "Couldn't download the plugin from that URL.");
     }
 
-    return pluginService.installPlugin(tempPath, { source: "url", originalUrl: trimmed });
+    return (await getPluginService()).installPlugin(tempPath, {
+      source: "url",
+      originalUrl: trimmed,
+    });
   } finally {
     if (wroteTempFile) {
       await rm(tempPath, { force: true }).catch(() => {});
@@ -376,7 +394,7 @@ export async function handleUninstall(pluginId: string, deleteSettings?: boolean
   if (deleteSettings !== undefined && typeof deleteSettings !== "boolean") {
     throw new Error("uninstall: deleteSettings must be a boolean");
   }
-  await pluginService.uninstallPlugin(pluginId, deleteSettings);
+  await (await getPluginService()).uninstallPlugin(pluginId, deleteSettings);
 }
 
 async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
@@ -385,7 +403,7 @@ async function handleCheckForUpdate(pluginId: string): Promise<PluginCheckUpdate
   }
   // The service owns the bounded download + hash compare and returns a
   // structured result for every domain outcome (#9297).
-  return pluginService.checkForUpdate(pluginId);
+  return (await getPluginService()).checkForUpdate(pluginId);
 }
 
 async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
@@ -393,7 +411,7 @@ async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
   // otherwise a fast renderer can read an empty registry before any plugin's
   // activate() runs — leaving plugin toolbar buttons missing until the next
   // mutation pushes a fresh broadcast (#9285).
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
@@ -403,12 +421,12 @@ async function handleMenuItems() {
   // Same init-race guard as `handleToolbarButtons` — block until startup
   // activation settles so the renderer's mount-time pull can't observe an
   // empty registry before plugins finish registering (#9285).
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getPluginMenuItems();
 }
 
 async function handleKeybindings() {
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getPluginKeybindings();
 }
 
@@ -416,7 +434,7 @@ async function handleContextMenuItems() {
   // Same init-race guard as `handleMenuItems` — block until startup activation
   // settles so the renderer's mount-time pull can't observe an empty registry
   // before plugins finish registering (#9285).
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getPluginContextMenuItems();
 }
 
@@ -429,7 +447,7 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
   // after this snapshot runs, so their IDs won't appear in `knownIds`. Pull
   // the live plugin-action registry from the main-side PluginService and
   // treat those as known.
-  for (const { id } of pluginService.listPluginActions()) {
+  for (const { id } of (await getPluginService()).listPluginActions()) {
     knownIds.add(id);
   }
 
@@ -461,6 +479,7 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // gives it direct access to event.senderFrame — the typed path here does
 // not and doesn't need it.
 async function handleActionsGet(): Promise<PluginActionDescriptor[]> {
+  const pluginService = await getPluginService();
   await pluginService.waitForInit();
   return pluginService.listPluginActions();
 }
@@ -469,27 +488,27 @@ async function handleActionsRegister(
   pluginId: string,
   contribution: PluginActionContribution
 ): Promise<void> {
-  pluginService.registerPluginAction(pluginId, contribution);
+  (await getPluginService()).registerPluginAction(pluginId, contribution);
 }
 
 async function handleActionsUnregister(pluginId: string, actionId: string): Promise<void> {
-  pluginService.unregisterPluginAction(pluginId, actionId);
+  (await getPluginService()).unregisterPluginAction(pluginId, actionId);
 }
 
 async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getPluginPanelKinds();
 }
 
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   // Same init-race guard as the surrounding pull-on-mount handlers (#9285) —
   // forge descriptors register during the deferred initialize().
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getRegisteredForgeProviders();
 }
 
 async function handleAgentsGet(): Promise<Record<string, AgentConfig>> {
-  await pluginService.waitForInit();
+  await (await getPluginService()).waitForInit();
   return getPluginAgentRegistry();
 }
 
@@ -562,7 +581,7 @@ async function handleFileDecorationsGet(
   // Implicit activation: any plugin that declares a provider for this scope is
   // forced to `activate()` before the impl lookup, so providers bound during
   // activate() are queryable on the first pull. No-op once already activated.
-  await pluginService.activatePluginsForFileDecorationScope(scope);
+  await (await getPluginService()).activatePluginsForFileDecorationScope(scope);
 
   const impls = getFileDecorationImpls(scope);
   if (impls.length === 0) return {};
@@ -740,6 +759,7 @@ async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot
   // Block until startup activation settles so the snapshot is post-activation
   // (mirrors handleToolbarButtons) — otherwise a fast renderer could read an
   // empty plugin set before any activate() runs.
+  const pluginService = await getPluginService();
   await pluginService.waitForInit();
   return pluginService.getDiagnosticsSnapshot();
 }
@@ -751,7 +771,7 @@ async function handleSettingsGetValues(
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<PluginSettingsUiValues> {
-  return pluginService.getSettingValuesForUi(pluginId, scope, projectId);
+  return (await getPluginService()).getSettingValuesForUi(pluginId, scope, projectId);
 }
 
 async function handleSettingsSetValue(
@@ -761,7 +781,7 @@ async function handleSettingsSetValue(
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<void> {
-  await pluginService.setSettingValueFromUi(pluginId, key, value, scope, projectId);
+  await (await getPluginService()).setSettingValueFromUi(pluginId, key, value, scope, projectId);
 }
 
 async function handleSettingsDeleteValue(
@@ -770,7 +790,7 @@ async function handleSettingsDeleteValue(
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<void> {
-  await pluginService.deleteSettingValueFromUi(pluginId, key, scope, projectId);
+  await (await getPluginService()).deleteSettingValueFromUi(pluginId, key, scope, projectId);
 }
 
 async function handleSettingsRevealSecret(
@@ -779,7 +799,7 @@ async function handleSettingsRevealSecret(
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<string | null> {
-  return pluginService.revealSecretSettingForUi(pluginId, key, scope, projectId);
+  return (await getPluginService()).revealSecretSettingForUi(pluginId, key, scope, projectId);
 }
 
 export const pluginNamespace = defineIpcNamespace({
@@ -866,7 +886,7 @@ export function registerPluginHandlers(): () => void {
         pluginId,
       };
       try {
-        return await pluginService.dispatchHandler(pluginId, channel, ctx, args);
+        return await (await getPluginService()).dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
         // `stableArgsSha256` content-discriminates without persisting any
         // arg bytes — two structurally identical failed invokes hash the
@@ -897,16 +917,4 @@ export function registerPluginHandlers(): () => void {
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PLUGIN_INVOKE));
 
   return () => cleanups.forEach((cleanup) => cleanup());
-}
-
-export function registerPluginHandler(
-  pluginId: string,
-  channel: string,
-  handler: PluginIpcHandler
-): void {
-  pluginService.registerHandler(pluginId, channel, handler);
-}
-
-export function removePluginHandlers(pluginId: string): void {
-  pluginService.removeHandlers(pluginId);
 }

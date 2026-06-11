@@ -1,4 +1,3 @@
-// eager-import-allow: lazily wires the plugin-MCP consent + audit services to the synchronous electron-store slices on first use (mirrors PluginActionAuditService)
 import { auditLogsStore, store } from "../../store.js";
 import { PluginMcpAuditService } from "./PluginMcpAuditService.js";
 import { PluginMcpConsentService } from "./PluginMcpConsentService.js";

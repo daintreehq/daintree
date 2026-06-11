@@ -9,12 +9,8 @@ import {
   isPrivateOrLoopbackHostname,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../../schemas/plugin.js";
-import {
-  extractPluginArchive,
-  computeArchiveHash,
-  readArchiveManifest,
-  MAX_DNTR_BYTES,
-} from "../PluginArchive.js";
+import { extractPluginArchive, computeArchiveHash, readArchiveManifest } from "../PluginArchive.js";
+import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,

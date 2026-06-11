@@ -1,8 +1,8 @@
-// eager-import-allow: wires plugin-MCP method channels and supervisor initialization on startup
+// eager-import-allow: reads pluginMcpConfig via store.get synchronously in IPC handlers
 import { defineIpcNamespace, op } from "../define.js";
 import { PLUGIN_MCP_METHOD_CHANNELS } from "./pluginMcp.preload.js";
-import { getPluginMcpSupervisor } from "../../services/PluginMcpSupervisor.js";
-import { pluginService } from "../../services/PluginService.js";
+import type * as PluginMcpSupervisorModule from "../../services/PluginMcpSupervisor.js";
+import type * as PluginServiceModule from "../../services/PluginService.js";
 import { store } from "../../store.js";
 import {
   PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
@@ -17,12 +17,35 @@ import {
   type PluginMcpToolKey,
 } from "../../../shared/types/ipc/pluginMcp.js";
 
+type PluginMcpSupervisor = ReturnType<typeof PluginMcpSupervisorModule.getPluginMcpSupervisor>;
+type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+
+// Lazy accessors (mirrors helpAssistant.ts): static imports here would pull
+// PluginMcpSupervisor and — transitively — the ~3,200-line PluginService onto
+// the eager startup path that #9285 deferred them off of.
+let cachedSupervisorModule: typeof PluginMcpSupervisorModule | null = null;
+async function getSupervisor(): Promise<PluginMcpSupervisor> {
+  if (!cachedSupervisorModule) {
+    cachedSupervisorModule = await import("../../services/PluginMcpSupervisor.js");
+  }
+  return cachedSupervisorModule.getPluginMcpSupervisor();
+}
+
+let cachedPluginService: PluginServiceSingleton | null = null;
+async function getPluginService(): Promise<PluginServiceSingleton> {
+  if (!cachedPluginService) {
+    const mod = await import("../../services/PluginService.js");
+    cachedPluginService = mod.pluginService;
+  }
+  return cachedPluginService;
+}
+
 async function handleList(): Promise<PluginMcpServerInfo[]> {
-  return getPluginMcpSupervisor().list();
+  return (await getSupervisor()).list();
 }
 
 async function handleGetStderr(key: PluginMcpServerKey): Promise<PluginMcpStderrResult> {
-  return getPluginMcpSupervisor().getStderr(key.pluginId, key.serverId);
+  return (await getSupervisor()).getStderr(key.pluginId, key.serverId);
 }
 
 /**
@@ -34,7 +57,7 @@ async function handleGetStderr(key: PluginMcpServerKey): Promise<PluginMcpStderr
 async function handleListTools(key: PluginMcpServerKey): Promise<PluginMcpListToolsResult> {
   await ensureServerStarted(key);
   const cfg = store.get("pluginMcpConfig") as { maxToolsPerSession?: unknown } | undefined;
-  return getPluginMcpSupervisor().listTools(
+  return (await getSupervisor()).listTools(
     key.pluginId,
     key.serverId,
     clampMaxTools(cfg?.maxToolsPerSession)
@@ -44,7 +67,7 @@ async function handleListTools(key: PluginMcpServerKey): Promise<PluginMcpListTo
 /** Tier-2 lookup: the full input schema for a single agent-selected tool (#9235). */
 async function handleGetFullSchema(key: PluginMcpToolKey): Promise<PluginMcpGetFullSchemaResult> {
   await ensureServerStarted(key);
-  return getPluginMcpSupervisor().getFullSchema(key.pluginId, key.serverId, key.toolName);
+  return (await getSupervisor()).getFullSchema(key.pluginId, key.serverId, key.toolName);
 }
 
 /**
@@ -54,13 +77,16 @@ async function handleGetFullSchema(key: PluginMcpToolKey): Promise<PluginMcpGetF
  * and never holds a stale `resolveSettings` closure across a plugin reload.
  */
 async function ensureServerStarted(key: PluginMcpServerKey): Promise<void> {
+  const pluginService = await getPluginService();
   const lookup = pluginService.findMcpServerContribution(key.pluginId, key.serverId);
   if (!lookup) {
     throw new Error(
       `Cannot enumerate tools for "${key.pluginId}/${key.serverId}": plugin or server is not registered`
     );
   }
-  await getPluginMcpSupervisor().start({
+  await (
+    await getSupervisor()
+  ).start({
     pluginId: key.pluginId,
     pluginDir: lookup.pluginDir,
     contributions: [lookup.contribution],
@@ -75,6 +101,7 @@ async function ensureServerStarted(key: PluginMcpServerKey): Promise<void> {
  * decoupled from `PluginService`.
  */
 async function handleRestart(key: PluginMcpServerKey): Promise<void> {
+  const pluginService = await getPluginService();
   const lookup = pluginService.findMcpServerContribution(key.pluginId, key.serverId);
   if (!lookup) {
     // A renderer race with plugin unload can land here. Throw so the caller
@@ -83,7 +110,9 @@ async function handleRestart(key: PluginMcpServerKey): Promise<void> {
       `Cannot restart "${key.pluginId}/${key.serverId}": plugin or server is not registered`
     );
   }
-  await getPluginMcpSupervisor().restart({
+  await (
+    await getSupervisor()
+  ).restart({
     pluginId: key.pluginId,
     pluginDir: lookup.pluginDir,
     serverId: key.serverId,

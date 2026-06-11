@@ -1,4 +1,3 @@
-// eager-import-allow: reads plugin settings via store.get synchronously during service init
 import fs from "fs/promises";
 import { existsSync } from "node:fs";
 import path from "path";

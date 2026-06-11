@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const mockDispatchHandler = vi.fn();
-const mockRegisterHandler = vi.fn();
-const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
 const mockInstallPlugin = vi.fn();
@@ -23,8 +21,6 @@ vi.mock("../../../services/PluginService.js", () => ({
     uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
     checkForUpdate: (...args: unknown[]) => mockCheckForUpdate(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
-    registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
-    removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
@@ -92,7 +88,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { registerPluginHandlers, registerPluginHandler, removePluginHandlers } from "../plugin.js";
+import { registerPluginHandlers } from "../plugin.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 
 beforeEach(() => {
@@ -1898,20 +1894,5 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("registerPluginHandler", () => {
-  it("delegates to pluginService.registerHandler", () => {
-    const handler = vi.fn();
-    registerPluginHandler("acme.my-plugin", "my-channel", handler);
-    expect(mockRegisterHandler).toHaveBeenCalledWith("acme.my-plugin", "my-channel", handler);
-  });
-});
-
-describe("removePluginHandlers", () => {
-  it("delegates to pluginService.removeHandlers", () => {
-    removePluginHandlers("acme.my-plugin");
-    expect(mockRemoveHandlers).toHaveBeenCalledWith("acme.my-plugin");
   });
 });
