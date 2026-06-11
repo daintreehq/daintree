@@ -269,6 +269,34 @@ export interface DiagnosticsBundleSavePayload {
   timeWindowStartMs?: number | null;
 }
 
+/**
+ * Result of starting a renderer CPU profile recording. `expiresAt` is the
+ * epoch (ms) when the main-side auto-stop fires; the renderer derives its
+ * countdown from it rather than running an independent timer.
+ */
+export type RendererCpuProfileStartResult =
+  | { status: "started"; expiresAt: number }
+  | {
+      status: "failed";
+      reason: "already-recording" | "webcontents-destroyed" | "cdp-error";
+      message?: string;
+    };
+
+/**
+ * Result of collecting a renderer CPU profile. `canceled` means the user
+ * dismissed the save dialog (silent, not an error). `devtools-detached`
+ * means something (typically DevTools) stole the CDP session mid-recording
+ * and the profile data is unrecoverable.
+ */
+export type RendererCpuProfileStopResult =
+  | { status: "saved" }
+  | { status: "canceled" }
+  | {
+      status: "failed";
+      reason: "not-recording" | "already-stopping" | "devtools-detached" | "save-failed";
+      message?: string;
+    };
+
 /** Payload for starting an agent install via setup wizard */
 export interface AgentInstallPayload {
   agentId: string;

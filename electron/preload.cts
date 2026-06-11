@@ -1236,6 +1236,10 @@ const api: ElectronAPI = {
 
     getReportEnrichment: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT),
 
+    startRendererCpuProfile: () => _unwrappingInvoke(CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_START),
+
+    stopRendererCpuProfile: () => _unwrappingInvoke(CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_STOP),
+
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       return _eventBusOn("system:wake", callback);
     },

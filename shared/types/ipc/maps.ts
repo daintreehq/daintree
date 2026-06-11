@@ -409,6 +409,18 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  // Renderer CPU profile capture (Settings > Troubleshooting). Start begins a
+  // CDP Profiler session on the calling WebContents with a main-side 15s
+  // auto-stop; stop collects the profile and runs the save-dialog flow. The
+  // target WebContents is taken from event.sender on the handler side.
+  "system:renderer-cpu-profile-start": {
+    args: [];
+    result: import("./system.js").RendererCpuProfileStartResult;
+  };
+  "system:renderer-cpu-profile-stop": {
+    args: [];
+    result: import("./system.js").RendererCpuProfileStopResult;
+  };
 
   // App state channels
   "app:get-state": {
