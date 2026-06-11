@@ -24,26 +24,6 @@ vi.mock("@/hooks/useDebounce", () => ({
   useDebounce: <T,>(value: T) => value,
 }));
 
-vi.mock("framer-motion", () => ({
-  AnimatePresence: ({ children }: { children: ReactNode }) => <>{children}</>,
-  m: new Proxy(
-    {},
-    {
-      get:
-        () =>
-        ({ children, ...rest }: { children: ReactNode } & Record<string, unknown>) => {
-          const safeProps = Object.fromEntries(
-            Object.entries(rest).filter(
-              ([k]) =>
-                !["initial", "animate", "exit", "transition", "variants", "layout"].includes(k)
-            )
-          );
-          return <div {...safeProps}>{children}</div>;
-        },
-    }
-  ),
-}));
-
 const makeCommit = (n: number, body = ""): GitCommit => ({
   hash: `hash-${n}`,
   shortHash: `sh${n}`,
@@ -211,8 +191,7 @@ describe("LocalCommitsDropdown", () => {
 
     fireEvent.click(row!);
 
-    // The mocked m.div remounts its subtree on re-render, so re-query rather
-    // than asserting on the pre-click nodes.
+    // Re-query after the re-render rather than asserting on pre-click nodes.
     await waitFor(() => {
       const rowAfter = document.querySelector('[role="option"][aria-expanded="true"]');
       expect(rowAfter?.textContent).toContain("commit message 1");

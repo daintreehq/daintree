@@ -14,16 +14,9 @@ import {
   Check,
   ChevronRight,
 } from "lucide-react";
-import { AnimatePresence, m } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import {
-  UI_ENTER_DURATION,
-  UI_EXIT_DURATION,
-  UI_ENTER_EASING_FM,
-  UI_EXIT_EASING_FM,
-} from "@/lib/animationUtils";
 import { useDebounce } from "@/hooks/useDebounce";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -45,6 +38,7 @@ interface LocalCommitsDropdownProps {
 }
 
 const PAGE_SIZE = 30;
+const COPY_FEEDBACK_MS = 2000;
 
 // Mirrors a rendered commit row (py-2.5 + title + metadata) so skeleton rows
 // don't shift the layout when real content lands.
@@ -110,7 +104,7 @@ function LocalCommitRow({ commit, optionId, isActive, isExpanded, onToggle }: Lo
     try {
       await navigator.clipboard.writeText(commit.hash);
       setCopied(true);
-      timeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
+      timeoutRef.current = window.setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
     } catch (error) {
       logError("Failed to copy commit hash", error);
     }
@@ -352,7 +346,7 @@ export function LocalCommitsDropdown({
 
     setSkip(0);
     setHasMore(false);
-    fetchData(0, false);
+    void fetchData(0, false);
 
     return () => {
       fetchGenRef.current += 1;
@@ -361,13 +355,13 @@ export function LocalCommitsDropdown({
 
   const handleLoadMore = useCallback(() => {
     if (!loadingMoreRef.current && hasMore) {
-      fetchData(skip, true);
+      void fetchData(skip, true);
     }
   }, [hasMore, fetchData, skip]);
 
   const handleRetry = () => {
     setSkip(0);
-    fetchData(0, false);
+    void fetchData(0, false);
   };
 
   const handleInputKeyDown = useCallback(
@@ -469,80 +463,66 @@ export function LocalCommitsDropdown({
 
       <div className="overflow-y-auto overscroll-contain flex-1 min-h-0 relative">
         {loading && !data.length && initialCount === 0 && renderEmpty()}
-        <AnimatePresence mode="popLayout">
-          {loading && !data.length && initialCount !== 0 ? (
-            <m.div
-              key="local-commit-skeleton"
-              initial={false}
-              exit={{ opacity: 0 }}
-              transition={{ duration: UI_EXIT_DURATION / 1000, ease: UI_EXIT_EASING_FM }}
-            >
-              <LocalCommitsSkeleton count={initialCount} />
-            </m.div>
-          ) : data.length > 0 ? (
-            <m.div
-              key="local-commit-content"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{
-                opacity: 0,
-                transition: { duration: UI_EXIT_DURATION / 1000, ease: UI_EXIT_EASING_FM },
-              }}
-              transition={{ duration: UI_ENTER_DURATION / 1000, ease: UI_ENTER_EASING_FM }}
-            >
-              {error && renderError()}
-              <div id={listId} role="listbox" className="divide-y divide-[var(--border-divider)]">
-                {data.map((commit, index) => (
-                  <LocalCommitRow
-                    key={commit.hash}
-                    commit={commit}
-                    optionId={`local-commit-option-${commit.hash}`}
-                    isActive={cursorIndex === index}
-                    isExpanded={expandedHashes.has(commit.hash)}
-                    onToggle={toggleCommitExpanded}
-                  />
-                ))}
-              </div>
+        {/* No skeleton/content crossfade here: that would need framer-motion,
+            which is a restricted (eagerly-bundled) import in this statically
+            loaded toolbar path. The fixed-height skeleton rows keep the swap
+            layout-stable, and FixedDropdown supplies the popover motion. */}
+        {loading && !data.length && initialCount !== 0 ? (
+          <LocalCommitsSkeleton count={initialCount} />
+        ) : data.length > 0 ? (
+          <div>
+            {error && renderError()}
+            <div id={listId} role="listbox" className="divide-y divide-[var(--border-divider)]">
+              {data.map((commit, index) => (
+                <LocalCommitRow
+                  key={commit.hash}
+                  commit={commit}
+                  optionId={`local-commit-option-${commit.hash}`}
+                  isActive={cursorIndex === index}
+                  isExpanded={expandedHashes.has(commit.hash)}
+                  onToggle={toggleCommitExpanded}
+                />
+              ))}
+            </div>
 
-              {hasMore && (
-                <div className="p-3 space-y-2">
-                  {loadMoreError && (
-                    <div className="p-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                      <p className="text-xs text-status-error">{loadMoreError}</p>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleLoadMore}
-                        className="mt-1 text-status-error hover:text-status-error/70 h-6 text-xs"
-                      >
-                        Retry
-                      </Button>
-                    </div>
+            {hasMore && (
+              <div className="p-3 space-y-2">
+                {loadMoreError && (
+                  <div className="p-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                    <p className="text-xs text-status-error">{loadMoreError}</p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleLoadMore}
+                      className="mt-1 text-status-error hover:text-status-error/70 h-6 text-xs"
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                <Button
+                  id="local-commit-load-more"
+                  variant="ghost"
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className={cn(
+                    "w-full text-muted-foreground hover:text-daintree-text",
+                    isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
                   )}
-                  <Button
-                    id="local-commit-load-more"
-                    variant="ghost"
-                    onClick={handleLoadMore}
-                    disabled={loadingMore}
-                    className={cn(
-                      "w-full text-muted-foreground hover:text-daintree-text",
-                      isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
-                    )}
-                  >
-                    {loadingMore ? (
-                      <>
-                        <RefreshCw className="animate-spin" />
-                        Loading...
-                      </>
-                    ) : (
-                      "Load more"
-                    )}
-                  </Button>
-                </div>
-              )}
-            </m.div>
-          ) : null}
-        </AnimatePresence>
+                >
+                  {loadingMore ? (
+                    <>
+                      <RefreshCw className="animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    "Load more"
+                  )}
+                </Button>
+              </div>
+            )}
+          </div>
+        ) : null}
         {!loading && !data.length && error && (
           <div className="p-8 text-center text-muted-foreground">
             <AlertCircle className="h-5 w-5 mx-auto mb-2 opacity-50" />
