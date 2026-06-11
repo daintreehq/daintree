@@ -125,15 +125,10 @@ export const createAddPanelActions = (
       }
 
       if (tier === "confirm" && !warningsDisabled) {
-        let memoryMB: number | null = null;
-        try {
-          const metrics = await import("@/clients").then((m) => m.systemClient.getAppMetrics());
-          memoryMB = metrics.totalMemoryMB;
-        } catch {
-          // Memory info unavailable
-        }
-
-        const confirmed = await requestConfirmation(globalCount, memoryMB);
+        // Pass `null` for memory rather than blocking the dialog on a metrics
+        // IPC — same call `preflightSpawnBatchLimit` makes; the dialog renders
+        // without the memory hint, never waits on it.
+        const confirmed = await requestConfirmation(globalCount, null);
         if (!confirmed) return null;
 
         // Re-check count after confirmation in case panels were closed during the dialog

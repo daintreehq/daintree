@@ -655,8 +655,13 @@ export class ProjectViewManager {
       view.webContents.focus();
     }
 
-    // Evict LRU views if over limit
-    this.evictStaleViews("lru");
+    // Evict LRU views if over limit — deferred off the switch promise;
+    // evictStaleViews re-checks all state at run time.
+    setImmediate(() => {
+      if (!this.disposed && !this.win.isDestroyed()) {
+        this.evictStaleViews("lru");
+      }
+    });
 
     return { view, isNew: true };
   }

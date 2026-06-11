@@ -100,6 +100,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       };
     }
 
+    // In-repo presets ride along in the payload; kicked off after the fast
+    // path (the cached result already carries them) so the disk read overlaps
+    // the rest of the hydrate work.
+    const projectPresetsPromise = currentProject
+      ? projectStore.readInRepoPresets(currentProject.path).catch((error) => {
+          console.warn("[AppHydrate] Failed to read in-repo presets:", error);
+          return {};
+        })
+      : undefined;
+
     // Read the global app state only after the fast path — the cached
     // HydrateResult already carries appState, so reading it earlier would pay
     // a redundant full config.json parse on every cache hit.
@@ -431,6 +441,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       tabGroups: tabGroupsToUse,
       terminalSizes: terminalSizesToUse,
       draftInputs: draftInputsToUse,
+      projectPresets: projectPresetsPromise ? await projectPresetsPromise : undefined,
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
@@ -455,10 +466,25 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const pending = crashService.getPendingCrash();
       crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
     }
+    // Ride-along app theme: only when the stored config is already in its
+    // fully-migrated shape. First-run defaulting and legacy customSchemes
+    // migration stay in the `app-theme:get` handler, which the renderer falls
+    // back to whenever this field is undefined.
+    const rawAppTheme = store.get("appTheme");
+    const appTheme =
+      rawAppTheme &&
+      typeof rawAppTheme === "object" &&
+      !Array.isArray(rawAppTheme) &&
+      typeof rawAppTheme.colorSchemeId === "string" &&
+      rawAppTheme.colorSchemeId &&
+      typeof (rawAppTheme.customSchemes as unknown) !== "string"
+        ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
+        : undefined;
     return {
       ...hydrate,
       crashPending,
       crashConfig: crashService.getConfig(),
+      appTheme,
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));

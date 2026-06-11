@@ -22,6 +22,7 @@ const projectClientMock = {
   getTerminalSizes: vi.fn(),
   getDraftInputs: vi.fn(),
   setDraftInputs: vi.fn(),
+  getInRepoPresets: vi.fn(),
 };
 
 const terminalConfigClientMock = {
@@ -184,6 +185,7 @@ describe("hydrateAppState", () => {
     projectClientMock.getTabGroups.mockResolvedValue([]);
     projectClientMock.getTerminalSizes.mockResolvedValue({});
     projectClientMock.getDraftInputs.mockResolvedValue({});
+    projectClientMock.getInRepoPresets.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -3138,6 +3140,52 @@ describe("hydrateAppState", () => {
       expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
       // Empty array still clears stale groups (mirrors the IPC path).
       expect(hydrateTabGroups).toHaveBeenCalledWith([]);
+    });
+
+    it("uses projectPresets from the hydrate payload and skips the standalone IPC call", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        projectPresets: { claude: [{ id: "team-preset", name: "Team" }] },
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the standalone getInRepoPresets call when projectPresets is absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // projectPresets intentionally omitted (older main process, or the
+        // safe-boot {ok:false} payload).
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).toHaveBeenCalledWith("project-1");
+    });
+
+    it("treats an empty projectPresets payload as authoritative (no IPC fallback)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        projectPresets: {},
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
     });
   });
 

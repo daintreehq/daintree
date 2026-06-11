@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   toBranchOption,
   buildBranchRows,
   type BranchOption,
   type BranchPickerRow,
+  type BranchWorktreeRef,
 } from "../branchPickerUtils";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { BranchInfo } from "@/types/electron";
-import type { WorktreeSnapshot } from "@shared/types";
 
 export interface UseBranchPickerResult {
   branchPickerOpen: boolean;
@@ -46,15 +47,26 @@ export function useBranchPicker({
 
   const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
 
-  const worktreeMap = useWorktreeStore((s) => s.worktrees);
+  const worktreeBranchEntries = useWorktreeStore(
+    useShallow((s) => {
+      const entries: string[] = [];
+      for (const wt of s.worktrees.values()) {
+        if (wt.branch) entries.push(wt.branch, wt.id, wt.name);
+      }
+      return entries;
+    })
+  );
 
   const worktreeByBranch = useMemo(() => {
-    const map = new Map<string, WorktreeSnapshot>();
-    for (const wt of worktreeMap.values()) {
-      if (wt.branch) map.set(wt.branch, wt);
+    const map = new Map<string, BranchWorktreeRef>();
+    for (let i = 0; i < worktreeBranchEntries.length; i += 3) {
+      map.set(worktreeBranchEntries[i]!, {
+        id: worktreeBranchEntries[i + 1]!,
+        name: worktreeBranchEntries[i + 2]!,
+      });
     }
     return map;
-  }, [worktreeMap]);
+  }, [worktreeBranchEntries]);
 
   const branchRows = useMemo(
     () =>

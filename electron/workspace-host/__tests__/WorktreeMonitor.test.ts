@@ -859,6 +859,76 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("falls back to the local base ref when origin/<base> can't be resolved", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(
+        cleanChangesWith({ tracking: "origin/test-branch", ahead: 1, behind: 0 })
+      );
+      mockGitRaw.mockImplementation((args: string[]) => {
+        if (args[0] === "rev-parse") return Promise.resolve("abc\nabc\n");
+        if (args.includes("origin/main...HEAD")) {
+          return Promise.reject(new Error("unknown revision"));
+        }
+        return Promise.resolve("1\t4\n");
+      });
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(mockGitRaw).toHaveBeenCalledWith([
+        "rev-list",
+        "--count",
+        "--left-right",
+        "main...HEAD",
+      ]);
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.baseBranchName).toBe("main");
+      expect(snapshot.baseBehindCount).toBe(1);
+      expect(snapshot.baseAheadCount).toBe(4);
+      expect(snapshot.baseMatchesUpstream).toBe(true);
+      expect(mockGitRaw).toHaveBeenCalledWith(["rev-parse", "@{u}", "main"]);
+
+      monitor.stop();
+    });
+
+    it("reuses cached divergence on forced passes until a tracked ref's stat changes", async () => {
+      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(readFile).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      vi.mocked(stat).mockResolvedValue({ mtimeMs: 1_000 } as unknown as Awaited<
+        ReturnType<typeof stat>
+      >);
+      mockGetWorktreeChangesWithStats.mockResolvedValue(cleanChangesWith({ tracking: null }));
+      mockGitRaw.mockResolvedValue("2\t5\n");
+
+      const revListCalls = () =>
+        mockGitRaw.mock.calls.filter((c) => Array.isArray(c[0]) && c[0][0] === "rev-list").length;
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+      expect(revListCalls()).toBe(1);
+      expect(monitor.getSnapshot().baseAheadCount).toBe(5);
+      expect(monitor.getSnapshot().baseBehindCount).toBe(2);
+
+      // Forced pass with unchanged refs: divergence comes from the cache.
+      await monitor.updateGitStatus(true);
+      expect(revListCalls()).toBe(1);
+      expect(monitor.getSnapshot().baseAheadCount).toBe(5);
+
+      // A background fetch writes the loose remote base ref without touching
+      // packed-refs — the cache key must notice and recompute.
+      vi.mocked(stat).mockImplementation(async (p) => {
+        const mtimeMs = String(p).endsWith("origin/main") ? 2_000 : 1_000;
+        return { mtimeMs } as unknown as Awaited<ReturnType<typeof stat>>;
+      });
+      mockGitRaw.mockResolvedValue("0\t5\n");
+      await monitor.updateGitStatus(true);
+      expect(revListCalls()).toBe(2);
+      expect(monitor.getSnapshot().baseBehindCount).toBe(0);
+
+      monitor.stop();
+    });
+
     it("reports zero counts when branch is in sync with upstream", async () => {
       mockGetWorktreeChangesWithStats.mockResolvedValue(
         cleanChangesWith({ tracking: "origin/main", ahead: 0, behind: 0 })

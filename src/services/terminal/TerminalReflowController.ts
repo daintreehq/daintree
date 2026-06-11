@@ -1,5 +1,29 @@
+import type { Terminal } from "@xterm/xterm";
 import type { ManagedTerminal } from "./types";
 import { logWarn } from "@/utils/logger";
+
+type XtermCoreRenderPause = {
+  _renderService?: {
+    _isPaused?: boolean;
+  };
+};
+
+/**
+ * Three-state read of xterm's private IntersectionObserver pause flag (same
+ * `_core` escape hatch as `getXtermCellDimensions` / `isXtermRenderPaused`).
+ * Returns `undefined` when the field is missing (API drift) so callers can
+ * fall back to the unconditional reflow path — unlike the watchdog's
+ * boolean read, which treats drift as not-paused.
+ */
+function readXtermRenderPaused(terminal: Terminal): boolean | undefined {
+  try {
+    const isPaused = (terminal as Terminal & { _core?: XtermCoreRenderPause })._core?._renderService
+      ?._isPaused;
+    return typeof isPaused === "boolean" ? isPaused : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Force a synchronous reflow that triggers xterm.js's IntersectionObserver
@@ -113,6 +137,11 @@ export class TerminalReflowController {
     // the buffered range. Skip without stamping the throttle so we reflow
     // on the next tick after ESU.
     if (managed.terminal.modes?.synchronizedOutputMode === true) return;
+    // Renderer is provably unpaused — the jitter would be a wasted forced
+    // layout. Skip without stamping lastReflowAt so a pause detected on the
+    // next write reflows immediately. `true` or `undefined` (API drift)
+    // falls through to keep all three #5092 recovery layers working.
+    if (readXtermRenderPaused(managed.terminal) === false) return;
 
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (now - (managed.lastReflowAt ?? 0) < REFLOW_THROTTLE_MS) return;

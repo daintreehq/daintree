@@ -40,7 +40,15 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     }
 
     const previousProjectId = projectStore.getCurrentProjectId();
-    await persistOutgoingProjectState(outgoingState, previousProjectId, "project:switch");
+    // Started concurrently with the view swap — the incoming view never reads
+    // the outgoing project's state file — and awaited before returning so the
+    // IPC contract (state persisted before resolve) is preserved.
+    const persistOutgoing = persistOutgoingProjectState(
+      outgoingState,
+      previousProjectId,
+      "project:switch"
+    );
+    trackOutgoingPersist(previousProjectId, persistOutgoing);
 
     const pvm = resolveProjectViewManager(deps, ctx.event);
     if (pvm) {
@@ -51,12 +59,17 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       if (options?.focusIntent) {
         pvm.setPendingFocusIntent(projectId, options.focusIntent);
       }
+      // Rapid switch-back: a cold-start hydrate of the target must not read
+      // its state file while a previous switch's persist is still writing it.
+      await awaitPendingOutgoingPersist(projectId);
       await activateProjectView(deps, ctx.event, pvm, projectId, project, {
         logPrefix: "[ProjectSwitch]",
       });
+      await persistOutgoing;
       return project;
     }
 
+    await persistOutgoing;
     return await projectSwitchService.switchProject(projectId);
   };
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_SWITCH, handleProjectSwitch));
@@ -84,20 +97,29 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     }
 
     const previousProjectId = projectStore.getCurrentProjectId();
+    let persistOutgoing: Promise<void> = Promise.resolve();
     if (previousProjectId !== projectId) {
-      await persistOutgoingProjectState(outgoingState, previousProjectId, "project:reopen");
+      persistOutgoing = persistOutgoingProjectState(
+        outgoingState,
+        previousProjectId,
+        "project:reopen"
+      );
+      trackOutgoingPersist(previousProjectId, persistOutgoing);
     }
 
     const pvm = resolveProjectViewManager(deps, ctx.event);
     if (pvm) {
+      await awaitPendingOutgoingPersist(projectId);
       await activateProjectView(deps, ctx.event, pvm, projectId, project, {
         logPrefix: "[ProjectReopen]",
         markActive: true,
         resumeWorkspace: true,
       });
+      await persistOutgoing;
       return project;
     }
 
+    await persistOutgoing;
     if (deps.worktreeService) {
       deps.worktreeService.resumeProject(project.path);
     }
@@ -106,6 +128,27 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+const pendingOutgoingPersists = new Map<string, Promise<void>>();
+
+function trackOutgoingPersist(projectId: string | null, persist: Promise<void>): void {
+  if (!projectId) return;
+  pendingOutgoingPersists.set(projectId, persist);
+  const cleanup = () => {
+    if (pendingOutgoingPersists.get(projectId) === persist) {
+      pendingOutgoingPersists.delete(projectId);
+    }
+  };
+  persist.then(cleanup, cleanup);
+}
+
+async function awaitPendingOutgoingPersist(projectId: string): Promise<void> {
+  const pending = pendingOutgoingPersists.get(projectId);
+  if (pending) {
+    // Failures surface on the originating switch's own await, not here.
+    await pending.catch(() => {});
+  }
 }
 
 function resolveProjectViewManager(deps: HandlerDependencies, event: Electron.IpcMainInvokeEvent) {
@@ -137,8 +180,9 @@ async function persistOutgoingProjectState(
           `${logLabel}/pre-apply(${previousProjectId})`
         ) as TabGroup[])
       : undefined;
-  const existing = await projectStore.getProjectState(previousProjectId);
-  await projectStore.saveProjectState(previousProjectId, {
+  // Queued so the read-merge-write can't clobber concurrent queued writers
+  // (terminalLayout handlers) now that the persist runs alongside the swap.
+  await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => ({
     ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
     projectId: previousProjectId,
     ...(validTerminals !== undefined && { terminals: validTerminals }),
@@ -146,7 +190,7 @@ async function persistOutgoingProjectState(
     ...(validDrafts !== undefined && { draftInputs: validDrafts }),
     ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
     activeWorktreeId: outgoingState.activeWorktreeId,
-  });
+  }));
 }
 
 type ActivateOptions = {

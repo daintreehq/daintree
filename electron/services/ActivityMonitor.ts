@@ -58,6 +58,11 @@ const SIMPLE_SNAPSHOT_SETTLE_MS = 1000;
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
+// Full-buffer strip+detect cadence cap. The rolling pattern buffer keeps
+// accumulating per chunk; only the stripAnsi + pattern-bank scan is
+// throttled, with a trailing-edge run so the final chunk before quiet is
+// still scanned. Downstream consumers debounce at 100ms+ scales.
+const PATTERN_SCAN_THROTTLE_MS = 30;
 
 export interface ProcessStateValidator {
   hasActiveChildren(): boolean;
@@ -155,6 +160,8 @@ export class ActivityMonitor {
   private idleSince = 0;
   private lastPatternResultAt = 0;
   private workingHoldUntil = 0;
+  private lastPatternScanAt = 0;
+  private patternScanTimer: NodeJS.Timeout | null = null;
 
   // Subsystem instances
   private readonly inputTracker: InputTracker;
@@ -419,6 +426,23 @@ export class ActivityMonitor {
   // busy on working-pattern matches.
   private detectPatternsFromData(data: string, now: number): void {
     this.patternBuf.update(data);
+
+    const elapsed = now - this.lastPatternScanAt;
+    if (elapsed < PATTERN_SCAN_THROTTLE_MS) {
+      if (!this.patternScanTimer) {
+        this.patternScanTimer = setTimeout(() => {
+          this.patternScanTimer = null;
+          if (this.isDisposed) return;
+          this.scanPatternBuffer(Date.now());
+        }, PATTERN_SCAN_THROTTLE_MS - elapsed);
+      }
+      return;
+    }
+    this.scanPatternBuffer(now);
+  }
+
+  private scanPatternBuffer(now: number): void {
+    this.lastPatternScanAt = now;
     const bufferText = stripAnsi(this.patternBuf.getText());
 
     // Check for boot-complete patterns in the rolling buffer
@@ -853,6 +877,11 @@ export class ActivityMonitor {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.patternScanTimer) {
+      clearTimeout(this.patternScanTimer);
+      this.patternScanTimer = null;
+    }
+    this.lastPatternScanAt = 0;
     this.completionTimer.dispose();
     this.inputTracker.reset();
     this.outputVolumeDetector.reset();

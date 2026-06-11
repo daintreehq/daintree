@@ -78,6 +78,13 @@ interface GitFileStatBaseline {
   packedRefs: number;
 }
 
+interface BaseDivergence {
+  baseBranchName: string | null;
+  aheadCount: number | null;
+  behindCount: number | null;
+  matchesUpstream: boolean;
+}
+
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
   adaptiveBackoff: boolean;
@@ -202,6 +209,8 @@ export class WorktreeMonitor {
   // simple-git fork-exec. null = no baseline yet (first poll, or post-error).
   private lastStatBaseline: GitFileStatBaseline | null = null;
   private lastStatBaselineAt: number = 0;
+  private lastBaseDivergenceKey: string | null = null;
+  private lastBaseDivergenceResult: BaseDivergence | null = null;
   private cachedCommonDir: string | null = null;
   // Timer used to defer the initial `updateGitStatus` call for background
   // monitors so N monitors starting together don't fork git simultaneously.
@@ -1952,50 +1961,49 @@ export class WorktreeMonitor {
     }
   }
 
-  private async computeBaseDivergence(hasUpstream: boolean): Promise<{
-    baseBranchName: string | null;
-    aheadCount: number | null;
-    behindCount: number | null;
-    matchesUpstream: boolean;
-  } | null> {
+  private async computeBaseDivergence(hasUpstream: boolean): Promise<BaseDivergence | null> {
     if (!this._branch || this._isMainWorktree) return null;
+
+    // Pick the branch to diff against. A linked PR's base branch is
+    // authoritative — it's exactly where this worktree's work will merge,
+    // which may differ from the repo's integration branch (e.g. a hotfix
+    // PR targeting `main` in a gitflow repo). Without a PR, fall back to
+    // the repository's main/integration branch.
+    const baseBranch = this._linked?.pr?.baseRef?.trim() || this.mainBranch;
+
+    // Divergence only moves when refs move, never on working-tree edits, so
+    // a stat key over the involved refs lets forced passes (watcher-driven
+    // edit storms) reuse the last result without any git spawns.
+    const key = await this.buildBaseDivergenceKey(baseBranch, hasUpstream);
+    if (key !== null && key === this.lastBaseDivergenceKey) {
+      return this.lastBaseDivergenceResult;
+    }
+
     const wsl = this.wslInvocation;
     const git = wsl
       ? createWslHardenedGit(wsl, this._pollAbortController.signal)
       : createHardenedGit(this.path, this._pollAbortController.signal);
 
     try {
-      // Pick the branch to diff against. A linked PR's base branch is
-      // authoritative — it's exactly where this worktree's work will merge,
-      // which may differ from the repo's integration branch (e.g. a hotfix
-      // PR targeting `main` in a gitflow repo). Without a PR, fall back to
-      // the repository's main/integration branch.
-      const baseBranch = this._linked?.pr?.baseRef?.trim() || this.mainBranch;
-
-      // Resolve base ref: try origin/<branch> first (remote ref stays fresh
-      // after fetch), fall back to local branch for repos without a remote.
+      // Resolve base ref via the rev-list itself: try origin/<branch> first
+      // (remote ref stays fresh after fetch), fall back to the local branch
+      // for repos without a remote.
       const remoteRef = `origin/${baseBranch}`;
       const localRef = baseBranch;
-      let resolvedRef: string;
+      const baseBranchName = baseBranch;
+      let resolvedRef = remoteRef;
+      let result: string;
       try {
-        await git.raw(["rev-parse", "--verify", remoteRef]);
-        resolvedRef = remoteRef;
+        result = await git.raw(["rev-list", "--count", "--left-right", `${remoteRef}...HEAD`]);
       } catch {
         try {
-          await git.raw(["rev-parse", "--verify", localRef]);
+          result = await git.raw(["rev-list", "--count", "--left-right", `${localRef}...HEAD`]);
           resolvedRef = localRef;
         } catch {
+          this.lastBaseDivergenceKey = null;
           return null;
         }
       }
-
-      const baseBranchName = baseBranch;
-      const result = await git.raw([
-        "rev-list",
-        "--count",
-        "--left-right",
-        `${resolvedRef}...HEAD`,
-      ]);
       const trimmed = result.trim();
       const parts = trimmed.split("\t");
       const behindCount = parts[0] != null && parts[0] !== "" ? parseInt(parts[0], 10) : 0;
@@ -2015,12 +2023,50 @@ export class WorktreeMonitor {
         }
       }
 
-      return {
+      const divergence: BaseDivergence = {
         baseBranchName,
         aheadCount: Number.isFinite(aheadCount) ? aheadCount : null,
         behindCount: Number.isFinite(behindCount) ? behindCount : null,
         matchesUpstream,
       };
+      this.lastBaseDivergenceKey = key;
+      this.lastBaseDivergenceResult = divergence;
+      return divergence;
+    } catch {
+      this.lastBaseDivergenceKey = null;
+      return null;
+    }
+  }
+
+  /**
+   * Stat-derived cache key for `computeBaseDivergence`. Covers every ref the
+   * computation reads: HEAD, this branch's local ref, the base branch's local
+   * and remote refs, the upstream remote ref (the `@{u}` proxy for
+   * `matchesUpstream`), and packed-refs. The remote-ref stats are essential —
+   * `git fetch` writes loose refs under refs/remotes/ without touching
+   * packed-refs, so the stat-baseline fields alone would serve stale
+   * behind-of-base counts after background fetches. Returns `null` (compute,
+   * don't cache) on any stat failure beyond ENOENT.
+   */
+  private async buildBaseDivergenceKey(
+    baseBranch: string,
+    hasUpstream: boolean
+  ): Promise<string | null> {
+    const branch = this._branch;
+    if (!branch) return null;
+    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    if (!gitDir) return null;
+    try {
+      const commonDir = await this.resolveCommonDirAsync(gitDir);
+      const stats = await Promise.all([
+        this.statMtime(pathJoin(gitDir, "HEAD")),
+        this.statMtime(pathJoin(commonDir, "refs", "heads", branch)),
+        this.statMtime(pathJoin(commonDir, "packed-refs")),
+        this.statMtime(pathJoin(commonDir, "refs", "heads", baseBranch)),
+        this.statMtime(pathJoin(commonDir, "refs", "remotes", "origin", baseBranch)),
+        this.statMtime(pathJoin(commonDir, "refs", "remotes", "origin", branch)),
+      ]);
+      return [branch, baseBranch, hasUpstream, ...stats].join(" ");
     } catch {
       return null;
     }

@@ -109,6 +109,11 @@ vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ worktrees: mockWorktrees }),
 }));
 
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map(mockWorktrees.map((wt) => [wt.id, wt])) }),
+}));
+
 vi.mock("@/hooks", () => ({
   useKeybindingDisplay: () => null,
   useAriaKeyshortcuts: () => undefined,

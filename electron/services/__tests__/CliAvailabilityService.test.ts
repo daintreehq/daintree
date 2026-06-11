@@ -11,19 +11,40 @@ import { refreshPath } from "../../setup/environment.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
-// Mock child_process. Both `execFileSync` (sync shell probe) and `execFile`
-// (async npm-global / WSL probes) are used by the service — mock both or
-// the async probes will call `undefined(...)` and throw TypeErrors at runtime.
+// Mock child_process. The service's probes (shell which/where, npm-global,
+// WSL) all run through async `execFile` — mock it or the probes will call
+// `undefined(...)` and throw TypeErrors at runtime. `execFileSync` is mocked
+// too: the tests in this file drive shell-probe behavior through
+// `mockedExecFileSync` implementations, and the default `execFile` impl
+// DELEGATES `which`/`where` spawns to it — calling the sync mock and
+// translating its return/throw into the async callback contract (string
+// stdout on success, error on throw). All other files (npm, wsl.exe, npx)
+// get an ENOENT callback so unmocked tests see the probe as "binary not
+// found" rather than hanging on an un-invoked callback.
 //
 // `execFile` has an overloaded signature: (file, args, callback) or
-// (file, args, options, callback). The default mock invokes whichever
-// callback was passed with an ENOENT error so unmocked tests see the probe
-// as "binary not found" rather than hanging on an un-invoked callback.
-// `vi.hoisted` guarantees this runs before `vi.mock` factories despite the
-// auto-hoisting that normally blocks reference to local bindings.
+// (file, args, options, callback). `vi.hoisted` guarantees this runs before
+// `vi.mock` factories despite the auto-hoisting that normally blocks
+// reference to local bindings.
 const { defaultExecFileImpl } = vi.hoisted(() => ({
   defaultExecFileImpl: (...args: unknown[]) => {
-    const callback = args.find((a): a is (err: unknown) => void => typeof a === "function");
+    const callback = args.find(
+      (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+    );
+    const [file, fileArgs, options] = args;
+    if (file === "which" || file === "where") {
+      queueMicrotask(() => {
+        try {
+          const out = execFileSync(file, fileArgs as readonly string[], options as never) as
+            | string
+            | Buffer;
+          callback?.(null, typeof out === "string" ? out : out.toString("utf8"));
+        } catch (err) {
+          callback?.(err);
+        }
+      });
+      return {} as never;
+    }
     const err = Object.assign(new Error("not found"), { code: "ENOENT" });
     queueMicrotask(() => callback?.(err));
     return {} as never;
@@ -195,12 +216,13 @@ describe("CliAvailabilityService", () => {
       // matches the registry size exactly.
       expect(mockedExecFileSync).toHaveBeenCalledTimes(16);
 
-      // stdio is now [ignore, pipe, ignore] so we can capture the resolved
-      // path from stdout while still suppressing any TTY output on stderr.
-      expect(mockedExecFileSync).toHaveBeenCalledWith(
-        expect.any(String),
+      // The shell probe runs through async execFile — assert the option
+      // shape (timeout + windowsHide) on the mock that observes it directly.
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        "which",
         expect.any(Array),
-        expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] })
+        expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
+        expect.any(Function)
       );
     });
 

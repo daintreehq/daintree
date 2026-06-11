@@ -22,17 +22,34 @@ vi.mock("electron", () => ({
   },
 }));
 
-const projectStoreMock = vi.hoisted(() => ({
-  getCurrentProjectId: vi.fn<() => string | null>(),
-  getProjectById:
-    vi.fn<(id: string) => { id: string; name: string; path: string; status?: string } | null>(),
-  setCurrentProject: vi.fn<(id: string) => Promise<void>>(),
-  getProjectState: vi.fn<(id: string) => Promise<Record<string, unknown> | null>>(),
-  saveProjectState: vi.fn<(id: string, state: unknown) => Promise<void>>(),
-  getAllProjects: vi.fn(() => []),
-  getCurrentProject: vi.fn(() => null),
-  updateProjectStatus: vi.fn(),
-}));
+const projectStoreMock = vi.hoisted(() => {
+  const getProjectState = vi.fn<(id: string) => Promise<Record<string, unknown> | null>>();
+  const saveProjectState = vi.fn<(id: string, state: unknown) => Promise<void>>();
+  return {
+    getCurrentProjectId: vi.fn<() => string | null>(),
+    getProjectById:
+      vi.fn<(id: string) => { id: string; name: string; path: string; status?: string } | null>(),
+    setCurrentProject: vi.fn<(id: string) => Promise<void>>(),
+    getProjectState,
+    saveProjectState,
+    // Mirrors the real queue contract: read, apply updater, save unless null.
+    enqueueProjectStateUpdate: vi.fn(
+      async (
+        id: string,
+        updater: (existing: Record<string, unknown> | null) => Record<string, unknown> | null
+      ) => {
+        const existing = await getProjectState(id);
+        const updated = await updater(existing);
+        if (updated !== null) {
+          await saveProjectState(id, updated);
+        }
+      }
+    ),
+    getAllProjects: vi.fn(() => []),
+    getCurrentProject: vi.fn(() => null),
+    updateProjectStatus: vi.fn(),
+  };
+});
 
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,

@@ -668,11 +668,20 @@ export function setupWebviewCSP(): void {
           : getDaintreeAppCSP(isDev)
         : getLocalhostDevCSP();
 
-    ses.webRequest.onHeadersReceived((details, callback) => {
-      callback({
-        responseHeaders: mergeCspHeaders(details, cspPolicy),
-      });
-    });
+    // CSP response headers are only enforced on document and worker
+    // main-script responses (workers map to "script" in the webRequest
+    // resource-type model), so stylesheet/image/font/xhr/media/ping traffic
+    // skips the network-service→main-process detour entirely. `urls` must be
+    // explicit: since Electron 41 an empty array matches nothing, and
+    // Electron 42 rejects "other" in `types` at registration.
+    ses.webRequest.onHeadersReceived(
+      { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
+      (details, callback) => {
+        callback({
+          responseHeaders: mergeCspHeaders(details, cspPolicy),
+        });
+      }
+    );
 
     configuredPartitions.add(partition);
   };

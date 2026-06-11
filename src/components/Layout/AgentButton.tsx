@@ -49,6 +49,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 import { resolveEffectivePresetId } from "@shared/types";
@@ -102,7 +103,6 @@ function AgentExternalLinkItems({ links }: { links?: AgentExternalLink[] }) {
 
 interface WorktreeMenuItemsProps {
   agentType: AgentType;
-  worktrees: ReturnType<typeof useWorktrees>["worktrees"];
 }
 
 // Flattens the worktree picker from a nested 3-deep submenu (worktree →
@@ -120,7 +120,8 @@ interface WorktreeMenuItemsProps {
 // row's onSelect honors the ref and skips the grid dispatch when set.
 // pointerDown/pointerUp still stopPropagation to keep Radix from
 // treating the icon press as the row's primary selection event.
-function WorktreeMenuItems({ agentType, worktrees }: WorktreeMenuItemsProps) {
+function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
+  const { worktrees } = useWorktrees();
   const dockClickedRef = useRef(false);
   const source = useMenuActionSource();
   return (
@@ -176,7 +177,7 @@ export function AgentButton({
   availability,
   "data-toolbar-item": dataToolbarItem,
 }: AgentButtonProps) {
-  const { worktrees } = useWorktrees();
+  const hasWorktrees = useWorktreeStore((s) => s.worktrees.size > 0);
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
@@ -445,13 +446,13 @@ export function AgentButton({
           >
             Launch {config.name} in Dock
           </ContextMenuActionItem>
-          {worktrees.length > 0 && (
+          {hasWorktrees && (
             <ContextMenuSub>
               <ContextMenuSubTrigger disabled={!isLaunchable}>
                 Launch in Worktree
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                <WorktreeMenuItems agentType={type} worktrees={worktrees} />
+                <WorktreeMenuItems agentType={type} />
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
@@ -742,13 +743,13 @@ export function AgentButton({
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
-        {worktrees.length > 0 && (
+        {hasWorktrees && (
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isLaunchable}>
               Launch in Worktree
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <WorktreeMenuItems agentType={type} worktrees={worktrees} />
+              <WorktreeMenuItems agentType={type} />
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}

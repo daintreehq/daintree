@@ -35,6 +35,7 @@ const mockState = vi.hoisted(() => ({
         draftInputs?: Record<string, string>;
       }
     | undefined,
+  projectPresets: {} as Record<string, unknown[]>,
   projectStateQuarantinedPath: undefined as string | undefined,
   safeMode: false,
   gpuStatus: { webgl2: "enabled" },
@@ -46,6 +47,7 @@ const getProjectByIdMock = vi.hoisted(() =>
   vi.fn((projectId: string) => (projectId === mockState.project?.id ? mockState.project : null))
 );
 const getProjectStateMock = vi.hoisted(() => vi.fn(async () => mockState.projectState));
+const readInRepoPresetsMock = vi.hoisted(() => vi.fn(async () => mockState.projectPresets));
 const getProjectStateWithRecoveryMock = vi.hoisted(() =>
   vi.fn(async () => ({
     state: mockState.projectState,
@@ -83,6 +85,7 @@ vi.mock("../ProjectStore.js", () => ({
     getProjectById: getProjectByIdMock,
     getProjectState: getProjectStateMock,
     getProjectStateWithRecovery: getProjectStateWithRecoveryMock,
+    readInRepoPresets: readInRepoPresetsMock,
   },
 }));
 
@@ -131,6 +134,7 @@ describe("AppHydrationService adversarial", () => {
     mockState.agentSettings = { defaultAgent: "codex" };
     mockState.project = { id: "project-1", name: "Project One", path: "/project/one" };
     mockState.projectState = undefined;
+    mockState.projectPresets = {};
     mockState.projectStateQuarantinedPath = undefined;
     mockState.safeMode = false;
     mockState.gpuStatus = { webgl2: "enabled" };
@@ -323,6 +327,37 @@ describe("AppHydrationService adversarial", () => {
     expect(result.tabGroups).toEqual(tabGroups);
     expect(result.terminalSizes).toEqual(terminalSizes);
     expect(result.draftInputs).toEqual(draftInputs);
+  });
+
+  it("folds in-repo project presets into the payload", async () => {
+    const presets = { claude: [{ id: "team-preset", name: "Team" }] };
+    mockState.projectPresets = presets as Record<string, unknown[]>;
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(readInRepoPresetsMock).toHaveBeenCalledWith("/project/one");
+    expect(result.projectPresets).toEqual(presets);
+  });
+
+  it("degrades projectPresets to empty when the in-repo read fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    readInRepoPresetsMock.mockRejectedValueOnce(new Error("EACCES"));
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.projectPresets).toEqual({});
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("leaves projectPresets undefined when the project is unknown", async () => {
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("missing-project");
+
+    expect(readInRepoPresetsMock).not.toHaveBeenCalled();
+    expect(result.projectPresets).toBeUndefined();
   });
 
   it("defaults tabGroups/terminalSizes/draftInputs to empty when project state is missing", async () => {

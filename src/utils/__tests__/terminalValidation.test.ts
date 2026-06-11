@@ -172,4 +172,16 @@ describe("terminalValidation", () => {
     expect(results.get("bad-cwd")?.valid).toBe(false);
     expect(results.get("bad-cli")?.valid).toBe(false);
   });
+
+  it("validateTerminals probes each unique cwd and CLI once across the batch", async () => {
+    const results = await validateTerminals([
+      makeTerminal({ id: "a", cwd: "/repo", launchAgentId: "claude" }) as never,
+      makeTerminal({ id: "b", cwd: "/repo", launchAgentId: "claude" }) as never,
+      makeTerminal({ id: "c", cwd: "/other", launchAgentId: "claude" }) as never,
+    ]);
+
+    expect(results.size).toBe(0);
+    expect(checkDirectoryMock).toHaveBeenCalledTimes(2);
+    expect(checkCommandMock).toHaveBeenCalledTimes(1);
+  });
 });
