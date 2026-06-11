@@ -17,7 +17,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
       onClick={onSelect}
       className={cn(
         "flex items-start gap-3 p-4 text-left rounded-[var(--radius-lg)] border border-daintree-border bg-overlay-subtle transition-colors",
-        "hover:bg-overlay-soft hover:border-daintree-border-interactive",
+        "hover:bg-overlay-soft hover:border-border-interactive",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
       )}
     >
