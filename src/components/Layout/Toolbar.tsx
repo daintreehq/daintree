@@ -518,7 +518,7 @@ export function Toolbar({
     } = useProjectStore.getState();
     if (isBootstrapped) {
       if (!seededProject) {
-        getCurrentProject();
+        void getCurrentProject();
       }
       void checkMissingProjects();
     } else {
