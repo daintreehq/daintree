@@ -698,11 +698,13 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // warmReactivationGate). Visibility is re-checked at execution time in
     // case the view was re-hidden between scheduling and the second frame.
     let wakePending = false;
+    let wakeRafId: number | null = null;
     function scheduleWake() {
       if (wakePending) return;
       wakePending = true;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      wakeRafId = requestAnimationFrame(() => {
+        wakeRafId = requestAnimationFrame(() => {
+          wakeRafId = null;
           wakePending = false;
           if (document.visibilityState === "visible") {
             void wakeActiveWorktreeTerminals();
@@ -710,6 +712,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         });
       });
     }
+    cleanups.push(() => {
+      if (wakeRafId !== null) cancelAnimationFrame(wakeRafId);
+    });
 
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;

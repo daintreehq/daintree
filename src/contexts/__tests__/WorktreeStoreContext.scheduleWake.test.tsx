@@ -15,10 +15,12 @@ vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
 vi.mock("@/lib/notify", () => ({ notify: vi.fn(() => "notif-id") }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 
-const rafQueue: FrameRequestCallback[] = [];
+const rafQueue = new Map<number, FrameRequestCallback>();
+let rafIdCounter = 0;
 
 function flushFrame(): void {
-  const pending = rafQueue.splice(0, rafQueue.length);
+  const pending = [...rafQueue.values()];
+  rafQueue.clear();
   for (const cb of pending) cb(0);
 }
 
@@ -30,12 +32,17 @@ function setVisibilityState(state: DocumentVisibilityState): void {
 }
 
 beforeEach(() => {
-  rafQueue.length = 0;
+  rafQueue.clear();
+  rafIdCounter = 0;
   wakeMock.mockClear();
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
-    rafQueue.push(cb);
-    return rafQueue.length;
+    const id = ++rafIdCounter;
+    rafQueue.set(id, cb);
+    return id;
   }) as typeof globalThis.requestAnimationFrame;
+  globalThis.cancelAnimationFrame = ((id: number): void => {
+    rafQueue.delete(id);
+  }) as typeof globalThis.cancelAnimationFrame;
   setVisibilityState("visible");
   useProjectStore.setState({
     currentProject: { id: "p1", name: "p1", path: "/repo/proj" } as unknown as Project,
@@ -69,20 +76,20 @@ async function renderProvider() {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <WorktreeStoreProvider>{children}</WorktreeStoreProvider>
   );
-  const { result } = renderHook(() => useContext(WorktreeStoreContext), { wrapper });
+  const { result, unmount } = renderHook(() => useContext(WorktreeStoreContext), { wrapper });
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
   });
   if (!result.current) throw new Error("WorktreeStoreContext is null");
-  return result.current;
+  return { store: result.current, unmount };
 }
 
 describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
   it("runs the missed-event guard synchronously on mount when already visible", async () => {
     await renderProvider();
     expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(rafQueue.length).toBe(0);
+    expect(rafQueue.size).toBe(0);
   });
 
   it("defers the wake to the second animation frame, not a microtask or first frame", async () => {
@@ -152,6 +159,39 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     });
     act(() => flushFrame());
     act(() => flushFrame());
+    expect(wakeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending wake when the provider unmounts mid-schedule", async () => {
+    const { unmount } = await renderProvider();
+    wakeMock.mockClear();
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    unmount();
+    act(() => flushFrame());
+    act(() => flushFrame());
+
+    expect(wakeMock).not.toHaveBeenCalled();
+  });
+
+  it("services a show arriving mid-dedup window with the already-pending wake", async () => {
+    await renderProvider();
+    wakeMock.mockClear();
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    act(() => flushFrame());
+    setVisibilityState("hidden");
+    setVisibilityState("visible");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    act(() => flushFrame());
+    act(() => flushFrame());
+
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
