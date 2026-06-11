@@ -151,6 +151,30 @@ function IconToggle({
   );
 }
 
+/**
+ * Horizontal reveal for search matches in the centered split view. Code cells
+ * there are overflow: clip — deliberately unscrollable, so scrollIntoView's
+ * inline axis can't desync one row from the shared offset. The reveal instead
+ * rides the file's scrollbar strip, whose scrollLeft shifts every row in
+ * lockstep. No-op outside centered split (unified/wrap scroll natively).
+ */
+function revealMatchInCenteredSplit(match: HTMLElement): void {
+  const region = match.closest<HTMLElement>(".diff-file-centered");
+  const cell = match.closest<HTMLElement>("td.diff-code");
+  const bar = region?.querySelector<HTMLElement>(".diff-hscrollbar");
+  if (!region || !cell || !bar) return;
+  const cellRect = cell.getBoundingClientRect();
+  const matchRect = match.getBoundingClientRect();
+  if (cellRect.width <= 0) return;
+  const fullyVisible = matchRect.left >= cellRect.left && matchRect.right <= cellRect.right;
+  if (fullyVisible) return;
+  // Column offset of the match within its unshifted line, then aim the shared
+  // offset so the match lands a third of the way into the pane.
+  const columnPx = matchRect.left - cellRect.left + bar.scrollLeft;
+  const target = Math.max(0, columnPx - cellRect.width / 3);
+  bar.scrollLeft = Math.min(target, bar.scrollWidth - bar.clientWidth);
+}
+
 const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
   BINARY_FILE: "Binary file — cannot display",
   FILE_TOO_LARGE: "File too large to display (> 500 KB)",
@@ -719,10 +743,12 @@ export function FileViewerModal({
         : (current + delta + matches.length) % matches.length;
     searchMatchIndexRef.current = next;
     setSearchMatchIndex(next);
-    matches[next]?.scrollIntoView({
+    const match = matches[next];
+    match?.scrollIntoView({
       block: "center",
       behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
+    if (match) revealMatchInCenteredSplit(match);
     useAnnouncerStore.getState().announce(`Match ${next + 1} of ${matches.length}`);
   }, []);
 

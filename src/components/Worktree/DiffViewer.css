@@ -1,0 +1,738 @@
+/* Diff viewer (react-diff-view) — all styling for DiffViewer.tsx and the
+   FileViewerModal diff mode: table/gutter layout, line fills, moved-block
+   styling, whitespace markers, search marks, hunk headers, and the
+   centered-split shared horizontal scrollbar. Imported by DiffViewer.tsx
+   (after react-diff-view's own stylesheet, which it overrides), so it ships
+   with the lazy vendor-editor chunk instead of the first-paint CSS bundle.
+
+   High-contrast support follows the same dual-block discipline as
+   src/index.css (see the rationale comment on its prefers-contrast block):
+   forced-colors = Windows system palette; prefers-contrast = macOS Increase
+   Contrast, keeping theme colors. The two blocks must stay separate. */
+
+/* React-Diff-View Tokyo Night Theme Overrides */
+.diff-viewer {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Base diff table styling */
+.diff-viewer .diff {
+  background: var(--color-daintree-bg);
+  color: var(--color-daintree-text);
+  table-layout: auto;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Wrap mode: soft-wrap long lines and let the table fill the container so
+   horizontal scrolling disappears entirely. The single-table split renderer
+   keeps row heights synced across columns by construction. */
+.diff-viewer[data-wrap="true"] .diff {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.diff-viewer[data-wrap="true"] .diff-code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Gutter (line numbers) styling.
+   Gutters are pinned (position: sticky) so a horizontal drag scrolls both
+   code columns in sync while line anchors stay visible. The second gutter
+   column (unified second column, split new-side column) docks beside the
+   first at --diff-gutter-width, which FileDiff sizes per file from the widest
+   line number plus the +/- marker. Sticky cells need opaque backgrounds and a
+   z-index above the code cells they slide over. */
+.diff-viewer .diff-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--color-daintree-sidebar);
+  color: var(--color-state-idle);
+  padding: 0 8px;
+  /* width acts as a hint under table-layout:auto; min-width keeps it from
+     shrinking under content-heavy code columns. */
+  width: var(--diff-gutter-width, 50px);
+  min-width: var(--diff-gutter-width, 50px);
+  text-align: right;
+  cursor: default;
+  user-select: none;
+  border-right: 1px solid var(--color-daintree-border);
+}
+
+/* Unified second gutter column docks beside the first. (Split tables don't
+   need a docking rule: the centered-split system below keeps the table
+   static, so its gutters never travel.) */
+.diff-viewer .diff td.diff-gutter:nth-child(2) {
+  left: var(--diff-gutter-width, 50px);
+}
+
+/* Textual insert/delete marker beside the line number (WCAG 1.4.1 — state is
+   never encoded by color alone; survives forced-colors). */
+.diff-viewer .diff-line-marker {
+  display: inline-block;
+  width: 1ch;
+  margin-left: 4px;
+  text-align: center;
+}
+
+/* Code content styling */
+.diff-viewer .diff-code {
+  background: var(--color-daintree-bg);
+  padding: 0 12px;
+  white-space: pre;
+}
+
+/* Added lines. The :root values below are the ORIGINAL hardcoded status-based
+ * fills and are the dark-mode source of truth (byte-for-byte unchanged). D1a
+ * wires the previously-dead per-palette diff-* tokens ONLY on light (in the
+ * `.light .diff-viewer` overrides below), where they unblock D1b's light alpha
+ * tuning. (Wiring on dark too would shift dark from the hardcoded 12/20/30% to
+ * the engine's intended 0.18/full/0.28 — a real dark change deferred pending
+ * confirmation that the dark diff token values are intended; see report.) */
+.diff-viewer .diff-code-insert {
+  background: color-mix(in oklab, var(--color-status-success) 12%, transparent);
+}
+
+/* Sticky gutter cells slide over code, so their tinted backgrounds composite
+   the tint over an opaque base via background-image instead of a transparent
+   background-color — visually identical to the previous transparent mix over
+   the sidebar surface. */
+.diff-viewer .diff-gutter-insert {
+  background-color: var(--color-daintree-sidebar);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-status-success) 20%, transparent),
+    color-mix(in oklab, var(--color-status-success) 20%, transparent)
+  );
+  color: var(--color-status-success);
+}
+
+/* Deleted lines */
+.diff-viewer .diff-code-delete {
+  background: color-mix(in oklab, var(--color-status-danger) 12%, transparent);
+}
+
+.diff-viewer .diff-gutter-delete {
+  background-color: var(--color-daintree-sidebar);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-status-danger) 20%, transparent),
+    color-mix(in oklab, var(--color-status-danger) 20%, transparent)
+  );
+  color: var(--color-status-danger);
+}
+
+/* Split-view empty-side placeholders: dim the void so "nothing exists here"
+   reads differently from an unchanged blank line. */
+.diff-viewer .diff-code-omit,
+.diff-viewer .diff-gutter-omit {
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-daintree-bg));
+}
+
+.diff-viewer .diff-gutter-omit::before {
+  display: none;
+}
+
+/* Word-level edit highlighting — noticeable but calm. The pill's luminance
+   is anchored to the theme canvas (status hue mixed INTO --color-daintree-bg,
+   oklch to keep chroma), so the syntax-colored text always keeps its
+   contrast: with muted status hues on a near-black canvas even this 40% mix
+   leaves the background around 0.10 relative luminance, well under the 0.134
+   ceiling that holds 4.5:1 against light theme text. 40% over the 12% line
+   fill matches GitHub dark's effective word-emphasis strength (0.4 word over
+   0.15 line). A 1px tinted inset ring (VS Code's diffEditor.*TextBorder
+   pattern) gives the segment a crisp boundary so noticeability doesn't ride
+   on the fill alone.
+   MECHANISM NOTE: the rendered markup is `span.diff-code-edit` inside the
+   insert/delete cell — there is no `.diff-code-insert-edit` element class.
+   react-diff-view styles the span through these variables (its :root
+   defaults are GitHub-light #c0dc91 / #f39ea2, unreadable on dark themes —
+   exactly what showed before this override). Setting the variables on
+   .diff-viewer beats the lib's :root defaults regardless of stylesheet
+   order, so this can't regress on specificity. */
+.diff-viewer {
+  --diff-code-insert-edit-background-color: color-mix(
+    in oklch,
+    var(--color-status-success) 40%,
+    var(--color-daintree-bg)
+  );
+  --diff-code-delete-edit-background-color: color-mix(
+    in oklch,
+    var(--color-status-danger) 40%,
+    var(--color-daintree-bg)
+  );
+}
+
+/* Top/bottom hairlines only, no radius and no side edges: the syntax
+   highlighter splits one contiguous edit range into separate token spans
+   (identifier, dot, call, paren), and per-span side borders would render one
+   logical change as a row of beads. With only horizontal edges the adjacent
+   fragments fuse into a single continuous band. */
+.diff-viewer .diff-code-insert .diff-code-edit {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, var(--color-status-success) 60%, var(--color-daintree-bg)),
+    inset 0 -1px 0 color-mix(in oklch, var(--color-status-success) 60%, var(--color-daintree-bg));
+}
+
+.diff-viewer .diff-code-delete .diff-code-edit {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, var(--color-status-danger) 60%, var(--color-daintree-bg)),
+    inset 0 -1px 0 color-mix(in oklch, var(--color-status-danger) 60%, var(--color-daintree-bg));
+}
+
+/* D1a (light) — wire the per-palette diff-* tokens. The line fills consume
+ * --color-diff-{insert,delete}-background / -edit; the gutter backgrounds use a
+ * stronger mix of the same line-fill token so the gutter reads as a denser band
+ * of the line color (the raw --color-diff-gutter-* token is full-opacity
+ * status color — usable as the glyph color, not as a legible background under
+ * same-color glyph text). This unblocks D1b light alpha tuning. */
+.light .diff-viewer .diff-code-insert {
+  background: var(--color-diff-insert-background);
+}
+
+.light .diff-viewer .diff-gutter-insert {
+  background-color: var(--color-surface);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-diff-insert-background) 70%, transparent),
+    color-mix(in oklab, var(--color-diff-insert-background) 70%, transparent)
+  );
+  color: var(--color-diff-gutter-insert);
+}
+
+.light .diff-viewer .diff-code-delete {
+  background: var(--color-diff-delete-background);
+}
+
+.light .diff-viewer .diff-gutter-delete {
+  background-color: var(--color-surface);
+  background-image: linear-gradient(
+    color-mix(in oklab, var(--color-diff-delete-background) 70%, transparent),
+    color-mix(in oklab, var(--color-diff-delete-background) 70%, transparent)
+  );
+  color: var(--color-diff-gutter-delete);
+}
+
+.light .diff-viewer .diff-code-omit,
+.light .diff-viewer .diff-gutter-omit {
+  background: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-surface));
+}
+
+/* Light edit pills consume the per-palette tokens (theme-engine owned, D1b
+   tunable); the alpha composites over the light canvas, so luminance stays
+   light-anchored by construction. */
+.light .diff-viewer {
+  --diff-code-insert-edit-background-color: var(--color-diff-insert-edit-background);
+  --diff-code-delete-edit-background-color: var(--color-diff-delete-edit-background);
+}
+
+/* Moved-block styling (client-side --color-moved, diffMovedUtils.ts): code
+   relocated within the file hue-shifts toward info and gains an inset edge
+   bar, so big refactors read as "moved, verify in transit" instead of raw
+   add/delete churn. The bar is a luminance/shape cue that survives grayscale
+   (the gutter also carries sr-only "moved" text); inset box-shadow instead of
+   border-left so moved cells don't shift 2px against their neighbors under
+   border-collapse: separate. Side-specific classes keep the unmoved partner
+   cell of a split row plain. */
+.diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+.diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+  background: color-mix(in oklch, var(--color-status-info) 13%, var(--color-daintree-bg));
+  box-shadow: inset 2px 0 0
+    color-mix(in oklch, var(--color-status-info) 60%, var(--color-daintree-bg));
+}
+
+.diff-viewer tr.diff-line-moved-old td.diff-gutter-delete,
+.diff-viewer tr.diff-line-moved-new td.diff-gutter-insert {
+  color: var(--color-status-info);
+}
+
+/* Whitespace-only edit segments (renderTokenWithInvisibles): the changed text
+   has no glyphs, so overlay one · per space cell and a → per tab. The real
+   space/tab characters stay as the DOM text — copying is unaffected. */
+.diff-viewer .diff-ws-space {
+  background-image: radial-gradient(
+    circle at 0.5ch 50%,
+    color-mix(in oklab, var(--color-daintree-text) 55%, transparent) 1px,
+    transparent 1.5px
+  );
+  background-size: 1ch 100%;
+  background-repeat: repeat-x;
+}
+
+.diff-viewer .diff-ws-tab {
+  position: relative;
+}
+
+.diff-viewer .diff-ws-tab::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: color-mix(in oklab, var(--color-daintree-text) 55%, transparent);
+  pointer-events: none;
+}
+
+/* Trailing whitespace on added lines — the classic review catch git paints
+   red. Slightly stronger than the word-edit pills (it flags a defect, and the
+   flagged span is whitespace, so there are no glyphs to obscure) but still
+   background-anchored like the pills above. */
+.diff-viewer .diff-ws-trailing {
+  background: color-mix(in oklch, var(--color-status-danger) 30%, var(--color-daintree-bg));
+  border-radius: var(--radius-xs);
+}
+
+/* In-diff search: all matches share the editor's search-highlight token; the
+   modal promotes the active one with diff-search-current as the single focus
+   anchor of the find flow. */
+.diff-viewer .diff-search-match {
+  background: var(--color-search-highlight-background);
+  border-radius: var(--radius-xs);
+}
+
+.diff-viewer .diff-search-match.diff-search-current {
+  outline: 1px solid var(--color-accent-primary);
+  outline-offset: 1px;
+}
+
+/* Hunk header rows (react-diff-view <Decoration>): the @@ context line plus
+   expand-hidden-lines controls. The inner block is sticky against horizontal
+   scroll so the header text stays readable on wide tables. */
+.diff-viewer .diff-decoration-content {
+  background: var(--color-surface);
+  color: var(--color-status-info);
+  padding: 4px 12px;
+  font-size: 11px;
+  border-top: 1px solid var(--color-daintree-border);
+  border-bottom: 1px solid var(--color-daintree-border);
+}
+
+.diff-viewer .diff-decoration-gutter {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-daintree-border);
+  border-bottom: 1px solid var(--color-daintree-border);
+}
+
+.diff-viewer .diff-hunk-header-inner {
+  position: sticky;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: max-content;
+}
+
+.diff-viewer .diff-hunk-header-text {
+  white-space: pre;
+  opacity: 0.85;
+}
+
+.diff-viewer .diff-hunk-header-hidden-count {
+  color: var(--color-text-muted, var(--color-daintree-text));
+  opacity: 0.6;
+}
+
+.diff-viewer .diff-hunk-header-expanders {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-viewer .diff-hunk-header-expanders button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-daintree-text);
+  background: var(--color-daintree-border);
+  font-size: 11px;
+  transition-property: color, background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+.diff-viewer .diff-hunk-header-expanders button:hover {
+  background: color-mix(in oklab, var(--color-daintree-border) 80%, var(--color-daintree-text));
+}
+
+/* Per-hunk copy: ghost button that surfaces on header hover (or keyboard
+   focus), copying the hunk's new-side text without +/- prefixes. */
+.diff-viewer .diff-hunk-header-copy {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted, var(--color-daintree-text));
+  opacity: 0;
+  transition-property: color, background-color, opacity;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+.diff-viewer .diff-decoration-content:hover .diff-hunk-header-copy,
+.diff-viewer .diff-hunk-header-copy:focus-visible,
+.diff-viewer .diff-hunk-header-copy[data-copied] {
+  opacity: 1;
+}
+
+.diff-viewer .diff-hunk-header-copy:hover {
+  color: var(--color-daintree-text);
+  background: var(--color-daintree-border);
+}
+
+/* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
+   header when scrollIntoView lands a hunk at block: "start". */
+.diff-viewer tbody.diff-hunk {
+  scroll-margin-top: 56px;
+}
+
+/* Selection styling */
+.diff-viewer .diff-code::selection,
+.diff-viewer .diff-code *::selection {
+  background: color-mix(in oklch, var(--color-accent-primary) 30%, transparent);
+}
+
+/* Scrollbar styling for diff viewer */
+.diff-viewer::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.diff-viewer::-webkit-scrollbar-track {
+  background: var(--color-daintree-bg);
+}
+
+.diff-viewer::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: var(--radius-sm);
+}
+
+.diff-viewer::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+/* D1a (light) — diff scrollbars consume the shared --scrollbar-* tokens so
+ * per-theme scrollbar tuning applies. Dark keeps the original hardcoded values
+ * above (byte-for-byte unchanged). */
+.light .diff-viewer::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Syntax highlighting overrides for Tokyo Night palette */
+.diff-viewer .token.comment,
+.diff-viewer .token.prolog,
+.diff-viewer .token.doctype,
+.diff-viewer .token.cdata {
+  color: var(--color-syntax-comment);
+}
+
+.diff-viewer .token.punctuation {
+  color: var(--color-syntax-punctuation);
+}
+
+.diff-viewer .token.property,
+.diff-viewer .token.tag,
+.diff-viewer .token.boolean,
+.diff-viewer .token.number,
+.diff-viewer .token.constant,
+.diff-viewer .token.symbol {
+  color: var(--color-syntax-number);
+}
+
+.diff-viewer .token.selector,
+.diff-viewer .token.attr-name,
+.diff-viewer .token.string,
+.diff-viewer .token.char,
+.diff-viewer .token.builtin {
+  color: var(--color-syntax-string);
+}
+
+.diff-viewer .token.operator,
+.diff-viewer .token.entity,
+.diff-viewer .token.url,
+.diff-viewer .language-css .token.string,
+.diff-viewer .style .token.string {
+  color: var(--color-syntax-operator);
+}
+
+.diff-viewer .token.atrule,
+.diff-viewer .token.attr-value,
+.diff-viewer .token.keyword {
+  color: var(--color-syntax-keyword);
+}
+
+.diff-viewer .token.function,
+.diff-viewer .token.class-name {
+  color: var(--color-syntax-function);
+}
+
+.diff-viewer .token.regex,
+.diff-viewer .token.important,
+.diff-viewer .token.variable {
+  color: var(--color-syntax-number);
+}
+
+/* border-collapse: collapse breaks position: sticky cells in Chromium (cell
+   borders detach during horizontal scroll); separate + zero spacing keeps the
+   1px gutter border traveling with the pinned cells. */
+.diff-viewer table.diff {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* Per-file horizontal scroll wrapper — gives each file its own scrollbar
+   so all rows scroll together instead of each <td> scrolling independently.
+   Used by unified view and single-side (add/delete) split tables; two-column
+   split tables use the centered-split system below instead. */
+.diff-viewer .diff-file-scroll {
+  overflow-x: auto;
+}
+
+/* Centered split view: each pane gets a fixed half of the viewport instead of
+   the old-side column growing to its longest line and shoving the new side
+   off-screen. The table itself never scrolls — code cells clip their overflow
+   and shift content via text-indent driven by --diff-hscroll, which FileDiff
+   mirrors from the scrollbar strip's scrollLeft. Because both panes consume
+   the same offset, their scroll positions are locked by construction, and the
+   pane with shorter lines simply shows blank space past its end. */
+.diff-viewer .diff-file-centered table.diff {
+  table-layout: fixed;
+  width: 100%;
+}
+
+/* Under fixed layout the <col> widths govern: gutters fixed, the two code
+   columns split the remainder equally — the center divider. */
+.diff-viewer .diff-file-centered col.diff-gutter-col {
+  width: var(--diff-gutter-width, 50px);
+}
+
+/* `clip`, not `hidden`: a hidden box is still a programmatic scroll container,
+   so scrollIntoView (search-match reveal) or selection auto-scroll can scroll
+   one cell internally and desync it from the shared offset — rows then scroll
+   at different rates. clip clips visually but is unscrollable, so the shared
+   text-indent stays the only thing that can move a row. */
+.diff-viewer .diff-file-centered td.diff-code {
+  overflow: clip;
+  text-indent: calc(-1 * var(--diff-hscroll, 0px));
+}
+
+/* Mark the center divider on the new-side gutter. */
+.diff-viewer .diff-file-centered td.diff-gutter:nth-child(3) {
+  border-left: 1px solid var(--color-daintree-border);
+}
+
+/* The single horizontal scrollbar driving both panes. Sticky against the
+   vertical scroller so it stays reachable mid-file. Height is explicit:
+   FileDiff measures real overflow (spacer vs strip width) and sets
+   data-active; without it the strip takes no space at all. */
+.diff-viewer .diff-hscrollbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  overflow-x: auto;
+  height: 0;
+  background: var(--color-daintree-bg);
+  /* The global `* { scrollbar-width: thin; scrollbar-color: … }` opts every
+     element into STANDARD scrollbars, which disqualifies ::-webkit-scrollbar
+     styling (Chromium 121+) and renders as a macOS overlay — invisible unless
+     already scrolling. This strip IS the scroll control, so it must be a
+     classic always-visible bar: reset the standard properties to auto to
+     re-enable the webkit pseudo styling below. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  /* Don't let edge overscroll chain into ancestor scrollers or gestures. */
+  overscroll-behavior-x: contain;
+}
+
+.diff-viewer .diff-hscrollbar[data-active] {
+  height: 12px;
+}
+
+.diff-viewer .diff-hscroll-spacer {
+  height: 1px;
+  /* viewport + max(0, longest line - pane content width); pane content is
+     (100% - both gutters) / 2 minus the 24px cell padding. */
+  width: calc(
+    100% +
+      max(0px, var(--diff-max-line, 0px) - ((100% - 2 * var(--diff-gutter-width, 50px)) / 2 - 24px))
+  );
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar {
+  height: 12px;
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
+  background: var(--color-daintree-bg);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: 6px;
+  border: 3px solid var(--color-daintree-bg);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+/* D1a (light) — see the .diff-viewer scrollbar note above. */
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
+  background: var(--color-daintree-bg);
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: var(--radius-sm);
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+/* D1a (light) — see the .diff-viewer scrollbar note above. */
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.diff-viewer table.diff td {
+  vertical-align: top;
+}
+
+@media (forced-colors: active) {
+  /* Diff viewer: author backgrounds are stripped to Canvas, so insert/delete
+     state rides on the gutter's textual +/- markers plus a system-color edge
+     on the code cells. Highlight/LinkText only mark which side changed — the
+     marker glyphs carry the add/remove meaning. */
+  .diff-viewer .diff-code-insert {
+    border-left: 3px solid Highlight;
+  }
+  .diff-viewer .diff-code-delete {
+    border-left: 3px solid LinkText;
+  }
+  .diff-viewer .diff-gutter {
+    border-right: 1px solid CanvasText;
+  }
+  /* Moved lines: the tinted fill and inset bar are stripped, so the cue rides
+     a pattern change — dash the side edge the rules above draw solid. */
+  .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+  .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+    border-left-style: dashed;
+    box-shadow: none;
+  }
+  /* Search/whitespace marks lose their backgrounds; system outlines and a
+     dotted underline (text-decoration survives forced colors) stand in. */
+  .diff-viewer .diff-search-match {
+    outline: 1px solid Highlight;
+  }
+  .diff-viewer .diff-ws-trailing {
+    outline: 1px dashed LinkText;
+  }
+  .diff-viewer .diff-ws-space {
+    text-decoration: underline dotted;
+  }
+}
+
+@media (prefers-contrast: more) {
+  /* Edit pills stay canvas-anchored so the intensity boost never lifts the
+     pill's luminance past the theme text; the ring goes full status color. */
+  .diff-viewer {
+    --diff-code-insert-edit-background-color: color-mix(
+      in oklch,
+      var(--color-status-success) 50%,
+      var(--color-daintree-bg)
+    );
+    --diff-code-delete-edit-background-color: color-mix(
+      in oklch,
+      var(--color-status-danger) 50%,
+      var(--color-daintree-bg)
+    );
+  }
+  .diff-viewer .diff-code-insert .diff-code-edit {
+    box-shadow:
+      inset 0 1px 0 var(--color-status-success),
+      inset 0 -1px 0 var(--color-status-success);
+  }
+  .diff-viewer .diff-code-delete .diff-code-edit {
+    box-shadow:
+      inset 0 1px 0 var(--color-status-danger),
+      inset 0 -1px 0 var(--color-status-danger);
+  }
+  /* Diff viewer fills are low-alpha tints by default; raise the mixes and add
+   * a status-colored edge so insert/delete bands stay legible when the user
+   * has explicitly asked for more contrast (keeps theme colors per the
+   * block's intent — no system-color repaint). */
+  .diff-viewer .diff-code-insert {
+    background: color-mix(in oklab, var(--color-status-success) 25%, transparent);
+    border-left: 2px solid var(--color-status-success);
+  }
+  .diff-viewer .diff-code-delete {
+    background: color-mix(in oklab, var(--color-status-danger) 25%, transparent);
+    border-left: 2px solid var(--color-status-danger);
+  }
+  .diff-viewer .diff-gutter-insert {
+    background-image: linear-gradient(
+      color-mix(in oklab, var(--color-status-success) 40%, transparent),
+      color-mix(in oklab, var(--color-status-success) 40%, transparent)
+    );
+  }
+  .diff-viewer .diff-gutter-delete {
+    background-image: linear-gradient(
+      color-mix(in oklab, var(--color-status-danger) 40%, transparent),
+      color-mix(in oklab, var(--color-status-danger) 40%, transparent)
+    );
+  }
+  /* Moved lines: raise the fill and let the edge bar take over the
+     status-colored border the rules above add to insert/delete cells. */
+  .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+  .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+    background: color-mix(in oklch, var(--color-status-info) 24%, var(--color-daintree-bg));
+    border-left-color: var(--color-status-info);
+    box-shadow: none;
+  }
+  /* Whitespace overlays at full text color when contrast is requested. */
+  .diff-viewer .diff-ws-space {
+    background-image: radial-gradient(
+      circle at 0.5ch 50%,
+      var(--color-daintree-text) 1px,
+      transparent 1.5px
+    );
+  }
+  .diff-viewer .diff-ws-tab::before {
+    color: var(--color-daintree-text);
+  }
+}

@@ -43,6 +43,8 @@ import markdown from "refractor/markdown";
 import tsx from "refractor/tsx";
 import typescript from "refractor/typescript";
 import "react-diff-view/style/index.css";
+// Our overrides — must come after the library stylesheet it overrides.
+import "./DiffViewer.css";
 import {
   Check,
   ChevronRight,
@@ -75,6 +77,19 @@ import { formatBytes } from "@/lib/formatBytes";
 for (const lang of [bash, css, javascript, jsx, json, markdown, tsx, typescript]) {
   refractor.register(lang);
 }
+
+/**
+ * react-diff-view's tokenize expects refractor v3's highlight() contract — a
+ * plain array of nodes. refractor v4+ returns a hast Root object, whose
+ * non-iterable shape makes the token tree walk throw, which the catch in
+ * useTokens silently turns into tokens = null: no syntax highlighting, no
+ * word-level edit pills, no search marks. Unwrapping .children restores the
+ * v3 shape the library walks correctly.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- structurally satisfies the lib's { highlight } contract; the v5 Root type can't
+const refractorAdapter = {
+  highlight: (code: string, language: string) => refractor.highlight(code, language).children,
+} as unknown as typeof refractor;
 
 const LANG_LOADERS: Record<string, () => Promise<{ default: Syntax }>> = {
   c: () => import("refractor/c"),
@@ -284,7 +299,7 @@ function useTokens(
     let cancelled = false;
     const options: TokenizeOptions = {
       highlight,
-      refractor,
+      refractor: refractorAdapter,
       language,
       enhancers: extraRanges
         ? [markEdits(hunks, { type: "block" }), pickRanges(extraRanges.old, extraRanges.new)]
@@ -294,7 +309,10 @@ function useTokens(
       if (cancelled) return;
       try {
         setTokens(tokenize(hunks, options) ?? null);
-      } catch {
+      } catch (err) {
+        // A null token pass silently degrades highlighting, edit pills, and
+        // search marks to plain text — keep the failure observable.
+        console.warn("Diff tokenization failed", err);
         setTokens(null);
       }
     });
