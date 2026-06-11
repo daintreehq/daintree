@@ -142,9 +142,9 @@
    leaves the background around 0.10 relative luminance, well under the 0.134
    ceiling that holds 4.5:1 against light theme text. 40% over the 12% line
    fill matches GitHub dark's effective word-emphasis strength (0.4 word over
-   0.15 line). A 1px tinted inset ring (VS Code's diffEditor.*TextBorder
-   pattern) gives the segment a crisp boundary so noticeability doesn't ride
-   on the fill alone.
+   0.15 line) — like GitHub, no border or radius: the syntax highlighter
+   splits one edit range into separate token spans, and any per-span edge
+   decoration renders one logical change as a row of beads.
    MECHANISM NOTE: the rendered markup is `span.diff-code-edit` inside the
    insert/delete cell — there is no `.diff-code-insert-edit` element class.
    react-diff-view styles the span through these variables (its :root
@@ -163,23 +163,6 @@
     var(--color-status-danger) 40%,
     var(--color-daintree-bg)
   );
-}
-
-/* Top/bottom hairlines only, no radius and no side edges: the syntax
-   highlighter splits one contiguous edit range into separate token spans
-   (identifier, dot, call, paren), and per-span side borders would render one
-   logical change as a row of beads. With only horizontal edges the adjacent
-   fragments fuse into a single continuous band. */
-.diff-viewer .diff-code-insert .diff-code-edit {
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklch, var(--color-status-success) 60%, var(--color-daintree-bg)),
-    inset 0 -1px 0 color-mix(in oklch, var(--color-status-success) 60%, var(--color-daintree-bg));
-}
-
-.diff-viewer .diff-code-delete .diff-code-edit {
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklch, var(--color-status-danger) 60%, var(--color-daintree-bg)),
-    inset 0 -1px 0 color-mix(in oklch, var(--color-status-danger) 60%, var(--color-daintree-bg));
 }
 
 /* D1a (light) — wire the per-palette diff-* tokens. The line fills consume
@@ -669,7 +652,7 @@
 
 @media (prefers-contrast: more) {
   /* Edit pills stay canvas-anchored so the intensity boost never lifts the
-     pill's luminance past the theme text; the ring goes full status color. */
+     pill's luminance past the theme text. */
   .diff-viewer {
     --diff-code-insert-edit-background-color: color-mix(
       in oklch,
@@ -681,16 +664,6 @@
       var(--color-status-danger) 50%,
       var(--color-daintree-bg)
     );
-  }
-  .diff-viewer .diff-code-insert .diff-code-edit {
-    box-shadow:
-      inset 0 1px 0 var(--color-status-success),
-      inset 0 -1px 0 var(--color-status-success);
-  }
-  .diff-viewer .diff-code-delete .diff-code-edit {
-    box-shadow:
-      inset 0 1px 0 var(--color-status-danger),
-      inset 0 -1px 0 var(--color-status-danger);
   }
   /* Diff viewer fills are low-alpha tints by default; raise the mixes and add
    * a status-colored edge so insert/delete bands stay legible when the user
