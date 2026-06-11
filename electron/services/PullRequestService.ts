@@ -379,7 +379,7 @@ class PullRequestService {
   private async resolveProvider(): Promise<void> {
     if (!this.projectId) return;
     try {
-      const git = createHardenedGit(this.cwd);
+      const git = await createHardenedGit(this.cwd);
       // simple-git's typed `getConfig` returns a `ConfigGetResult` envelope at
       // runtime (`{ key, paths, scopes, value, values }`). Earlier code cast it
       // straight to `string | null` on the assumption that daintree's wiring

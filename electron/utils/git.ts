@@ -188,7 +188,7 @@ export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, D
 
 export async function getCommitCount(cwd: string): Promise<number> {
   try {
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
     const count = await git.raw(["rev-list", "--count", "HEAD"]);
     return parseInt(count.trim(), 10);
   } catch (error) {
@@ -224,7 +224,7 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
   const { cwd, search, branch, skip = 0, limit = 30 } = options;
 
   try {
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
 
     const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
     const total = parseInt(totalCountStr.trim(), 10);
@@ -278,7 +278,7 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
 
 export async function getLatestTrackedFileMtime(worktreePath: string): Promise<number | null> {
   try {
-    const git = createHardenedGit(worktreePath);
+    const git = await createHardenedGit(worktreePath);
     const unixSeconds = await git.raw(["log", "-1", "--format=%ct"]);
     const parsed = Number.parseInt(unixSeconds.trim(), 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : null;
@@ -302,10 +302,12 @@ export interface GetWorktreeChangesOptions {
   wsl?: WslGitInvocation;
 }
 
-function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): SimpleGit {
+async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<SimpleGit> {
   if (opts.wsl) {
     try {
-      return createWslHardenedGit(opts.wsl);
+      // `await` so a rejected factory promise lands in this catch and falls
+      // back, matching the previous synchronous-throw behaviour.
+      return await createWslHardenedGit(opts.wsl);
     } catch {
       // Fall back to native git if the WSL invocation is rejected (e.g. wrong
       // platform, missing distro). Polling continues using the slower path.
@@ -356,7 +358,7 @@ export async function getWorktreeChangesWithStats(
     }
 
     try {
-      const git: SimpleGit = gitForChanges(cwd, options);
+      const git: SimpleGit = await gitForChanges(cwd, options);
       const status: StatusResult = await git.status();
 
       // Consolidate rev-parse into a single spawn; HEAD may not exist in empty

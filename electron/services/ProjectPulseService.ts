@@ -219,7 +219,7 @@ export class ProjectPulseService {
       return { sha: PROBE_MISSING_PATH_SENTINEL, branch: undefined };
     }
     try {
-      const git = createHardenedGit(worktreePath);
+      const git = await createHardenedGit(worktreePath);
       const shaOut = await git.raw(["rev-parse", "--verify", "HEAD"]);
       const sha = shaOut.trim() || null;
       let branch: string | undefined;
@@ -260,7 +260,7 @@ export class ProjectPulseService {
       throw new Error(`Worktree path does not exist: ${worktreePath}`);
     }
 
-    const git = createHardenedGit(worktreePath, signal);
+    const git = await createHardenedGit(worktreePath, signal);
     const startTime = Date.now();
 
     const isRepo = await git.checkIsRepo();

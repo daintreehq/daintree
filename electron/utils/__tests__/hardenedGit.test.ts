@@ -28,43 +28,43 @@ import {
 import { simpleGit } from "simple-git";
 
 describe("validateCwd", () => {
-  it("throws for empty string", () => {
+  it("throws for empty string", async () => {
     expect(() => validateCwd("")).toThrow("Invalid working directory");
   });
 
-  it("throws for whitespace-only string", () => {
+  it("throws for whitespace-only string", async () => {
     expect(() => validateCwd("   ")).toThrow("Invalid working directory");
   });
 
-  it("throws for non-string input (number)", () => {
+  it("throws for non-string input (number)", async () => {
     expect(() => validateCwd(123)).toThrow("Invalid working directory");
   });
 
-  it("throws for non-string input (null)", () => {
+  it("throws for non-string input (null)", async () => {
     expect(() => validateCwd(null)).toThrow("Invalid working directory");
   });
 
-  it("throws for non-string input (undefined)", () => {
+  it("throws for non-string input (undefined)", async () => {
     expect(() => validateCwd(undefined)).toThrow("Invalid working directory");
   });
 
-  it("throws for relative path", () => {
+  it("throws for relative path", async () => {
     expect(() => validateCwd("relative/path")).toThrow("absolute path");
   });
 
-  it("throws for parent traversal path", () => {
+  it("throws for parent traversal path", async () => {
     expect(() => validateCwd("../malicious-repo")).toThrow("absolute path");
   });
 
-  it("throws for dot-relative path", () => {
+  it("throws for dot-relative path", async () => {
     expect(() => validateCwd("./something")).toThrow("absolute path");
   });
 
-  it("does not throw for absolute path (unix)", () => {
+  it("does not throw for absolute path (unix)", async () => {
     expect(() => validateCwd("/absolute/path")).not.toThrow();
   });
 
-  it("does not throw for root path", () => {
+  it("does not throw for root path", async () => {
     expect(() => validateCwd("/")).not.toThrow();
   });
 });
@@ -74,8 +74,8 @@ describe("createHardenedGit", () => {
     vi.clearAllMocks();
   });
 
-  it("calls simpleGit with correct baseDir", () => {
-    createHardenedGit("/test/repo");
+  it("calls simpleGit with correct baseDir", async () => {
+    await createHardenedGit("/test/repo");
 
     expect(simpleGit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -84,37 +84,37 @@ describe("createHardenedGit", () => {
     );
   });
 
-  it("disables fsmonitor to prevent cross-worktree contamination", () => {
-    createHardenedGit("/test/repo");
+  it("disables fsmonitor to prevent cross-worktree contamination", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).toContain("core.fsmonitor=false");
     expect(options.config).not.toContain("core.fsmonitor=true");
   });
 
-  it("passes config overrides including protocol.ext.allow=never", () => {
-    createHardenedGit("/test/repo");
+  it("passes config overrides including protocol.ext.allow=never", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).toContain("protocol.ext.allow=never");
   });
 
-  it("disables core.sshCommand via config", () => {
-    createHardenedGit("/test/repo");
+  it("disables core.sshCommand via config", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).toContain("core.sshCommand=");
   });
 
-  it("disables credential.helper via config", () => {
-    createHardenedGit("/test/repo");
+  it("disables credential.helper via config", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).toContain("credential.helper=");
   });
 
-  it("enables allowUnsafe flags for overriding blocked config keys", () => {
-    createHardenedGit("/test/repo");
+  it("enables allowUnsafe flags for overriding blocked config keys", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.unsafe).toEqual({
@@ -129,8 +129,8 @@ describe("createHardenedGit", () => {
     });
   });
 
-  it("includes all security-critical config overrides", () => {
-    createHardenedGit("/test/repo");
+  it("includes all security-critical config overrides", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const expectedKeys = [
@@ -152,23 +152,23 @@ describe("createHardenedGit", () => {
     expect(options.config).toHaveLength(expectedKeys.length);
   });
 
-  it("passes abort signal when provided", () => {
+  it("passes abort signal when provided", async () => {
     const controller = new AbortController();
-    createHardenedGit("/test/repo", controller.signal);
+    await createHardenedGit("/test/repo", controller.signal);
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.abort).toBe(controller.signal);
   });
 
-  it("does not include abort option when no signal provided", () => {
-    createHardenedGit("/test/repo");
+  it("does not include abort option when no signal provided", async () => {
+    await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options).not.toHaveProperty("abort");
   });
 
-  it("sets LC_MESSAGES=C, LANGUAGE empty, and GIT_OPTIONAL_LOCKS=0 via .env()", () => {
-    createHardenedGit("/test/repo");
+  it("sets LC_MESSAGES=C, LANGUAGE empty, and GIT_OPTIONAL_LOCKS=0 via .env()", async () => {
+    await createHardenedGit("/test/repo");
 
     expect(mockGitInstance.env).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -179,19 +179,19 @@ describe("createHardenedGit", () => {
     );
   });
 
-  it("sets a platform-appropriate LC_CTYPE so non-ASCII paths survive iconv", () => {
-    createHardenedGit("/test/repo");
+  it("sets a platform-appropriate LC_CTYPE so non-ASCII paths survive iconv", async () => {
+    await createHardenedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(typeof envArg.LC_CTYPE).toBe("string");
     expect(envArg.LC_CTYPE).toMatch(/UTF-8$/);
   });
 
-  it("clears inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES win", () => {
+  it("clears inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES win", async () => {
     const orig = process.env.LC_ALL;
     process.env.LC_ALL = "C";
     try {
-      createHardenedGit("/test/repo");
+      await createHardenedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.LC_ALL).toBe("");
@@ -201,11 +201,11 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("does not apply hardened SSH command (blocked via config instead)", () => {
+  it("does not apply hardened SSH command (blocked via config instead)", async () => {
     const origSsh = process.env.GIT_SSH_COMMAND;
     delete process.env.GIT_SSH_COMMAND;
     try {
-      createHardenedGit("/test/repo");
+      await createHardenedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_SSH_COMMAND).toBeUndefined();
@@ -214,10 +214,10 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("spreads process.env into hardenedGit .env() call", () => {
+  it("spreads process.env into hardenedGit .env() call", async () => {
     process.env.DAINTREE_TEST_SENTINEL = "sentinel_value";
     try {
-      createHardenedGit("/test/repo");
+      await createHardenedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.PATH).toBe(process.env.PATH);
@@ -227,7 +227,7 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("strips inherited git execution env before applying hardened overrides", () => {
+  it("strips inherited git execution env before applying hardened overrides", async () => {
     const envKeys = [
       "EDITOR",
       "GIT_CONFIG_COUNT",
@@ -245,7 +245,7 @@ describe("createHardenedGit", () => {
       process.env[key] = "inherited-unsafe-value";
     }
     try {
-      createHardenedGit("/test/repo", undefined, "linux");
+      await createHardenedGit("/test/repo", undefined, "linux");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       for (const key of envKeys) {
@@ -261,13 +261,13 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("locale env values override conflicting process.env entries", () => {
+  it("locale env values override conflicting process.env entries", async () => {
     const origMessages = process.env.LC_MESSAGES;
     const origLanguage = process.env.LANGUAGE;
     process.env.LC_MESSAGES = "fr_FR.UTF-8";
     process.env.LANGUAGE = "fr_FR";
     try {
-      createHardenedGit("/test/repo");
+      await createHardenedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.LC_MESSAGES).toBe("C");
@@ -280,46 +280,46 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("suppresses optional .git/index.lock writes via GIT_OPTIONAL_LOCKS=0", () => {
-    createHardenedGit("/test/repo");
+  it("suppresses optional .git/index.lock writes via GIT_OPTIONAL_LOCKS=0", async () => {
+    await createHardenedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GIT_OPTIONAL_LOCKS).toBe("0");
   });
 
-  it("blocks interactive credential prompts via GIT_TERMINAL_PROMPT=0", () => {
-    createHardenedGit("/test/repo");
+  it("blocks interactive credential prompts via GIT_TERMINAL_PROMPT=0", async () => {
+    await createHardenedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GIT_TERMINAL_PROMPT).toBe("0");
   });
 
-  it("disables Windows GCM interactive dialogs via GCM_INTERACTIVE=Never", () => {
-    createHardenedGit("/test/repo");
+  it("disables Windows GCM interactive dialogs via GCM_INTERACTIVE=Never", async () => {
+    await createHardenedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GCM_INTERACTIVE).toBe("Never");
   });
 
-  it("sets GIT_ASKPASS=true on POSIX so credential helpers fail fast", () => {
-    createHardenedGit("/test/repo", undefined, "darwin");
+  it("sets GIT_ASKPASS=true on POSIX so credential helpers fail fast", async () => {
+    await createHardenedGit("/test/repo", undefined, "darwin");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GIT_ASKPASS).toBe("true");
   });
 
-  it("sets GIT_ASKPASS=true on linux", () => {
-    createHardenedGit("/test/repo", undefined, "linux");
+  it("sets GIT_ASKPASS=true on linux", async () => {
+    await createHardenedGit("/test/repo", undefined, "linux");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GIT_ASKPASS).toBe("true");
   });
 
-  it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", () => {
+  it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", async () => {
     const origAskpass = process.env.GIT_ASKPASS;
     delete process.env.GIT_ASKPASS;
     try {
-      createHardenedGit("/test/repo", undefined, "win32");
+      await createHardenedGit("/test/repo", undefined, "win32");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_ASKPASS).toBeUndefined();
@@ -334,8 +334,8 @@ describe("createAuthenticatedGit", () => {
     vi.clearAllMocks();
   });
 
-  it("calls simpleGit with correct baseDir", () => {
-    createAuthenticatedGit("/test/repo");
+  it("calls simpleGit with correct baseDir", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     expect(simpleGit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -344,8 +344,8 @@ describe("createAuthenticatedGit", () => {
     );
   });
 
-  it("does not include credential-blocking config entries", () => {
-    createAuthenticatedGit("/test/repo");
+  it("does not include credential-blocking config entries", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).not.toContain("credential.helper=");
@@ -353,8 +353,8 @@ describe("createAuthenticatedGit", () => {
     expect(options.config).not.toContain("core.askpass=");
   });
 
-  it("includes all non-credential security config entries", () => {
-    createAuthenticatedGit("/test/repo");
+  it("includes all non-credential security config entries", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).toContain("core.fsmonitor=false");
@@ -367,8 +367,8 @@ describe("createAuthenticatedGit", () => {
     expect(options.config).toContain("core.precomposeunicode=true");
   });
 
-  it("sets GIT_TERMINAL_PROMPT, hardened GIT_SSH_COMMAND, and GIT_OPTIONAL_LOCKS=0 via .env()", () => {
-    createAuthenticatedGit("/test/repo");
+  it("sets GIT_TERMINAL_PROMPT, hardened GIT_SSH_COMMAND, and GIT_OPTIONAL_LOCKS=0 via .env()", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     expect(mockGitInstance.env).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -380,25 +380,25 @@ describe("createAuthenticatedGit", () => {
     );
   });
 
-  it("sets GIT_OPTIONAL_LOCKS=0 to suppress incidental lock writes", () => {
-    createAuthenticatedGit("/test/repo");
+  it("sets GIT_OPTIONAL_LOCKS=0 to suppress incidental lock writes", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GIT_OPTIONAL_LOCKS).toBe("0");
   });
 
-  it("sets GCM_INTERACTIVE=Never to prevent Windows GCM dialogs", () => {
-    createAuthenticatedGit("/test/repo");
+  it("sets GCM_INTERACTIVE=Never to prevent Windows GCM dialogs", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(envArg.GCM_INTERACTIVE).toBe("Never");
   });
 
-  it("does NOT set GIT_ASKPASS so legitimate credential helpers can resolve", () => {
+  it("does NOT set GIT_ASKPASS so legitimate credential helpers can resolve", async () => {
     const origAskpass = process.env.GIT_ASKPASS;
     delete process.env.GIT_ASKPASS;
     try {
-      createAuthenticatedGit("/test/repo");
+      await createAuthenticatedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_ASKPASS).toBeUndefined();
@@ -407,8 +407,8 @@ describe("createAuthenticatedGit", () => {
     }
   });
 
-  it("sets LC_MESSAGES=C, LANGUAGE empty, and GIT_OPTIONAL_LOCKS=0 via .env()", () => {
-    createAuthenticatedGit("/test/repo");
+  it("sets LC_MESSAGES=C, LANGUAGE empty, and GIT_OPTIONAL_LOCKS=0 via .env()", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     expect(mockGitInstance.env).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -419,19 +419,19 @@ describe("createAuthenticatedGit", () => {
     );
   });
 
-  it("sets a platform-appropriate LC_CTYPE so non-ASCII paths survive iconv", () => {
-    createAuthenticatedGit("/test/repo");
+  it("sets a platform-appropriate LC_CTYPE so non-ASCII paths survive iconv", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
     expect(typeof envArg.LC_CTYPE).toBe("string");
     expect(envArg.LC_CTYPE).toMatch(/UTF-8$/);
   });
 
-  it("clears inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES win", () => {
+  it("clears inherited LC_ALL so the more specific LC_CTYPE / LC_MESSAGES win", async () => {
     const orig = process.env.LC_ALL;
     process.env.LC_ALL = "C";
     try {
-      createAuthenticatedGit("/test/repo");
+      await createAuthenticatedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.LC_ALL).toBe("");
@@ -441,10 +441,10 @@ describe("createAuthenticatedGit", () => {
     }
   });
 
-  it("spreads process.env into the .env() call", () => {
+  it("spreads process.env into the .env() call", async () => {
     process.env.DAINTREE_TEST_SENTINEL = "sentinel_value";
     try {
-      createAuthenticatedGit("/test/repo");
+      await createAuthenticatedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.PATH).toBe(process.env.PATH);
@@ -455,7 +455,7 @@ describe("createAuthenticatedGit", () => {
     }
   });
 
-  it("forced env values override conflicting process.env entries", () => {
+  it("forced env values override conflicting process.env entries", async () => {
     const origPrompt = process.env.GIT_TERMINAL_PROMPT;
     const origSsh = process.env.GIT_SSH_COMMAND;
     const origPager = process.env.GIT_PAGER;
@@ -467,7 +467,7 @@ describe("createAuthenticatedGit", () => {
     process.env.LC_MESSAGES = "fr_FR.UTF-8";
     process.env.LANGUAGE = "fr_FR";
     try {
-      createAuthenticatedGit("/test/repo");
+      await createAuthenticatedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_TERMINAL_PROMPT).toBe("0");
@@ -491,15 +491,15 @@ describe("createAuthenticatedGit", () => {
     }
   });
 
-  it("sets block timeout to 0 for network operations", () => {
-    createAuthenticatedGit("/test/repo");
+  it("sets block timeout to 0 for network operations", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.timeout).toEqual({ block: 0 });
   });
 
-  it("enables allowUnsafe flags", () => {
-    createAuthenticatedGit("/test/repo");
+  it("enables allowUnsafe flags", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.unsafe).toEqual({
@@ -514,38 +514,38 @@ describe("createAuthenticatedGit", () => {
     });
   });
 
-  it("forwards abort signal when provided", () => {
+  it("forwards abort signal when provided", async () => {
     const controller = new AbortController();
-    createAuthenticatedGit("/test/repo", { signal: controller.signal });
+    await createAuthenticatedGit("/test/repo", { signal: controller.signal });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.abort).toBe(controller.signal);
   });
 
-  it("does not include abort option when no signal provided", () => {
-    createAuthenticatedGit("/test/repo");
+  it("does not include abort option when no signal provided", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options).not.toHaveProperty("abort");
   });
 
-  it("forwards progress callback when provided", () => {
+  it("forwards progress callback when provided", async () => {
     const progressFn = vi.fn();
-    createAuthenticatedGit("/test/repo", { progress: progressFn });
+    await createAuthenticatedGit("/test/repo", { progress: progressFn });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.progress).toBe(progressFn);
   });
 
-  it("does not include progress option when not provided", () => {
-    createAuthenticatedGit("/test/repo");
+  it("does not include progress option when not provided", async () => {
+    await createAuthenticatedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options).not.toHaveProperty("progress");
   });
 
-  it("appends extraConfig items to config", () => {
-    createAuthenticatedGit("/test/repo", {
+  it("appends extraConfig items to config", async () => {
+    await createAuthenticatedGit("/test/repo", {
       extraConfig: ["transfer.bundleURI=false"],
     });
 
@@ -559,9 +559,9 @@ describe("createBackgroundFetchGit", () => {
     vi.clearAllMocks();
   });
 
-  it("layers background-fetch config on top of authenticated config", () => {
+  it("layers background-fetch config on top of authenticated config", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", { signal: controller.signal });
+    await createBackgroundFetchGit("/test/repo", { signal: controller.signal });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).toContain("core.packedRefsTimeout=5000");
@@ -573,17 +573,17 @@ describe("createBackgroundFetchGit", () => {
     expect(options.config).not.toContain("core.askpass=");
   });
 
-  it("forwards the abort signal to simple-git", () => {
+  it("forwards the abort signal to simple-git", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", { signal: controller.signal });
+    await createBackgroundFetchGit("/test/repo", { signal: controller.signal });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.abort).toBe(controller.signal);
   });
 
-  it("sets GIT_ASKPASS=true on POSIX so credential helpers fail fast", () => {
+  it("sets GIT_ASKPASS=true on POSIX so credential helpers fail fast", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", {
+    await createBackgroundFetchGit("/test/repo", {
       signal: controller.signal,
       platform: "darwin",
     });
@@ -595,9 +595,9 @@ describe("createBackgroundFetchGit", () => {
     expect(lastEnv.GIT_OPTIONAL_LOCKS).toBe("0");
   });
 
-  it("re-states GIT_OPTIONAL_LOCKS and GCM_INTERACTIVE in the POSIX second .env() call", () => {
+  it("re-states GIT_OPTIONAL_LOCKS and GCM_INTERACTIVE in the POSIX second .env() call", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", {
+    await createBackgroundFetchGit("/test/repo", {
       signal: controller.signal,
       platform: "darwin",
     });
@@ -609,9 +609,9 @@ describe("createBackgroundFetchGit", () => {
     expect(lastEnv.GCM_INTERACTIVE).toBe("Never");
   });
 
-  it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", () => {
+  it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", {
+    await createBackgroundFetchGit("/test/repo", {
       signal: controller.signal,
       platform: "win32",
     });
@@ -623,9 +623,9 @@ describe("createBackgroundFetchGit", () => {
     expect(env.GIT_ASKPASS).toBeUndefined();
   });
 
-  it("appends caller-supplied extraConfig after background-fetch config", () => {
+  it("appends caller-supplied extraConfig after background-fetch config", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", {
+    await createBackgroundFetchGit("/test/repo", {
       signal: controller.signal,
       extraConfig: ["transfer.bundleURI=false"],
     });
@@ -635,9 +635,9 @@ describe("createBackgroundFetchGit", () => {
     expect(options.config).toContain("core.packedRefsTimeout=5000");
   });
 
-  it("inherits block timeout 0 from authenticated profile", () => {
+  it("inherits block timeout 0 from authenticated profile", async () => {
     const controller = new AbortController();
-    createBackgroundFetchGit("/test/repo", { signal: controller.signal });
+    await createBackgroundFetchGit("/test/repo", { signal: controller.signal });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.timeout).toEqual({ block: 0 });
@@ -662,101 +662,101 @@ describe("createWslHardenedGit", () => {
     });
   });
 
-  it("throws on non-Windows platforms", () => {
+  it("throws on non-Windows platforms", async () => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-    expect(() =>
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
         posixPath: "/home/user/proj",
       })
-    ).toThrow("only available on Windows");
+    ).rejects.toThrow("only available on Windows");
   });
 
-  it("throws when distro is empty", () => {
-    expect(() =>
+  it("throws when distro is empty", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "",
         uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
         posixPath: "/home/user/proj",
       })
-    ).toThrow("WSL distro");
+    ).rejects.toThrow("WSL distro");
   });
 
-  it("throws when posix path does not start with /", () => {
-    expect(() =>
+  it("throws when posix path does not start with /", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
         posixPath: "home/user/proj",
       })
-    ).toThrow("posix path");
+    ).rejects.toThrow("posix path");
   });
 
-  it("throws when UNC path is not a WSL UNC", () => {
-    expect(() =>
+  it("throws when UNC path is not a WSL UNC", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "C:\\repos\\proj",
         posixPath: "/home/user/proj",
       })
-    ).toThrow("UNC path");
+    ).rejects.toThrow("UNC path");
   });
 
-  it("rejects strings starting with \\\\wsl but missing the WSL UNC shape", () => {
+  it("rejects strings starting with \\\\wsl but missing the WSL UNC shape", async () => {
     // Old `startsWith("\\\\wsl")` gate let this through; tightened check
     // (detectWslPath) fails closed on the malformed shape.
-    expect(() =>
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wslfoo\\bar",
         posixPath: "/home/user/proj",
       })
-    ).toThrow("UNC path");
+    ).rejects.toThrow("UNC path");
   });
 
-  it("rejects bare \\\\wsl$\\ with no distro segment", () => {
-    expect(() =>
+  it("rejects bare \\\\wsl$\\ with no distro segment", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wsl$\\",
         posixPath: "/",
       })
-    ).toThrow("UNC path");
+    ).rejects.toThrow("UNC path");
   });
 
-  it("rejects bare \\\\wsl.localhost\\ with no distro segment", () => {
-    expect(() =>
+  it("rejects bare \\\\wsl.localhost\\ with no distro segment", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wsl.localhost\\",
         posixPath: "/",
       })
-    ).toThrow("UNC path");
+    ).rejects.toThrow("UNC path");
   });
 
-  it("rejects when supplied distro does not match parsed UNC distro", () => {
-    expect(() =>
+  it("rejects when supplied distro does not match parsed UNC distro", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wsl$\\Debian\\home\\user\\proj",
         posixPath: "/home/user/proj",
       })
-    ).toThrow("distro does not match");
+    ).rejects.toThrow("distro does not match");
   });
 
-  it("rejects when supplied posixPath does not match parsed UNC remainder", () => {
-    expect(() =>
+  it("rejects when supplied posixPath does not match parsed UNC remainder", async () => {
+    await expect(
       createWslHardenedGit({
         distro: "Ubuntu",
         uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
         posixPath: "/some/other/path",
       })
-    ).toThrow("posix path does not match");
+    ).rejects.toThrow("posix path does not match");
   });
 
-  it("uses the UNC path as baseDir so simple-git's statSync succeeds on Windows", () => {
-    createWslHardenedGit({
+  it("uses the UNC path as baseDir so simple-git's statSync succeeds on Windows", async () => {
+    await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
       posixPath: "/home/user/proj",
@@ -769,8 +769,8 @@ describe("createWslHardenedGit", () => {
     );
   });
 
-  it("sets binary to wsl.exe + git two-tuple", () => {
-    createWslHardenedGit({
+  it("sets binary to wsl.exe + git two-tuple", async () => {
+    await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
       posixPath: "/home/user/proj",
@@ -780,8 +780,8 @@ describe("createWslHardenedGit", () => {
     expect(options.binary).toEqual(["wsl.exe", "git"]);
   });
 
-  it("carries the full HARDENED_GIT_CONFIG", () => {
-    createWslHardenedGit({
+  it("carries the full HARDENED_GIT_CONFIG", async () => {
+    await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
       posixPath: "/home/user/proj",
@@ -794,8 +794,8 @@ describe("createWslHardenedGit", () => {
     expect(options.config).toHaveLength(HARDENED_GIT_CONFIG.length);
   });
 
-  it("sets WSL_DISTRO_NAME, GIT_OPTIONAL_LOCKS=0, and locale in env for diagnostics", () => {
-    createWslHardenedGit({
+  it("sets WSL_DISTRO_NAME, GIT_OPTIONAL_LOCKS=0, and locale in env for diagnostics", async () => {
+    await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
       posixPath: "/home/user/proj",
@@ -810,8 +810,8 @@ describe("createWslHardenedGit", () => {
     expect(envArg.GIT_OPTIONAL_LOCKS).toBe("0");
   });
 
-  it("applies the same env hardening as createHardenedGit (Linux git inside WSL)", () => {
-    createWslHardenedGit({
+  it("applies the same env hardening as createHardenedGit (Linux git inside WSL)", async () => {
+    await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
       posixPath: "/home/user/proj",
@@ -824,9 +824,9 @@ describe("createWslHardenedGit", () => {
     expect(envArg.GCM_INTERACTIVE).toBe("Never");
   });
 
-  it("forwards abort signal when provided", () => {
+  it("forwards abort signal when provided", async () => {
     const controller = new AbortController();
-    createWslHardenedGit(
+    await createWslHardenedGit(
       {
         distro: "Ubuntu",
         uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
@@ -839,8 +839,8 @@ describe("createWslHardenedGit", () => {
     expect(options.abort).toBe(controller.signal);
   });
 
-  it("enables allowUnsafe flags matching createHardenedGit", () => {
-    createWslHardenedGit({
+  it("enables allowUnsafe flags matching createHardenedGit", async () => {
+    await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
       posixPath: "/home/user/proj",
@@ -861,7 +861,7 @@ describe("createWslHardenedGit", () => {
 });
 
 describe("getGitLocaleEnv", () => {
-  it("returns LC_CTYPE=C.UTF-8, LANG=C.UTF-8, and GIT_OPTIONAL_LOCKS=0 on win32", () => {
+  it("returns LC_CTYPE=C.UTF-8, LANG=C.UTF-8, and GIT_OPTIONAL_LOCKS=0 on win32", async () => {
     expect(getGitLocaleEnv("win32")).toEqual({
       LC_CTYPE: "C.UTF-8",
       LANG: "C.UTF-8",
@@ -869,40 +869,40 @@ describe("getGitLocaleEnv", () => {
     });
   });
 
-  it("returns LC_CTYPE=en_US.UTF-8 and GIT_OPTIONAL_LOCKS=0 on darwin (macOS lacks C.UTF-8)", () => {
+  it("returns LC_CTYPE=en_US.UTF-8 and GIT_OPTIONAL_LOCKS=0 on darwin (macOS lacks C.UTF-8)", async () => {
     expect(getGitLocaleEnv("darwin")).toEqual({
       LC_CTYPE: "en_US.UTF-8",
       GIT_OPTIONAL_LOCKS: "0",
     });
   });
 
-  it("returns LC_CTYPE=C.UTF-8 and GIT_OPTIONAL_LOCKS=0 on linux", () => {
+  it("returns LC_CTYPE=C.UTF-8 and GIT_OPTIONAL_LOCKS=0 on linux", async () => {
     expect(getGitLocaleEnv("linux")).toEqual({
       LC_CTYPE: "C.UTF-8",
       GIT_OPTIONAL_LOCKS: "0",
     });
   });
 
-  it("does not set LANG on non-win32 platforms", () => {
+  it("does not set LANG on non-win32 platforms", async () => {
     expect(getGitLocaleEnv("linux")).not.toHaveProperty("LANG");
     expect(getGitLocaleEnv("darwin")).not.toHaveProperty("LANG");
   });
 });
 
 describe("config constants", () => {
-  it("HARDENED_GIT_CONFIG includes credential-blocking entries", () => {
+  it("HARDENED_GIT_CONFIG includes credential-blocking entries", async () => {
     expect(HARDENED_GIT_CONFIG).toContain("credential.helper=");
     expect(HARDENED_GIT_CONFIG).toContain("core.sshCommand=");
     expect(HARDENED_GIT_CONFIG).toContain("core.askpass=");
   });
 
-  it("AUTHENTICATED_GIT_CONFIG excludes credential-blocking entries", () => {
+  it("AUTHENTICATED_GIT_CONFIG excludes credential-blocking entries", async () => {
     expect(AUTHENTICATED_GIT_CONFIG).not.toContain("credential.helper=");
     expect(AUTHENTICATED_GIT_CONFIG).not.toContain("core.sshCommand=");
     expect(AUTHENTICATED_GIT_CONFIG).not.toContain("core.askpass=");
   });
 
-  it("both configs share the same security base entries", () => {
+  it("both configs share the same security base entries", async () => {
     const securityEntries = [
       "core.fsmonitor=false",
       "core.untrackedCache=false",
@@ -921,7 +921,7 @@ describe("config constants", () => {
 });
 
 describe("buildHardenedGitEnv", () => {
-  it("returns the same env shape that createHardenedGit applies via .env()", () => {
+  it("returns the same env shape that createHardenedGit applies via .env()", async () => {
     const env = buildHardenedGitEnv("linux");
     expect(env).toEqual(
       expect.objectContaining({
@@ -937,17 +937,17 @@ describe("buildHardenedGitEnv", () => {
     );
   });
 
-  it("does not set GIT_ASKPASS on win32", () => {
+  it("does not set GIT_ASKPASS on win32", async () => {
     const env = buildHardenedGitEnv("win32");
     expect(env.GIT_ASKPASS).toBeUndefined();
   });
 
-  it("sets GIT_ASKPASS=true on darwin", () => {
+  it("sets GIT_ASKPASS=true on darwin", async () => {
     const env = buildHardenedGitEnv("darwin");
     expect(env.GIT_ASKPASS).toBe("true");
   });
 
-  it("uses the platform arg instead of process.platform when supplied", () => {
+  it("uses the platform arg instead of process.platform when supplied", async () => {
     const env = buildHardenedGitEnv("darwin");
     expect(env.LC_CTYPE).toBe("en_US.UTF-8");
   });

@@ -66,7 +66,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid file path");
     }
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
     await git.add(["--", payload.filePath]);
     invalidateStagingDiffStatCache(payload.cwd);
   };
@@ -79,7 +79,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid file path");
     }
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
 
     let hasHead = true;
     try {
@@ -114,7 +114,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
     await git.add(["--", ...paths]);
     invalidateStagingDiffStatCache(payload.cwd);
   };
@@ -128,7 +128,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
 
     let hasHead = true;
     try {
@@ -150,7 +150,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_STAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
     await git.add("-A");
     invalidateStagingDiffStatCache(cwd);
   };
@@ -160,7 +160,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_UNSTAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
 
     let hasHead = true;
     try {
@@ -188,7 +188,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Commit message is required");
     }
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
     await scanStagedFilesForConflictMarkers(git);
     const result = await git.commit(payload.message.trim());
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
@@ -213,7 +213,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
 
     pushingCwds.add(payload.cwd);
-    const git = createAuthenticatedGit(payload.cwd);
+    const git = await createAuthenticatedGit(payload.cwd);
     let branchName: string | undefined;
     const senderWindow = ctx.senderWindow;
 
@@ -243,7 +243,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         targetBranch: targetBranch ?? undefined,
       });
 
-      const authGit = createAuthenticatedGit(payload.cwd, {
+      const authGit = await createAuthenticatedGit(payload.cwd, {
         progress: (data) => {
           sendProgress({
             cwd: payload.cwd,
@@ -318,7 +318,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_PULL_REBASE, 3, 10_000);
     validateCwd(payload?.cwd);
 
-    const git = createAuthenticatedGit(payload.cwd);
+    const git = await createAuthenticatedGit(payload.cwd);
 
     try {
       const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
@@ -358,7 +358,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid lease SHA");
     }
 
-    const git = createAuthenticatedGit(payload.cwd);
+    const git = await createAuthenticatedGit(payload.cwd);
     const branchName = payload.branchName.trim();
 
     try {
@@ -397,7 +397,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const branchName = payload.branchName.trim();
     const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
     try {
       // No `--no-merges` — `behindCount` from `git status -b` includes merge
       // commits, and the dialog's "N more" tail relies on the listed rows
@@ -428,7 +428,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const handleGetUsername = async (cwd: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);
     validateCwd(cwd);
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
     try {
       const { value } = await git.getConfig("user.name");
       return value || null;
@@ -442,7 +442,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_GET_STAGING_STATUS, 20, 10_000);
     validateCwd(cwd);
 
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
     const status = await git.status();
 
     const mapStatus = (s: string): GitStatus => {
@@ -612,7 +612,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
 
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
 
@@ -641,7 +641,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
 
-    const git = withNonInteractiveEnv(createHardenedGit(cwd));
+    const git = withNonInteractiveEnv(await createHardenedGit(cwd));
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
 
@@ -680,7 +680,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid diff type: must be 'unstaged', 'staged', or 'head'");
     }
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
 
     let raw: string;
     switch (diffType) {
@@ -792,7 +792,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid side: must be 'ours' or 'theirs'");
     }
 
-    const git = createHardenedGit(payload.cwd);
+    const git = await createHardenedGit(payload.cwd);
     const flag = payload.side === "ours" ? "--ours" : "--theirs";
     // `checkout --ours/--theirs` leaves the file unstaged — the conflict markers
     // are still in the index. Follow with `git add` so the resolution lands in

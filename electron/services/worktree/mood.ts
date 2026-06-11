@@ -9,7 +9,7 @@ const MS_PER_DAY = 1000 * 60 * 60 * 24;
  */
 export async function getLastCommitAgeInDays(worktreePath: string): Promise<number | null> {
   try {
-    const git = createHardenedGit(worktreePath);
+    const git = await createHardenedGit(worktreePath);
     const log = await git.log({ maxCount: 1 });
     const lastDate = log.latest?.date;
     if (!lastDate) return null;

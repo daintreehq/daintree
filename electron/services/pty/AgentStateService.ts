@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { events } from "../events.js";
 import { nextAgentState, getStateChangeTimestamp, type AgentEvent } from "../AgentStateMachine.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";

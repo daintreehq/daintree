@@ -11,6 +11,7 @@ import {
   isImmutableAppAsset,
   isNotModified,
   setAppPermissionsPolicy,
+  toHttpDate,
 } from "../utils/appProtocol.js";
 import {
   DAINTREE_APP_PERMISSIONS_POLICY,
@@ -319,12 +320,17 @@ const PLUGIN_REVALIDATE_DIRECTIVE = "no-cache";
 // same-origin, COEP-enabled embedders silently reject every plugin asset with
 // ERR_BLOCKED_BY_RESPONSE. COEP is not set on individual sub-resources — the
 // plugin view document is responsible for cross-origin isolation policy.
-function buildPluginHeaders(mimeType: string, filePath: string): Record<string, string> {
+function buildPluginHeaders(
+  mimeType: string,
+  filePath: string,
+  stats?: { mtime: Date }
+): Record<string, string> {
   // Vite content-hashed assets (`assets/<name>-<hash>.<ext>`) are immutable;
   // everything else is `no-cache` so plugin reloads pick up fresh bundles.
   // V8 code cache persistence requires a validator header (Last-Modified or
-  // ETag) on top of Cache-Control. We omit both for the MVP — first-load cost
-  // only; revisit if profile data shows a regression.
+  // ETag) on top of Cache-Control, so `Last-Modified` is emitted whenever the
+  // handler has stats — without it Chromium treats the response as
+  // non-cacheable and recompiles plugin scripts on every load (#8652).
   const cacheControl = isImmutableAppAsset(filePath)
     ? PLUGIN_IMMUTABLE_DIRECTIVE
     : PLUGIN_REVALIDATE_DIRECTIVE;
@@ -336,6 +342,7 @@ function buildPluginHeaders(mimeType: string, filePath: string): Record<string, 
     "Permissions-Policy": DAINTREE_APP_PERMISSIONS_POLICY,
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": cacheControl,
+    ...(stats ? { "Last-Modified": toHttpDate(stats.mtime) } : {}),
   };
 }
 
@@ -489,11 +496,32 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
     }
 
     try {
-      const buffer = await fileHandle.readFile();
+      // Stat via the open handle (no realpath/stat TOCTOU window) so the 304
+      // shortcut and the Last-Modified validator share one source of truth.
+      const fileStats = await fileHandle.stat();
+      // fs.open succeeds on directories on POSIX; guard before the 304
+      // short-circuit so a directory URL carrying If-Modified-Since falls
+      // through to 404 instead of returning 304. Mirrors app://.
+      if (!fileStats.isFile()) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: buildPluginErrorHeaders(),
+        });
+      }
+
       const mimeType = getMimeType(realFile);
+      const ifModifiedSince = request.headers.get("If-Modified-Since");
+      if (isNotModified(ifModifiedSince, fileStats.mtime)) {
+        return new Response(null, {
+          status: 304,
+          headers: buildPluginHeaders(mimeType, realFile, fileStats),
+        });
+      }
+
+      const buffer = await fileHandle.readFile();
       return new Response(buffer, {
         status: 200,
-        headers: buildPluginHeaders(mimeType, realFile),
+        headers: buildPluginHeaders(mimeType, realFile, fileStats),
       });
     } catch (err) {
       console.error("[MAIN] plugin protocol read failed:", candidatePath, err);

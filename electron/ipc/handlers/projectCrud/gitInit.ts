@@ -33,7 +33,7 @@ export function registerGitInitHandlers(): () => void {
       throw new Error("Path is not a directory");
     }
 
-    const git = createHardenedGit(directoryPath);
+    const git = await createHardenedGit(directoryPath);
     await git.init();
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_INIT_GIT, handleProjectInitGit));
@@ -92,7 +92,7 @@ export function registerGitInitHandlers(): () => void {
         throw new Error("Path is not a directory");
       }
 
-      const git = createHardenedGit(directoryPath);
+      const git = await createHardenedGit(directoryPath);
 
       emitProgress("init", "start", "Initializing Git repository...");
       await git.init();

@@ -97,7 +97,7 @@ export class PreAgentSnapshotService {
   }
 
   private async createSnapshot(worktreeId: string): Promise<void> {
-    const git = createHardenedGit(worktreeId);
+    const git = await createHardenedGit(worktreeId);
 
     // Check for rebase/merge in progress
     const status = await git.status();
@@ -167,7 +167,7 @@ export class PreAgentSnapshotService {
       };
     }
 
-    const git = createHardenedGit(worktreeId);
+    const git = await createHardenedGit(worktreeId);
 
     // Find the stash entry by message prefix
     const stashIndex = await this.findStashIndex(worktreeId);
@@ -221,7 +221,7 @@ export class PreAgentSnapshotService {
     if (snapshot.hasChanges) {
       const stashIndex = await this.findStashIndex(worktreeId);
       if (stashIndex !== null) {
-        const git = createHardenedGit(worktreeId);
+        const git = await createHardenedGit(worktreeId);
         await git.stash(["drop", `stash@{${stashIndex}}`]);
       }
     }
@@ -238,7 +238,7 @@ export class PreAgentSnapshotService {
   }
 
   private async findStashIndex(worktreeId: string): Promise<number | null> {
-    const git = createHardenedGit(worktreeId);
+    const git = await createHardenedGit(worktreeId);
     const raw = await git.raw(["stash", "list", "--pretty=format:%gd %ct %s"]);
     if (!raw.trim()) return null;
 

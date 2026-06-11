@@ -72,6 +72,7 @@ vi.mock("../../utils/appProtocol.js", () => ({
   buildHeaders: vi.fn(),
   isImmutableAppAsset: vi.fn(() => false),
   isNotModified: vi.fn(() => false),
+  toHttpDate: vi.fn((date: Date) => date.toUTCString()),
 }));
 
 // Real-ish flag values matter: the protocol handler passes
@@ -1277,6 +1278,7 @@ describe("protocol registration", () => {
     vi.mocked(fs.open).mockResolvedValue({
       readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, mtime: new Date() }),
     } as unknown as Awaited<ReturnType<typeof fs.open>>);
     vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
 
@@ -1313,6 +1315,7 @@ describe("protocol registration", () => {
     vi.mocked(fs.open).mockResolvedValue({
       readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, mtime: new Date() }),
     } as unknown as Awaited<ReturnType<typeof fs.open>>);
     vi.mocked(appProtocol.getMimeType).mockReturnValue("text/javascript");
 
@@ -1719,12 +1722,14 @@ describe("createPluginProtocolHandler", () => {
   type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
 
   const PLUGIN_ROOT = path.resolve("/plugins/installed/my-plugin");
+  const PLUGIN_MTIME = new Date("2024-01-02T03:04:05.000Z");
 
-  function makeFileHandle(content: string | Buffer = "data") {
+  function makeFileHandle(content: string | Buffer = "data", isFile = true) {
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
     return {
       readFile: vi.fn().mockResolvedValue(buffer),
       close: vi.fn().mockResolvedValue(undefined),
+      stat: vi.fn().mockResolvedValue({ isFile: () => isFile, mtime: PLUGIN_MTIME }),
     };
   }
 
@@ -1780,6 +1785,49 @@ describe("createPluginProtocolHandler", () => {
     expect(response.headers.get("Permissions-Policy")).toBeTruthy();
     // No Cross-Origin-Embedder-Policy header on sub-resources (document sets it).
     expect(response.headers.get("Cross-Origin-Embedder-Policy")).toBeNull();
+  });
+
+  it("emits Last-Modified on 200 responses so the V8 code cache can persist (#10395)", async () => {
+    const handler = buildHandler();
+    const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Last-Modified")).toBe(PLUGIN_MTIME.toUTCString());
+  });
+
+  it("returns 304 with validator headers when If-Modified-Since matches (#10395)", async () => {
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.isNotModified).mockReturnValueOnce(true);
+
+    const handler = buildHandler();
+    const response = await handler(
+      makeRequest("plugin://my-plugin/dist/index.js", {
+        headers: { "If-Modified-Since": PLUGIN_MTIME.toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get("Last-Modified")).toBe(PLUGIN_MTIME.toUTCString());
+    expect(vi.mocked(appProtocol.isNotModified)).toHaveBeenCalledWith(
+      PLUGIN_MTIME.toUTCString(),
+      PLUGIN_MTIME
+    );
+  });
+
+  it("returns 404 when the opened path is a directory (no 304 short-circuit)", async () => {
+    const fs = await import("fs/promises");
+    const handle = makeFileHandle("data", false);
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = buildHandler();
+    const response = await handler(
+      makeRequest("plugin://my-plugin/dist", {
+        headers: { "If-Modified-Since": PLUGIN_MTIME.toUTCString() },
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(handle.close).toHaveBeenCalled();
   });
 
   it("returns 404 for an unknown plugin id", async () => {

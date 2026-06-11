@@ -185,7 +185,7 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
-  const git = createHardenedGit(cwd);
+  const git = await createHardenedGit(cwd);
   const isRepo = await git.checkIsRepo();
   if (!isRepo) {
     return [];
@@ -210,7 +210,7 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
     args.push("--", pathspec);
   }
 
-  const output = await createHardenedGit(gitRoot).raw(args);
+  const output = await (await createHardenedGit(gitRoot)).raw(args);
   const prefix = pathspec ? `${pathspec.replace(/\/$/, "")}/` : "";
 
   const files = output
