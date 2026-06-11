@@ -116,6 +116,8 @@ function makeDeps(
     unhibernate: vi.fn(),
     forceReflow: vi.fn(),
     isStoreBackgrounded: vi.fn(() => false),
+    isStoreHidden: vi.fn(() => false),
+    repairStoreVisibility: vi.fn(),
     ...overrides,
   };
 }
@@ -296,7 +298,102 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.applyRendererPolicy).toHaveBeenCalledWith("t1", TerminalRefreshTier.FOCUSED);
     });
 
-    it("floors the repair tier to VISIBLE when the computed tier itself is BACKGROUND", () => {
+    it("leaves a computed BACKGROUND tier alone when store visibility is intact (policy)", () => {
+      // Completed/exited agents and exited processes compute BACKGROUND by
+      // design (hibernation eligibility) — repairing would loop forever (#10416).
+      const managed = makeManaged({
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+        getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+      });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
+      expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+      expect(deps.repairStoreVisibility).not.toHaveBeenCalled();
+      expect(logWarn).not.toHaveBeenCalled();
+      expect(managed.lastWatchdogRepairAt).toBeUndefined();
+    });
+
+    it("leaves a policy BACKGROUND tier alone even when the applied tier is also BACKGROUND", () => {
+      const managed = makeManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+      });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
+      expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+      expect(deps.repairStoreVisibility).not.toHaveBeenCalled();
+      expect(managed.lastWatchdogRepairAt).toBeUndefined();
+    });
+
+    it("rate-limits via cooldown when the store repair fails to converge", () => {
+      // If repairStoreVisibility doesn't take (store keeps reporting hidden),
+      // the watchdog must degrade to periodic cooldown-spaced retries — the
+      // pre-#10416 behavior — not a per-tick repair loop.
+      const managed = makeManaged({
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+        getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+      });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, { isStoreHidden: vi.fn(() => true) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledTimes(1);
+      expect(managed.lastWatchdogRepairAt).toBeGreaterThan(0);
+
+      // Inside the cooldown window — no retry.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledTimes(1);
+
+      // Past the cooldown — the still-diverged store retries.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledTimes(2);
+    });
+
+    it("repairs poisoned store visibility and applies the re-derived tier", () => {
+      // The warm-swap split from #10416: store isVisible=false while service
+      // and DOM agree the terminal is on-screen.
+      let storeHidden = true;
+      const managed = makeManaged({
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+        getRefreshTier: () =>
+          storeHidden ? TerminalRefreshTier.BACKGROUND : TerminalRefreshTier.FOCUSED,
+      });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, {
+        isStoreHidden: vi.fn(() => storeHidden),
+        repairStoreVisibility: vi.fn(() => {
+          storeHidden = false;
+        }),
+      });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledWith("t1");
+      expect(deps.applyRendererPolicy).toHaveBeenCalledWith("t1", TerminalRefreshTier.FOCUSED);
+      expect(logWarn).toHaveBeenCalledWith(
+        expect.stringContaining("BACKGROUND tier"),
+        expect.objectContaining({ id: "t1", storeHidden: true })
+      );
+
+      // Converges: once the store is repaired the divergence is gone — no
+      // further repairs after the cooldown elapses.
+      vi.clearAllMocks();
+      vi.advanceTimersByTime(WATCHDOG_REPAIR_COOLDOWN_MS + WATCHDOG_INTERVAL_MS * 2);
+      expect(deps.repairStoreVisibility).not.toHaveBeenCalled();
+      expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+    });
+
+    it("floors to VISIBLE when the tier still computes BACKGROUND after the store repair", () => {
+      // Store-hidden completed agent: the store repair lands but policy keeps
+      // the computed tier at BACKGROUND — next tick treats it as intentional.
+      let storeHidden = true;
       instances.set(
         "t1",
         makeManaged({
@@ -304,11 +401,22 @@ describe("TerminalReconciliationWatchdog", () => {
           getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
         })
       );
-      const deps = makeDeps(instances);
+      const deps = makeDeps(instances, {
+        isStoreHidden: vi.fn(() => storeHidden),
+        repairStoreVisibility: vi.fn(() => {
+          storeHidden = false;
+        }),
+      });
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledWith("t1");
       expect(deps.applyRendererPolicy).toHaveBeenCalledWith("t1", TerminalRefreshTier.VISIBLE);
+
+      vi.clearAllMocks();
+      vi.advanceTimersByTime(WATCHDOG_REPAIR_COOLDOWN_MS + WATCHDOG_INTERVAL_MS * 2);
+      expect(deps.repairStoreVisibility).not.toHaveBeenCalled();
+      expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
     });
 
     it("reasserts the backend tier when it diverged to background", () => {
