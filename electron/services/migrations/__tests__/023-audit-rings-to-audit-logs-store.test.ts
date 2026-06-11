@@ -173,9 +173,7 @@ describe("migration023 — audit rings to audit-logs store", () => {
 
     expect(auditLogsStoreMock.set).not.toHaveBeenCalled();
     expect("records" in (data.runHistory as object)).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("runHistory.records")
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("runHistory.records"));
     warnSpy.mockRestore();
   });
 

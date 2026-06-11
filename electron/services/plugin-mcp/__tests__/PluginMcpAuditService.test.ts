@@ -181,7 +181,11 @@ describe("PluginMcpAuditService", () => {
       descriptionRaw: "SHOULD_BE_DROPPED",
     };
     const cfgTampered = makeConfig({ auditLog: [tampered] });
-    const rebuilt = new PluginMcpAuditService(cfgTampered.save, cfgTampered.read, cfgTampered.logStore);
+    const rebuilt = new PluginMcpAuditService(
+      cfgTampered.save,
+      cfgTampered.read,
+      cfgTampered.logStore
+    );
     rebuilt.hydrate();
     // Append a record to trigger a flush, then check the persisted JSON.
     rebuilt.append({
