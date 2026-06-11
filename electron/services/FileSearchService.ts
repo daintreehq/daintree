@@ -210,7 +210,7 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
     args.push("--", pathspec);
   }
 
-  const output = await createHardenedGit(gitRoot).raw(args);
+  const output = await (await createHardenedGit(gitRoot)).raw(args);
   const prefix = pathspec ? `${pathspec.replace(/\/$/, "")}/` : "";
 
   const files = output
