@@ -64,6 +64,34 @@ describe("connectivity lazy MCP proxy", () => {
     expect(fake.listeners.size).toBe(1);
   });
 
+  it("leaves the seed at unknown when wired after start, even if already running", () => {
+    const registry = getServiceConnectivityRegistry();
+    registry.start();
+
+    const fake = createFakeMcpServer(true);
+    wireMcpServerToConnectivityRegistry(fake);
+
+    // Deliberate per the registry's seeding contract: a server that was
+    // already running when wiring lands waits for its first live status
+    // event rather than back-filling the snapshot, avoiding a spurious
+    // unreachable→reachable recovery toast.
+    expect(registry.getSnapshot().mcp.status).toBe("unknown");
+
+    fake.setRunning(true);
+    expect(registry.getSnapshot().mcp.status).toBe("reachable");
+  });
+
+  it("tolerates repeated dispose before wiring", () => {
+    const registry = getServiceConnectivityRegistry();
+    registry.start();
+    registry.dispose();
+    registry.dispose();
+
+    const fake = createFakeMcpServer(false);
+    wireMcpServerToConnectivityRegistry(fake);
+    expect(fake.listeners.size).toBe(0);
+  });
+
   it("drops a subscription unsubscribed before wiring", () => {
     const registry = getServiceConnectivityRegistry();
     registry.start();

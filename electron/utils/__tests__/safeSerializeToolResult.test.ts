@@ -36,4 +36,16 @@ describe("safeSerializeToolResult", () => {
   it("falls back to string coercion when JSON.stringify yields undefined", () => {
     expect(safeSerializeToolResult(undefined)).toBe("undefined");
   });
+
+  it("falls back to string coercion when a toJSON implementation throws", () => {
+    // JSON.stringify invokes toJSON before the replacer can intercept, so the
+    // throw escapes to the outer catch and string coercion takes over.
+    const hostile = {
+      ok: true,
+      toJSON() {
+        throw new Error("boom");
+      },
+    };
+    expect(safeSerializeToolResult(hostile)).toBe("[object Object]");
+  });
 });

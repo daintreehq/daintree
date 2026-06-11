@@ -153,7 +153,14 @@ export function getServiceConnectivityRegistry(): ServiceConnectivityRegistry {
   return registryInstance;
 }
 
-/** Test-only helper to reset the singleton between cases. */
+/**
+ * Test-only helper to reset the singleton between cases. Also replaces the
+ * lazy MCP proxy — note that `McpServerService.ts` wires its singleton at
+ * module scope, so a test that imports that module (directly or transitively)
+ * has already wired the OLD proxy; the fresh one stays unwired until the test
+ * calls `wireMcpServerToConnectivityRegistry` itself. Use fakes, not the real
+ * singleton, in tests that rely on this reset.
+ */
 export function _resetServiceConnectivityRegistryForTests(): void {
   if (registryInstance) {
     registryInstance.dispose();
