@@ -378,7 +378,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // the original per-panel probe path.
         const reconnectPrefetchIds = (appState.terminals ?? [])
           .filter((saved) => {
-            if (!saved || isSmokeTestTerminalId(saved.id)) return false;
+            // A corrupt saved id would make the strict bulk handler reject the
+            // whole batch; keep it out so one bad panel can't disable the
+            // prefetch for the rest (it still gets its per-panel fallback).
+            if (!saved || typeof saved.id !== "string" || !saved.id.trim()) return false;
+            if (isSmokeTestTerminalId(saved.id)) return false;
             if (backendTerminalMap.has(saved.id)) return false;
             const kind = inferKind(saved);
             return kind !== "assistant" && panelKindHasPty(kind);

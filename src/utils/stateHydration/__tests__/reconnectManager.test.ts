@@ -73,4 +73,18 @@ describe("reconnectWithTimeout", () => {
 
     expect(outcome).toEqual({ status: "error", error: failure });
   });
+
+  it("times out a hung IPC probe on the fallback path", async () => {
+    vi.useFakeTimers();
+    try {
+      reconnectMock.mockReturnValueOnce(new Promise(() => {}));
+
+      const outcomePromise = reconnectWithTimeout("t-hung", noopLog);
+      await vi.advanceTimersByTimeAsync(2001);
+
+      await expect(outcomePromise).resolves.toEqual({ status: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

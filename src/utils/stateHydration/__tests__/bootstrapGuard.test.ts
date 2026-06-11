@@ -164,6 +164,27 @@ describe("ensureHydrationBootstrap", () => {
       expect(next.isBootstrapped).toBe(true);
     });
 
+    it("sets the bootstrap flag for an empty project list (fresh install)", async () => {
+      getSafeBootPromiseMock.mockResolvedValue({
+        ok: true,
+        result: {
+          projects: [],
+          project: null,
+        },
+      });
+
+      await ensureHydrationBootstrap();
+
+      const updater = projectSetStateMock.mock.calls[0]?.[0] as (state: {
+        projects: unknown[];
+        currentProject: unknown;
+        isBootstrapped: boolean;
+      }) => Record<string, unknown>;
+      const next = updater({ projects: [], currentProject: null, isBootstrapped: false });
+      expect(next.projects).toEqual([]);
+      expect(next.isBootstrapped).toBe(true);
+    });
+
     it("falls back per-field when the payload is partial", async () => {
       getSafeBootPromiseMock.mockResolvedValue({
         ok: true,
