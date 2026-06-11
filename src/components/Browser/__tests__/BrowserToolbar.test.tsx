@@ -397,6 +397,37 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(texts).not.toContain("Screenshot copied to clipboard");
   });
 
+  it("screenshot capture clears prior success feedback when a retry fails", async () => {
+    const onCaptureScreenshot = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const { container, getByRole } = renderToolbar({
+      onCaptureScreenshot,
+      isWebviewReady: true,
+    });
+    const button = getByRole("button", { name: "Copy screenshot to clipboard" });
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => {
+      const texts = Array.from(container.querySelectorAll('[role="status"]')).map(
+        (node) => node.textContent
+      );
+      expect(texts).toContain("Screenshot copied to clipboard");
+    });
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    const texts = Array.from(container.querySelectorAll('[role="status"]')).map(
+      (node) => node.textContent
+    );
+    expect(texts).not.toContain("Screenshot copied to clipboard");
+  });
+
   it("screenshot capture shows no success feedback when the handler rejects", async () => {
     const onCaptureScreenshot = vi.fn(() => Promise.reject(new Error("capture failed")));
     const { container, getByRole } = renderToolbar({

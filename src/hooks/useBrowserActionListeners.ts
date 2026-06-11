@@ -6,7 +6,8 @@ export type BrowserActionCallbacks = {
   onBack: () => void;
   onForward: () => void;
   onSetZoom: (rawZoom: number) => void;
-  onCaptureScreenshot: () => void;
+  // Result is discarded on this path; the toolbar prop is where it matters.
+  onCaptureScreenshot: () => void | Promise<boolean>;
   onToggleConsole?: () => void;
   onClearConsole?: () => void;
   onToggleDevTools: () => void;

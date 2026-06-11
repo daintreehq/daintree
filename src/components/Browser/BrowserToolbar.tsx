@@ -468,9 +468,12 @@ export function BrowserToolbar({
     } catch (err) {
       logError("Failed to capture screenshot", err);
     }
-    if (!success) return;
-    setScreenshotCopied(true);
     if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
+    if (!success) {
+      setScreenshotCopied(false);
+      return;
+    }
+    setScreenshotCopied(true);
     screenshotCopiedTimerRef.current = setTimeout(
       () => setScreenshotCopied(false),
       COPIED_FEEDBACK_RESET_MS

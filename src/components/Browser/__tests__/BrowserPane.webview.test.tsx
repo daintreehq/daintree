@@ -1121,6 +1121,59 @@ describe("BrowserPane webview lifecycle regression", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect((window as any).electron.clipboard.writeImage).not.toHaveBeenCalled();
     });
+
+    it("resolves false and notifies when capturePage rejects", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.capturePage.mockRejectedValueOnce(new Error("capture failed"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).electron.clipboard.writeImage).not.toHaveBeenCalled();
+    });
+
+    it("resolves false for a second capture while the first is still in flight", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let resolveCapture: (value: { toPNG: () => Uint8Array }) => void;
+      webview.capturePage.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        })
+      );
+
+      let first: Promise<boolean>;
+      let second: boolean | undefined;
+      await act(async () => {
+        first = getToolbarCapture()();
+        second = await getToolbarCapture()();
+        resolveCapture!({ toPNG: () => new Uint8Array([0x89]) });
+        await first;
+      });
+
+      expect(second).toBe(false);
+      await expect(first!).resolves.toBe(true);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((window as any).electron.clipboard.writeImage).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("stale URL detection on initial load", () => {

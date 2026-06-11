@@ -1913,6 +1913,28 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       );
     });
 
+    it("resolves false and notifies when capturePage rejects", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.capturePage.mockRejectedValueOnce(new Error("capture failed"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+      expect(getWriteImageMock()).not.toHaveBeenCalled();
+    });
+
     it("resolves false for a second capture while the first is still in flight", async () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
