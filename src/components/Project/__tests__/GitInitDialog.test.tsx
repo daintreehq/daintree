@@ -107,7 +107,7 @@ describe("GitInitDialog", () => {
     const button = screen.getByRole("button", {
       name: /initialize repository/i,
     }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
 
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
@@ -123,6 +123,21 @@ describe("GitInitDialog", () => {
           gitignoreTemplate: "node",
           initialCommitMessage: "feat: init",
         })
+      );
+    });
+  });
+
+  it("pre-fills the commit message and submits the default without editing", async () => {
+    renderDialog();
+
+    const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
+    expect(input.value).toBe("Initial commit");
+
+    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+
+    await waitFor(() => {
+      expect(initGitGuidedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ initialCommitMessage: "Initial commit" })
       );
     });
   });

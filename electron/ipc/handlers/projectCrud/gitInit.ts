@@ -149,11 +149,12 @@ export function registerGitInitHandlers(): () => void {
         completedSteps.push("add");
         emitProgress("add", "success", "Files staged");
 
+        const commitMessage = initialCommitMessage.trim() || "Initial commit";
         emitProgress("commit", "start", "Creating initial commit...");
         try {
-          await git.commit(initialCommitMessage);
+          await git.commit(commitMessage);
           completedSteps.push("commit");
-          emitProgress("commit", "success", `Committed: ${initialCommitMessage}`);
+          emitProgress("commit", "success", `Committed: ${commitMessage}`);
         } catch (commitError) {
           const errorMsg = formatErrorMessage(commitError, "Failed to create initial commit");
           if (errorMsg.includes("user.email") || errorMsg.includes("user.name")) {
