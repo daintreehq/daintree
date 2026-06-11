@@ -804,7 +804,7 @@ describe("registerDiagnosticsHandlers", () => {
       let resolveStop: ((value: unknown) => void) | undefined;
       sendCommand.mockImplementation((method: string) => {
         if (method === "Profiler.stop") {
-          return new Promise((resolve) => {
+          return new Promise<unknown>((resolve) => {
             resolveStop = resolve;
           });
         }
