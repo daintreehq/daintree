@@ -39,6 +39,7 @@ import {
   RateLimitDetailsPanel,
 } from "./RateLimitDetails";
 import { ForgeStatPill } from "./ForgeStatPill";
+import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
 
 // Hover-to-prefetch tuning. 150ms matches the codebase's Tier 1 state-change
 // timing and is long enough to filter mouse traversal across the toolbar pill
@@ -1068,13 +1069,23 @@ export const ForgeStatsToolbarButton = memo(
                       commitsButtonRef.current?.focus();
                     }}
                   />
-                ) : null
+                ) : (
+                  // Commit history is local git data, so commits-only mode
+                  // (no forge provider) still gets a browsable dropdown
+                  // (issue #10414).
+                  <LocalCommitsDropdown
+                    cwd={activeWorktree?.path ?? currentProject.path}
+                    branch={activeWorktree?.branch}
+                    open={commitsOpen}
+                    initialCount={stats?.commitCount}
+                    onClose={() => {
+                      setCommitsOpen(false);
+                      commitsButtonRef.current?.focus();
+                    }}
+                  />
+                )
               }
               onClick={() => {
-                // Without the provider-supplied dropdown view (commits-only
-                // mode) there is nothing to open — the count itself is the
-                // whole affordance.
-                if (!DropdownView || !providerId) return;
                 setIssuesOpen(false);
                 setPrsOpen(false);
                 setCommitsOpen((p) => !p);
