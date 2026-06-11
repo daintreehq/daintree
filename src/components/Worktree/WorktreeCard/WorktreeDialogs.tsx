@@ -4,7 +4,6 @@ import type { Issue } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 import { IssuePickerDialog } from "../IssuePickerDialog";
-import { PlanFileViewer } from "@/components/FileViewer/PlanFileViewer";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
 
@@ -14,6 +13,12 @@ import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
 // covers eval-only time on first open.
 const LazyReviewHub = lazy(() =>
   import("../ReviewHub/ReviewHub").then((m) => ({ default: m.ReviewHub }))
+);
+
+// This was the last static path to CodeViewer's CodeMirror closure
+// (vendor-editor, ~443KB raw) — lazy keeps it out of the eager entry chunk.
+const LazyPlanFileViewer = lazy(() =>
+  import("@/components/FileViewer/PlanFileViewer").then((m) => ({ default: m.PlanFileViewer }))
 );
 
 export interface WorktreeDialogsProps {
@@ -55,6 +60,7 @@ export function WorktreeDialogs({
   // !isOpen) — it avoids re-suspending on reopen and keeps focus-restore
   // cleanup semantics identical to the previously-static mount.
   const reviewHubMounted = useKeepMounted(showReviewHub);
+  const planViewerMounted = useKeepMounted(showPlanViewer);
   return (
     <>
       <ConfirmDialog
@@ -96,12 +102,16 @@ export function WorktreeDialogs({
         </Suspense>
       )}
 
-      <PlanFileViewer
-        isOpen={showPlanViewer}
-        filePath={worktree.planFilePath}
-        rootPath={worktree.path}
-        onClose={onClosePlanViewer}
-      />
+      {planViewerMounted && (
+        <Suspense fallback={null}>
+          <LazyPlanFileViewer
+            isOpen={showPlanViewer}
+            filePath={worktree.planFilePath}
+            rootPath={worktree.path}
+            onClose={onClosePlanViewer}
+          />
+        </Suspense>
+      )}
     </>
   );
 }

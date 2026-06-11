@@ -82,6 +82,17 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).not.toMatch(/"absolute top-0 right-0 bottom-0 z-30"/);
   });
 
+  it("lazily defines and eagerly preloads HelpPanel (issue #10389)", () => {
+    // HelpPanel (~175KB source subtree) must not be in the eager entry chunk.
+    expect(source).not.toMatch(/import \{ HelpPanel \} from/);
+    expect(source).toContain('function preloadHelpPanel() {\n  return import("../HelpPanel");');
+    // Named `HelpPanel` (not Lazy*) so the JSX assertions above keep matching.
+    expect(source).toContain("const HelpPanel = lazy(");
+    // The render is unconditional, so the chunk is always needed — it must be
+    // in-flight at module evaluation, not after first mount.
+    expect(source).toContain("void preloadHelpPanel();");
+  });
+
   it("clips a full-width Assistant while the right sidebar slot animates like the worktree sidebar", () => {
     // The Assistant content stays full width and pinned to the viewport edge.
     // The flex slot width animates underneath it, so the panel grid slides

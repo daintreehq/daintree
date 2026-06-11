@@ -77,13 +77,22 @@ import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialog
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
+
+// Direct file import (not the Project barrel) so the lazy chunk doesn't pull
+// in barrel siblings. Renders only when no project is open, so it stays off
+// the returning-user first-paint path.
+function preloadWelcomeScreen() {
+  return import("./components/Project/WelcomeScreen");
+}
+const LazyWelcomeScreen = lazy(() =>
+  preloadWelcomeScreen().then((m) => ({ default: m.WelcomeScreen }))
+);
 
 function preloadSettingsDialog() {
   return import("./components/Settings/SettingsDialog");
@@ -952,7 +961,9 @@ function AppInner() {
                         defaultCwd={defaultTerminalCwd}
                         emptyContent={
                           currentProject === null ? (
-                            <WelcomeScreen gettingStarted={gettingStarted} />
+                            <Suspense fallback={null}>
+                              <LazyWelcomeScreen gettingStarted={gettingStarted} />
+                            </Suspense>
                           ) : undefined
                         }
                       />
