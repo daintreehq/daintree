@@ -383,11 +383,11 @@ describe("WelcomeScreen", () => {
     expect(buttons).toHaveLength(3);
   });
 
-  it("dispatches project.openDialog when Open your project is clicked", () => {
+  it("dispatches project.add when Open your project is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
     fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
-    expect(dispatchMock).toHaveBeenCalledWith("project.openDialog", undefined, {
+    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, {
       source: "user",
     });
   });

@@ -111,12 +111,12 @@ describe("GettingStartedChecklist", () => {
     expect(completedButton).toBeNull();
   });
 
-  it("dispatches project.openDialog when 'Open your project' is clicked", () => {
+  it("dispatches project.add when 'Open your project' is clicked", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
     fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("project.openDialog", undefined, { source: "user" });
+    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
   });
 
   it("dispatches panel.palette when 'Ask AI to help with your code' is clicked", () => {
