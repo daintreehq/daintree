@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FolderOpen, Info } from "lucide-react";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 
 interface WorktreePathPickerProps {
   value: string;
@@ -24,6 +25,10 @@ export function WorktreePathPicker({
   onBrowseClick,
   disabled,
 }: WorktreePathPickerProps) {
+  // isGeneratingPath goes true on every keystroke (it also gates submit), but
+  // the debounced generation usually resolves fast — only show the spinner for
+  // genuinely slow lookups.
+  const showGeneratingSpinner = useDohertyGate(isGeneratingPath);
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
@@ -61,7 +66,7 @@ export function WorktreePathPicker({
             aria-invalid={errorField === "worktree-path" ? true : undefined}
             aria-describedby={errorField === "worktree-path" ? "validation-error" : undefined}
           />
-          {isGeneratingPath && (
+          {showGeneratingSpinner && (
             <Spinner
               size="md"
               className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"

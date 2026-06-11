@@ -84,6 +84,10 @@ const SETTINGS_HIGHLIGHT_DECAY_MS = 1500;
 // doesn't mount every tab at once.
 export const SETTINGS_TAB_HOVER_INTENT_MS = 150;
 
+// The app version is immutable for the process lifetime — fetch it once and
+// reuse across dialog opens so the sidebar slot never shows a placeholder.
+let cachedAppVersion: string | null = null;
+
 // Lowercase the first letter so the label reads naturally mid-sentence
 // ("Requires voice input"), unless it starts with an initialism like
 // MCP / AI / API — those stay uppercase.
@@ -191,7 +195,7 @@ function SettingsDialogInner({
     }
   }, [isOpen, setPortalOpen]);
 
-  const [appVersion, setAppVersion] = useState<string>("Loading...");
+  const [appVersion, setAppVersion] = useState<string>(cachedAppVersion ?? "");
 
   const [hiddenSettingBanner, setHiddenSettingBanner] = useState<{
     label: string;
@@ -241,10 +245,13 @@ function SettingsDialogInner({
   }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && cachedAppVersion === null) {
       appClient
         .getVersion()
-        .then(setAppVersion)
+        .then((version) => {
+          cachedAppVersion = version;
+          setAppVersion(version);
+        })
         .catch((error) => {
           logError("Failed to fetch app version", error);
           setAppVersion("Unavailable");

@@ -20,7 +20,7 @@ export function registerNavigationActions(
 
   actions.set("action.palette.open", () => ({
     id: "action.palette.open",
-    title: "Open Action Palette",
+    title: "Open Command Palette",
     description: "Search and execute any action",
     category: "navigation",
     kind: "command",

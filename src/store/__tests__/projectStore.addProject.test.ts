@@ -250,7 +250,7 @@ describe("projectStore addProject", () => {
       await useProjectStore.getState().addProjectByPath("relative/path");
 
       expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Failed to add project" })
+        expect.objectContaining({ title: "Couldn't add project" })
       );
     });
 
@@ -271,7 +271,7 @@ describe("projectStore addProject", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "error",
-          title: "Failed to mark as safe",
+          title: "Couldn't mark as safe",
           message: "git binary not on PATH",
         })
       );
@@ -301,7 +301,7 @@ describe("projectStore addProject", () => {
       );
       expect(ownershipToasts).toHaveLength(0);
       const genericToasts = notifyMock.mock.calls.filter(
-        (call) => (call[0] as { title?: string }).title === "Failed to add project"
+        (call) => (call[0] as { title?: string }).title === "Couldn't add project"
       );
       expect(genericToasts.length).toBeGreaterThan(0);
     });

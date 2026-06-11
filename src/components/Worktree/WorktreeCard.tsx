@@ -876,8 +876,7 @@ export function WorktreeCard({
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
                       className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
-                      aria-label="Manual reorder paused while filter is active"
-                      aria-disabled="true"
+                      aria-hidden="true"
                     >
                       <GripVertical className="w-3 h-3" />
                     </div>
@@ -896,7 +895,11 @@ export function WorktreeCard({
                       ? "bg-overlay-emphasis text-text-primary"
                       : "text-text-primary/25 group-hover/card:text-text-primary/40 group-hover/card:bg-overlay-soft"
                   )}
-                  aria-label="Drag to reorder"
+                  // Pointer-only affordance: the grip is non-focusable (the row
+                  // strips dnd-kit's role/tabIndex), so an aria-label here is
+                  // dead ARIA claiming a phantom control. Keyboard reorder is
+                  // the row's Alt+Arrow path (aria-keyshortcuts on the row).
+                  aria-hidden="true"
                   {...dragHandleListeners}
                 >
                   <GripVertical className="w-3 h-3" />

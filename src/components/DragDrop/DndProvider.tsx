@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   type MouseEvent as ReactMouseEvent,
+  type TouchEvent as ReactTouchEvent,
   type MutableRefObject,
 } from "react";
 import {
@@ -31,6 +32,7 @@ import {
   type Announcements,
   type MeasuringConfiguration,
   type MouseSensorOptions,
+  type TouchSensorOptions,
   type Over,
   type ScreenReaderInstructions,
 } from "@dnd-kit/core";
@@ -150,6 +152,27 @@ export class NoDndMouseSensor extends MouseSensor {
   ];
 }
 
+// TouchSensor variant with the same [data-no-dnd] opt-out as NoDndMouseSensor,
+// so a long-press on an opted-out element doesn't start the drag the mouse
+// path deliberately suppresses. Mirrors the upstream TouchSensor.activators
+// shape (including the multi-touch bail) so options flow through unchanged.
+export class NoDndTouchSensor extends TouchSensor {
+  static activators: {
+    eventName: "onTouchStart";
+    handler: (event: ReactTouchEvent, options: TouchSensorOptions) => boolean;
+  }[] = [
+    {
+      eventName: "onTouchStart",
+      handler: ({ nativeEvent: event }, { onActivation }) => {
+        if (event.touches.length > 1) return false;
+        if (isNoDndTarget(event.target)) return false;
+        onActivation?.({ event });
+        return true;
+      },
+    },
+  ];
+}
+
 // Cursor offset from top of preview (positions cursor in title bar area)
 const TITLE_BAR_CURSOR_OFFSET = 12;
 
@@ -201,8 +224,18 @@ function getDragLabel(data: unknown): string {
  * Resolve the announcement label for a droppable. Worktree-sort uses
  * `worktree-sort-{id}` for the sortable handle and `worktree-drop-{id}` for
  * the row's drop target — both should announce the same human-readable label.
+ * The synthetic droppables (trash pill, grid/dock placeholders) register no
+ * panel data, so without explicit labels they'd all announce as "panel" —
+ * worst on trash, where the drop closes the panel. Exported for unit tests.
  */
-function getOverDragLabel(over: Over): string {
+export function getOverDragLabel(over: Over): string {
+  if (over.id === TRASH_DROPPABLE_ID) return "trash — drop to close panel";
+  const overData = over.data.current as
+    | { container?: "grid" | "dock"; isPlaceholder?: boolean }
+    | undefined;
+  if (overData?.isPlaceholder) {
+    return overData.container === "dock" ? "the dock" : "empty grid slot";
+  }
   const sortDragId = parseWorktreeSortDragId(over.id);
   if (sortDragId) return resolveWorktreeLabel(sortDragId);
   if (typeof over.id === "string" && over.id.startsWith("worktree-drop-")) {
@@ -539,7 +572,7 @@ export function DndProvider({ children }: DndProviderProps) {
     useSensor(NoDndMouseSensor, {
       activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE },
     }),
-    useSensor(TouchSensor, {
+    useSensor(NoDndTouchSensor, {
       activationConstraint: { delay: 150, tolerance: 5 },
     }),
     useSensor(KeyboardSensor, {

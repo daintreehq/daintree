@@ -163,16 +163,23 @@ describe("GettingStartedChecklist", () => {
     expect(defaultProps.onToggleCollapse).not.toHaveBeenCalled();
   });
 
-  it("renders the n/n counter while the checklist is incomplete", () => {
+  it("renders the endowed n/n counter while the checklist is incomplete", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
-    expect(screen.getByText("1/4")).toBeTruthy();
+    // 1 real item done + the always-complete "Install Daintree" row, over 4+1.
+    expect(screen.getByText("2/5")).toBeTruthy();
     expect(screen.queryByText("All set")).toBeNull();
   });
 
   it("renders the 'All set' milestone label when every item is complete", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
     expect(screen.getByText("All set")).toBeTruthy();
-    expect(screen.queryByText("4/4")).toBeNull();
+    expect(screen.queryByText("5/5")).toBeNull();
+  });
+
+  it("renders the endowed 'Install Daintree' row as a non-interactive div", () => {
+    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
+    expect(screen.getByText("Install Daintree")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /install daintree/i })).toBeNull();
   });
 
   describe("accessibility", () => {
@@ -234,7 +241,7 @@ describe("GettingStartedChecklist", () => {
       const { rerender } = render(
         <GettingStartedChecklist {...defaultProps} checklist={mixedState} />
       );
-      const muted = screen.getByText("1/4");
+      const muted = screen.getByText("2/5");
       expect(muted.className).toContain("text-daintree-text/50");
       expect(muted.className).not.toContain("text-daintree-accent");
 

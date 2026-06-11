@@ -98,7 +98,7 @@ describe("PrivacyDataTab", () => {
 
     expect(window.electron.privacy.setTelemetryLevel).toHaveBeenCalledWith("errors");
     expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Failed to save setting" })
+      expect.objectContaining({ type: "error", title: "Couldn't save setting" })
     );
   });
 
@@ -203,7 +203,7 @@ describe("PrivacyDataTab", () => {
 
     expect(window.electron.privacy.setLogRetention).toHaveBeenCalledWith(90);
     expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Failed to save setting" })
+      expect.objectContaining({ type: "error", title: "Couldn't save setting" })
     );
   });
 });

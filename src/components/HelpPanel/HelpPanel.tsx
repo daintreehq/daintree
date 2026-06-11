@@ -901,7 +901,7 @@ export function HelpPanel({
                     "rounded-[var(--radius-sm)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                   )}
-                  title="Switch to the worktree this assistant is pinned to."
+                  title="Switch to the worktree this assistant is pinned to"
                 >
                   <span
                     aria-hidden
@@ -948,7 +948,7 @@ export function HelpPanel({
                   "bg-status-danger/10 text-status-danger hover:bg-status-danger/15 transition-colors duration-150",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 )}
-                title="The pinned terminal has closed — start a new session."
+                title="The pinned terminal has closed — start a new session"
               >
                 Start new session
               </button>

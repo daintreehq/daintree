@@ -386,7 +386,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
     test("marking an item via IPC persists and reflects on re-show", async () => {
       const { window } = ctx;
       const panel = await showChecklist(window);
-      await expect(panel.getByText("Getting Started")).toBeVisible({ timeout: T_SHORT });
+      await expect(panel.getByText("Getting started")).toBeVisible({ timeout: T_SHORT });
 
       // createdWorktree won't auto-complete in a single-worktree project.
       const item = panel.locator(SEL.checklist.item("createdWorktree"));

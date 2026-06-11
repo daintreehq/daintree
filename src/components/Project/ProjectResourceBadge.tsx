@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { logError } from "@/utils/logger";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
@@ -315,11 +316,10 @@ export function ProjectResourceBadge() {
     };
   }, [fetchStats]);
 
+  // Stale-while-revalidate: keep the last snapshot across closes so reopening
+  // shows data instantly; the poll below refreshes it silently.
   useEffect(() => {
-    if (!open) {
-      setPopoverData(null);
-      return;
-    }
+    if (!open) return;
 
     let cancelled = false;
 
@@ -391,7 +391,15 @@ export function ProjectResourceBadge() {
               />
             </>
           ) : (
-            <div className="text-[10px] text-daintree-text/30 text-center py-2">Loading...</div>
+            <Skeleton label="Loading resource details" className="space-y-3">
+              <div className="space-y-1.5">
+                <SkeletonBone className="h-3 w-16" />
+                <SkeletonBone className="h-3 w-full" />
+                <SkeletonBone className="h-3 w-5/6" />
+                <SkeletonBone className="h-3 w-3/4" />
+              </div>
+              <SkeletonBone className="h-1.5 w-full rounded-full" />
+            </Skeleton>
           )}
         </div>
       </PopoverContent>

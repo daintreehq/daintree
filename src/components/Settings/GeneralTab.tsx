@@ -639,7 +639,7 @@ export function GeneralTab({
               <SettingsSwitchCard
                 icon={RefreshCw}
                 title="Notify when a new version is available"
-                subtitle="Show an inbox notification with a link to the Microsoft Store."
+                subtitle="Show an inbox notification with a link to the Microsoft Store"
                 isEnabled={storeUpdateNotificationsEnabled ?? true}
                 onChange={() => void handleStoreUpdateNotificationsToggle()}
                 ariaLabel="Toggle Microsoft Store update notifications"

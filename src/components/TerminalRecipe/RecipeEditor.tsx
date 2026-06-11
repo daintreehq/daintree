@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useRecipeStore, MAX_TERMINALS_PER_RECIPE } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
@@ -145,12 +146,16 @@ export function RecipeEditor({
     [recipeName, terminals, showInEmptyState, autoAssign]
   );
 
-  const { onBeforeClose } = useUnsavedChanges({ isDirty });
+  const { onBeforeClose, isConfirmOpen, closeConfirm } = useUnsavedChanges({ isDirty });
 
-  const handleCancel = useCallback(async () => {
-    const canClose = await onBeforeClose();
-    if (canClose) onClose();
+  const handleCancel = useCallback(() => {
+    if (onBeforeClose()) onClose();
   }, [onBeforeClose, onClose]);
+
+  const handleDiscard = useCallback(() => {
+    closeConfirm();
+    onClose();
+  }, [closeConfirm, onClose]);
 
   useEffect(() => {
     if (isOpen) {
@@ -247,427 +252,446 @@ export function RecipeEditor({
     }
   };
 
+  const recipeDisplayName = (recipe?.name ?? recipeName).trim();
+
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      onBeforeClose={onBeforeClose}
-      size="lg"
-      dismissible={!isSaving}
-    >
-      <AppDialog.Header>
-        <AppDialog.Title>{recipe ? "Edit Recipe" : "Create Recipe"}</AppDialog.Title>
-      </AppDialog.Header>
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        onBeforeClose={onBeforeClose}
+        size="lg"
+        dismissible={!isSaving}
+      >
+        <AppDialog.Header>
+          <AppDialog.Title>{recipe ? "Edit Recipe" : "Create Recipe"}</AppDialog.Title>
+        </AppDialog.Header>
 
-      <AppDialog.Body>
-        <div className="mb-4">
-          <label
-            htmlFor="recipe-name"
-            className="block text-sm font-medium text-daintree-text mb-1"
-          >
-            Recipe Name
-          </label>
-          <input
-            ref={recipeNameInputRef}
-            id="recipe-name"
-            type="text"
-            value={recipeName}
-            onChange={(e) => setRecipeName(e.target.value)}
-            placeholder="e.g., Full Stack Dev"
-            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
-          />
-        </div>
+        <AppDialog.Body>
+          <div className="mb-4">
+            <label
+              htmlFor="recipe-name"
+              className="block text-sm font-medium text-daintree-text mb-1"
+            >
+              Recipe Name
+            </label>
+            <input
+              ref={recipeNameInputRef}
+              id="recipe-name"
+              type="text"
+              value={recipeName}
+              onChange={(e) => setRecipeName(e.target.value)}
+              placeholder="e.g., Full Stack Dev"
+              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+            />
+          </div>
 
-        <div className="mb-4">
-          <label
-            htmlFor="recipe-scope"
-            className="block text-sm font-medium text-daintree-text mb-1"
-          >
-            Scope
-          </label>
-          {recipe ? (
-            <div className="px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm opacity-75">
-              {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
-                ? "Project"
-                : "Global (all projects)"}
-            </div>
-          ) : (
+          <div className="mb-4">
+            <label
+              htmlFor="recipe-scope"
+              className="block text-sm font-medium text-daintree-text mb-1"
+            >
+              Scope
+            </label>
+            {recipe ? (
+              <div className="px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm opacity-75">
+                {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
+                  ? "Project"
+                  : "Global (all projects)"}
+              </div>
+            ) : (
+              <select
+                id="recipe-scope"
+                value={scope}
+                onChange={(e) => setScope(e.target.value as "global" | "project")}
+                className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+              >
+                <option value="project">Project (current project only)</option>
+                <option value="global">Global (all projects)</option>
+              </select>
+            )}
+          </div>
+
+          <div className="mb-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                id="show-in-empty-state"
+                type="checkbox"
+                checked={showInEmptyState}
+                onChange={(e) => setShowInEmptyState(e.target.checked)}
+                aria-describedby="show-in-empty-state-help"
+                className="w-4 h-4 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent checked:border-daintree-accent focus:ring-2 focus:ring-daintree-accent"
+              />
+              <span className="text-sm font-medium text-daintree-text">Show in Empty State</span>
+            </label>
+            <p
+              id="show-in-empty-state-help"
+              className="text-xs text-text-muted mt-1 ml-6 select-text"
+            >
+              Display this recipe as a primary launcher when the worktree has no active terminals
+            </p>
+          </div>
+
+          <div className="mb-4">
+            <label
+              htmlFor="auto-assign"
+              className="block text-sm font-medium text-daintree-text mb-1"
+            >
+              Auto-assign Issue
+            </label>
             <select
-              id="recipe-scope"
-              value={scope}
-              onChange={(e) => setScope(e.target.value as "global" | "project")}
+              id="auto-assign"
+              value={autoAssign}
+              onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
+              aria-describedby="auto-assign-help"
               className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
             >
-              <option value="project">Project (current project only)</option>
-              <option value="global">Global (all projects)</option>
+              <option value="always">Always assign to me</option>
+              <option value="prompt">Ask before assigning</option>
+              <option value="never">Never assign</option>
             </select>
-          )}
-        </div>
-
-        <div className="mb-4">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              id="show-in-empty-state"
-              type="checkbox"
-              checked={showInEmptyState}
-              onChange={(e) => setShowInEmptyState(e.target.checked)}
-              aria-describedby="show-in-empty-state-help"
-              className="w-4 h-4 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent checked:border-daintree-accent focus:ring-2 focus:ring-daintree-accent"
-            />
-            <span className="text-sm font-medium text-daintree-text">Show in Empty State</span>
-          </label>
-          <p
-            id="show-in-empty-state-help"
-            className="text-xs text-text-muted mt-1 ml-6 select-text"
-          >
-            Display this recipe as a primary launcher when the worktree has no active terminals
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <label
-            htmlFor="auto-assign"
-            className="block text-sm font-medium text-daintree-text mb-1"
-          >
-            Auto-assign Issue
-          </label>
-          <select
-            id="auto-assign"
-            value={autoAssign}
-            onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
-            aria-describedby="auto-assign-help"
-            className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
-          >
-            <option value="always">Always assign to me</option>
-            <option value="prompt">Ask before assigning</option>
-            <option value="never">Never assign</option>
-          </select>
-          <p id="auto-assign-help" className="text-xs text-text-muted mt-1 select-text">
-            Controls whether the linked GitHub issue is automatically assigned to you during quick
-            worktree creation
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-daintree-text">
-              Terminals ({terminals.length}/{MAX_TERMINALS_PER_RECIPE})
-            </label>
-            <Button
-              size="sm"
-              onClick={handleAddTerminal}
-              disabled={terminals.length >= MAX_TERMINALS_PER_RECIPE}
-            >
-              + Add Terminal
-            </Button>
+            <p id="auto-assign-help" className="text-xs text-text-muted mt-1 select-text">
+              Controls whether the linked GitHub issue is automatically assigned to you during quick
+              worktree creation
+            </p>
           </div>
 
-          <div className="space-y-3">
-            {terminals.map((terminal, index) => (
-              <div
-                key={index}
-                className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] p-3"
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-daintree-text">
+                Terminals ({terminals.length}/{MAX_TERMINALS_PER_RECIPE})
+              </label>
+              <Button
+                size="sm"
+                onClick={handleAddTerminal}
+                disabled={terminals.length >= MAX_TERMINALS_PER_RECIPE}
               >
-                <div className="flex items-start gap-3">
-                  <div className="flex-1">
-                    <label
-                      htmlFor={`terminal-type-${index}`}
-                      className="block text-xs font-medium text-daintree-text mb-1"
-                    >
-                      Type
-                    </label>
-                    <select
-                      id={`terminal-type-${index}`}
-                      value={terminal.type}
-                      onChange={(e) => {
-                        const newType = e.target.value as RecipeTerminalType;
-                        setTerminals((prev) => {
-                          const updated = [...prev];
-                          const current = updated[index];
-                          if (!current) return prev;
-                          const prevType = current.type;
-                          updated[index] = {
-                            ...current,
-                            type: newType,
-                            // Clear command when switching between types so the new type uses its default
-                            command: newType === prevType ? current.command : "",
-                            // Clear initialPrompt and args when switching to terminal or dev-preview
-                            initialPrompt:
-                              newType === "terminal" || newType === "dev-preview"
-                                ? ""
-                                : current.initialPrompt,
-                            args:
-                              newType === "terminal" || newType === "dev-preview"
-                                ? ""
-                                : current.args,
-                            // Clear devCommand when switching away from dev-preview
-                            devCommand: newType !== "dev-preview" ? "" : current.devCommand,
-                          };
-                          return updated;
-                        });
-                      }}
-                      className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                    >
-                      {TERMINAL_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {TYPE_LABELS[type]}
-                        </option>
-                      ))}
-                    </select>
+                + Add Terminal
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {terminals.map((terminal, index) => (
+                <div
+                  key={index}
+                  className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] p-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1">
+                      <label
+                        htmlFor={`terminal-type-${index}`}
+                        className="block text-xs font-medium text-daintree-text mb-1"
+                      >
+                        Type
+                      </label>
+                      <select
+                        id={`terminal-type-${index}`}
+                        value={terminal.type}
+                        onChange={(e) => {
+                          const newType = e.target.value as RecipeTerminalType;
+                          setTerminals((prev) => {
+                            const updated = [...prev];
+                            const current = updated[index];
+                            if (!current) return prev;
+                            const prevType = current.type;
+                            updated[index] = {
+                              ...current,
+                              type: newType,
+                              // Clear command when switching between types so the new type uses its default
+                              command: newType === prevType ? current.command : "",
+                              // Clear initialPrompt and args when switching to terminal or dev-preview
+                              initialPrompt:
+                                newType === "terminal" || newType === "dev-preview"
+                                  ? ""
+                                  : current.initialPrompt,
+                              args:
+                                newType === "terminal" || newType === "dev-preview"
+                                  ? ""
+                                  : current.args,
+                              // Clear devCommand when switching away from dev-preview
+                              devCommand: newType !== "dev-preview" ? "" : current.devCommand,
+                            };
+                            return updated;
+                          });
+                        }}
+                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                      >
+                        {TERMINAL_TYPES.map((type) => (
+                          <option key={type} value={type}>
+                            {TYPE_LABELS[type]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex-1">
+                      <label
+                        htmlFor={`terminal-title-${index}`}
+                        className="block text-xs font-medium text-daintree-text mb-1"
+                      >
+                        Title (optional)
+                      </label>
+                      <input
+                        id={`terminal-title-${index}`}
+                        type="text"
+                        value={terminal.title || ""}
+                        onChange={(e) => handleTerminalChange(index, "title", e.target.value)}
+                        placeholder="Default"
+                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                      />
+                    </div>
+
+                    <div className="pt-5">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleRemoveTerminal(index)}
+                        disabled={terminals.length === 1}
+                      >
+                        Remove
+                      </Button>
+                    </div>
                   </div>
 
-                  <div className="flex-1">
-                    <label
-                      htmlFor={`terminal-title-${index}`}
-                      className="block text-xs font-medium text-daintree-text mb-1"
-                    >
-                      Title (optional)
-                    </label>
-                    <input
-                      id={`terminal-title-${index}`}
-                      type="text"
-                      value={terminal.title || ""}
-                      onChange={(e) => handleTerminalChange(index, "title", e.target.value)}
-                      placeholder="Default"
-                      className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                    />
-                  </div>
+                  {terminal.type === "terminal" && (
+                    <>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-command-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          Command (optional)
+                        </label>
+                        <input
+                          id={`terminal-command-${index}`}
+                          type="text"
+                          value={terminal.command || ""}
+                          onChange={(e) => handleTerminalChange(index, "command", e.target.value)}
+                          placeholder="e.g., npm run dev"
+                          className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                        />
+                      </div>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-exit-behavior-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          After Exit
+                        </label>
+                        <select
+                          id={`terminal-exit-behavior-${index}`}
+                          value={terminal.exitBehavior || "trash"}
+                          onChange={(e) =>
+                            handleTerminalChange(
+                              index,
+                              "exitBehavior",
+                              e.target.value === "trash" ? "" : e.target.value
+                            )
+                          }
+                          aria-describedby={`terminal-exit-behavior-help-${index}`}
+                          className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                        >
+                          <option value="trash">Send to Trash (default)</option>
+                          <option value="keep">Keep for Review</option>
+                          <option value="remove">Remove Completely</option>
+                        </select>
+                        <p
+                          id={`terminal-exit-behavior-help-${index}`}
+                          className="text-xs text-text-muted mt-1 select-text"
+                        >
+                          {FAILURE_PRESERVE_CAPTION}
+                        </p>
+                      </div>
+                    </>
+                  )}
 
-                  <div className="pt-5">
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => handleRemoveTerminal(index)}
-                      disabled={terminals.length === 1}
-                    >
-                      Remove
-                    </Button>
-                  </div>
+                  {terminal.type !== "terminal" && terminal.type !== "dev-preview" && (
+                    <>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-args-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          Arguments (optional)
+                        </label>
+                        <input
+                          id={`terminal-args-${index}`}
+                          type="text"
+                          value={terminal.args || ""}
+                          onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
+                          placeholder="e.g., --model claude-opus-4-5"
+                          aria-describedby={`terminal-args-help-${index}`}
+                          className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                        />
+                        <p
+                          id={`terminal-args-help-${index}`}
+                          className="text-xs text-text-muted mt-1 select-text"
+                        >
+                          Additional CLI arguments passed to the agent at launch
+                        </p>
+                      </div>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-initial-prompt-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          Initial Prompt (optional)
+                        </label>
+                        <textarea
+                          id={`terminal-initial-prompt-${index}`}
+                          value={terminal.initialPrompt || ""}
+                          onChange={(e) =>
+                            handleTerminalChange(index, "initialPrompt", e.target.value)
+                          }
+                          placeholder="e.g., Review the latest changes and suggest improvements"
+                          rows={2}
+                          aria-describedby={`terminal-initial-prompt-help-${index}`}
+                          className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text resize-y min-h-[60px]"
+                        />
+                        <RecipeVariablePreview
+                          initialPrompt={terminal.initialPrompt || ""}
+                          worktreeId={worktreeId ?? recipe?.worktreeId}
+                        />
+                        <p
+                          id={`terminal-initial-prompt-help-${index}`}
+                          className="text-xs text-text-muted mt-1 select-text"
+                        >
+                          Variables:{" "}
+                          <code className="text-daintree-text/70">{"{{issue_number}}"}</code>,{" "}
+                          <code className="text-daintree-text/70">{"{{pr_number}}"}</code>,{" "}
+                          <code className="text-daintree-text/70">{"{{number}}"}</code>,{" "}
+                          <code className="text-daintree-text/70">{"{{worktree_path}}"}</code>,{" "}
+                          <code className="text-daintree-text/70">{"{{branch_name}}"}</code>
+                        </p>
+                      </div>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-agent-exit-behavior-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          After Exit
+                        </label>
+                        <select
+                          id={`terminal-agent-exit-behavior-${index}`}
+                          value={terminal.exitBehavior || "keep"}
+                          onChange={(e) =>
+                            handleTerminalChange(
+                              index,
+                              "exitBehavior",
+                              e.target.value === "keep" ? "" : e.target.value
+                            )
+                          }
+                          aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
+                          className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                        >
+                          <option value="keep">Keep for Review (default)</option>
+                          <option value="trash">Send to Trash</option>
+                          <option value="remove">Remove Completely</option>
+                        </select>
+                        <p
+                          id={`terminal-agent-exit-behavior-help-${index}`}
+                          className="text-xs text-text-muted mt-1 select-text"
+                        >
+                          {FAILURE_PRESERVE_CAPTION}
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {terminal.type === "dev-preview" && (
+                    <>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-dev-command-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          Dev Command (optional)
+                        </label>
+                        <input
+                          id={`terminal-dev-command-${index}`}
+                          type="text"
+                          value={terminal.devCommand || ""}
+                          onChange={(e) =>
+                            handleTerminalChange(index, "devCommand", e.target.value)
+                          }
+                          placeholder="e.g., npm run dev"
+                          aria-describedby={`terminal-dev-command-help-${index}`}
+                          className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                        />
+                        <p
+                          id={`terminal-dev-command-help-${index}`}
+                          className="text-xs text-text-muted mt-1 select-text"
+                        >
+                          Leave empty to use project default or auto-detect from package.json
+                        </p>
+                      </div>
+                      <div className="mt-2">
+                        <label
+                          htmlFor={`terminal-dev-exit-behavior-${index}`}
+                          className="block text-xs font-medium text-daintree-text mb-1"
+                        >
+                          After Exit
+                        </label>
+                        <select
+                          id={`terminal-dev-exit-behavior-${index}`}
+                          value={terminal.exitBehavior || "trash"}
+                          onChange={(e) =>
+                            handleTerminalChange(
+                              index,
+                              "exitBehavior",
+                              e.target.value === "trash" ? "" : e.target.value
+                            )
+                          }
+                          aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
+                          className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                        >
+                          <option value="trash">Send to Trash (default)</option>
+                          <option value="keep">Keep for Review</option>
+                          <option value="remove">Remove Completely</option>
+                        </select>
+                        <p
+                          id={`terminal-dev-exit-behavior-help-${index}`}
+                          className="text-xs text-text-muted mt-1 select-text"
+                        >
+                          {FAILURE_PRESERVE_CAPTION}
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
-
-                {terminal.type === "terminal" && (
-                  <>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-command-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        Command (optional)
-                      </label>
-                      <input
-                        id={`terminal-command-${index}`}
-                        type="text"
-                        value={terminal.command || ""}
-                        onChange={(e) => handleTerminalChange(index, "command", e.target.value)}
-                        placeholder="e.g., npm run dev"
-                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                      />
-                    </div>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-exit-behavior-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        After Exit
-                      </label>
-                      <select
-                        id={`terminal-exit-behavior-${index}`}
-                        value={terminal.exitBehavior || "trash"}
-                        onChange={(e) =>
-                          handleTerminalChange(
-                            index,
-                            "exitBehavior",
-                            e.target.value === "trash" ? "" : e.target.value
-                          )
-                        }
-                        aria-describedby={`terminal-exit-behavior-help-${index}`}
-                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                      >
-                        <option value="trash">Send to Trash (default)</option>
-                        <option value="keep">Keep for Review</option>
-                        <option value="remove">Remove Completely</option>
-                      </select>
-                      <p
-                        id={`terminal-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1 select-text"
-                      >
-                        {FAILURE_PRESERVE_CAPTION}
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                {terminal.type !== "terminal" && terminal.type !== "dev-preview" && (
-                  <>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-args-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        Arguments (optional)
-                      </label>
-                      <input
-                        id={`terminal-args-${index}`}
-                        type="text"
-                        value={terminal.args || ""}
-                        onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
-                        placeholder="e.g., --model claude-opus-4-5"
-                        aria-describedby={`terminal-args-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                      />
-                      <p
-                        id={`terminal-args-help-${index}`}
-                        className="text-xs text-text-muted mt-1 select-text"
-                      >
-                        Additional CLI arguments passed to the agent at launch
-                      </p>
-                    </div>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-initial-prompt-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        Initial Prompt (optional)
-                      </label>
-                      <textarea
-                        id={`terminal-initial-prompt-${index}`}
-                        value={terminal.initialPrompt || ""}
-                        onChange={(e) =>
-                          handleTerminalChange(index, "initialPrompt", e.target.value)
-                        }
-                        placeholder="e.g., Review the latest changes and suggest improvements"
-                        rows={2}
-                        aria-describedby={`terminal-initial-prompt-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text resize-y min-h-[60px]"
-                      />
-                      <RecipeVariablePreview
-                        initialPrompt={terminal.initialPrompt || ""}
-                        worktreeId={worktreeId ?? recipe?.worktreeId}
-                      />
-                      <p
-                        id={`terminal-initial-prompt-help-${index}`}
-                        className="text-xs text-text-muted mt-1 select-text"
-                      >
-                        Variables:{" "}
-                        <code className="text-daintree-text/70">{"{{issue_number}}"}</code>,{" "}
-                        <code className="text-daintree-text/70">{"{{pr_number}}"}</code>,{" "}
-                        <code className="text-daintree-text/70">{"{{number}}"}</code>,{" "}
-                        <code className="text-daintree-text/70">{"{{worktree_path}}"}</code>,{" "}
-                        <code className="text-daintree-text/70">{"{{branch_name}}"}</code>
-                      </p>
-                    </div>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-agent-exit-behavior-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        After Exit
-                      </label>
-                      <select
-                        id={`terminal-agent-exit-behavior-${index}`}
-                        value={terminal.exitBehavior || "keep"}
-                        onChange={(e) =>
-                          handleTerminalChange(
-                            index,
-                            "exitBehavior",
-                            e.target.value === "keep" ? "" : e.target.value
-                          )
-                        }
-                        aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
-                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                      >
-                        <option value="keep">Keep for Review (default)</option>
-                        <option value="trash">Send to Trash</option>
-                        <option value="remove">Remove Completely</option>
-                      </select>
-                      <p
-                        id={`terminal-agent-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1 select-text"
-                      >
-                        {FAILURE_PRESERVE_CAPTION}
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                {terminal.type === "dev-preview" && (
-                  <>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-dev-command-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        Dev Command (optional)
-                      </label>
-                      <input
-                        id={`terminal-dev-command-${index}`}
-                        type="text"
-                        value={terminal.devCommand || ""}
-                        onChange={(e) => handleTerminalChange(index, "devCommand", e.target.value)}
-                        placeholder="e.g., npm run dev"
-                        aria-describedby={`terminal-dev-command-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                      />
-                      <p
-                        id={`terminal-dev-command-help-${index}`}
-                        className="text-xs text-text-muted mt-1 select-text"
-                      >
-                        Leave empty to use project default or auto-detect from package.json
-                      </p>
-                    </div>
-                    <div className="mt-2">
-                      <label
-                        htmlFor={`terminal-dev-exit-behavior-${index}`}
-                        className="block text-xs font-medium text-daintree-text mb-1"
-                      >
-                        After Exit
-                      </label>
-                      <select
-                        id={`terminal-dev-exit-behavior-${index}`}
-                        value={terminal.exitBehavior || "trash"}
-                        onChange={(e) =>
-                          handleTerminalChange(
-                            index,
-                            "exitBehavior",
-                            e.target.value === "trash" ? "" : e.target.value
-                          )
-                        }
-                        aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
-                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
-                      >
-                        <option value="trash">Send to Trash (default)</option>
-                        <option value="keep">Keep for Review</option>
-                        <option value="remove">Remove Completely</option>
-                      </select>
-                      <p
-                        id={`terminal-dev-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1 select-text"
-                      >
-                        {FAILURE_PRESERVE_CAPTION}
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
 
-        {error && (
-          <div className="mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-[var(--radius-md)] text-status-error text-sm">
-            {error}
-          </div>
-        )}
-      </AppDialog.Body>
+          {error && (
+            <div className="mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-[var(--radius-md)] text-status-error text-sm">
+              {error}
+            </div>
+          )}
+        </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <Button variant="outline" onClick={() => void handleCancel()} disabled={isSaving}>
-          Cancel
-        </Button>
-        <Button onClick={handleSave} disabled={isSaving}>
-          {isSaving ? "Saving..." : recipe ? "Update Recipe" : "Create Recipe"}
-        </Button>
-      </AppDialog.Footer>
-    </AppDialog>
+        <AppDialog.Footer>
+          <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={isSaving}>
+            {isSaving ? "Saving..." : recipe ? "Update Recipe" : "Create Recipe"}
+          </Button>
+        </AppDialog.Footer>
+      </AppDialog>
+
+      <ConfirmDialog
+        isOpen={isConfirmOpen}
+        onClose={closeConfirm}
+        variant="destructive"
+        zIndex="nested"
+        title={
+          recipeDisplayName ? `Discard changes to '${recipeDisplayName}'?` : "Discard changes?"
+        }
+        description="Your edits to this recipe won't be saved"
+        confirmLabel="Discard changes"
+        onConfirm={handleDiscard}
+      />
+    </>
   );
 }

@@ -215,6 +215,7 @@ vi.mock("@dnd-kit/core", () => ({
   closestCenter: vi.fn(),
   useSensor: vi.fn(() => ({})),
   useSensors: vi.fn(() => []),
+  KeyboardSensor: class {},
   PointerSensor: class {},
   TouchSensor: class {},
 }));
@@ -222,6 +223,7 @@ vi.mock("@dnd-kit/core", () => ({
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   horizontalListSortingStrategy: vi.fn(),
+  sortableKeyboardCoordinates: vi.fn(),
   arrayMove: <T,>(arr: T[]) => arr,
 }));
 

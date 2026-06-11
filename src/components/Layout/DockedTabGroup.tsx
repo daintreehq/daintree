@@ -5,12 +5,18 @@ import {
   closestCenter,
   useSensor,
   useSensors,
+  KeyboardSensor,
   PointerSensor,
   TouchSensor,
   type DragEndEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { ChevronDown, CopyPlus } from "lucide-react";
@@ -271,8 +277,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 150, tolerance: 5 },
-    })
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  // While a tab drag is live (keyboard pickup), the tablist arrow handler must
+  // not also move focus — dnd-kit's sensor owns the arrow keys.
+  const isTabDragActiveRef = useRef(false);
+  const handleTabDragStart = useCallback(() => {
+    isTabDragActiveRef.current = true;
+  }, []);
+  const handleTabDragCancel = useCallback(() => {
+    isTabDragActiveRef.current = false;
+  }, []);
 
   // Tab IDs for sortable context
   const tabIds = useMemo(() => panels.map((p) => p.id), [panels]);
@@ -287,6 +304,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
+      isTabDragActiveRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
@@ -344,6 +362,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // do not handle those keys here — doing so would double-activate.
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isTabDragActiveRef.current) return;
       if (panels.length < 2) return;
 
       // Anchor arrow movement to the currently focused tab when one is
@@ -605,7 +624,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           <DndContext
             sensors={tabSensors}
             collisionDetection={closestCenter}
+            onDragStart={handleTabDragStart}
             onDragEnd={handleTabDragEnd}
+            onDragCancel={handleTabDragCancel}
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
             autoScroll={tabAutoScroll}
             accessibility={{ announcements: tabAnnouncements }}

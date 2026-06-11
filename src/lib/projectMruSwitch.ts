@@ -51,8 +51,8 @@ export async function switchProjectByMruDirection(
   } catch (error) {
     notify({
       type: "error",
-      title: "Failed to switch project",
-      message: formatErrorMessage(error, "Failed to switch project"),
+      title: "Couldn't switch project",
+      message: formatErrorMessage(error, "Couldn't switch project"),
       actions: [
         {
           label: "Try again",

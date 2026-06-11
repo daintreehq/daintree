@@ -165,7 +165,7 @@ export function ContentGridEmptyState({
             variant="zero-data"
             scale="canvas"
             icon={<FolderOpen />}
-            title="Open a Git repository"
+            title="Open a project folder"
             description="Worktrees let you work on multiple tasks in isolated environments"
             action={
               <Button
@@ -175,7 +175,7 @@ export function ContentGridEmptyState({
                   void actionService.dispatch("project.add", undefined, { source: "user" });
                 }}
               >
-                Open directory...
+                Open folder…
               </Button>
             }
           />

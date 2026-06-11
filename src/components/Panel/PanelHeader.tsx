@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -33,11 +34,18 @@ import {
   closestCenter,
   useSensor,
   useSensors,
+  KeyboardSensor,
   PointerSensor,
   TouchSensor,
   type DragEndEvent,
+  type UniqueIdentifier,
 } from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
 import type { PanelKind } from "@/types";
@@ -49,6 +57,7 @@ import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BellDot, FolderGit2 } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
+import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import {
   useAriaKeyshortcuts,
   useBackgroundPanelStats,
@@ -448,12 +457,45 @@ function PanelHeaderComponent({
     }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 150, tolerance: 5 },
-    })
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  // Surface-specific ARIA announcements — without this dnd-kit reads the
+  // generic English defaults ("Picked up draggable item <id>").
+  const getTabLabel = useCallback(
+    (tabId: UniqueIdentifier) => {
+      const tab = tabs?.find((t) => t.id === tabId);
+      return tab ? getBaseTitle(tab.title) : null;
+    },
+    [tabs]
+  );
+  const tabAnnouncements = useMemo(
+    () => makeSortableAnnouncements(getTabLabel, "tab"),
+    [getTabLabel]
+  );
+
+  // Restrict dnd-kit's autoscroller to the horizontal tab strip itself so its
+  // scrollable-ancestor walk doesn't scroll the surrounding panel content.
+  const tabAutoScroll = useMemo(
+    () => ({ canScroll: (el: Element) => el === tabListEl }),
+    [tabListEl]
+  );
+
+  // While a tab drag is live (keyboard pickup), the tablist arrow handler must
+  // not also move focus/selection — dnd-kit's sensor owns the arrow keys.
+  const isTabDragActiveRef = useRef(false);
+  const handleTabDragStart = useCallback(() => {
+    isTabDragActiveRef.current = true;
+  }, []);
+  const handleTabDragCancel = useCallback(() => {
+    isTabDragActiveRef.current = false;
+  }, []);
 
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
+      isTabDragActiveRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id || !tabs || !onTabReorder) return;
 
@@ -475,6 +517,7 @@ function PanelHeaderComponent({
   // Arrow key navigation for tabs (standard tablist behavior)
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isTabDragActiveRef.current) return;
       if (!tabs || tabs.length < 2 || !onTabClick) return;
 
       const currentIndex = tabs.findIndex((t) => t.isActive);
@@ -620,8 +663,12 @@ function PanelHeaderComponent({
           <DndContext
             sensors={tabSensors}
             collisionDetection={closestCenter}
+            onDragStart={handleTabDragStart}
             onDragEnd={handleTabDragEnd}
+            onDragCancel={handleTabDragCancel}
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+            autoScroll={tabAutoScroll}
+            accessibility={{ announcements: tabAnnouncements }}
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <PanelTabList

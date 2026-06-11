@@ -322,7 +322,7 @@ export const SEL = {
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
   },
   actionPalette: {
-    dialog: '[role="dialog"][aria-label="Action palette"]',
+    dialog: '[role="dialog"][aria-label="Command palette"]',
     searchInput: '[aria-label="Search actions"]',
     list: "#action-palette-list",
     options: '#action-palette-list [role="option"]',
@@ -484,7 +484,7 @@ export const SEL = {
     // Footer affordance listing the @/#/:/> prefixes; rendered only on empty query.
     discoverabilityRow: '[aria-label="Prefix shortcuts"]',
     // Mode chip (e.g. "Commands") rendered as the action-palette input prefix.
-    modeChip: '[role="dialog"][aria-label="Action palette"] [role="status"][aria-live="polite"]',
+    modeChip: '[role="dialog"][aria-label="Command palette"] [role="status"][aria-live="polite"]',
     // Sectioned-body header in the action palette MRU rail.
     recentlyUsedHeader: '#action-palette-list [aria-label="Recently used"]',
     // Non-divider rows in the action-palette listbox (excludes aria-disabled headers).

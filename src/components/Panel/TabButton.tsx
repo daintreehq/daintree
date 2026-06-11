@@ -254,14 +254,27 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     onClick();
   }, [isEditing, onClick]);
 
+  // dnd-kit's KeyboardSensor activator arrives via sortableListeners.onKeyDown
+  // and would otherwise clobber tab activation (both want Space/Enter). Split
+  // it out and compose: Space/Enter on an inactive tab activates it (APG
+  // manual activation); on the already-active tab they fall through to the
+  // sensor so the focused tab can be picked up and reordered without a mouse.
+  const { onKeyDown: sortableKeyDownListener, ...sortablePointerListeners } =
+    sortableListeners ?? {};
+  const sortableKeyDown = sortableKeyDownListener as ((e: React.KeyboardEvent) => void) | undefined;
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
+        if (isActive && sortableKeyDown) {
+          sortableKeyDown(e);
+          return;
+        }
         e.preventDefault();
         onClick();
       }
     },
-    [onClick]
+    [isActive, onClick, sortableKeyDown]
   );
 
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
@@ -288,7 +301,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           )}
           data-tab-id={id}
           {...mergedAttributes}
-          {...sortableListeners}
+          {...sortablePointerListeners}
         >
           {isActive && (
             <m.div

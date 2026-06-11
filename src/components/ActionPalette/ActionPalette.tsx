@@ -434,7 +434,7 @@ export function ActionPalette({
       renderBody={showSections ? renderSectionedBody : undefined}
       label="Actions"
       shortcut={actionPaletteShortcut}
-      ariaLabel="Action palette"
+      ariaLabel="Command palette"
       searchPlaceholder="Find an action"
       searchAriaLabel="Search actions"
       listId="action-palette-list"

@@ -91,9 +91,11 @@ const ConsoleRow = memo(function ConsoleRow({
             <button
               type="button"
               onClick={handleToggle}
+              aria-expanded={!isGroupCollapsed}
+              aria-label="Toggle console group"
               className="text-daintree-text/40 mr-1 select-none hover:text-daintree-text/60"
             >
-              {isGroupCollapsed ? "▶" : "▼"}
+              <span aria-hidden="true">{isGroupCollapsed ? "▶" : "▼"}</span>
             </button>
           )}
           {msg.args.length > 0 ? (
@@ -276,6 +278,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               key={filter}
               type="button"
               onClick={() => setLevelFilter(filter)}
+              aria-pressed={levelFilter === filter}
               className={cn(
                 buttonClass,
                 levelFilter === filter
@@ -300,6 +303,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
+          aria-label="Filter console messages"
           className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-daintree-text/30"
         />
 
@@ -313,6 +317,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
                 type="button"
                 onClick={handleScrollToBottom}
                 className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+                aria-label="Scroll to bottom"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
               </button>

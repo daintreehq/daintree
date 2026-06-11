@@ -499,7 +499,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "error",
-          title: "Failed to close project",
+          title: "Couldn't close project",
         })
       );
     });

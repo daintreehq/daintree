@@ -319,8 +319,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          title: "Failed to mute notifications",
-          message: formatErrorMessage(error, "Failed to mute project notifications"),
+          title: "Couldn't mute notifications",
+          message: formatErrorMessage(error, "Couldn't mute project notifications"),
           duration: 5000,
         });
         throw error;
@@ -428,8 +428,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
-          title: "Failed to silence notifications",
-          message: formatErrorMessage(error, `Failed to silence ${label}`),
+          title: "Couldn't silence notifications",
+          message: formatErrorMessage(error, `Couldn't silence ${label}`),
           duration: 5000,
         });
         throw error;

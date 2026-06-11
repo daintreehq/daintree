@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import type { MutableRefObject } from "react";
 import type { Active, Over } from "@dnd-kit/core";
-import { createDragAnnouncements, type DragAnnouncementRefs } from "../DndProvider";
+import {
+  createDragAnnouncements,
+  getOverDragLabel,
+  GRID_PLACEHOLDER_ID,
+  TRASH_DROPPABLE_ID,
+  type DragAnnouncementRefs,
+} from "../DndProvider";
+import { DOCK_PLACEHOLDER_ID } from "../DockPlaceholder";
 import { makeSortableAnnouncements } from "../sortableAnnouncements";
 
 // Build a refs harness with controlled values so the factory's pickup-time
@@ -416,5 +423,31 @@ describe("makeSortableAnnouncements — nested DndContext factory", () => {
         "Picked up browser tab tab-z. Press arrow keys to move, Space to drop, Escape to cancel."
       );
     });
+  });
+});
+
+describe("getOverDragLabel — synthetic droppables", () => {
+  it("names the trash droppable instead of falling back to the generic panel label", () => {
+    const label = getOverDragLabel(makeOver(TRASH_DROPPABLE_ID, undefined));
+    expect(label).not.toBe("panel");
+    expect(label).toContain("trash");
+  });
+
+  it("distinguishes the grid and dock placeholders by their container data", () => {
+    const grid = getOverDragLabel(
+      makeOver(GRID_PLACEHOLDER_ID, { container: "grid", isPlaceholder: true })
+    );
+    const dock = getOverDragLabel(
+      makeOver(DOCK_PLACEHOLDER_ID, { container: "dock", isPlaceholder: true })
+    );
+    expect(grid).not.toBe(dock);
+    expect(grid).toContain("grid");
+    expect(dock).toContain("dock");
+  });
+
+  it("still resolves panel data for ordinary droppables", () => {
+    expect(getOverDragLabel(makeOver("term-1", { terminal: { title: "Terminal" } }))).toBe(
+      "Terminal"
+    );
   });
 });
