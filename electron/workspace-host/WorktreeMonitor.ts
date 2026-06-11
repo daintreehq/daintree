@@ -66,6 +66,10 @@ const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 // match on the next stat pass without forcing a real git check.
 const STAT_ABSENT_SENTINEL = -1;
 
+// FNV-1a 32-bit offset basis. Also the digest of an empty change list, which
+// makes it the natural initial value for `previousStateHash` (see below).
+const FNV_OFFSET_BASIS = 0x811c9dc5;
+
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.floor(Math.random() * (maxMs - minMs));
@@ -135,7 +139,11 @@ export class WorktreeMonitor {
   private summary: string | undefined;
   private modifiedCount: number = 0;
   private lastActivityTimestamp: number | null = null;
-  private previousStateHash: number | null = null;
+  // Seeded with the FNV-1a offset basis — the digest of an empty change list —
+  // mirroring the legacy string implementation where the initial sentinel ""
+  // equaled the clean-tree hash, so a first poll of a clean tree reads as
+  // "no change" exactly as before.
+  private previousStateHash: number = FNV_OFFSET_BASIS;
 
   // Note state
   private aiNote: string | undefined;
@@ -1710,7 +1718,9 @@ export class WorktreeMonitor {
         return;
       }
 
-      const isInitialLoad = this.previousStateHash === null;
+      // True on initial load OR while the tree has stayed clean — the two are
+      // deliberately indistinguishable (legacy ""-hash semantics).
+      const isInitialLoad = this.previousStateHash === FNV_OFFSET_BASIS;
       const isNowClean = newChanges.changedFileCount === 0;
       const hasPendingChanges = newChanges.changedFileCount > 0;
       const shouldUpdateTimestamp =
@@ -2082,7 +2092,7 @@ export class WorktreeMonitor {
       .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
       .sort()
       .join("|");
-    let hash = 0x811c9dc5;
+    let hash = FNV_OFFSET_BASIS;
     for (let i = 0; i < hashInput.length; i++) {
       hash = Math.imul(hash ^ hashInput.charCodeAt(i), 0x01000193) >>> 0;
     }
