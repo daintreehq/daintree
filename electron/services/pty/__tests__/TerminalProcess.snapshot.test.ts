@@ -266,5 +266,72 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
       expect(terminal.getInfo().headlessTerminal).toBeUndefined();
     });
     expect(terminal.getInfo().preservedSnapshot).toBeUndefined();
+    expect(terminal.getSerializedState()).toBeNull();
+    await expect(terminal.getSerializedStateAsync()).resolves.toBeNull();
+  });
+
+  it("keeps the live headless terminal when serialization fails", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+    const addon = terminal.getInfo().serializeAddon!;
+    const spy = vi.spyOn(addon, "serialize").mockImplementationOnce(() => {
+      throw new Error("serialize boom");
+    });
+
+    pty.emitData("still readable\r\n");
+    pty.emitExit(0);
+    await vi.waitFor(() => {
+      expect(spy).toHaveBeenCalled();
+    });
+
+    const info = terminal.getInfo();
+    expect(info.preservedSnapshot).toBeUndefined();
+    expect(info.headlessTerminal).toBeDefined();
+    expect(info.serializeAddon).toBeDefined();
+    // Subsequent reads serve the live buffer.
+    expect(terminal.getSerializedState()).toContain("still readable");
+  });
+
+  it("serves the cached snapshot without re-serializing", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+    const spy = vi.spyOn(terminal.getInfo().serializeAddon!, "serialize");
+
+    pty.emitData("cache me\r\n");
+    await exitAndAwaitDispose(terminal, pty);
+
+    const callsAfterExit = spy.mock.calls.length;
+    terminal.getSerializedState();
+    terminal.getSerializedState();
+    await terminal.getSerializedStateAsync();
+    expect(spy.mock.calls.length).toBe(callsAfterExit);
+  });
+
+  it("caches and serves an empty-buffer snapshot", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+
+    await exitAndAwaitDispose(terminal, pty);
+
+    const info = terminal.getInfo();
+    expect(info.preservedSnapshot).toBeDefined();
+    expect(terminal.getSerializedState()).toBe(info.preservedSnapshot);
+    await expect(terminal.getSerializedStateAsync()).resolves.toBe(info.preservedSnapshot);
+  });
+
+  it("bails safely when dispose() lands before the drain callback fires", async () => {
+    const pty = createControllablePty();
+    const terminal = createTerminal(undefined, pty);
+
+    pty.emitData("racing output\r\n");
+    pty.emitExit(0);
+    // dispose() tears down headless synchronously, before xterm's async
+    // parser queue delivers the sentinel drain callback.
+    terminal.dispose();
+
+    expect(terminal.getInfo().headlessTerminal).toBeUndefined();
+    // Let any queued drain callback fire and hit the bail guard.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(terminal.getInfo().preservedSnapshot).toBeUndefined();
   });
 });
