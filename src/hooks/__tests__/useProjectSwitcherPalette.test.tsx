@@ -44,8 +44,9 @@ const {
     locateProject: vi.fn().mockResolvedValue(undefined),
   };
 
-  const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
-    selector(projectState)
+  const useProjectStoreMock = Object.assign(
+    vi.fn((selector: (state: typeof projectState) => unknown) => selector(projectState)),
+    { getState: () => projectState }
   );
   const notifyMock = vi.fn().mockReturnValue("");
 
@@ -446,6 +447,60 @@ describe("useProjectSwitcherPalette", () => {
       expect(projectState.closeActiveProject).toHaveBeenCalledWith("project-1");
       expect(projectState.closeProject).not.toHaveBeenCalled();
       expect(result.current.stopConfirmProjectId).toBeNull();
+    });
+
+    it("stop confirmation uses closeProject for a non-active project", async () => {
+      projectState.currentProject = null;
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        await result.current.stopProject("project-1");
+      });
+
+      expect(result.current.stopConfirmProjectId).toBe("project-1");
+
+      await act(async () => {
+        await result.current.confirmStopProject();
+      });
+
+      expect(projectState.closeProject).toHaveBeenCalledWith("project-1", { killTerminals: true });
+      expect(projectState.closeActiveProject).not.toHaveBeenCalled();
+      expect(result.current.stopConfirmProjectId).toBeNull();
+    });
+
+    it("stop confirmation uses closeProject when a different project is active", async () => {
+      projectState.currentProject = { id: "project-2" };
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        await result.current.stopProject("project-1");
+      });
+
+      await act(async () => {
+        await result.current.confirmStopProject();
+      });
+
+      expect(projectState.closeProject).toHaveBeenCalledWith("project-1", { killTerminals: true });
+      expect(projectState.closeActiveProject).not.toHaveBeenCalled();
+    });
+
+    it("stop confirmation re-evaluates isActive at confirm time, not at stopProject time", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        await result.current.stopProject("project-1");
+      });
+
+      projectState.currentProject = null;
+
+      await act(async () => {
+        await result.current.confirmStopProject();
+      });
+
+      expect(projectState.closeProject).toHaveBeenCalledWith("project-1", { killTerminals: true });
+      expect(projectState.closeActiveProject).not.toHaveBeenCalled();
     });
 
     it("confirm calls removeProject for non-active project, not closeActiveProject", async () => {

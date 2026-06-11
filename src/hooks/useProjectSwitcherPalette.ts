@@ -171,6 +171,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const addProjectFn = useProjectStore((state) => state.addProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
+  const closeProject = useProjectStore((state) => state.closeProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const locateProjectFn = useProjectStore((state) => state.locateProject);
   const projectStats = useProjectStatsStore((state) => state.stats);
@@ -509,12 +510,22 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     const capturedId = stopConfirmProjectId;
 
     try {
-      await closeActiveProject(capturedId);
+      const isActive = useProjectStore.getState().currentProject?.id === capturedId;
+      if (isActive) {
+        await closeActiveProject(capturedId);
+      } else {
+        await closeProject(capturedId, { killTerminals: true });
+      }
       setStopConfirmProjectId(null);
     } catch (error) {
       const retry = async () => {
+        const isActive = useProjectStore.getState().currentProject?.id === capturedId;
         try {
-          await closeActiveProject(capturedId);
+          if (isActive) {
+            await closeActiveProject(capturedId);
+          } else {
+            await closeProject(capturedId, { killTerminals: true });
+          }
         } catch (retryError) {
           notify({
             type: "error",
@@ -533,7 +544,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     } finally {
       setIsStoppingProject(false);
     }
-  }, [stopConfirmProjectId, closeActiveProject]);
+  }, [stopConfirmProjectId, closeActiveProject, closeProject]);
 
   const removeProjectFromList = useCallback(
     async (projectId: string) => {
