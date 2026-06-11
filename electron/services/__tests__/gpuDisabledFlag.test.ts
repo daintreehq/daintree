@@ -60,6 +60,19 @@ describe("gpuDisabledFlag", () => {
     it("ignores surrounding whitespace", () => {
       expect(parseGpuDisabledFlag("  1718105000000\n").timestamp).toBe(1718105000000);
     });
+
+    it("treats valid JSON without a reason field as a legacy crash flag", () => {
+      for (const raw of ["{}", "[]", "null", "true"]) {
+        const data = parseGpuDisabledFlag(raw);
+        expect(data.reason).toBe("crash");
+        expect(data.version).toBe(LEGACY_GPU_FLAG_VERSION);
+      }
+    });
+
+    it("zeroes a non-numeric timestamp field", () => {
+      const data = parseGpuDisabledFlag('{"reason":"user","version":"1.0.0","timestamp":"soon"}');
+      expect(data.timestamp).toBe(0);
+    });
   });
 
   describe("readGpuDisabledFlagData", () => {

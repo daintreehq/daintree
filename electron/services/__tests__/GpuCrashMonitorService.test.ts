@@ -120,6 +120,19 @@ describe("GpuCrashMonitorService", () => {
       expect(fs.existsSync(path.join(tmpDir, "gpu-disabled.flag"))).toBe(true);
     });
 
+    it("isGpuDisabledByFlag reflects a write that happens after a cached read", () => {
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
+      writeGpuDisabledFlag(tmpDir, "crash");
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+    });
+
+    it("isGpuDisabledByFlag reflects a clear that happens after a cached read", () => {
+      writeGpuDisabledFlag(tmpDir, "crash");
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
+      clearGpuDisabledFlag(tmpDir);
+      expect(isGpuDisabledByFlag(tmpDir)).toBe(false);
+    });
+
     it("writeGpuDisabledFlag persists the reason and writing app version", () => {
       appMock.getVersion.mockReturnValue("2.3.4");
       writeGpuDisabledFlag(tmpDir, "user");

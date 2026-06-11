@@ -87,6 +87,25 @@ describe("dispatchRecoveryNotifications", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
+    it("a user-disabled hydrate does not consume the one-shot crash toast guard", () => {
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          gpuHardwareAccelerationDisabled: true,
+          gpuDisabledReason: "user",
+        })
+      );
+      expect(notifyMock).not.toHaveBeenCalled();
+
+      dispatchRecoveryNotifications(
+        makeHydrateResult({
+          gpuHardwareAccelerationDisabled: true,
+          gpuDisabledReason: "crash",
+        })
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock.mock.calls[0]![0].title).toBe("Hardware acceleration disabled");
+    });
+
     it("offers a re-enable action that calls the GPU IPC bridge", () => {
       const setHardwareAcceleration = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("window", {

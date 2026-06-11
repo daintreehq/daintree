@@ -37,6 +37,7 @@ export function writeGpuDisabledFlag(userDataPath: string, reason: GpuDisabledRe
     version: app.getVersion(),
     timestamp: Date.now(),
   });
+  cachedGpuDisabledByFlag = null;
 }
 
 export function clearGpuDisabledFlag(userDataPath: string): void {
@@ -44,6 +45,7 @@ export function clearGpuDisabledFlag(userDataPath: string): void {
   if (fs.existsSync(flagPath)) {
     fs.unlinkSync(flagPath);
   }
+  cachedGpuDisabledByFlag = null;
 }
 
 export function isGpuAngleFallbackByFlag(userDataPath: string): boolean {
