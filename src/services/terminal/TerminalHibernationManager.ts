@@ -149,8 +149,11 @@ export class TerminalHibernationManager {
 
     // Dispose terminal instance — this removes xterm's injected DOM elements
     // from the hostElement but leaves the hostElement itself in the DOM
-    // so XtermAdapter's container ref stays valid for reattachment
-    const options = managed.terminal.options;
+    // so XtermAdapter's container ref stays valid for reattachment.
+    // The spread is load-bearing: `terminal.options` is a live getter proxy
+    // backed by rawOptions, and dispose() nulls rawOptions.linkHandler — a
+    // plain snapshot taken pre-dispose keeps the handler for the wake path.
+    const options = { ...managed.terminal.options };
     try {
       managed.terminal.dispose();
     } catch {
@@ -158,9 +161,19 @@ export class TerminalHibernationManager {
     }
     // Swap in a fresh un-opened placeholder so the disposed instance — and
     // with it the whole scrollback buffer graph — becomes GC-eligible for the
-    // duration of hibernation. The placeholder exists only to carry options
-    // for unhibernate(); it must never be open()-ed or given addons/listeners.
+    // duration of hibernation. The placeholder carries the options for
+    // unhibernate(); it must never be open()-ed or given listeners.
     managed.terminal = new Terminal(options);
+    // Re-point the eager addons at the placeholder. loadAddon() left each of
+    // them holding a _terminal reference, so keeping the old instances on
+    // `managed` would retain the disposed terminal's buffer graph anyway.
+    // unhibernate() overwrites all of these from its own setupTerminalAddons
+    // call; the placeholder set exists only to sever that edge while keeping
+    // the fields non-null (fit/search on an un-opened terminal are no-ops).
+    const placeholderAddons = setupTerminalAddons(managed.terminal);
+    managed.fitAddon = placeholderAddons.fitAddon;
+    managed.serializeAddon = placeholderAddons.serializeAddon;
+    managed.searchAddon = placeholderAddons.searchAddon;
 
     managed.isHibernated = true;
     managed.isOpened = false;
