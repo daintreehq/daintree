@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useProjectStore } from "@/store";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
@@ -50,11 +50,16 @@ export function FileViewerModalHost() {
 
   return (
     <ErrorBoundary variant="component" componentName="FileViewerModal" resetKeys={[openSeq]}>
+      {/* Mirrors FileDiffModal's fallback: a Doherty-gated bone in a
+          modal-shaped frame, so fast chunk loads show only the scrim. */}
       <Suspense
         fallback={
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim-medium">
-            <Spinner size="xl" className="text-text-inverse" />
-          </div>
+          <Skeleton
+            label="Loading file viewer"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-scrim-medium"
+          >
+            <SkeletonBone className="w-[min(80vw,720px)] h-[min(70vh,480px)]" />
+          </Skeleton>
         }
       >
         <LazyFileViewerModal

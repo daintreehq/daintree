@@ -278,7 +278,7 @@ describe("createApplicationMenu", () => {
 
   describe("File menu Clone Repository item", () => {
     it("has a Clone Repository... item that sends clone-repo action", () => {
-      const item = findMenuItem(capturedTemplate, "File", "Clone Repository...");
+      const item = findMenuItem(capturedTemplate, "File", "Clone Repository…");
       expect(item).toBeDefined();
       item!.click!(
         {} as Electron.MenuItem,
@@ -362,7 +362,7 @@ describe("update menu lifecycle", () => {
 
       const item = menuItemRegistry.get("check-for-updates-mac");
       expect(item).toBeDefined();
-      expect(item!.label).toBe("Restart to install update");
+      expect(item!.label).toBe("Restart to Install Update");
       expect(item!.enabled).toBe(true);
     });
 
@@ -542,7 +542,7 @@ describe("update menu lifecycle", () => {
       const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
       expect(items.some((i) => i.label === "Exit")).toBe(false);
       const fileSettings = items.find(
-        (i) => i.label === "Settings..." && i.accelerator === "CommandOrControl+,"
+        (i) => i.label === "Settings…" && i.accelerator === "CommandOrControl+,"
       );
       expect(fileSettings).toBeUndefined();
     });
@@ -560,7 +560,7 @@ describe("update menu lifecycle", () => {
       expect(last.role).toBe("quit");
       expect(penultimate.type).toBe("separator");
 
-      const settings = items.find((i) => i.label === "Settings...");
+      const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
 
@@ -578,7 +578,7 @@ describe("update menu lifecycle", () => {
       expect(last.label).toBe("Exit");
       expect(last.role).toBe("quit");
 
-      const settings = items.find((i) => i.label === "Settings...");
+      const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
     });
@@ -589,7 +589,7 @@ describe("update menu lifecycle", () => {
 
       const fileMenu = capturedTemplate.find((m) => m.label === "File");
       const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
-      const settings = items.find((i) => i.label === "Settings...");
+      const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
 
       settings!.click!(
@@ -674,7 +674,7 @@ describe("update menu lifecycle", () => {
     it("ready state sets restart label", () => {
       dispatchUpdate("ready");
       const item = menuItemRegistry.get("check-for-updates-mac");
-      expect(item!.label).toBe("Restart to install update");
+      expect(item!.label).toBe("Restart to Install Update");
       expect(item!.enabled).toBe(true);
     });
 

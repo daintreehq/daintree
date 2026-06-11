@@ -78,7 +78,9 @@ export function PluginConfirmDialog() {
         cooldownKey={current.requestId}
       >
         <div className="space-y-2">
-          <div className="text-xs text-daintree-text/60 uppercase tracking-wide">Arguments</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+            Arguments
+          </div>
           <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
             {current.argsSummary || "(none)"}
           </pre>

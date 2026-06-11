@@ -250,8 +250,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   return (
     <div className="space-y-2">
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2">Command Overrides</h3>
-        <p className="text-xs text-daintree-text/60 select-text">
+        <h3 className="text-sm font-medium text-daintree-text mb-2">Command Overrides</h3>
+        <p className="text-xs text-daintree-text/50 select-text">
           Customize command behavior for this project. Set default argument values, define custom
           prompts, or disable commands entirely.
         </p>
@@ -265,14 +265,14 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
       {/* Search and Filters */}
       <div className="flex items-center gap-3 mb-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/60" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/40" />
           <input
             type="text"
             placeholder="Search commands..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             disabled={isLoading}
-            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent disabled:opacity-60 disabled:cursor-not-allowed"
+            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent disabled:opacity-60 disabled:cursor-not-allowed"
             aria-label="Search commands"
           />
         </div>
@@ -336,7 +336,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       <ChevronRight
                         data-animated-chevron
                         className={cn(
-                          "h-4 w-4 text-daintree-text/60 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                          "w-3.5 h-3.5 text-daintree-text/60 transition-transform duration-150",
                           isExpanded && "rotate-90"
                         )}
                       />

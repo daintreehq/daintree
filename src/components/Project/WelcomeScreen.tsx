@@ -207,7 +207,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         {visibleShortcutTips.length > 0 && (
           <div className="w-full">
             <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
-              Keyboard Shortcuts
+              Keyboard shortcuts
             </h3>
             <div className="grid grid-cols-2 gap-x-8 gap-y-2">
               {visibleShortcutTips.map(({ label, actionId }) => {
@@ -331,7 +331,7 @@ function RecentProjects({
   return (
     <div className="w-full">
       <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
-        Recent Projects
+        Recent projects
       </h3>
       <div className="space-y-1">
         {projects.map((project) => (
@@ -576,7 +576,7 @@ function InlineChecklist({
     <div className="w-full">
       <div className="flex items-center gap-3 mb-3">
         <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider">
-          Getting Started
+          Getting started
         </h3>
         <span className="text-[10px] text-daintree-text/40 font-mono">
           {progressDone}/{progressTotal}

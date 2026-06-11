@@ -44,7 +44,7 @@ const UPDATE_MENU_ITEM_IDS = ["check-for-updates-mac", "check-for-updates-help"]
 const UPDATE_MENU_STATE_LABELS: Record<UpdateMenuState, { label: string; enabled: boolean }> = {
   idle: { label: "Check for Updates…", enabled: true },
   checking: { label: "Checking…", enabled: false },
-  ready: { label: "Restart to install update", enabled: true },
+  ready: { label: "Restart to Install Update", enabled: true },
 };
 
 function applyUpdateMenuState(state: UpdateMenuState): void {
@@ -162,7 +162,7 @@ export function createApplicationMenu(
       label: "File",
       submenu: [
         {
-          label: "Open Directory...",
+          label: "Open Directory…",
           accelerator: "CommandOrControl+O",
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
@@ -179,7 +179,7 @@ export function createApplicationMenu(
           },
         },
         {
-          label: "Clone Repository...",
+          label: "Clone Repository…",
           click: (_item, browserWindow) =>
             sendAction("project.cloneRepo", getTargetBrowserWindow(browserWindow)),
         },
@@ -190,7 +190,7 @@ export function createApplicationMenu(
             sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "New Worktree...",
+          label: "New Worktree…",
           accelerator: "CommandOrControl+N",
           click: (_item, browserWindow) =>
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
@@ -203,13 +203,13 @@ export function createApplicationMenu(
         ...(process.platform !== "darwin"
           ? [
               {
-                label: "Settings...",
+                label: "Settings…",
                 accelerator: "CommandOrControl+,",
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
               {
-                label: "Plugin Manager...",
+                label: "Plugin Manager…",
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
               },
@@ -411,13 +411,13 @@ export function createApplicationMenu(
           ? [...terminalPluginItems, { type: "separator" as const }]
           : []),
         {
-          label: "Quick Switcher...",
+          label: "Quick Switcher…",
           accelerator: "CommandOrControl+P",
           click: (_item, browserWindow) =>
             sendAction("nav.quickSwitcher", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "Command Palette...",
+          label: "Command Palette…",
           accelerator: "CommandOrControl+Shift+P",
           click: (_item, browserWindow) =>
             sendAction("action.palette.open", getTargetBrowserWindow(browserWindow)),
@@ -526,13 +526,13 @@ export function createApplicationMenu(
           : []),
         { type: "separator" },
         {
-          label: "Settings...",
+          label: "Settings…",
           accelerator: "CommandOrControl+,",
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "Plugin Manager...",
+          label: "Plugin Manager…",
           click: (_item, browserWindow) =>
             sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
         },

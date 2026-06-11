@@ -38,7 +38,7 @@ export function SettingsCheckbox({
 
   const scopeBadge = scope ? (
     <span
-      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+      className={`text-[10px] px-1.5 py-0.5 rounded-sm font-medium ${
         scope === "project"
           ? "bg-status-info/10 text-status-info"
           : scope === "global"

@@ -64,7 +64,7 @@ export function SettingsSelect({
 
   const scopeBadge = scope ? (
     <span
-      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+      className={`text-[10px] px-1.5 py-0.5 rounded-sm font-medium ${
         scope === "project"
           ? "bg-status-info/10 text-status-info"
           : scope === "global"
@@ -79,7 +79,7 @@ export function SettingsSelect({
   return (
     <div className="group grid grid-cols-subgrid gap-2 col-span-full">
       <div className="flex items-center gap-2">
-        <label htmlFor={id} className="text-sm text-daintree-text/70">
+        <label htmlFor={id} className="text-sm text-text-secondary">
           {label}
         </label>
         {scopeBadge}
@@ -91,7 +91,7 @@ export function SettingsSelect({
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-text",
+              "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
               "transition-colors"
@@ -125,7 +125,7 @@ export function SettingsSelect({
         </SelectContent>
       </Select>
       {description && (
-        <p id={descriptionId} className="text-xs text-daintree-text/40 select-text">
+        <p id={descriptionId} className="text-xs text-text-muted select-text">
           {description}
         </p>
       )}

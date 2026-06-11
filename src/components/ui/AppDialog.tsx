@@ -1,4 +1,12 @@
-import { useEffect, useRef, useCallback, useId, createContext, useContext } from "react";
+import {
+  useEffect,
+  useRef,
+  useCallback,
+  useId,
+  createContext,
+  useContext,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -25,7 +33,7 @@ import {
 import { X } from "lucide-react";
 import { Button } from "./button";
 
-type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "4xl" | "6xl" | "7xl";
+type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl";
 type DialogVariant = "default" | "destructive" | "info";
 type DialogZIndex = "modal" | "nested";
 type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
@@ -90,9 +98,8 @@ const sizeClasses: Record<DialogSize, string> = {
   sm: "max-w-md",
   md: "max-w-xl",
   lg: "max-w-2xl",
-  xl: "max-w-5xl",
-  "2xl": "max-w-4xl",
   "4xl": "max-w-4xl",
+  "5xl": "max-w-5xl",
   "6xl": "max-w-6xl",
   "7xl": "max-w-[min(96rem,92vw)]",
 };
@@ -343,7 +350,7 @@ export function AppDialog({
     <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
       <div
         className={cn(
-          "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-md backdrop-saturate-[1.25]",
+          "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-md backdrop-saturate-[var(--theme-material-saturation)]",
           zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           "transition-opacity",
           "motion-reduce:transition-none motion-reduce:duration-0",
@@ -378,10 +385,13 @@ export function AppDialog({
             "outline-hidden",
             className
           )}
-          style={{
-            transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
-            transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-          }}
+          style={
+            {
+              transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+              transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+              "--scroll-shadow-color": "var(--color-surface-dialog)",
+            } as CSSProperties
+          }
           onClick={(e) => e.stopPropagation()}
         >
           {children}

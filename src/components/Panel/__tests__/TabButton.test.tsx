@@ -625,4 +625,45 @@ describe("TabButton", () => {
       expect(screen.queryByText(/^Agent /)).toBeNull();
     });
   });
+
+  describe("keyboard drag pickup composition", () => {
+    it("activates an inactive tab on Space instead of forwarding to the sortable sensor", () => {
+      const onClick = vi.fn();
+      const sensorKeyDown = vi.fn();
+      render(
+        <TabButton
+          {...defaultProps}
+          isActive={false}
+          onClick={onClick}
+          sortableListeners={{ onKeyDown: sensorKeyDown }}
+        />
+      );
+      fireEvent.keyDown(screen.getByRole("tab"), { key: " " });
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(sensorKeyDown).not.toHaveBeenCalled();
+    });
+
+    it("forwards Space/Enter on the active tab to the sortable keydown so dnd-kit can pick it up", () => {
+      const onClick = vi.fn();
+      const sensorKeyDown = vi.fn();
+      render(
+        <TabButton
+          {...defaultProps}
+          isActive
+          onClick={onClick}
+          sortableListeners={{ onKeyDown: sensorKeyDown }}
+        />
+      );
+      fireEvent.keyDown(screen.getByRole("tab"), { key: "Enter" });
+      expect(sensorKeyDown).toHaveBeenCalledTimes(1);
+      expect(onClick).not.toHaveBeenCalled();
+    });
+
+    it("keeps Space activation on the active tab when no sortable listeners are wired", () => {
+      const onClick = vi.fn();
+      render(<TabButton {...defaultProps} isActive onClick={onClick} />);
+      fireEvent.keyDown(screen.getByRole("tab"), { key: " " });
+      expect(onClick).toHaveBeenCalledTimes(1);
+    });
+  });
 });

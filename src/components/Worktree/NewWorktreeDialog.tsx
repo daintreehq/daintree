@@ -605,7 +605,7 @@ export function NewWorktreeDialog({
                   notify({
                     type: "warning",
                     title: "Couldn't undo assignment",
-                    message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on ${forgeName}`,
+                    message: `${formatErrorMessage(err, "Couldn't unassign issue")} — you can unassign manually on ${forgeName}`,
                   });
                 });
             };
@@ -622,11 +622,11 @@ export function NewWorktreeDialog({
               },
             });
           } catch (assignErr) {
-            const message = formatErrorMessage(assignErr, "Failed to assign issue");
+            const message = formatErrorMessage(assignErr, "Couldn't assign issue");
             const issueUrl = snapIssue.url;
             notify({
               type: "warning",
-              title: "Could not assign issue",
+              title: "Couldn't assign issue",
               message: `${message} — you can assign it manually on ${forgeName}`,
               actions: issueUrl
                 ? [
@@ -647,11 +647,11 @@ export function NewWorktreeDialog({
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
             await spawnPanelsFromRecipe({ terminals, worktreeId, cwd: snapWorktreePath });
           } catch (cloneErr) {
-            const message = formatErrorMessage(cloneErr, "Failed to clone layout");
+            const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({
               type: "warning",
-              title: "Could not clone layout",
-              message: `${message} — worktree was created successfully`,
+              title: "Couldn't clone layout",
+              message: `${message} — the worktree itself was created`,
             });
           }
         } else if (snapSelectedRecipe) {
@@ -672,7 +672,7 @@ export function NewWorktreeDialog({
               projectId,
             });
           } catch (recipeErr) {
-            const message = formatErrorMessage(recipeErr, "Failed to run recipe");
+            const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
             const recipeId = snapSelectedRecipe.id;
             const recipePath = snapWorktreePath;
             const recipeWorktreeId = worktreeId;
@@ -684,8 +684,8 @@ export function NewWorktreeDialog({
             };
             notify({
               type: "warning",
-              title: "Could not run recipe",
-              message: `${message} — worktree was created successfully`,
+              title: "Couldn't run recipe",
+              message: `${message} — the worktree itself was created`,
               actions: [
                 {
                   label: "Retry recipe",
@@ -708,7 +708,7 @@ export function NewWorktreeDialog({
         onWorktreeCreated?.(worktreeId);
         useAnnouncerStore.getState().announce(`Created worktree ${fullBranchName}`);
       } catch (err: unknown) {
-        const message = formatErrorMessage(err, "Failed to create worktree");
+        const message = formatErrorMessage(err, "Couldn't create worktree");
         if (placeholderPath) {
           useWorktreeSelectionStore.getState().failPendingCreation(placeholderPath, message);
         } else {

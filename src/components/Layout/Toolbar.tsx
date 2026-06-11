@@ -341,7 +341,7 @@ function OverflowMenu({
                 <DropdownMenuGroup key="forge-group">
                   <DropdownMenuLabel>Git</DropdownMenuLabel>
                   <DropdownMenuItem key="forge-commits" disabled>
-                    <GitCommit className="mr-2 h-4 w-4" />
+                    <GitCommit className="mr-2 h-3.5 w-3.5" />
                     Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>,
@@ -355,18 +355,18 @@ function OverflowMenu({
                   key="forge-issues"
                   onClick={() => forgeStatsRef.current?.openIssues()}
                 >
-                  <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
+                  <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
                   Issues {repoStats?.issueCount != null ? `(${repoStats.issueCount})` : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
-                  <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
+                  <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
                   Pull Requests {repoStats?.prCount != null ? `(${repoStats.prCount})` : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   key="forge-commits"
                   onClick={() => forgeStatsRef.current?.openCommits()}
                 >
-                  <GitCommit className="mr-2 h-4 w-4" />
+                  <GitCommit className="mr-2 h-3.5 w-3.5" />
                   Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
@@ -397,7 +397,7 @@ function OverflowMenu({
           const disabled = id === "copy-tree" && !hasActiveWorktree;
           return [
             <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
-              <Icon className="mr-2 h-4 w-4" />
+              <Icon className="mr-2 h-3.5 w-3.5" />
               <span className="flex-1">
                 {meta.label}
                 {countSuffix(id)}
@@ -432,8 +432,8 @@ function AgentOverflowItem({
   const shortcut = useKeybindingDisplay(`agent.${id}`);
   return (
     <DropdownMenuItem onClick={onSelect}>
-      <span className="relative mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-4 w-4" />
+      <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
+        <Icon className="h-3.5 w-3.5" />
         {dotColor && (
           <span
             aria-hidden="true"

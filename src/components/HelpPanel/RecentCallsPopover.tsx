@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { McpAuditRecord, McpAuditResult } from "@shared/types";
@@ -77,11 +78,11 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
 
       <div className="max-h-[min(360px,var(--radix-popover-content-available-height,360px))] overflow-y-auto px-1 pb-1">
         {loading ? (
-          <div className="space-y-1.5 px-2 py-1.5" aria-hidden>
-            <div className="h-3 w-5/6 rounded bg-daintree-text/10 animate-pulse" />
-            <div className="h-3 w-4/6 rounded bg-daintree-text/10 animate-pulse" />
-            <div className="h-3 w-3/4 rounded bg-daintree-text/10 animate-pulse" />
-          </div>
+          <Skeleton label="Loading recent calls" className="space-y-1.5 px-2 py-1.5">
+            <SkeletonBone className="h-3 w-5/6" />
+            <SkeletonBone className="h-3 w-4/6" />
+            <SkeletonBone className="h-3 w-3/4" />
+          </Skeleton>
         ) : error ? (
           <p className="px-2 py-3 text-daintree-text/50">Couldn't load recent calls</p>
         ) : records.length === 0 ? (

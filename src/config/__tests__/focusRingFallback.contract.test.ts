@@ -335,7 +335,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Settings/KeyboardShortcutsTab.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-muted focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "Parent shows focus: wrapper at line 230 has `focus-within:border-daintree-accent focus-within:ring-1`",
   },
@@ -349,7 +349,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/FileViewer/FileViewerModal.tsx",
     fragment:
-      "w-44 bg-transparent text-xs text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+      "w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "Parent shows focus: the diff search bar wrapper has `focus-within:border-daintree-accent focus-within:ring-1`",
   },
@@ -368,13 +368,13 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Settings/ColorSchemePicker.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
     reason: "Parent shows focus: wrapper at line 172 has `focus-within:border-daintree-accent`",
   },
   {
     file: "src/components/ThemeBrowser/ThemeBrowser.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
     reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-daintree-accent`",
   },
   {
@@ -393,14 +393,14 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Settings/AgentSelectorDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
   },
   {
     file: "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
   },

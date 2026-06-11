@@ -13,15 +13,18 @@ interface DialogCopy {
   confirmLabel: string;
 }
 
+// Shared with TerminalContextMenu's local kill dialog so the two copies can't drift.
+export const KILL_RUNNING_AGENT_DIALOG_COPY: DialogCopy = {
+  title: "Kill terminal with running agent?",
+  description:
+    "An agent is mid-work in this terminal. Killing it stops the agent and discards its scrollback. The terminal process and any unsaved output will be lost.",
+  confirmLabel: "Kill terminal",
+};
+
 function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCopy {
   switch (pending.kind) {
     case "kill":
-      return {
-        title: "Kill terminal with running agent?",
-        description:
-          "An agent is mid-work in this terminal. Killing it stops the agent and discards its scrollback. The PTY process and any unsaved output will be lost.",
-        confirmLabel: "Kill terminal",
-      };
+      return KILL_RUNNING_AGENT_DIALOG_COPY;
     case "restart":
       return {
         title: "Restart terminal with running agent?",

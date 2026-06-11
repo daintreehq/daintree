@@ -1532,11 +1532,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               { source: "user" }
             );
           }}
-          className={`inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent ${
-            canArmMatching
-              ? "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]"
-              : "text-daintree-text/25 cursor-not-allowed"
-          }`}
+          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
           aria-label={armMatchingLabel}
         >
           <Zap className="w-3 h-3" aria-hidden="true" />

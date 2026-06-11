@@ -477,16 +477,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           } catch (retryError) {
             notify({
               type: "error",
-              title: "Failed to update project",
-              message: formatErrorMessage(retryError, "Failed to update project"),
+              title: "Couldn't update project",
+              message: formatErrorMessage(retryError, "Couldn't update project"),
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
             });
           }
         };
         notify({
           type: "error",
-          title: "Failed to update project",
-          message: formatErrorMessage(error, "Failed to update project"),
+          title: "Couldn't update project",
+          message: formatErrorMessage(error, "Couldn't update project"),
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
       }
@@ -518,16 +518,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         } catch (retryError) {
           notify({
             type: "error",
-            title: "Failed to stop project",
-            message: formatErrorMessage(retryError, "Failed to stop project"),
+            title: "Couldn't stop project",
+            message: formatErrorMessage(retryError, "Couldn't stop project"),
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           });
         }
       };
       notify({
         type: "error",
-        title: "Failed to stop project",
-        message: formatErrorMessage(error, "Failed to stop project"),
+        title: "Couldn't stop project",
+        message: formatErrorMessage(error, "Couldn't stop project"),
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
     } finally {
@@ -695,10 +695,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         } catch (retryError) {
           notify({
             type: "error",
-            title: isActive ? "Failed to close project" : "Failed to remove project",
+            title: isActive ? "Couldn't close project" : "Couldn't remove project",
             message: formatErrorMessage(
               retryError,
-              isActive ? "Failed to close project" : "Failed to remove project"
+              isActive ? "Couldn't close project" : "Couldn't remove project"
             ),
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           });
@@ -706,12 +706,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       };
       notify({
         type: "error",
-        title: removeConfirmProject.isActive
-          ? "Failed to close project"
-          : "Failed to remove project",
+        title: removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project",
         message: formatErrorMessage(
           error,
-          removeConfirmProject.isActive ? "Failed to close project" : "Failed to remove project"
+          removeConfirmProject.isActive ? "Couldn't close project" : "Couldn't remove project"
         ),
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });

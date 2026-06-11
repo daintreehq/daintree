@@ -1,6 +1,8 @@
 import { useState, useEffect, useId } from "react";
 import { Play, Bell, BellOff, Volume2, AudioLines, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsCheckbox } from "./SettingsCheckbox";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -119,6 +121,10 @@ type LoadState = "loading" | "ready" | "error";
 export function NotificationSettingsTab() {
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const loading = loadState === "loading";
+  // Gate the inline "Loading…" hint past the Doherty threshold so fast IPC
+  // resolutions don't flash a loading state for sub-400ms work.
+  const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const escalationDelayId = useId();
   const activeDaysId = useId();
 
@@ -218,10 +224,6 @@ export function NotificationSettingsTab() {
     window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
-  if (loadState === "loading") {
-    return <div className="text-sm text-daintree-text/50">Loading…</div>;
-  }
-
   if (loadState === "error") {
     return (
       <div className="text-sm text-daintree-text/60">
@@ -232,6 +234,7 @@ export function NotificationSettingsTab() {
 
   return (
     <div className="space-y-6">
+      {showInlineLoading && <p className="text-xs text-daintree-text/50">Loading…</p>}
       <SettingsSwitchCard
         variant="compact"
         title="Enable notifications"
@@ -240,9 +243,15 @@ export function NotificationSettingsTab() {
         onChange={() => update({ enabled: !settings.enabled })}
         ariaLabel="Enable notifications"
         icon={settings.enabled ? Bell : BellOff}
+        disabled={loading}
       />
 
-      <div className={cn("space-y-6", !settings.enabled && "opacity-50 pointer-events-none")}>
+      <div
+        className={cn(
+          "space-y-6",
+          (!settings.enabled || loading) && "opacity-50 pointer-events-none"
+        )}
+      >
         <SettingsSection
           icon={Bell}
           title="Agent notifications"

@@ -160,7 +160,7 @@ const ContextMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-default select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden focus:bg-overlay-raised data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[state=open]:bg-overlay-raised",
         inset && "pl-8",
         className
       )}
@@ -347,7 +347,7 @@ const ContextMenuLabel = React.forwardRef<
     <Label
       ref={ref}
       className={cn(
-        "px-2 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50",
+        "px-2.5 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50",
         inset && "pl-8",
         className
       )}

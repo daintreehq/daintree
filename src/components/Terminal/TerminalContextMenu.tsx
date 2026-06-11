@@ -19,6 +19,7 @@ import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
+import { KILL_RUNNING_AGENT_DIALOG_COPY } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import {
   ArrowDownFromLine,
   Bell,
@@ -398,13 +399,7 @@ export function TerminalContextMenu({
           break;
         case "kill":
           if (terminalHasRunningAgentSession(terminal)) {
-            setDestructiveConfirm({
-              kind: "kill",
-              title: "Kill terminal with running agent?",
-              description:
-                "An agent is mid-work in this terminal. Killing it stops the agent and discards its scrollback. The PTY process and any unsaved output will be lost.",
-              confirmLabel: "Kill terminal",
-            });
+            setDestructiveConfirm({ kind: "kill", ...KILL_RUNNING_AGENT_DIALOG_COPY });
             return;
           }
           void actionService.dispatch(
@@ -598,7 +593,7 @@ export function TerminalContextMenu({
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close browser
+            Trash browser
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
@@ -655,7 +650,7 @@ export function TerminalContextMenu({
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close dev preview
+            Trash dev preview
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />
@@ -698,7 +693,7 @@ export function TerminalContextMenu({
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Close review
+            Trash review
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             <OctagonX className={ICON_CLASS} aria-hidden="true" />

@@ -183,7 +183,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             value={gitignoreTemplate}
             onChange={(e) => setGitignoreTemplate(e.target.value as GitignoreTemplate)}
             disabled={configDisabled}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           >
             {TEMPLATE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -221,7 +221,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
               onChange={(e) => setInitialCommitMessage(e.target.value)}
               disabled={configDisabled}
               placeholder="Initial commit"
-              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
             />
           </div>
         )}

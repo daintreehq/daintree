@@ -157,12 +157,12 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).toContain("cursor-not-allowed opacity-30");
   });
 
-  it("sets aria-disabled on the disabled grip", () => {
-    expect(cardSource).toContain('aria-disabled="true"');
-  });
-
-  it("labels the disabled grip for screen readers", () => {
-    expect(cardSource).toContain('aria-label="Manual reorder paused while filter is active"');
+  it("hides the pointer-only grips from assistive tech instead of dead aria-labels", () => {
+    // The grips are role-less and non-focusable (SortableWorktreeCard strips
+    // dnd-kit's role/tabIndex), so an aria-label would claim a phantom
+    // control — keyboard reorder is the row's Alt+Arrow path.
+    expect(cardSource).not.toContain('aria-label="Drag to reorder"');
+    expect(cardSource).not.toContain('aria-label="Manual reorder paused while filter is active"');
   });
 
   it("shows the disabled explanation in a TooltipContent", () => {
@@ -176,7 +176,7 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
 
   it("keeps the enabled grip with cursor-grab and dragHandleListeners", () => {
     expect(cardSource).toContain("cursor-grab active:cursor-grabbing");
-    expect(cardSource).toContain('aria-label="Drag to reorder"');
+    expect(cardSource).toContain("{...dragHandleListeners}");
   });
 
   it("preserves the group-hover delay on the enabled grip", () => {

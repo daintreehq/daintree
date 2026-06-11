@@ -578,7 +578,7 @@ export function AgentSetupWizard({
     notify({
       type: "info",
       title: "Crash reporting off by default",
-      message: "Crash reporting is off. Enable it in Settings → Privacy & Data",
+      message: "Enable it anytime in Settings → Privacy & Data",
       priority: "low",
       countable: false,
     });
@@ -709,6 +709,13 @@ export function AgentSetupWizard({
             ))}
           </div>
           <div className="flex items-center gap-2">
+            {state.step.type === "agents" &&
+              !showLoadingSelections &&
+              selectedAgentIds.length === 0 && (
+                <span aria-live="polite" className="text-xs text-daintree-text/50">
+                  Select at least one agent to continue
+                </span>
+              )}
             {state.step.type !== "complete" &&
               (state.history.length > 0 ? (
                 <Button
@@ -784,9 +791,7 @@ function AppearanceStep({
   return (
     <section>
       <h3 className="text-base font-semibold text-daintree-text mb-2">Appearance</h3>
-      <p className="text-sm text-daintree-text/60 mb-4">
-        Choose your preferred theme. More options available in Settings.
-      </p>
+      <p className="text-sm text-daintree-text/60 mb-4">Choose your preferred theme</p>
       <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Select theme">
         {schemes.map((scheme) => {
           const isSelected = selectedSchemeId === scheme.id;
@@ -873,7 +878,7 @@ function AgentsStep({
         <p className="text-sm text-daintree-text/60 mb-4">
           Select the agents you want in your workflow. Already-installed agents are pre-selected.
           You can change this anytime from{" "}
-          <span className="text-daintree-text/80">Settings &gt; Agents</span>.
+          <span className="text-daintree-text/80">Settings → Agents</span>.
         </p>
         {isLoading ? (
           <Skeleton label="Loading agents" className="space-y-2">
@@ -1027,7 +1032,7 @@ export function CompleteStep({
         <p className="text-sm text-daintree-text/60">
           {hasAgents
             ? `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use. Launch them from the toolbar or with keyboard shortcuts.`
-            : "No agents were installed. You can install them later from Settings > Agents."}
+            : "No agents were installed. You can install them later from Settings → Agents."}
         </p>
       </div>
 
@@ -1077,7 +1082,7 @@ export function CompleteStep({
       )}
 
       <p className="text-xs text-daintree-text/40">
-        You can re-run this wizard from Settings &gt; Agents
+        You can re-run this wizard from Settings → Agents
       </p>
     </div>
   );

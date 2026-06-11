@@ -147,7 +147,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.theme.pick", () => ({
     id: "app.theme.pick",
-    title: "Pick Theme...",
+    title: "Pick Theme…",
     description: "Open the theme palette to browse and preview themes",
     category: "app",
     kind: "command",
@@ -162,13 +162,13 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.theme.browser.open", () => ({
     id: "app.theme.browser.open",
-    title: "Change Theme...",
+    title: "Browse Themes…",
     description: "Open the theme browser to preview and commit a new theme",
     category: "app",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["appearance", "colors", "scheme", "browse"],
+    keywords: ["appearance", "colors", "scheme", "browse", "change"],
     nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));

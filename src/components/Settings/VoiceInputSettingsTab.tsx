@@ -12,8 +12,7 @@ import {
   AlertCircle,
   ExternalLink,
   Sparkles,
-  ChevronDown,
-  ChevronUp,
+  ChevronRight,
   FileSearch,
   RotateCcw,
 } from "lucide-react";
@@ -565,7 +564,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
+            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -636,7 +635,10 @@ function AdvancedSection({
         onClick={() => setExpanded((v) => !v)}
         className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
       >
-        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        <ChevronRight
+          data-animated-chevron
+          className={cn("w-3.5 h-3.5 transition-transform duration-150", expanded && "rotate-90")}
+        />
         Advanced
       </button>
       {expanded && (
@@ -656,7 +658,7 @@ function AdvancedSection({
               onBlur={(e) => update({ organizationId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "org-..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors disabled:opacity-50"
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -673,7 +675,7 @@ function AdvancedSection({
               onBlur={(e) => update({ projectId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "proj_..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors disabled:opacity-50"
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -966,7 +968,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/50 transition-colors"
+          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors"
         />
         <Button
           onClick={onAdd}
@@ -1042,7 +1044,10 @@ function CorePromptViewer() {
         onClick={() => setExpanded((v) => !v)}
         className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
       >
-        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        <ChevronRight
+          data-animated-chevron
+          className={cn("w-3.5 h-3.5 transition-transform duration-150", expanded && "rotate-90")}
+        />
         Inspect core prompt
       </button>
       {expanded && (

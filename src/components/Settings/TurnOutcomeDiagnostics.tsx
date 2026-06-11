@@ -231,6 +231,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
             >
               <span className="flex items-center gap-2">
                 <ChevronRight
+                  data-animated-chevron
                   className={cn(
                     "w-3.5 h-3.5 transition-transform duration-150",
                     outcomeSectionOpen ? "rotate-90" : "rotate-0"
@@ -292,6 +293,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
             >
               <span className="flex items-center gap-2">
                 <ChevronRight
+                  data-animated-chevron
                   className={cn(
                     "w-3.5 h-3.5 transition-transform duration-150",
                     toolErrorOpen ? "rotate-90" : "rotate-0"
@@ -358,6 +360,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
             >
               <span className="flex items-center gap-2">
                 <ChevronRight
+                  data-animated-chevron
                   className={cn(
                     "w-3.5 h-3.5 transition-transform duration-150",
                     tierRejectedOpen ? "rotate-90" : "rotate-0"
@@ -426,6 +429,7 @@ export function TurnOutcomeDiagnostics({ auditRecords }: TurnOutcomeDiagnosticsP
             >
               <span className="flex items-center gap-2">
                 <ChevronRight
+                  data-animated-chevron
                   className={cn(
                     "w-3.5 h-3.5 transition-transform duration-150",
                     agentStuckOpen ? "rotate-90" : "rotate-0"

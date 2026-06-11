@@ -109,7 +109,7 @@ describe("ShortcutReferenceDialog", () => {
   it("renders all categories with no query", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    expect(screen.getByText("Keyboard Shortcuts")).toBeTruthy();
+    expect(screen.getByText("Keyboard shortcuts")).toBeTruthy();
     expect(screen.getByText("Terminal")).toBeTruthy();
     expect(screen.getByText("System")).toBeTruthy();
     expect(screen.getByText("Stash Current Input")).toBeTruthy();

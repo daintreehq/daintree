@@ -4,6 +4,7 @@ import { useEventStore, type EventRecord, type EventFilterOptions } from "@/stor
 import { Copy, Check, ChevronDown, ChevronRight, Filter, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { logError } from "@/utils/logger";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { sanitizeErrorText } from "@/utils/errorText";
 
 interface EventDetailProps {
@@ -120,6 +121,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
     try {
       await navigator.clipboard.writeText(sanitizeErrorText(formattedPayload));
       setCopied(true);
+      useAnnouncerStore.getState().announce("Payload copied");
 
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);
@@ -166,6 +168,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
             <TooltipTrigger asChild>
               <button
                 onClick={copyPayload}
+                aria-label="Copy payload"
                 className="flex-shrink-0 p-2 hover:bg-muted rounded transition-colors"
               >
                 {copied ? (
@@ -183,6 +186,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
       <div className="flex-shrink-0 border-b">
         <button
           onClick={() => toggleSection("metadata")}
+          aria-expanded={expandedSections.has("metadata")}
           className="w-full px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
         >
           {expandedSections.has("metadata") ? (
@@ -233,6 +237,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
       <div className="flex-1 flex flex-col border-b">
         <button
           onClick={() => toggleSection("payload")}
+          aria-expanded={expandedSections.has("payload")}
           className="flex-shrink-0 px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
         >
           {expandedSections.has("payload") ? (
@@ -261,6 +266,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
           <div className="flex-shrink-0">
             <button
               onClick={() => toggleSection("context")}
+              aria-expanded={expandedSections.has("context")}
               className="w-full px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
             >
               {expandedSections.has("context") ? (

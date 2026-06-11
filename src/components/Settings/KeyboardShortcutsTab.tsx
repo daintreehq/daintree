@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Search, X, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { keybindingService, type RegisteredKeybindingConfig } from "@/services/KeybindingService";
+import { formatShortcutForTooltip } from "@/lib/platform";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -242,7 +243,7 @@ export function KeyboardShortcutsTab() {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
             aria-label="Search shortcuts"
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-muted focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
           />
           {searchQuery && (
             <button
@@ -300,6 +301,40 @@ export function KeyboardShortcutsTab() {
             No shortcuts found matching "{searchQuery}"
           </div>
         )}
+
+        {/* Keyboard drag-and-drop is otherwise only discoverable through
+            screen-reader ARIA hints; surface it for sighted keyboard users.
+            Static — dnd-kit sensor interactions, not rebindable actions. */}
+        <div data-testid="list-reordering-help">
+          <h4 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider mb-2">
+            List reordering
+          </h4>
+          <div className="space-y-0">
+            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+              <span className="text-sm text-daintree-text shrink-0">Reorder panel</span>
+              <span className="text-xs text-daintree-text/60 text-right">
+                Focus the panel header, then Space to pick up, arrows to move, Space to drop, Esc to
+                cancel
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+              <span className="text-sm text-daintree-text shrink-0">Reorder tab</span>
+              <span className="text-xs text-daintree-text/60 text-right">
+                Focus the active tab, then Space to pick up, arrows to move, Space to drop
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+              <span className="text-sm text-daintree-text shrink-0">Reorder worktree</span>
+              <span className="text-xs text-daintree-text/60 text-right">
+                {formatShortcutForTooltip("Alt+Up")} / {formatShortcutForTooltip("Alt+Down")} in the
+                sidebar
+              </span>
+            </div>
+          </div>
+          <p className="text-xs text-daintree-text/40 mt-2">
+            These shortcuts are fixed and can't be rebound
+          </p>
+        </div>
       </div>
 
       <ConfirmDialog

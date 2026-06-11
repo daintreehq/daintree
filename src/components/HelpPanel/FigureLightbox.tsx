@@ -67,7 +67,7 @@ export function FigureLightbox({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
-      size="xl"
+      size="5xl"
       maxHeight="max-h-[90vh]"
       data-testid="figure-lightbox"
     >

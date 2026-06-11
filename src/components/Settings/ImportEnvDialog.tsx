@@ -126,7 +126,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-3">
+      <AppDialog.Body className="space-y-4">
         {step === "paste" ? (
           <>
             <AppDialog.Description>
@@ -141,13 +141,13 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
-              className="w-full h-56 resize-y font-mono text-[12px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 outline-hidden focus:ring-2 focus:ring-daintree-accent/40 text-daintree-text"
+              className="w-full h-56 resize-y font-mono text-[12px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 text-daintree-text"
               aria-label="Paste .env content"
               data-testid="import-env-textarea"
             />
             {hasErrors && (
               <div
-                className="rounded-[var(--radius-md)] border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-[12px] text-status-warning"
+                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-[12px] text-status-warning"
                 data-testid="import-env-errors"
               >
                 <div className="flex items-center gap-1.5 font-medium mb-1">

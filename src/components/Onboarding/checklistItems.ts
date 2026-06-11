@@ -18,21 +18,21 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
   {
     id: "openedProject",
     label: "Open your project",
-    description: "Connect a local folder — everything else flows from here.",
+    description: "Connect a local folder — everything else flows from here",
     icon: FolderOpen,
     actionId: "project.openDialog",
   },
   {
     id: "launchedAgent",
     label: "Ask AI to help with your code",
-    description: "Agents can write code, fix bugs, and answer questions about your codebase.",
+    description: "Agents can write code, fix bugs, and answer questions about your codebase",
     icon: Sprout,
     actionId: "panel.palette",
   },
   {
     id: "createdWorktree",
     label: "Start a parallel task",
-    description: "Work on two things at once without switching branches.",
+    description: "Work on two things at once without switching branches",
     icon: FolderGit2,
     actionId: "worktree.createDialog.open",
   },
@@ -40,7 +40,7 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     id: "ranSecondParallelAgent",
     label: "Run two agents in parallel",
     description:
-      "Kick off a second agent while the first keeps working — that's the Daintree superpower.",
+      "Kick off a second agent while the first keeps working — that's the Daintree superpower",
     icon: Plug,
     actionId: "panel.palette",
   },

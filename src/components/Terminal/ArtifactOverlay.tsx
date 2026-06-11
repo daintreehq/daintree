@@ -429,7 +429,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         <button
           onClick={() => setIsExpanded(true)}
           className={cn(
-            "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
+            "px-3 py-2 rounded-[var(--radius-md)] bg-daintree-bg shadow-[var(--theme-shadow-floating)]",
             "border border-status-info/30 text-status-info hover:bg-status-info/10",
             "text-sm font-medium transition-colors",
             "flex items-center gap-2"

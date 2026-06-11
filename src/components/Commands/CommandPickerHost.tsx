@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCommandStore } from "@/store/commandStore";
 import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
@@ -51,6 +52,11 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
     }))
   );
 
+  // Sub-400ms builder loads go straight from the picker to CommandBuilder with
+  // a single dialog enter animation; the spinner dialog only mounts for
+  // genuinely slow loads.
+  const showBuilderLoading = useDohertyGate(isLoadingBuilder);
+
   useEffect(() => {
     if (isPickerOpen) {
       loadCommands(context);
@@ -101,7 +107,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
         onDismiss={closePicker}
       />
 
-      {activeCommand && isLoadingBuilder && (
+      {activeCommand && showBuilderLoading && (
         <AppDialog isOpen={true} onClose={handleBuilderCancel} size="md">
           <AppDialog.Header>
             <AppDialog.Title>{activeCommand.label}</AppDialog.Title>
@@ -109,8 +115,8 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
           </AppDialog.Header>
           <AppDialog.Body>
             <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <Spinner size="2xl" className="text-daintree-accent" />
-              <p className="text-sm text-daintree-text/70">Loading command configuration...</p>
+              <Spinner size="2xl" className="text-daintree-text/40" />
+              <p className="text-sm text-daintree-text/70">Loading command configuration…</p>
             </div>
           </AppDialog.Body>
         </AppDialog>

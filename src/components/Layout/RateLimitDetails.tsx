@@ -123,7 +123,7 @@ function RateLimitBucketRow({ label, bucket, now }: RateLimitBucketRowProps) {
         <span
           className={cn(
             "text-[13px] font-medium leading-none",
-            exhausted ? "text-text-primary" : "text-daintree-text"
+            exhausted ? "text-text-primary" : "text-text-secondary"
           )}
         >
           {label}

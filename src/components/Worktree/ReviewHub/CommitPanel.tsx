@@ -387,7 +387,7 @@ export function CommitPanel({
           // Fallback keeps themes without --review-commit-input-bg byte-identical.
           "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-daintree-bg))] px-3 py-2 text-xs font-mono",
           "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
-          "placeholder:text-daintree-text/30 text-daintree-text",
+          "placeholder:text-text-placeholder text-daintree-text",
           "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed"
         )}

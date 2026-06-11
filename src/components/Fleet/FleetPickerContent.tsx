@@ -2,6 +2,7 @@ import { useCallback, useMemo, type ReactElement } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { CheckIcon, MinusIcon, Search } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { Kbd } from "@/components/ui/Kbd";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -106,26 +107,17 @@ export function FleetPickerContent({
   return (
     <div className="flex flex-1 flex-col min-h-0" data-testid={`${testIdPrefix}-root`}>
       <div className="px-4 py-3 border-b border-daintree-border shrink-0">
-        <div className="relative">
-          <Search
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-daintree-text/40 pointer-events-none"
-            aria-hidden="true"
-          />
-          <input
-            autoFocus={autoFocusSearch}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search terminals, worktrees, branches, or recent output"
-            aria-label="Search terminals"
-            className={cn(
-              "w-full rounded border border-daintree-border bg-daintree-bg pl-8 pr-3 py-1.5 text-[13px] text-daintree-text",
-              "placeholder:text-daintree-text/40",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-            )}
-            data-testid={`${testIdPrefix}-search`}
-          />
-        </div>
+        <AppPaletteDialog.Input
+          inputPrefix={
+            <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+          }
+          autoFocus={autoFocusSearch}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search terminals, worktrees, branches, or recent output"
+          aria-label="Search terminals"
+          data-testid={`${testIdPrefix}-search`}
+        />
         {headerSlot}
       </div>
 
@@ -207,13 +199,13 @@ export function FleetPickerFooterHint({
   return (
     <>
       <span className="inline-flex items-center gap-1">
-        <Kbd>↑</Kbd>
-        <Kbd>↓</Kbd>
+        <kbd className={KBD_CLASS}>↑</kbd>
+        <kbd className={KBD_CLASS}>↓</kbd>
         <span>Move</span>
       </span>
       <span className="text-daintree-text/30">·</span>
       <span className="inline-flex items-center gap-1">
-        <Kbd>Space</Kbd>
+        <kbd className={KBD_CLASS}>Space</kbd>
         <span>Toggle</span>
       </span>
       <ShortcutsPopover />

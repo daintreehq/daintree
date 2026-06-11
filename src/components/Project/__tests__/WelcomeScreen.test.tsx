@@ -311,7 +311,7 @@ describe("WelcomeScreen", () => {
   it("renders recent projects sorted by frecencyScore descending", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Recent Projects")).toBeTruthy();
+    expect(screen.getByText("Recent projects")).toBeTruthy();
 
     const projectNames = screen
       .getAllByText(/Project (Alpha|Beta|Gamma)/)
@@ -323,7 +323,7 @@ describe("WelcomeScreen", () => {
     storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.queryByText("Recent Projects")).toBeNull();
+    expect(screen.queryByText("Recent projects")).toBeNull();
   });
 
   it("calls switchProject when a recent project is clicked", () => {
@@ -364,7 +364,7 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByText("Install Daintree")).toBeTruthy();
-    expect(screen.getByText("Getting Started")).toBeTruthy();
+    expect(screen.getByText("Getting started")).toBeTruthy();
   });
 
   it("shows correct progress ratio with endowed item", () => {
@@ -422,26 +422,26 @@ describe("WelcomeScreen", () => {
   it("hides checklist when dismissed", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(dismissed)} />);
 
-    expect(screen.queryByText("Getting Started")).toBeNull();
+    expect(screen.queryByText("Getting started")).toBeNull();
     expect(screen.queryByText("Install Daintree")).toBeNull();
   });
 
   it("hides checklist when all items are complete", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allComplete)} />);
 
-    expect(screen.queryByText("Getting Started")).toBeNull();
+    expect(screen.queryByText("Getting started")).toBeNull();
   });
 
   it("hides checklist when checklist is null", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
-    expect(screen.queryByText("Getting Started")).toBeNull();
+    expect(screen.queryByText("Getting started")).toBeNull();
   });
 
   it("hides checklist when visible is false", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete, false)} />);
 
-    expect(screen.queryByText("Getting Started")).toBeNull();
+    expect(screen.queryByText("Getting started")).toBeNull();
     expect(screen.queryByText("Install Daintree")).toBeNull();
   });
 
@@ -455,7 +455,7 @@ describe("WelcomeScreen", () => {
 
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allComplete)} />);
     // All done — checklist is hidden (showChecklist is false when allDone)
-    expect(screen.queryByText("Getting Started")).toBeNull();
+    expect(screen.queryByText("Getting started")).toBeNull();
   });
 
   it("renders progress at 100% width when all items complete", () => {
@@ -633,7 +633,7 @@ describe("WelcomeScreen", () => {
 
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.queryByText("Keyboard Shortcuts")).toBeNull();
+    expect(screen.queryByText("Keyboard shortcuts")).toBeNull();
   });
 
   it("renders Keyboard Shortcuts section when only one combo is available", () => {
@@ -644,7 +644,7 @@ describe("WelcomeScreen", () => {
 
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Keyboard Shortcuts")).toBeTruthy();
+    expect(screen.getByText("Keyboard shortcuts")).toBeTruthy();
     const kbdElements = document.querySelectorAll("kbd");
     expect(kbdElements.length).toBe(1);
     expect(kbdElements[0]!.textContent).toBe("⌘N");
@@ -762,7 +762,7 @@ describe("WelcomeScreen", () => {
   it("renders keyboard shortcuts inside kbd elements", () => {
     const { container } = render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getAllByText("Keyboard Shortcuts").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Keyboard shortcuts").length).toBeGreaterThanOrEqual(1);
 
     const kbdElements = container.querySelectorAll("kbd");
     expect(kbdElements.length).toBeGreaterThanOrEqual(6);
@@ -790,13 +790,13 @@ describe("WelcomeScreen", () => {
   it("shows recent projects before checklist for returning users", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    const recentProjects = screen.getByText("Recent Projects");
+    const recentProjects = screen.getByText("Recent projects");
 
     // Recent Projects should appear before Getting Started in DOM order
     const container = recentProjects.closest("[class*='max-w-2xl']")!;
     const headings = Array.from(container.querySelectorAll("h3"));
-    const recentIdx = headings.findIndex((h) => h.textContent?.includes("Recent Projects"));
-    const checklistIdx = headings.findIndex((h) => h.textContent?.includes("Getting Started"));
+    const recentIdx = headings.findIndex((h) => h.textContent?.includes("Recent projects"));
+    const checklistIdx = headings.findIndex((h) => h.textContent?.includes("Getting started"));
     expect(recentIdx).toBeLessThan(checklistIdx);
   });
 
@@ -804,8 +804,8 @@ describe("WelcomeScreen", () => {
     storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    expect(screen.queryByText("Recent Projects")).toBeNull();
-    expect(screen.getByText("Getting Started")).toBeTruthy();
+    expect(screen.queryByText("Recent projects")).toBeNull();
+    expect(screen.getByText("Getting started")).toBeTruthy();
   });
 
   // --- Agent Welcome Card (#5111) ---
@@ -994,7 +994,7 @@ describe("WelcomeScreen", () => {
 
       expect(screen.getByTestId("agent-setup-banner")).toBeTruthy();
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
-      expect(screen.queryByText("Getting Started")).toBeNull();
+      expect(screen.queryByText("Getting started")).toBeNull();
     });
 
     it("shows the welcome card and suppresses the checklist once the setup banner is dismissed", () => {
@@ -1008,7 +1008,7 @@ describe("WelcomeScreen", () => {
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
       expect(screen.getByText(/Installed agents found/)).toBeTruthy();
-      expect(screen.queryByText("Getting Started")).toBeNull();
+      expect(screen.queryByText("Getting started")).toBeNull();
     });
 
     it("falls through to the checklist when no agents are installed and the banner is dismissed", () => {
@@ -1019,7 +1019,7 @@ describe("WelcomeScreen", () => {
 
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-      expect(screen.getByText("Getting Started")).toBeTruthy();
+      expect(screen.getByText("Getting started")).toBeTruthy();
     });
 
     it("falls through to the checklist when scan finished but no agents are launchable", () => {
@@ -1032,7 +1032,7 @@ describe("WelcomeScreen", () => {
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
-      expect(screen.getByText("Getting Started")).toBeTruthy();
+      expect(screen.getByText("Getting started")).toBeTruthy();
     });
 
     it("falls through to the checklist when an agent is already pinned", () => {
@@ -1046,7 +1046,7 @@ describe("WelcomeScreen", () => {
       render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
-      expect(screen.getByText("Getting Started")).toBeTruthy();
+      expect(screen.getByText("Getting started")).toBeTruthy();
     });
 
     it("renders nothing while onboarding state is hydrating", () => {
@@ -1061,7 +1061,7 @@ describe("WelcomeScreen", () => {
 
       expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
       expect(screen.queryByText(/Installed agents found/)).toBeNull();
-      expect(screen.queryByText("Getting Started")).toBeNull();
+      expect(screen.queryByText("Getting started")).toBeNull();
     });
   });
 

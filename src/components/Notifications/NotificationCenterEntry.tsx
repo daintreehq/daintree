@@ -520,7 +520,7 @@ function RowOptionsMenu({
                 onUnsnooze?.();
               }}
             >
-              <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+              <Clock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               {snoozedUntil !== undefined
                 ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
                 : "Unsnooze"}
@@ -528,7 +528,7 @@ function RowOptionsMenu({
           ) : (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+                <Clock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Snooze
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
@@ -548,13 +548,13 @@ function RowOptionsMenu({
         {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
         {supportsCopyCorrelationId && (
           <DropdownMenuItem onSelect={handleCopyCorrelationId}>
-            <Copy className="mr-2 h-3 w-3" aria-hidden="true" />
+            <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Copy correlation ID
           </DropdownMenuItem>
         )}
         {supportsGoToSource && (
           <DropdownMenuItem onSelect={handleGoToSource}>
-            <ArrowRight className="mr-2 h-3 w-3" aria-hidden="true" />
+            <ArrowRight className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Go to source
           </DropdownMenuItem>
         )}
@@ -565,7 +565,7 @@ function RowOptionsMenu({
               void handleReportOnGitHub();
             }}
           >
-            <Bug className="mr-2 h-3 w-3" aria-hidden="true" />
+            <Bug className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Report on GitHub
           </DropdownMenuItem>
         )}

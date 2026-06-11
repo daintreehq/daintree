@@ -132,8 +132,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           } catch (retryErr) {
             notify({
               type: "error",
-              title: "Failed to load settings",
-              message: "Privacy settings could not be loaded.",
+              title: "Couldn't load settings",
+              message: "Privacy settings couldn't be loaded.",
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
             });
             logError("Failed to load privacy settings", retryErr);
@@ -141,8 +141,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         };
         notify({
           type: "error",
-          title: "Failed to load settings",
-          message: "Privacy settings could not be loaded.",
+          title: "Couldn't load settings",
+          message: "Privacy settings couldn't be loaded.",
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
         });
         logError("Failed to load privacy settings", err);
@@ -171,8 +171,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           setTelemetryLevel(prev);
           notify({
             type: "error",
-            title: "Failed to save setting",
-            message: "Telemetry level could not be saved.",
+            title: "Couldn't save setting",
+            message: "Telemetry level couldn't be saved.",
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           });
           logError("Failed to set telemetry level", retryErr);
@@ -180,8 +180,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       };
       notify({
         type: "error",
-        title: "Failed to save setting",
-        message: "Telemetry level could not be saved.",
+        title: "Couldn't save setting",
+        message: "Telemetry level couldn't be saved.",
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
       logError("Failed to set telemetry level", err);
@@ -203,8 +203,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           setLogRetentionDays(prev);
           notify({
             type: "error",
-            title: "Failed to save setting",
-            message: "Log retention could not be saved.",
+            title: "Couldn't save setting",
+            message: "Log retention couldn't be saved.",
             actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           });
           logError("Failed to set log retention", retryErr);
@@ -212,8 +212,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       };
       notify({
         type: "error",
-        title: "Failed to save setting",
-        message: "Log retention could not be saved.",
+        title: "Couldn't save setting",
+        message: "Log retention couldn't be saved.",
         actions: [{ label: "Try again", variant: "primary", onClick: retry }],
       });
       logError("Failed to set log retention", err);

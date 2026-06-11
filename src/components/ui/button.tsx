@@ -34,7 +34,7 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
         ghost:
           "text-text-secondary hover:bg-overlay-soft hover:text-daintree-text focus-visible:text-daintree-text",
-        link: "text-primary underline-offset-4 hover:underline",
+        link: "text-text-link underline-offset-4 hover:underline",
         subtle:
           "bg-surface-panel text-text-secondary ring-1 ring-border-strong hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text",
         pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text",

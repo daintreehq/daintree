@@ -46,7 +46,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
     try {
       const exists = await systemClient.checkDirectory(newCwd);
       if (!exists) {
-        setValidationError("Directory does not exist");
+        setValidationError("Directory doesn't exist");
         return;
       }
 
@@ -57,7 +57,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
 
       onClose();
     } catch (error) {
-      setValidationError("Could not restart terminal. Please try again.");
+      setValidationError("Couldn't restart terminal. Try again.");
       logError("Failed to update CWD and restart", error);
     } finally {
       setValidating(false);
@@ -92,7 +92,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-daintree-text/70 mb-1">
-              Current (invalid):
+              Current directory
             </label>
             <code className="block p-2 bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-status-error/30 rounded text-sm text-status-error font-mono truncate">
               {currentCwd}
@@ -104,7 +104,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
               htmlFor="new-cwd-input"
               className="block text-sm font-medium text-daintree-text/70 mb-1"
             >
-              New Directory:
+              New directory
             </label>
             <input
               ref={inputRef}
@@ -140,7 +140,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
           Cancel
         </Button>
         <Button onClick={handleUpdate} disabled={validating}>
-          {validating ? "Updating..." : "Update & Restart"}
+          {validating ? "Updating…" : "Update and restart"}
         </Button>
       </AppDialog.Footer>
     </AppDialog>
