@@ -6,7 +6,7 @@ interface ScrollbackPolicy {
   minLines: number;
 }
 
-const AGENT_POLICY: ScrollbackPolicy = { multiplier: 1.5, maxLines: 5000, minLines: 500 };
+const AGENT_POLICY: ScrollbackPolicy = { multiplier: 5, maxLines: 5000, minLines: 500 };
 const PLAIN_POLICY: ScrollbackPolicy = { multiplier: 0.3, maxLines: 2000, minLines: 200 };
 
 /**
