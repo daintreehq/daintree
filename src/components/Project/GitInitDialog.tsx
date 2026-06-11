@@ -39,6 +39,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const hasFinalizedSuccessRef = useRef(false);
   const inFlightRef = useRef(false);
   const sawTerminalEventRef = useRef(false);
+  const sawErrorEventRef = useRef(false);
 
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedSuccessRef.current) {
@@ -60,6 +61,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
       hasFinalizedSuccessRef.current = false;
       inFlightRef.current = false;
       sawTerminalEventRef.current = false;
+      sawErrorEventRef.current = false;
       return;
     }
 
@@ -68,14 +70,18 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
 
       if (event.status === "error") {
         sawTerminalEventRef.current = true;
+        sawErrorEventRef.current = true;
         setError(event.error || event.message || "Unknown error");
         setIsComplete(false);
         setIsInitializing(false);
       } else if (event.step === "complete" && event.status === "success") {
         sawTerminalEventRef.current = true;
-        setError(null);
-        setIsComplete(true);
-        setIsInitializing(false);
+        // A success event never follows an error event within one run — treat it as stale/foreign
+        if (!sawErrorEventRef.current) {
+          setError(null);
+          setIsComplete(true);
+          setIsInitializing(false);
+        }
       }
     });
 
@@ -92,6 +98,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     }
     inFlightRef.current = true;
     sawTerminalEventRef.current = false;
+    sawErrorEventRef.current = false;
 
     setIsInitializing(true);
     setError(null);
@@ -100,14 +107,17 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     hasFinalizedSuccessRef.current = false;
 
     try {
-      await projectClient.initGitGuided({
+      const result = await projectClient.initGitGuided({
         directoryPath,
         createInitialCommit,
         initialCommitMessage: initialCommitMessage.trim(),
         createGitignore: gitignoreTemplate !== "none",
         gitignoreTemplate,
       });
-      if (!sawTerminalEventRef.current) {
+      if (result.outcome === "success") {
+        setError(null);
+        setIsComplete(true);
+      } else if (!sawTerminalEventRef.current) {
         setError(
           "Initialization finished without a status update — check the repository to confirm the result."
         );
