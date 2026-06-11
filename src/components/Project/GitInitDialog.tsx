@@ -73,6 +73,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
         setIsInitializing(false);
       } else if (event.step === "complete" && event.status === "success") {
         sawTerminalEventRef.current = true;
+        setError(null);
         setIsComplete(true);
         setIsInitializing(false);
       }
@@ -157,6 +158,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const showConnecting = useDohertyGate(isInitializing && progressEvents.length === 0);
   const showProgress = showConnecting || progressEvents.length > 0;
   const configDisabled = isInitializing || isComplete;
+  const canStart = !createInitialCommit || initialCommitMessage.trim() !== "";
 
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
@@ -289,7 +291,10 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             <Button variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button onClick={() => void startInitialization()} disabled={isInitializing}>
+            <Button
+              onClick={() => void startInitialization()}
+              disabled={isInitializing || !canStart}
+            >
               Try again
             </Button>
           </>
@@ -300,7 +305,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             </Button>
             <Button
               onClick={() => void startInitialization()}
-              disabled={isInitializing}
+              disabled={isInitializing || !canStart}
               loading={isInitializing}
             >
               Initialize repository
