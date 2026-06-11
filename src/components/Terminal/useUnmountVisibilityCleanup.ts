@@ -11,6 +11,12 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
  * (#10416). restartKey is in the deps because a restart re-attaches under a
  * new generation — without re-capturing, the final real unmount would be
  * mistaken for a stale cleanup and skipped.
+ *
+ * StrictMode double-invoke is safe: XtermAdapter's attach (useLayoutEffect,
+ * generation bump) replays before this passive effect first runs, so the
+ * captured generation matches the live mount and the replayed cleanup writes
+ * false at worst transiently — the IntersectionObserver's first real reading
+ * restores it, same as the unguarded cleanup this hook replaced.
  */
 export function useUnmountVisibilityCleanup(
   id: string,

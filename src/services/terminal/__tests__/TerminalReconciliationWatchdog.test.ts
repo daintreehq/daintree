@@ -316,6 +316,46 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(managed.lastWatchdogRepairAt).toBeUndefined();
     });
 
+    it("leaves a policy BACKGROUND tier alone even when the applied tier is also BACKGROUND", () => {
+      const managed = makeManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+      });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
+      expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
+      expect(deps.repairStoreVisibility).not.toHaveBeenCalled();
+      expect(managed.lastWatchdogRepairAt).toBeUndefined();
+    });
+
+    it("rate-limits via cooldown when the store repair fails to converge", () => {
+      // If repairStoreVisibility doesn't take (store keeps reporting hidden),
+      // the watchdog must degrade to periodic cooldown-spaced retries — the
+      // pre-#10416 behavior — not a per-tick repair loop.
+      const managed = makeManaged({
+        lastAppliedTier: TerminalRefreshTier.VISIBLE,
+        getRefreshTier: () => TerminalRefreshTier.BACKGROUND,
+      });
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, { isStoreHidden: vi.fn(() => true) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledTimes(1);
+      expect(managed.lastWatchdogRepairAt).toBeGreaterThan(0);
+
+      // Inside the cooldown window — no retry.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledTimes(1);
+
+      // Past the cooldown — the still-diverged store retries.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.repairStoreVisibility).toHaveBeenCalledTimes(2);
+    });
+
     it("repairs poisoned store visibility and applies the re-derived tier", () => {
       // The warm-swap split from #10416: store isVisible=false while service
       // and DOM agree the terminal is on-screen.

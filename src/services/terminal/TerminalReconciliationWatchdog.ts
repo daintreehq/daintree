@@ -229,7 +229,10 @@ export class TerminalReconciliationWatchdog {
       // A BACKGROUND computed tier with store visibility intact is store
       // policy (completed/exited agent, exited process, PTY-less panel) —
       // hibernation eligibility, not divergence. Repairing it would fight
-      // the policy on every tick, forever (#10416).
+      // the policy on every tick, forever (#10416). Applies regardless of
+      // appliedTier: when both tiers sit at BACKGROUND the applied state
+      // already matches policy, and an applied-only BACKGROUND divergence
+      // (computed tier active) skips this guard and repairs below.
       if (computedTier === TerminalRefreshTier.BACKGROUND && !storeHidden) return 0;
       if (heavyBudget <= 0) return 0;
       managed.lastWatchdogRepairAt = now;
