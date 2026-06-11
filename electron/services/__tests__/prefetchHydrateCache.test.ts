@@ -25,6 +25,7 @@ function makeHydrate(projectId: string): HydrateResult {
     agentSettings: {} as HydrateResult["agentSettings"],
     gpuWebGLHardware: true,
     gpuHardwareAccelerationDisabled: false,
+    gpuDisabledReason: null,
     gpuAngleFallbackActive: false,
     safeMode: false,
     isWindowsStore: false,
