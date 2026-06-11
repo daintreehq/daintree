@@ -185,9 +185,67 @@ describe("useArtifacts module-level store teardown", () => {
     __test_simulateArtifactDetected("t1", overflow);
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener.mock.calls[0]![1]).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    const notified = listener.mock.calls[0]![1] as Artifact[];
+    expect(notified).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(notified[0]!.id).toBe("a1");
+    expect(notified[notified.length - 1]!.id).toBe(`a${MAX_ARTIFACTS_PER_TERMINAL}`);
 
     unsubscribe();
+  });
+
+  it("an empty detection batch is a no-op — no store entry, no notification", () => {
+    const listener = vi.fn();
+    const unsubscribe = __test_subscribeArtifactStore(listener);
+
+    const accepted = __test_simulateArtifactDetected("ghost", []);
+
+    expect(accepted).toBe(true);
+    expect(__test_getArtifactsFor("ghost")).toBeUndefined();
+    expect(__test_getArtifactStoreSize()).toBe(0);
+    expect(listener).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  it("applies the cap from a clean slate after a live clearArtifacts", () => {
+    const { result } = renderHook(() => useArtifacts("live-cap"));
+
+    act(() => {
+      __test_simulateArtifactDetected(
+        "live-cap",
+        Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) => makeArtifact({ id: `a${i}` }))
+      );
+    });
+    act(() => {
+      result.current.clearArtifacts();
+    });
+
+    act(() => {
+      __test_simulateArtifactDetected(
+        "live-cap",
+        Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL + 10 }, (_, i) =>
+          makeArtifact({ id: `b${i}` })
+        )
+      );
+    });
+
+    const stored = __test_getArtifactsFor("live-cap")!;
+    expect(stored).toHaveLength(MAX_ARTIFACTS_PER_TERMINAL);
+    expect(stored[0]!.id).toBe("b10");
+  });
+
+  it("tombstone still blocks a late packet on a terminal that was at cap", () => {
+    __test_simulateArtifactDetected(
+      "t1",
+      Array.from({ length: MAX_ARTIFACTS_PER_TERMINAL }, (_, i) => makeArtifact({ id: `a${i}` }))
+    );
+
+    removeArtifactsForTerminal("t1");
+
+    const accepted = __test_simulateArtifactDetected("t1", [makeArtifact({ id: "late" })]);
+    expect(accepted).toBe(false);
+    expect(__test_getArtifactStoreSize()).toBe(0);
+    expect(__test_isTombstoned("t1")).toBe(true);
   });
 
   it("removeArtifactsForTerminal still clears a capped terminal", () => {

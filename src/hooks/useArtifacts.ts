@@ -45,6 +45,10 @@ function appendArtifacts(terminalId: string, artifacts: Artifact[]): boolean {
   if (removedTerminals.has(terminalId)) {
     return false;
   }
+  // An empty batch must not create a Map entry or notify listeners.
+  if (artifacts.length === 0) {
+    return true;
+  }
   const currentArtifacts = artifactStore.get(terminalId) || [];
   const merged = [...currentArtifacts, ...artifacts];
   const newArtifacts =
