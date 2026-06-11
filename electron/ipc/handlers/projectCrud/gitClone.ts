@@ -205,7 +205,7 @@ export function registerGitCloneHandlers(): () => void {
           // omits the URL for the same reason.
           cloneUrl = (await cloneCapability.getAuthenticatedCloneUrl(url).catch(() => null)) ?? url;
         }
-        const git = createAuthenticatedGit(parentPath, {
+        const git = await createAuthenticatedGit(parentPath, {
           signal: localController.signal,
           progress({ stage, progress }) {
             // Sentence-case the display label (git emits lowercase, e.g.

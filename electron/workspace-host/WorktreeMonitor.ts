@@ -1981,8 +1981,8 @@ export class WorktreeMonitor {
 
     const wsl = this.wslInvocation;
     const git = wsl
-      ? createWslHardenedGit(wsl, this._pollAbortController.signal)
-      : createHardenedGit(this.path, this._pollAbortController.signal);
+      ? await createWslHardenedGit(wsl, this._pollAbortController.signal)
+      : await createHardenedGit(this.path, this._pollAbortController.signal);
 
     try {
       // Resolve base ref via the rev-list itself: try origin/<branch> first
@@ -2089,8 +2089,8 @@ export class WorktreeMonitor {
     try {
       const wsl = this.wslInvocation;
       const git = wsl
-        ? createWslHardenedGit(wsl, this._pollAbortController.signal)
-        : createHardenedGit(this.path, this._pollAbortController.signal);
+        ? await createWslHardenedGit(wsl, this._pollAbortController.signal)
+        : await createHardenedGit(this.path, this._pollAbortController.signal);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

@@ -280,7 +280,7 @@ export class RepoFetchCoordinator {
     const timeout = setTimeout(() => controller.abort(), FETCH_ABORT_TIMEOUT_MS);
     let succeeded = false;
     try {
-      const git = createBackgroundFetchGit(opts.worktreePath, {
+      const git = await createBackgroundFetchGit(opts.worktreePath, {
         signal: controller.signal,
       });
       // --no-write-fetch-head: skip writing FETCH_HEAD on background fetches

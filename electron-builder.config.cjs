@@ -1,4 +1,63 @@
 const PACKAGE_VERSION = require("./package.json").version;
+const path = require("path");
+const fs = require("fs");
+
+// Packages require()d from node_modules at runtime — the esbuild `external`
+// list in scripts/build-main.mjs (minus "electron"). Everything else under
+// node_modules is already bundled into dist/dist-electron by Vite/esbuild and
+// is dead weight in the ASAR (~10k files, issue #10395).
+const RUNTIME_NODE_MODULE_ROOTS = [
+  "@parcel/watcher",
+  "node-pty",
+  "better-sqlite3",
+  "win-job-object",
+  "posix-pty-reaper",
+  "copytree",
+  "onnxruntime-node",
+  "avr-vad",
+];
+
+/**
+ * Walk the production dependency closure (dependencies + optional + peer,
+ * skipping packages not installed) of the given root package names, resolving
+ * against the top-level node_modules.
+ */
+function collectDependencyClosure(rootNames) {
+  const closure = new Set();
+  const queue = [...rootNames];
+  while (queue.length > 0) {
+    const name = queue.pop();
+    if (closure.has(name)) continue;
+    const manifestPath = path.join(__dirname, "node_modules", name, "package.json");
+    if (!fs.existsSync(manifestPath)) continue; // e.g. other-platform optional deps
+    closure.add(name);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    queue.push(
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {})
+    );
+  }
+  return closure;
+}
+
+/**
+ * `!node_modules/<pkg>/**` exclusion patterns for every package in the
+ * production tree that no runtime-required (esbuild-external) package needs.
+ * Computed per build machine so platform-specific optional deps (e.g.
+ * `@parcel/watcher-darwin-arm64`) resolve naturally. Exclusion-only patterns
+ * sidestep electron-builder's unreliable re-include-after-`!node_modules/**`
+ * matching; nested `node_modules` copies under kept packages are untouched.
+ */
+function buildBundledNodeModuleExcludes() {
+  const appDependencies = Object.keys(require("./package.json").dependencies ?? {});
+  const keep = collectDependencyClosure(RUNTIME_NODE_MODULE_ROOTS);
+  const all = collectDependencyClosure(appDependencies);
+  return [...all]
+    .filter((name) => !keep.has(name))
+    .sort()
+    .map((name) => `!node_modules/${name}/**/*`);
+}
 
 // electron-builder 26.x enforces the channel enum: "alpha" | "beta" | "dev"
 // | "rc" | "stable" | null. Anything else fails schema validation. We return
@@ -60,6 +119,9 @@ module.exports = async function () {
       // folded to "" in production builds. Excluding the dir keeps shipped
       // binaries from carrying dead test fixtures.
       "!dist-electron/plugins/sample/**",
+      // Drop node_modules packages that are already bundled into dist/
+      // dist-electron and never require()d at runtime (#10395).
+      ...buildBundledNodeModuleExcludes(),
     ],
     extraResources: [
       { from: "help", to: "help" },
@@ -82,6 +144,12 @@ module.exports = async function () {
       // avr-vad reads its bundled silero_vad_v5.onnx via `fs` relative to its
       // own dist dir; unpack so that path resolves outside the ASAR too.
       "node_modules/avr-vad/**/*",
+      // @parcel/watcher loads per-platform `watcher.node` binaries; the mac
+      // x64ArchFiles signing glob below already assumes they live under
+      // app.asar.unpacked — make that explicit instead of relying on
+      // electron-builder's smart-unpack detection.
+      "node_modules/@parcel/watcher/**/*",
+      "node_modules/@parcel/watcher-*/**/*",
     ],
     electronFuses: {
       runAsNode: false,

@@ -563,7 +563,7 @@ export class WorkspaceService {
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
       const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
-      this.git = createHardenedGit(projectRootPath, this._shutdownController.signal);
+      this.git = await createHardenedGit(projectRootPath, this._shutdownController.signal);
       this.listService.setGit(this.git, projectRootPath);
 
       // #6669: prune at startup so externally-deleted worktrees (kept in
@@ -1434,7 +1434,7 @@ export class WorkspaceService {
    */
   private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
     try {
-      const git = createHardenedGit(monitor.path);
+      const git = await createHardenedGit(monitor.path);
       const remotes = await git.getRemotes(true);
       const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
       const fetchUrl = origin?.refs?.fetch;
@@ -2212,7 +2212,7 @@ export class WorkspaceService {
     // absoluteCreatePath is block-scoped to the try.
     let pendingCreateKey: string | null = null;
     try {
-      const git = createHardenedGit(rootPath);
+      const git = await createHardenedGit(rootPath);
       const { baseBranch, path } = options;
       let { newBranch } = options;
       let { fromRemote = false, useExistingBranch = false } = options;
@@ -2833,7 +2833,7 @@ export class WorkspaceService {
 
   async listBranches(requestId: string, rootPath: string): Promise<void> {
     try {
-      const git = createHardenedGit(rootPath);
+      const git = await createHardenedGit(rootPath);
       const summary: BranchSummary = await git.branch(["-a"]);
       const branches: BranchInfo[] = [];
 
@@ -2875,7 +2875,7 @@ export class WorkspaceService {
     headRefName: string
   ): Promise<void> {
     try {
-      const git = createAuthenticatedGit(rootPath);
+      const git = await createAuthenticatedGit(rootPath);
       await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
@@ -2893,7 +2893,7 @@ export class WorkspaceService {
 
   async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
     try {
-      const git = createHardenedGit(rootPath);
+      const git = await createHardenedGit(rootPath);
       const rawReflog = await git.raw(["reflog", "--format=%gs"]);
 
       if (!rawReflog?.trim()) {
@@ -2958,7 +2958,7 @@ export class WorkspaceService {
         // ignore
       }
 
-      const git = createHardenedGit(cwd);
+      const git = await createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
         const { readFile } = await import("fs/promises");
