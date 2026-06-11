@@ -138,6 +138,11 @@ const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
 // a silent no-op, even when the underlying pipelines are degraded.
 const HOST_REFRESH_TIMEOUT_MS = 45_000;
 
+// FIFO cap on the acknowledged-mutation dedup set. Mutation ids are arbitrary
+// UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
+// a session sees well under 100 deletes, so 500 never evicts a live id.
+export const MAX_ACKNOWLEDGED_MUTATIONS = 500;
+
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private pollQueue = new PQueue({
@@ -279,6 +284,15 @@ export class WorkspaceService {
    * and the renderer's outbox replay flow takes over.
    */
   private readonly acknowledgedMutations = new Set<string>();
+
+  /** Record an acked mutation id, evicting the oldest past the FIFO cap. */
+  private recordAcknowledgedMutation(mutationId: string): void {
+    this.acknowledgedMutations.add(mutationId);
+    if (this.acknowledgedMutations.size > MAX_ACKNOWLEDGED_MUTATIONS) {
+      const oldest = this.acknowledgedMutations.values().next().value;
+      if (oldest !== undefined) this.acknowledgedMutations.delete(oldest);
+    }
+  }
 
   /** Advance and return the next monotonic seq for an outgoing event. */
   private nextSeq(): number {
@@ -2769,7 +2783,7 @@ export class WorkspaceService {
       // sees the id in `lastAcknowledgedMutationIds` and prunes without firing
       // a second delete — the operation completed once, the renderer just
       // missed the live ack.
-      if (mutationId) this.acknowledgedMutations.add(mutationId);
+      if (mutationId) this.recordAcknowledgedMutation(mutationId);
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       // Delete failed — drop any pending entry so a real external change to

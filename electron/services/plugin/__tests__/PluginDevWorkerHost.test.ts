@@ -105,6 +105,17 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("forks the worker with a V8 heap cap in execArgv", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    host.waitForReady().catch(() => {});
+    void host.start();
+
+    const execArgv: string[] = forkMock.mock.calls[0][2].execArgv;
+    expect(execArgv.some((arg) => /^--max-old-space-size=\d+$/.test(arg))).toBe(true);
+    host.dispose();
+  });
+
   it("exports CRASH_WINDOW_MS aligned with the other guards (30 minutes)", async () => {
     const mod = await loadModule();
     expect(mod.CRASH_WINDOW_MS).toBe(30 * 60 * 1000);

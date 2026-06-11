@@ -135,7 +135,7 @@ export class WorktreeMonitor {
   private summary: string | undefined;
   private modifiedCount: number = 0;
   private lastActivityTimestamp: number | null = null;
-  private previousStateHash: string = "";
+  private previousStateHash: number | null = null;
 
   // Note state
   private aiNote: string | undefined;
@@ -1710,7 +1710,7 @@ export class WorktreeMonitor {
         return;
       }
 
-      const isInitialLoad = this.previousStateHash === "";
+      const isInitialLoad = this.previousStateHash === null;
       const isNowClean = newChanges.changedFileCount === 0;
       const hasPendingChanges = newChanges.changedFileCount > 0;
       const shouldUpdateTimestamp =
@@ -2072,12 +2072,20 @@ export class WorktreeMonitor {
     }
   }
 
-  private calculateStateHash(changes: WorktreeChanges): string {
+  // 32-bit FNV-1a digest instead of the raw joined string: the previous
+  // implementation retained a path+stats concatenation proportional to the
+  // worktree's change count for the monitor's lifetime. A hash collision
+  // (~1 in 2^32) only delays a change event until the next poll.
+  private calculateStateHash(changes: WorktreeChanges): number {
     const hashInput = changes.changes
       .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
       .sort()
       .join("|");
-    return hashInput;
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < hashInput.length; i++) {
+      hash = Math.imul(hash ^ hashInput.charCodeAt(i), 0x01000193) >>> 0;
+    }
+    return hash >>> 0;
   }
 
   private async fetchLastCommitMessage(changes: WorktreeChanges): Promise<string> {

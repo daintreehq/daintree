@@ -784,6 +784,21 @@ describe("WorkspaceService.deleteWorktree", () => {
       });
     });
 
+    it("caps the ack set FIFO — oldest ids evict first, recent ids survive", async () => {
+      const { MAX_ACKNOWLEDGED_MUTATIONS } = await import("../WorkspaceService.js");
+      const record = (id: string) => service["recordAcknowledgedMutation"](id);
+
+      record("mut-oldest");
+      for (let i = 0; i < MAX_ACKNOWLEDGED_MUTATIONS; i++) {
+        record(`mut-${i}`);
+      }
+
+      const ids = service.getAcknowledgedMutationIds();
+      expect(ids.length).toBe(MAX_ACKNOWLEDGED_MUTATIONS);
+      expect(ids).not.toContain("mut-oldest");
+      expect(ids).toContain(`mut-${MAX_ACKNOWLEDGED_MUTATIONS - 1}`);
+    });
+
     it("a request with a NEW mutationId for an already-removed worktree still throws not-found", async () => {
       // Sanity check: only the matching mutationId short-circuits — a fresh
       // mutationId on a phantom id is a genuine error.

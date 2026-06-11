@@ -245,8 +245,13 @@ export class ProcessTreeCache {
     const ppid = parseInt(match[2], 10);
     const cpuPercent = parseFloat(match[3]) || 0;
     const rssKb = parseInt(match[4], 10) || 0;
-    const comm = match[5];
-    const command = match[6]?.trim() || comm;
+    // Regex captures are V8 sliced strings that pin the entire multi-MB ps
+    // stdout in memory for as long as the cache retains them. Buffer.from()
+    // round-trip is the only idiom that forces a flat copy — String(),
+    // concatenation, and template literals all produce ConsStrings that still
+    // reference the parent.
+    const comm = Buffer.from(match[5]).toString();
+    const command = match[6] ? Buffer.from(match[6]).toString().trim() || comm : comm;
 
     if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid <= 0) {
       return null;

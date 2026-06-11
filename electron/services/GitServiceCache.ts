@@ -12,6 +12,10 @@ class GitServiceCache {
     return service;
   }
 
+  delete(path: string): void {
+    this.cache.delete(path);
+  }
+
   clear(): void {
     this.cache.clear();
   }
