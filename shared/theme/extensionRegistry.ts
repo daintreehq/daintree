@@ -144,14 +144,49 @@ export const EXTENSION_KEY_REGISTRY = {
   // QuickRun command-input fill. The CSS fallback is the overlay-soft ink wash
   // (correct on dark); light themes lift the field to a raised input plane.
   "dock-input-bg": OPTIONAL,
+  // Dock item fills/borders. These shadow same-named :root declarations in
+  // src/index.css; the theme's inline var on <html> wins the cascade, and the
+  // :root values (idle overlay-subtle, accent@12% active fill, accent@0.32
+  // active border) are the fallbacks when a theme omits the keys. Light themes
+  // can replace the accent-tinted active fill with a lift-toward-white plane.
+  "dock-item-bg": OPTIONAL,
+  "dock-item-bg-active": OPTIONAL,
+  "dock-item-border-active": OPTIONAL,
   "dock-shadow": DOCK_SHADOW,
+
+  // Grid grain texture. NOT authored directly by built-ins — resolved from
+  // strategy.grainCharacter (palette.ts) into a curated SVG data-URI or `none`.
+  // Conditionally emitted: unset/"fine" emits no var so the CSS fallback keeps
+  // the bundled noise.png (see resolveGrainImage in themes.ts).
+  "grain-image": OPTIONAL,
 
   // Panel title bars. Fallbacks are transparent (idle) and overlay-subtle
   // (focused) — dark themes render unchanged without the keys.
   "panel-header-bg": OPTIONAL,
   "panel-header-focus-bg": OPTIONAL,
 
-  // Panel grid
+  // Panel focus chrome — the focused/selected pane's border ink
+  // (panel-focus-border), double-ring glow stack (panel-focus-shadow), and
+  // fill (panel-selected-bg). Consumed by .terminal-selected /
+  // .assistant-focused / .terminal-focused in src/index.css with today's
+  // color-mix recipes as fallbacks. Values are full CSS expressions, so no
+  // perceptibility guard applies. Accent budget: focus IS the load-bearing
+  // signal per focus region, so accent-family ink here is legitimate — but a
+  // theme inking focus chrome from its accent family must NOT also carry
+  // another accent fill in the panel region. The `prefers-contrast: more` and
+  // `forced-colors: active` blocks in src/index.css keep their hardcoded
+  // system-color recipes and continue to win over these keys — never "unify"
+  // them into this extension surface.
+  "panel-focus-border": OPTIONAL,
+  "panel-focus-shadow": OPTIONAL,
+  "panel-selected-bg": OPTIONAL,
+
+  // Panel grid. Both keys accept full CSS `background` shorthand (gradients
+  // included), not just a flat color. The audited flat `surfaces.grid` token
+  // remains the contrast/ramp source of truth: a gradient value must keep the
+  // flat hex as its final layer, and the boot splash skeleton reads the flat
+  // --theme-surface-grid directly, so boot theming is unaffected by gradients
+  // here.
   "panel-grid-bg": OPTIONAL,
   "terminal-grid-bg": OPTIONAL,
 
@@ -199,6 +234,10 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-section-header-bg": OPTIONAL,
   "settings-section-header-bg-solid": OPTIONAL,
   "settings-sidebar-bg": OPTIONAL,
+  // Scroll-fade color for the settings sidebar's ScrollShadow. Only needed by
+  // themes that author a custom settings-sidebar-bg; the CSS fallback in
+  // settings.css composites the default 50% canvas wash over the dialog shell.
+  "settings-sidebar-scroll-fade": OPTIONAL,
 
   // Sidebar — required keys whose CSS fallback (white-tint) is invisible on
   // light themes. See #8175 lineage.
@@ -248,6 +287,16 @@ export const EXTENSION_KEY_REGISTRY = {
   // Review hub — commit-message field fill. The CSS fallback is the canvas
   // tone (correct on dark); light themes lift the field to a raised plane.
   "review-commit-input-bg": OPTIONAL,
+
+  // Welcome screen. welcome-field-wash is a full CSS `background` shorthand
+  // layered behind the welcome layout (fallback `none` = today's chrome);
+  // welcome-mark-color tints the brand mark (fallback: tint at 50%). The
+  // welcome screen carries real text: washes stay whisper-alpha (≤8%) and the
+  // existing text alphas must still clear their contrast floors over the
+  // composited wash — a design-review gate, not a regex (gradient strings
+  // defeat perceptibility regexes).
+  "welcome-field-wash": OPTIONAL,
+  "welcome-mark-color": OPTIONAL,
 
   // Worktree section
   "worktree-section-hover-bg": OPTIONAL,

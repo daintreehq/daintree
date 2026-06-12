@@ -789,7 +789,7 @@ export function WorktreeCard({
                 "absolute inset-0 z-20 pointer-events-none animate-input-receipt-flash",
                 variant === "grid" && "rounded-lg"
               )}
-              style={{ background: "color-mix(in oklch, currentColor 10%, transparent)" }}
+              style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
               aria-hidden="true"
               data-testid="worktree-card-input-receipt"
             />

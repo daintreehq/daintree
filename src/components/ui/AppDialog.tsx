@@ -350,7 +350,7 @@ export function AppDialog({
     <AppDialogContext.Provider value={{ onClose: handleClose, titleId, descriptionId, variant }}>
       <div
         className={cn(
-          "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-md backdrop-saturate-[var(--theme-material-saturation)]",
+          "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
           zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           "transition-opacity",
           "motion-reduce:transition-none motion-reduce:duration-0",

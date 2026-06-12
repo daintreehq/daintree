@@ -569,12 +569,12 @@ code.hljs {
 
 .hljs-addition {
   color: var(--color-syntax-string);
-  background: color-mix(in oklch, var(--color-syntax-string) 15%, transparent);
+  background: color-mix(in srgb, var(--color-syntax-string) 15%, transparent);
 }
 
 .hljs-deletion {
   color: var(--color-syntax-keyword);
-  background: color-mix(in oklch, var(--color-status-danger) 15%, transparent);
+  background: color-mix(in srgb, var(--color-status-danger) 15%, transparent);
 }
 
 .hljs-emphasis {
@@ -626,18 +626,18 @@ code.hljs {
    * bevel. */
   --shadow-overlay:
     0 1px 0 var(--theme-overlay-soft) inset,
-    0 12px 40px color-mix(in oklch, var(--theme-shadow-color) 89%, transparent);
+    0 12px 40px color-mix(in srgb, var(--theme-shadow-color) 89%, transparent);
   --shadow-modal:
     0 1px 0 var(--theme-overlay-medium) inset,
-    0 20px 56px color-mix(in oklch, var(--theme-shadow-color) 81%, transparent);
+    0 20px 56px color-mix(in srgb, var(--theme-shadow-color) 81%, transparent);
   --shadow-dock-popover:
     0 1px 0 var(--theme-overlay-strong) inset,
-    0 25px 70px -10px color-mix(in oklch, var(--theme-shadow-color) 97%, transparent);
+    0 25px 70px -10px color-mix(in srgb, var(--theme-shadow-color) 97%, transparent);
   --shadow-dock-panel-popover:
     0 1px 0 var(--theme-overlay-strong) inset,
-    0 10px 40px -10px color-mix(in oklch, var(--theme-shadow-color) 78%, transparent),
-    0 20px 60px -15px color-mix(in oklch, var(--theme-shadow-color) 56%, transparent),
-    0 30px 80px -20px color-mix(in oklch, var(--theme-shadow-color) 75%, transparent);
+    0 10px 40px -10px color-mix(in srgb, var(--theme-shadow-color) 78%, transparent),
+    0 20px 60px -15px color-mix(in srgb, var(--theme-shadow-color) 56%, transparent),
+    0 30px 80px -20px color-mix(in srgb, var(--theme-shadow-color) 75%, transparent);
   --border-overlay: var(--theme-border-strong);
   --border-dock-popup: color-mix(
     in oklab,
@@ -653,6 +653,11 @@ code.hljs {
   --dock-padding-y: 0.375rem;
   --dock-gap: 0.375rem;
   --dock-item-height: 2rem;
+  /* dock-item-bg / dock-item-bg-active / dock-item-border-active are OPTIONAL
+     extension keys (shared/theme/extensionRegistry.ts). Themes override them
+     via inline vars on <html>, which beat these :root fallbacks in the
+     cascade; a self-referential var() fallback here would be an invalid
+     custom-property cycle. Omission keeps these exact values. */
   --dock-item-bg: var(--theme-overlay-subtle);
   --dock-item-bg-hover: var(--theme-overlay-medium);
   --dock-item-bg-active: color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
@@ -1071,10 +1076,14 @@ code.hljs {
     content: "";
     position: absolute;
     inset: 0;
-    background-image: url("./assets/noise.png");
+    /* The noise.png fallback must stay here: a relative url() inside a :root
+       custom property resolves against the document, not this stylesheet, so
+       themes swap the texture via --grain-image (data-URI or `none`) and the
+       bundled asset remains the unset/"fine" default. */
+    background-image: var(--grain-image, url("./assets/noise.png"));
     background-repeat: repeat;
-    opacity: 0.02;
-    mix-blend-mode: overlay;
+    opacity: var(--theme-grain-opacity, 0.02);
+    mix-blend-mode: var(--theme-grain-blend, overlay);
     pointer-events: none;
     z-index: 0;
   }
@@ -1619,7 +1628,7 @@ body,
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 35%, transparent);
   animation: fleet-exit-pulse 220ms var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
@@ -1655,7 +1664,7 @@ body,
    * overlay invisible when the animation is killed (data-performance-mode
    * wildcard sets `animation: none`), avoiding a frozen static tint. */
   opacity: 0;
-  background-color: color-mix(in oklch, var(--theme-tint) 20%, transparent);
+  background-color: color-mix(in srgb, var(--theme-tint) 20%, transparent);
   animation: fleet-preview-enter 150ms var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
@@ -1925,13 +1934,22 @@ body,
   }
 }
 
-/* Terminal Selection State */
+/* Terminal Selection State.
+   panel-focus-border / panel-focus-shadow / panel-selected-bg are OPTIONAL
+   extension keys; the fallbacks are the pre-extension recipes verbatim. The
+   high-contrast `prefers-contrast: more` and `forced-colors: active` blocks
+   below keep their own hardcoded recipes and continue to win. */
 .terminal-selected {
-  border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-  background-color: var(--color-surface-highlight);
-  box-shadow:
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+  box-shadow: var(
+    --panel-focus-shadow,
     inset 0 0 0 1px var(--theme-overlay-soft),
-    0 0 0 1px var(--theme-overlay-strong);
+    0 0 0 1px var(--theme-overlay-strong)
+  );
 }
 
 /* Ensure header separator uses overlay token for consistency */
@@ -1946,10 +1964,15 @@ body,
    state, and any future no-terminal content with the lift, so the chrome is
    scoped here to edges only. */
 .assistant-focused {
-  border-left-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-  box-shadow:
+  border-left-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  box-shadow: var(
+    --panel-focus-shadow,
     inset 0 0 0 1px var(--theme-overlay-soft),
-    0 0 0 1px var(--theme-overlay-strong);
+    0 0 0 1px var(--theme-overlay-strong)
+  );
 }
 
 /* Panel Agent State Borders — grid panel container state-driven styling */
@@ -2090,11 +2113,16 @@ body,
 
 /* Backwards compatibility for older selection class */
 .terminal-focused {
-  border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));
-  background-color: var(--color-surface-highlight);
-  box-shadow:
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary))
+  );
+  background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+  box-shadow: var(
+    --panel-focus-shadow,
     inset 0 0 0 1px var(--theme-overlay-medium),
-    0 0 0 1px var(--theme-overlay-emphasis);
+    0 0 0 1px var(--theme-overlay-emphasis)
+  );
 }
 
 /* Terminal Pane Ping Animation
@@ -2137,13 +2165,13 @@ body,
 
 @keyframes terminal-ping-border {
   0% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
   35% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 25%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 25%, transparent);
   }
   100% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
 }
 
@@ -2153,7 +2181,7 @@ body,
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  background: color-mix(in oklch, var(--theme-tint) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-tint) 12%, transparent);
   animation: terminal-ping-overlay var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
   will-change: opacity;
 }
@@ -2178,17 +2206,25 @@ body,
   }
   35% {
     /* Overshoot: selected + extra brightness */
-    background-color: var(--color-surface-highlight);
-    border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));
+    background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+    border-color: var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary))
+    );
     box-shadow: inset 0 0 0 1px var(--theme-overlay-medium);
   }
   100% {
     /* Settled: matches .terminal-selected exactly */
-    background-color: var(--color-surface-highlight);
-    border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-    box-shadow:
+    background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+    border-color: var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    );
+    box-shadow: var(
+      --panel-focus-shadow,
       inset 0 0 0 1px var(--theme-overlay-soft),
-      0 0 0 1px var(--theme-overlay-strong);
+      0 0 0 1px var(--theme-overlay-strong)
+    );
   }
 }
 
@@ -2200,13 +2236,13 @@ body,
 
 @keyframes terminal-header-border {
   0% {
-    border-bottom-color: color-mix(in oklch, var(--theme-tint) 5%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 5%, transparent);
   }
   35% {
-    border-bottom-color: color-mix(in oklch, var(--theme-tint) 25%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 25%, transparent);
   }
   100% {
-    border-bottom-color: color-mix(in oklch, var(--theme-tint) 5%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 5%, transparent);
   }
 }
 
@@ -2219,13 +2255,13 @@ body,
 /* Title glow - same animation for both variants */
 @keyframes title-glow {
   0% {
-    text-shadow: 0 0 0 color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    text-shadow: 0 0 0 color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
   35% {
-    text-shadow: 0 0 8px color-mix(in oklch, var(--theme-tint) 30%, transparent);
+    text-shadow: 0 0 8px color-mix(in srgb, var(--theme-tint) 30%, transparent);
   }
   100% {
-    text-shadow: 0 0 0 color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    text-shadow: 0 0 0 color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
 }
 

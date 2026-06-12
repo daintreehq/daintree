@@ -21,6 +21,16 @@ export interface ThemeStrategy {
    * high-key light palette — without redefining each surface token.
    */
   statusSurfaceOpacity?: number;
+  /**
+   * WHICH texture tiles on the .bg-noise grid layer (strength/blend live on the
+   * grain-opacity / grain-blend tokens). Resolved by resolveGrainImage() in
+   * themes.ts into the conditionally-emitted `grain-image` extension var.
+   * Unset or "fine" emits NO var so the CSS fallback keeps the bundled
+   * noise.png — a relative url() inside a :root custom property resolves
+   * against the document, not the stylesheet, so the fallback must stay in
+   * the CSS. "none" emits the keyword `none`.
+   */
+  grainCharacter?: "fine" | "coarse" | "paper" | "none";
 }
 
 export interface ThemePalette {
