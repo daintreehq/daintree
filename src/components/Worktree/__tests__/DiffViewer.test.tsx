@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
@@ -526,30 +528,10 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     return capturedDiffProps.renderGutter as RenderGutterFn;
   }
 
-  function findChildren(node: React.ReactNode, className: string): React.ReactElement[] {
-    const out: React.ReactElement[] = [];
-    const visit = (n: React.ReactNode) => {
-      if (!React.isValidElement(n)) return;
-      const props = n.props as { className?: string; children?: React.ReactNode };
-      if (props.className === className) out.push(n);
-      if (props.children) React.Children.forEach(props.children, visit);
-    };
-    React.Children.forEach(node, visit);
-    return out;
-  }
-
   it("wraps the line number in a .diff-line-number span for insert rows", () => {
     const renderGutter = getRenderGutter();
     const result = renderGutter({
-      change: {
-        type: "insert",
-        content: "added",
-        isInsert: true,
-        isDelete: false,
-        isNormal: false,
-        oldLineNumber: undefined,
-        newLineNumber: 2,
-      },
+      change: { type: "insert", content: "added", lineNumber: 2, isInsert: true },
       renderDefault: () => "2",
       wrapInAnchor: (n) => <a href="#L2">{n}</a>,
     });
@@ -567,15 +549,7 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
   it("wraps the line number in a .diff-line-number span for delete rows", () => {
     const renderGutter = getRenderGutter();
     const result = renderGutter({
-      change: {
-        type: "delete",
-        content: "old",
-        isInsert: false,
-        isDelete: true,
-        isNormal: false,
-        oldLineNumber: 1,
-        newLineNumber: undefined,
-      },
+      change: { type: "delete", content: "old", lineNumber: 1, isDelete: true },
       renderDefault: () => "1",
       wrapInAnchor: (n) => <a href="#L1">{n}</a>,
     });
@@ -593,15 +567,7 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
   it("emits a sibling .diff-line-marker after the .diff-line-number, never inside it", () => {
     const renderGutter = getRenderGutter();
     const result = renderGutter({
-      change: {
-        type: "insert",
-        content: "added",
-        isInsert: true,
-        isDelete: false,
-        isNormal: false,
-        oldLineNumber: undefined,
-        newLineNumber: 2,
-      },
+      change: { type: "insert", content: "added", lineNumber: 2, isInsert: true },
       renderDefault: () => "2",
       wrapInAnchor: (n) => <a href="#L2">{n}</a>,
     });
@@ -616,5 +582,17 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     // gutter cell is what enforces nowrap; the marker span itself is the
     // element that would wrap if the cell allowed it.
     expect(lineNumberSpans[0]!.querySelector(".diff-line-marker")).toBeNull();
+  });
+});
+
+// Load the actual stylesheet at test time so a deleted/regressed rule breaks
+// the build, not just a hand-typed assumption. The load is async-free and
+// the file is small — the assertion guards both the gutter-level fix and the
+// per-element fallback against accidental removal.
+describe("DiffViewer gutter CSS contract (#10422)", () => {
+  it("declares white-space: nowrap on the gutter cell and on .diff-line-number", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-gutter\s*\{[^}]*white-space:\s*nowrap/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-line-number\s*\{[^}]*white-space:\s*nowrap/);
   });
 });
