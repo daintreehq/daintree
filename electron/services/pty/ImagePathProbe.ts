@@ -4,18 +4,12 @@ import { readlink } from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 
-// Stale-while-revalidate windows. Soft-stale (500ms) triggers a background
-// refresh on the next read; the cached basename is still returned so the
-// detector keeps a continuous signal across polls. Hard-max (5000ms) is
-// 3-4× the 1500ms ProcessTreeCache poll interval — using anything close to
-// the poll interval causes every poll to fall past max-age in setTimeout
-// jitter, blanking the basename and defeating hysteresis. Eviction TTL keeps
-// idle PIDs out of the map so it cannot grow unbounded across a long session
-// of short-lived children; ProcessDetector also evicts disappeared child
-// PIDs proactively so PID reuse can't return a stale prior-process basename.
-const IMAGE_PATH_SOFT_STALE_MS = 500;
-const IMAGE_PATH_MAX_AGE_MS = 5000;
+// The probe timeout caps lsof/readlink time per PID.
 const IMAGE_PATH_PROBE_TIMEOUT_MS = 750;
+// Eviction TTL keeps idle PIDs out of the map so it cannot grow unbounded
+// across long sessions with many short-lived children. ProcessDetector also
+// evicts disappeared child PIDs proactively so PID reuse cannot return a
+// stale prior-process basename.
 const IMAGE_PATH_EVICTION_TTL_MS = 30_000;
 
 // `lsof -Fn` on macOS lists every memory-mapped text segment for the process —
@@ -43,11 +37,12 @@ interface CacheEntry {
  * as its image), so it gives `ProcessDetector` a third identity signal that
  * survives the title-rewriting case the kernel `comm` and argv columns fail.
  *
- * Stale-while-revalidate per PID so the synchronous `detectAgent()` contract
- * stays synchronous — first call schedules an async resolution, subsequent
- * calls within the freshness window return the cached basename, calls past
- * the soft-stale window trigger a refresh while still returning the cached
- * value. Past hard-max we return null until the refresh completes.
+ * Async-fill per PID so the synchronous `detectAgent()` contract stays
+ * synchronous — the first call schedules an async resolution and returns
+ * null; once a probe succeeds the basename is returned permanently (a
+ * running process's executable image is immutable), with failed probes
+ * retried until one succeeds. `evict()` drops exited PIDs so PID reuse
+ * cannot serve a stale prior-process basename.
  *
  * Platform dispatch:
  *  - Linux: `readlink /proc/<pid>/exe` (pure Node, ~instant)
@@ -99,14 +94,21 @@ export class ImagePathProbe {
     entry.lastReadAt = now;
 
     const hasEverProbed = entry.updatedAt > 0;
-    const age = hasEverProbed ? now - entry.updatedAt : 0;
 
-    if (!entry.refreshing && (!hasEverProbed || age > IMAGE_PATH_SOFT_STALE_MS)) {
-      this.scheduleRefresh(pid, entry);
+    // A running process's executable image is immutable for its lifetime —
+    // the kernel does not allow exec() to replace the image of an already-
+    // running process. Once we have a successful (non-null) result for a PID
+    // we can return it unconditionally without re-probing; evict() is called
+    // by ProcessDetector when a child exits, so PID-reuse cannot return a
+    // stale prior-process basename. Only schedule refreshes until we get a
+    // non-null result, or while the result is null (failed probe to retry).
+    if (!hasEverProbed || (!entry.refreshing && entry.basename === null)) {
+      if (!entry.refreshing) {
+        this.scheduleRefresh(pid, entry);
+      }
     }
 
     if (!hasEverProbed) return null;
-    if (age > IMAGE_PATH_MAX_AGE_MS) return null;
 
     return entry.basename;
   }
