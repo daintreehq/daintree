@@ -127,8 +127,7 @@ export const theme: BuiltInThemeSource = {
     // (inner shadows on panes read as a defect). panel-selected-bg stays on
     // the neutral fallback by design.
     "panel-focus-border": "rgba(232,220,200,0.32)",
-    "panel-focus-shadow":
-      "0 0 0 1px rgba(232,220,200,0.10), 0 -14px 30px -16px rgba(207,160,67,0.32), 0 12px 30px -12px rgba(9,5,3,0.55)",
+    "panel-focus-shadow": "0 0 0 1px rgba(232,220,200,0.10), 0 0 10px rgba(207,160,67,0.07)",
     "pulse-before-bg": "#0D0907",
     "pulse-card-bg": "#1E1612",
     "pulse-card-shadow": "0 4px 14px rgba(9,5,3,0.45), 0 1px 3px rgba(9,5,3,0.30)",
@@ -146,6 +145,9 @@ export const theme: BuiltInThemeSource = {
     "pulse-skeleton-gradient": "linear-gradient(90deg, #2A1E18 25%, #342820 50%, #2A1E18 75%)",
     // The single accent membership fill in the settings region; hover stays
     // on neutral bark light (accent-restraint contract).
+    // Rows above the panel shell, below elevated: secondary labels ~5.2:1.
+    "settings-card-bg": "#231A14",
+    "settings-list-item-bg": "#231A14",
     "settings-nav-active-bg": "rgba(80,162,77,0.13)",
     "settings-nav-hover-bg": "rgba(180,140,120,0.05)",
     "settings-search-bg": "#0E0A08",

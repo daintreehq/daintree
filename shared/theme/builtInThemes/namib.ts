@@ -123,9 +123,8 @@ export const theme: BuiltInThemeSource = {
     "dock-item-border-active": "rgba(232,155,95,0.35)",
     // Apricot crest focus hairline; the keyboard focus ring stays cold.
     // Outer ring + contact shadow only — no inset (reads as a defect on panes).
-    "panel-focus-border": "rgba(232,155,95,0.55)",
-    "panel-focus-shadow": "0 0 0 1px rgba(232,155,95,0.20), 0 1px 2px rgba(16,11,6,0.40)",
-    "panel-selected-bg": "rgba(214,181,142,0.04)",
+    "panel-focus-border": "rgba(232,155,95,0.36)",
+    "panel-focus-shadow": "0 0 0 1px rgba(232,155,95,0.12), 0 1px 2px rgba(16,11,6,0.40)",
     // Focused pane's title bar: same crest ink at whisper alpha.
     "panel-header-focus-bg": "rgba(232,155,95,0.06)",
     "pulse-before-bg": "#141110",

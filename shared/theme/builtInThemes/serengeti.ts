@@ -145,14 +145,13 @@ export const theme: BuiltInThemeSource = {
     "dock-item-bg-active": "#FFFFFF",
     "dock-item-border-active": "#D2CDB4",
     // Panel title bars join the straw chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#F2EFE1",
+    "panel-header-bg": "#E9E0B4",
     "panel-header-focus-bg": "#F7F5E9",
     // Dense umber focus edge + short contact pool; no inset ring (reads as a
     // defect on light panes). panel-selected-bg stays on the neutral fallback
     // by design — the shade lives at the pane's edge, never as a fill.
-    "panel-focus-border": "rgba(56,44,24,0.45)",
-    "panel-focus-shadow":
-      "0 0 0 1px rgba(56,44,24,0.28), 0 1px 2px rgba(56,44,24,0.18), 0 6px 14px rgba(56,44,24,0.12)",
+    "panel-focus-border": "rgba(56,44,24,0.60)",
+    "panel-focus-shadow": "0 0 0 1px rgba(56,44,24,0.28), 0 1px 2px rgba(56,44,24,0.18)",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":
       "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",

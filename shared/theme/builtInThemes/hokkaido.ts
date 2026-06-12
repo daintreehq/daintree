@@ -164,11 +164,10 @@ export const theme: BuiltInThemeSource = {
     // Focus is the panel region's one accent signal — no other accent fill in
     // this region; no inset component. Selected fill keeps the elevated-white
     // fallback (lift-to-white law).
-    "panel-focus-border": "#6E57DB",
-    "panel-focus-shadow":
-      "0 0 0 1px rgba(110,87,219,0.25), 0 0 12px rgba(110,87,219,0.12), 0 1px 2px rgba(44,48,78,0.10)",
+    "panel-focus-border": "rgba(110,87,219,0.70)",
+    "panel-focus-shadow": "0 0 0 1px rgba(110,87,219,0.25), 0 1px 2px rgba(44,48,78,0.10)",
     // Panel title bars join the snow chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#EEEDF4",
+    "panel-header-bg": "#DFDDF2",
     "panel-header-focus-bg": "#F4F4F9",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":

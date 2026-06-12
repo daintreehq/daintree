@@ -121,9 +121,8 @@ export const theme: BuiltInThemeSource = {
     // Focus chrome inked from the overlayTint water-light; no other
     // accent-family fill may appear in the panel region, and selected/focused
     // share this one ink. Outer-only (inset rings read as a defect on panes).
-    "panel-focus-border": "rgba(176,216,202,0.60)",
-    "panel-focus-shadow": "0 0 0 1px rgba(140,200,180,0.30), 0 2px 6px rgba(6,12,10,0.60)",
-    "panel-selected-bg": "rgba(140,200,180,0.05)",
+    "panel-focus-border": "rgba(176,216,202,0.38)",
+    "panel-focus-shadow": "0 0 0 1px rgba(140,200,180,0.16)",
     "pulse-before-bg": "#0E1211",
     "pulse-card-bg": "#1A2421",
     "pulse-card-shadow": "0 1px 2px rgba(6,12,10,0.50), 0 1px 1px rgba(6,12,10,0.35)",

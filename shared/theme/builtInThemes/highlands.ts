@@ -114,9 +114,8 @@ export const theme: BuiltInThemeSource = {
     // Pale-heather focus ink — NOT the accent (budget stays whole) and not
     // amber (collides with the panel-state-waiting border). Selected and
     // focused share it; outer-only, no inset (inset rings read as a defect).
-    "panel-focus-border": "rgba(207,192,225,0.55)",
-    "panel-focus-shadow": "0 0 0 1px rgba(207,192,225,0.14), 0 0 26px rgba(207,192,225,0.08)",
-    "panel-selected-bg": "rgba(207,192,225,0.04)",
+    "panel-focus-border": "rgba(207,192,225,0.36)",
+    "panel-focus-shadow": "0 0 0 1px rgba(207,192,225,0.10), 0 0 12px rgba(207,192,225,0.04)",
     "pulse-before-bg": "#151316",
     "pulse-card-bg": "#2B292D",
     "pulse-card-shadow": "0 1px 2px rgba(18,13,9,0.35), 0 4px 14px rgba(18,13,9,0.22)",
@@ -134,6 +133,10 @@ export const theme: BuiltInThemeSource = {
     "pulse-ring-offset": "#2B292D",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #3C3A3F 25%, #454248 50%, #3C3A3F 75%)",
     // The single accent-tinted membership fill in the chrome.
+    // Rows one step above the panel shell, well below elevated: secondary-text
+    // labels hold ~6.1:1 here (washed out on the elevated fallback).
+    "settings-card-bg": "#2F2D32",
+    "settings-list-item-bg": "#2F2D32",
     "settings-nav-active-bg": "rgba(180,135,216,0.11)",
     "settings-nav-hover-bg": "rgba(207,192,225,0.05)",
     "settings-search-bg": "rgba(19,17,20,0.60)",

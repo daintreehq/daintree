@@ -146,7 +146,11 @@ export const theme: BuiltInThemeSource = {
     "terminal-grid-bg": "#E2D3BD",
     // Panel title bars join the stone frame (= surface-toolbar); the focused
     // pane's cap brightens.
-    "panel-header-bg": "#F1E8DB",
+    // Focused-pane emphasis at parity with the dark set: warm stone ink line
+    // + contact shadow (no accent spend).
+    "panel-focus-border": "rgba(52,44,35,0.50)",
+    "panel-focus-shadow": "0 1px 2px rgba(40,34,26,0.18)",
+    "panel-header-bg": "#E9DDCB",
     "panel-header-focus-bg": "#F7F1E8",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":

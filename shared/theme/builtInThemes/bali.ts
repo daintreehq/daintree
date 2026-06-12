@@ -141,13 +141,12 @@ export const theme: BuiltInThemeSource = {
     // Registry format guard: shadow-color channels, alpha ≥ 0.25.
     "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
     // Panel title bars join the stone chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#EFF1EB",
+    "panel-header-bg": "#DDE5C6",
     "panel-header-focus-bg": "#F5F6F1",
     // Outer glow only (inset rings read as a defect on panes); focus chrome is
     // this region's one accent signal — keep other accent fills out of it.
-    "panel-focus-border": "rgba(33,133,70,0.85)",
-    "panel-focus-shadow":
-      "0 0 0 1px rgba(33,133,70,0.22), 0 2px 12px rgba(33,133,70,0.18), 0 10px 28px rgba(36,44,30,0.08)",
+    "panel-focus-border": "rgba(33,133,70,0.70)",
+    "panel-focus-shadow": "0 0 0 1px rgba(33,133,70,0.22), 0 1px 2px rgba(36,44,30,0.10)",
     "panel-selected-bg": "#FBFCF6",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":

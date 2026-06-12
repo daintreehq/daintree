@@ -148,13 +148,13 @@ export const theme: BuiltInThemeSource = {
     // Registry format guard: shadow-color channels, alpha ≥ 0.25.
     "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
     // Accent-family focus ink — no other accent fill in the panel region;
-    // outer ring + halo, never an inset (reads as a defect on panes). Selected
+    // outer ring only, never an inset (reads as a defect on panes). Selected
     // and focused share this border; panel-selected-bg keeps its fallback.
-    "panel-focus-border": "rgba(68,144,177,0.70)",
-    "panel-focus-shadow":
-      "0 0 0 1px rgba(68,144,177,0.25), 0 0 18px rgba(68,144,177,0.22), 0 1px 2px rgba(51,80,105,0.10)",
-    // Panel title bars join the wind-slab chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#E9F0F5",
+    "panel-focus-border": "rgba(68,144,177,0.85)",
+    "panel-focus-shadow": "0 0 0 1px rgba(68,144,177,0.25), 0 1px 2px rgba(51,80,105,0.10)",
+    // Unselected caps sit a clear step below the field (sidebar-grid midpoint)
+    // so the focused pane's bright cap reads side by side.
+    "panel-header-bg": "#D0E1EB",
     "panel-header-focus-bg": "#EFF4F8",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":
@@ -210,8 +210,7 @@ export const theme: BuiltInThemeSource = {
     "toolbar-divider": "rgba(197,207,214,0.7)",
     "toolbar-pill-radius": "0.5rem",
     // Pills sit lighter than the chrome strip (raised, like all content).
-    "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(238,148,128,0.06), rgba(25,33,40,0.02)), #F6F8FA",
+    "toolbar-project-bg": "#F7FAFC",
     "toolbar-project-border": "rgba(197,207,214,0.75)",
     "toolbar-project-chip-bg": "rgba(25,33,40,0.04)",
     "toolbar-project-chip-border": "rgba(197,207,214,0.75)",

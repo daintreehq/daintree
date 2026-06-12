@@ -116,9 +116,8 @@ export const theme: BuiltInThemeSource = {
   extensions: {
     // Focus is the one accent-family signal in the panel region; outer light only,
     // no inset ring.
-    "panel-focus-border": "rgba(125,212,223,0.62)",
-    "panel-focus-shadow": "0 0 0 1px rgba(125,212,223,0.28), 0 0 30px rgba(58,183,197,0.13)",
-    "panel-selected-bg": "rgba(211,230,228,0.04)",
+    "panel-focus-border": "rgba(125,212,223,0.38)",
+    "panel-focus-shadow": "0 0 0 1px rgba(125,212,223,0.16), 0 0 12px rgba(58,183,197,0.06)",
     "pulse-before-bg": "#05090B",
     // Deliberately below the surface ramp.
     "pulse-card-bg": "#050809",

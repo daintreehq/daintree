@@ -147,12 +147,12 @@ export const theme: BuiltInThemeSource = {
     // Registry format guard: shadow-color channels, alpha ≥ 0.25.
     "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
     // Panel title bars join the sand chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#F1F0EC",
+    "panel-header-bg": "#E4E1D5",
     "panel-header-focus-bg": "#F7F6F2",
     // Warm ink only, never accent — the white-card-plus-rail selection stays
     // the region's one accent signal. Selected and focused share this border.
-    "panel-focus-border": "rgba(43,38,31,0.34)",
-    "panel-focus-shadow": "0 1px 2px rgba(43,38,31,0.10), 0 8px 24px rgba(43,38,31,0.12)",
+    "panel-focus-border": "rgba(43,38,31,0.50)",
+    "panel-focus-shadow": "0 1px 2px rgba(43,38,31,0.12)",
     // The audited flat grid hex stays the final layer; surfaces.grid is
     // untouched so the ramp audit is unaffected.
     "panel-grid-bg": "linear-gradient(180deg, #DDDACC 0%, #DAD5C7 100%), #DCD8CA",

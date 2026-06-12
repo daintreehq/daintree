@@ -107,10 +107,8 @@ export const theme: BuiltInThemeSource = {
   extensions: {
     // Outer-only focus chrome (inset rings read as a defect on panes); the one
     // accent signal in the panel region — panel-selected-bg stays non-accent.
-    "panel-focus-border": "rgba(196,98,64,0.68)",
-    "panel-focus-shadow":
-      "0 0 0 1px rgba(196,98,64,0.22), 0 0 18px rgba(196,98,64,0.13), 0 0 44px rgba(220,232,196,0.06)",
-    "panel-selected-bg": "#35352A",
+    "panel-focus-border": "rgba(196,98,64,0.30)",
+    "panel-focus-shadow": "0 0 0 1px rgba(196,98,64,0.10)",
     "pulse-before-bg": "#0E0F0C",
     // Small-surface gradient only; the flat panel hex stays the final layer.
     "pulse-card-bg":
