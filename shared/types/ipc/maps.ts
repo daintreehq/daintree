@@ -1584,6 +1584,7 @@ export interface IpcEventMap {
   "project:on-switch": ProjectSwitchPayload;
   "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
   "project:focus-on-activate": { intent: "focus-next-waiting" };
+  "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;

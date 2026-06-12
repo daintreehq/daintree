@@ -69,6 +69,13 @@ const CRASH_LOOP_THRESHOLD = 3;
 // observable benefit. Unfreeze is always immediate — keeping a view frozen
 // after we've decided to leave efficiency is the worst-of-both-worlds.
 const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
+// Trailing-edge debounce for forwarding resize-end content bounds to cached
+// project views (#10415). Cached renderers are CPU-throttled (and CDP-frozen
+// under efficiency), so mid-drag spam is pure waste — only the settled size
+// matters. IPC to a frozen renderer queues in Mojo and delivers on unfreeze,
+// so no wake cycle is needed. Single debounce on `resize` rather than the
+// `resized` event because Linux never emits `resized`.
+const BACKGROUND_RESIZE_DEBOUNCE_MS = 300;
 /**
  * Soft paint-gate timeout (ms). At this point the gate logs that the
  * incoming view is taking longer than the typical cold start, but the
@@ -231,6 +238,7 @@ export class ProjectViewManager {
   private evictionTimestamps = new Map<string, number>();
   private efficiencyFreezeEnabled = false;
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
+  private backgroundResizeTimer: NodeJS.Timeout | null = null;
   private pendingPaintGate: PaintGate | null = null;
   private paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
   private paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
@@ -299,6 +307,7 @@ export class ProjectViewManager {
       if (outgoing && !outgoing.webContents.isDestroyed() && outgoing !== view) {
         outgoing.setBounds({ x: 0, y: 0, width, height });
       }
+      this.scheduleBackgroundResizeNotify();
     };
     win.on("resize", this.resizeHandler);
     win.on("maximize", this.resizeHandler);
@@ -930,6 +939,33 @@ export class ProjectViewManager {
     }
   }
 
+  private scheduleBackgroundResizeNotify(): void {
+    if (this.backgroundResizeTimer) {
+      clearTimeout(this.backgroundResizeTimer);
+    }
+    this.backgroundResizeTimer = setTimeout(() => {
+      this.backgroundResizeTimer = null;
+      this.notifyBackgroundResize();
+    }, BACKGROUND_RESIZE_DEBOUNCE_MS);
+  }
+
+  // Forward the settled content bounds to every cached view so its renderer
+  // can keep PTY geometry tracking the window while detached (#10415). The
+  // detached view's own viewport stays stale until reattach — setBounds()
+  // does not propagate to a detached WebContentsView — so the renderer
+  // derives terminal sizes from these bounds instead of from layout.
+  private notifyBackgroundResize(): void {
+    if (this.disposed || this.win.isDestroyed()) return;
+    const { width, height } = this.win.getContentBounds();
+    for (const [projectId, entry] of this.views) {
+      if (projectId === this.activeProjectId) continue;
+      if (entry.state !== "cached") continue;
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed()) continue;
+      wc.send(CHANNELS.PROJECT_BACKGROUND_RESIZE, { width, height });
+    }
+  }
+
   private unfreezeAllCached(): void {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
@@ -978,6 +1014,11 @@ export class ProjectViewManager {
       this.efficiencyFreezeTimer = null;
     }
     this.efficiencyFreezeEnabled = false;
+
+    if (this.backgroundResizeTimer) {
+      clearTimeout(this.backgroundResizeTimer);
+      this.backgroundResizeTimer = null;
+    }
 
     this.clearPaintGate();
     for (const projectId of Array.from(this.views.keys())) {
