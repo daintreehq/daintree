@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
+import { projectClient } from "@/clients";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -295,6 +296,12 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
+}));
+
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/DevPreview/ConsoleDrawer", () => ({
@@ -2346,6 +2353,175 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
       expect(container.textContent).toContain("npm run custom");
+    });
+  });
+
+  describe("auto-detected run button (#10419)", () => {
+    const flushAutoDetect = async () => {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    type RunnerFixture = { id: string; name: string; command: string; source: "package.json" };
+
+    const defaultRunners: RunnerFixture[] = [
+      { id: "r1", name: "dev", command: "pnpm dev", source: "package.json" },
+    ];
+
+    const setSettingsStoreState = (devServerCommand: string, runners = defaultRunners) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand,
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: runners,
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        })
+      );
+    };
+
+    beforeEach(() => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: "",
+      }));
+      setSettingsStoreState("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "stopped",
+        url: null,
+      };
+      projectClientGetSettingsMock.mockResolvedValue({
+        devServerCommand: "",
+        devServerAutoDetected: false,
+        devServerDismissed: false,
+        turbopackEnabled: true,
+      });
+      saveSettingsMock.mockResolvedValue(undefined);
+    });
+
+    const getRunButton = () => screen.getByRole("button", { name: "Run `pnpm dev`" });
+
+    it("saves the displayed candidate command without re-running detection", async () => {
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          devServerCommand: "pnpm dev",
+          devServerAutoDetected: true,
+          devServerDismissed: false,
+        })
+      );
+      expect(vi.mocked(projectClient.detectRunners)).not.toHaveBeenCalled();
+    });
+
+    it("shows an inline error banner with a retry action when saving fails", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("shows the error banner when project settings cannot be loaded", async () => {
+      projectClientGetSettingsMock.mockResolvedValueOnce(null);
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+    });
+
+    it("shows the error banner when loading settings rejects", async () => {
+      projectClientGetSettingsMock.mockRejectedValueOnce(new Error("IPC failure"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+    });
+
+    it("clears the banner on retry and saves the same command", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await flushAutoDetect();
+
+      expect(screen.queryByText("Couldn't start preview")).toBeNull();
+      expect(saveSettingsMock).toHaveBeenCalledTimes(2);
+      expect(saveSettingsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ devServerCommand: "pnpm dev" })
+      );
+    });
+
+    it("retries the alternate command that failed, not the primary candidate", async () => {
+      setSettingsStoreState("", [
+        { id: "r1", name: "dev", command: "pnpm dev", source: "package.json" },
+        { id: "r2", name: "start", command: "npm start", source: "package.json" },
+      ]);
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      // The popover mock renders the picker entries inline; pick the alternate.
+      fireEvent.click(screen.getByText("npm start"));
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).toHaveBeenCalledTimes(2);
+      expect(saveSettingsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ devServerCommand: "npm start" })
+      );
+    });
+
+    it("does not resurface a stale failure after the pane is reconfigured", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      setSettingsStoreState("pnpm dev");
+      rerender(<DevPreviewPane {...baseProps} />);
+      await flushAutoDetect();
+
+      setSettingsStoreState("");
+      rerender(<DevPreviewPane {...baseProps} />);
+
+      expect(screen.queryByText("Couldn't start preview")).toBeNull();
     });
   });
 

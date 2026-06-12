@@ -437,7 +437,15 @@ export function DevPreviewPane({
   // Store the original guest UA so we can restore it when clearing a preset
   const originalUaRef = useRef<string | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  // The command whose auto-detect/save attempt failed; null = no failure shown.
+  // Empty string means the attempt never resolved a command (re-detection found
+  // nothing), so retry falls back to the currently displayed candidate.
+  const [autoDetectFailedCommand, setAutoDetectFailedCommand] = useState<string | null>(null);
   const autoDetectRef = useRef(false);
+
+  useEffect(() => {
+    if (devCommand) setAutoDetectFailedCommand(null);
+  }, [devCommand]);
   const { saveSettings } = useProjectSettings();
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
@@ -1044,9 +1052,14 @@ export function DevPreviewPane({
 
       autoDetectRef.current = true;
       setIsAutoDetecting(true);
+      setAutoDetectFailedCommand(null);
+      let attemptedCommand = candidateCommand ?? "";
       try {
         const latestSettings = await projectClient.getSettings(currentProjectId);
-        if (!latestSettings) return false;
+        if (!latestSettings) {
+          if (isMountedRef.current) setAutoDetectFailedCommand(attemptedCommand);
+          return false;
+        }
 
         let command = candidateCommand;
         if (!command) {
@@ -1057,7 +1070,11 @@ export function DevPreviewPane({
           )?.command;
         }
 
-        if (!command) return false;
+        if (!command) {
+          if (isMountedRef.current) setAutoDetectFailedCommand("");
+          return false;
+        }
+        attemptedCommand = command;
 
         await saveSettings({
           ...latestSettings,
@@ -1069,6 +1086,7 @@ export function DevPreviewPane({
         return true;
       } catch (err) {
         logError("Failed to auto-detect dev server", err);
+        if (isMountedRef.current) setAutoDetectFailedCommand(attemptedCommand);
         return false;
       } finally {
         autoDetectRef.current = false;
@@ -1651,7 +1669,7 @@ export function DevPreviewPane({
                       </div>
                       <div className="flex flex-col items-center gap-2">
                         <Button
-                          onClick={() => void handleAutoDetect()}
+                          onClick={() => void handleAutoDetect(primaryCandidate.command)}
                           disabled={isAutoDetecting || isSettingsLoading}
                           variant="ghost"
                           size="sm"
@@ -1664,6 +1682,25 @@ export function DevPreviewPane({
                               : `Run \`${primaryCandidate.command}\``}
                           </span>
                         </Button>
+                        {autoDetectFailedCommand !== null && (
+                          <InlineStatusBanner
+                            icon={XCircle}
+                            severity="error"
+                            title="Couldn't start preview"
+                            description="The detected command couldn't be saved to project settings."
+                            className="w-full rounded text-left"
+                            action={{
+                              id: "dev-preview-auto-detect-retry",
+                              label: "Retry",
+                              icon: RotateCw,
+                              variant: "dangerFilled",
+                              onClick: () =>
+                                void handleAutoDetect(
+                                  autoDetectFailedCommand || primaryCandidate.command
+                                ),
+                            }}
+                          />
+                        )}
                         {candidates.length > 1 && (
                           <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
                             <PopoverTrigger asChild>
