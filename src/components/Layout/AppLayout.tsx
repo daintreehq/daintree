@@ -32,6 +32,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
+import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -118,6 +119,7 @@ export function AppLayout({
 }: AppLayoutProps) {
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
+  useDiagnosticsAutoOpen();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
   // the 250ms ease-out-expo width transition during the drag (the transition

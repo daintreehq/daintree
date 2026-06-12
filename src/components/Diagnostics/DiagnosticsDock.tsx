@@ -76,49 +76,24 @@ const RESIZE_STEP = 10;
 const RESIZE_STEP_LARGE = 50;
 
 export function DiagnosticsDock({ onRetry, onCancelRetry, className }: DiagnosticsDockProps) {
-  const {
-    isOpen,
-    activeTab,
-    height,
-    maxHeight,
-    openDock,
-    closeDock,
-    setActiveTab,
-    setHeight,
-    setMaxHeight,
-  } = useDiagnosticsStore(
-    useShallow((s) => ({
-      isOpen: s.isOpen,
-      activeTab: s.activeTab,
-      height: s.height,
-      maxHeight: s.maxHeight,
-      openDock: s.openDock,
-      closeDock: s.closeDock,
-      setActiveTab: s.setActiveTab,
-      setHeight: s.setHeight,
-      setMaxHeight: s.setMaxHeight,
-    }))
-  );
+  const { isOpen, activeTab, height, maxHeight, closeDock, setActiveTab, setHeight, setMaxHeight } =
+    useDiagnosticsStore(
+      useShallow((s) => ({
+        isOpen: s.isOpen,
+        activeTab: s.activeTab,
+        height: s.height,
+        maxHeight: s.maxHeight,
+        closeDock: s.closeDock,
+        setActiveTab: s.setActiveTab,
+        setHeight: s.setHeight,
+        setMaxHeight: s.setMaxHeight,
+      }))
+    );
   const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
   const failedBudgetCount = usePerfMetricsStore((state) => state.failedBudgetCount);
-  const prevErrorCountRef = useRef(0);
-
-  useEffect(() => {
-    if (errorCount > 0 && prevErrorCountRef.current === 0 && !isOpen) {
-      openDock("problems");
-      useErrorStore.getState().promoteErrors();
-    }
-    // Promote new errors arriving while the dock is already open on problems
-    if (
-      errorCount > prevErrorCountRef.current &&
-      prevErrorCountRef.current > 0 &&
-      isOpen &&
-      activeTab === "problems"
-    ) {
-      useErrorStore.getState().promoteErrors();
-    }
-    prevErrorCountRef.current = errorCount;
-  }, [errorCount, isOpen, openDock, activeTab]);
+  // Auto-open on new errors lives in useDiagnosticsAutoOpen (always mounted in
+  // AppLayout) — the dock is lazy-mounted, so a watcher here would never see
+  // the first error.
 
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
