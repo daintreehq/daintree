@@ -117,6 +117,7 @@ export const CHANNELS = {
   SYSTEM_SAVE_DIAGNOSTICS_BUNDLE: "system:save-diagnostics-bundle",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
+  SYSTEM_GET_RESOURCE_PROFILE: "system:get-resource-profile",
   DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
   DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
   DIAGNOSTICS_GET_INFO: "diagnostics:get-info",

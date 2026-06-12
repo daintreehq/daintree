@@ -6,6 +6,7 @@ import { mkdirSync } from "node:fs";
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
+import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 
@@ -203,6 +204,32 @@ export function forgetEluSample(webContentsId: number): void {
   eluHighStreak.delete(webContentsId);
 }
 
+/**
+ * A streak whose latest sample is older than this many poll periods is stale
+ * — the view was evicted mid-streak, its window closed, or sampling paused
+ * across a suspend — and must not keep the pressure signal latched.
+ */
+const RENDERER_ELU_STALE_POLL_PERIODS = 2;
+
+/**
+ * True while any view's consecutive-saturation streak has reached
+ * {@link RENDERER_ELU_HIGH_SAMPLE_COUNT} and its latest sample is fresh.
+ * Consumed by ResourceProfileService as a pressure input — the data is
+ * already collected on the 30s poll cadence, so reading it adds no
+ * measurement cost.
+ */
+export function hasSustainedRendererSaturation(now = Date.now()): boolean {
+  const staleMs = currentAppMetricsPollIntervalMs * RENDERER_ELU_STALE_POLL_PERIODS;
+  for (const [webContentsId, streak] of eluHighStreak) {
+    if (streak < RENDERER_ELU_HIGH_SAMPLE_COUNT) continue;
+    const sample = eluSamples.get(webContentsId);
+    if (!sample) continue;
+    if (now - sample.timestamp > staleMs) continue;
+    return true;
+  }
+  return false;
+}
+
 /** Read-only view for diagnostics / tests. */
 export function getEluSamples(): ReadonlyMap<number, RendererEluSample> {
   return eluSamples;
@@ -334,7 +361,10 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       } catch {
         /* non-critical */
       }
-      const metrics = app.getAppMetrics();
+      // Force-refresh (never read stale): this poll is the canonical sweep on
+      // the aligned 30s tick and primes the shared snapshot for read-through
+      // consumers (ResourceProfileService's eval on the same tick).
+      const metrics = refreshAppMetricsSnapshot();
       const activePids = new Set<number>();
       let hasPressure = false;
       let aggregateMb = 0;
@@ -488,7 +518,10 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         try {
           let beforeMb = 0;
           try {
-            for (const proc of app.getAppMetrics()) {
+            // Force-refresh: this pair measures a reclaim delta across the
+            // settle window — a TTL-stale read would zero the delta and
+            // change tier-2 escalation behavior.
+            for (const proc of refreshAppMetricsSnapshot()) {
               if (!MONITORED_TYPES.has(proc.type)) continue;
               beforeMb += getProcessMemoryMb(proc);
             }
@@ -523,7 +556,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           let pressureRemains = false;
           let resampleFailed = false;
           try {
-            for (const proc of app.getAppMetrics()) {
+            for (const proc of refreshAppMetricsSnapshot()) {
               if (!MONITORED_TYPES.has(proc.type)) continue;
               const mb = getProcessMemoryMb(proc);
               afterMb += mb;

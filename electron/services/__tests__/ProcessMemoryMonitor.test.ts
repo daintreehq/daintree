@@ -61,6 +61,7 @@ import {
   getEluHighStreaks,
   RENDERER_ELU_HIGH_RATIO,
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
+  hasSustainedRendererSaturation,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 
@@ -1269,6 +1270,41 @@ describe("ProcessMemoryMonitor", () => {
       forgetEluSample(42);
       expect(getEluSamples().has(42)).toBe(false);
       expect(getEluHighStreaks().has(42)).toBe(false);
+    });
+
+    it("hasSustainedRendererSaturation reports false below the streak threshold and true at it", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT - 1; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      expect(hasSustainedRendererSaturation()).toBe(false);
+
+      recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      expect(hasSustainedRendererSaturation()).toBe(true);
+    });
+
+    it("hasSustainedRendererSaturation clears when the saturated view is forgotten", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      expect(hasSustainedRendererSaturation()).toBe(true);
+
+      forgetEluSample(42);
+      expect(hasSustainedRendererSaturation()).toBe(false);
+    });
+
+    it("hasSustainedRendererSaturation treats a stale streak as no pressure", () => {
+      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
+      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT; i++) {
+        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
+      }
+      const sample = getEluSamples().get(42)!;
+
+      expect(hasSustainedRendererSaturation(sample.timestamp)).toBe(true);
+      // Two poll periods after the last sample the streak is stale (the view
+      // was evicted mid-streak or sampling paused) and must not stay latched.
+      expect(hasSustainedRendererSaturation(sample.timestamp + 10 * 60_000)).toBe(false);
     });
 
     // Documents current behavior: a view that goes "active" → "cached" →
