@@ -437,6 +437,7 @@ export function DevPreviewPane({
   // Store the original guest UA so we can restore it when clearing a preset
   const originalUaRef = useRef<string | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [autoDetectFailed, setAutoDetectFailed] = useState(false);
   const autoDetectRef = useRef(false);
   const { saveSettings } = useProjectSettings();
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
@@ -1044,9 +1045,13 @@ export function DevPreviewPane({
 
       autoDetectRef.current = true;
       setIsAutoDetecting(true);
+      setAutoDetectFailed(false);
       try {
         const latestSettings = await projectClient.getSettings(currentProjectId);
-        if (!latestSettings) return false;
+        if (!latestSettings) {
+          if (isMountedRef.current) setAutoDetectFailed(true);
+          return false;
+        }
 
         let command = candidateCommand;
         if (!command) {
@@ -1057,7 +1062,10 @@ export function DevPreviewPane({
           )?.command;
         }
 
-        if (!command) return false;
+        if (!command) {
+          if (isMountedRef.current) setAutoDetectFailed(true);
+          return false;
+        }
 
         await saveSettings({
           ...latestSettings,
@@ -1069,6 +1077,7 @@ export function DevPreviewPane({
         return true;
       } catch (err) {
         logError("Failed to auto-detect dev server", err);
+        if (isMountedRef.current) setAutoDetectFailed(true);
         return false;
       } finally {
         autoDetectRef.current = false;
@@ -1651,7 +1660,7 @@ export function DevPreviewPane({
                       </div>
                       <div className="flex flex-col items-center gap-2">
                         <Button
-                          onClick={() => void handleAutoDetect()}
+                          onClick={() => void handleAutoDetect(primaryCandidate.command)}
                           disabled={isAutoDetecting || isSettingsLoading}
                           variant="ghost"
                           size="sm"
@@ -1664,6 +1673,22 @@ export function DevPreviewPane({
                               : `Run \`${primaryCandidate.command}\``}
                           </span>
                         </Button>
+                        {autoDetectFailed && (
+                          <InlineStatusBanner
+                            icon={XCircle}
+                            severity="error"
+                            title="Couldn't start preview"
+                            description="The detected command couldn't be saved to project settings."
+                            className="w-full rounded text-left"
+                            action={{
+                              id: "dev-preview-auto-detect-retry",
+                              label: "Retry",
+                              icon: RotateCw,
+                              variant: "dangerFilled",
+                              onClick: () => void handleAutoDetect(primaryCandidate.command),
+                            }}
+                          />
+                        )}
                         {candidates.length > 1 && (
                           <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
                             <PopoverTrigger asChild>
