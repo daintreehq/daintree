@@ -76,6 +76,13 @@ export const PERF_MARKS = {
   PROJECT_SWITCH_LOAD_PROJECT: "project_switch_load_project",
   WORKTREE_SWITCH_START: "worktree_switch_start",
   WORKTREE_SWITCH_END: "worktree_switch_end",
+  /**
+   * Double-rAF after the selection commit — the first frame the user can see
+   * the new worktree's panels. `WORKTREE_SWITCH_END` anchors on store
+   * mutation + terminal policy, which finishes before paint; this mark is the
+   * perceived-latency boundary for the app's highest-frequency navigation.
+   */
+  WORKTREE_SWITCH_PAINTED: "worktree_switch_painted",
 
   PROJECT_STATE_WRITE: "project_state_write",
   PROJECT_STATE_READ: "project_state_read",
@@ -91,6 +98,14 @@ export const PERF_MARKS = {
   TERMINAL_DATA_RECEIVED: "terminal_data_received",
   TERMINAL_DATA_PARSED: "terminal_data_parsed",
   TERMINAL_DATA_RENDERED: "terminal_data_rendered",
+  /**
+   * Sampled keystroke→echo delta: time from a MessagePort terminal write to
+   * the next port data chunk for the same terminal id (~1/32 writes; pairs
+   * older than 250ms are discarded so unrelated output isn't counted as
+   * echo). Measured in `terminalClient`; the end-to-end input-latency signal
+   * the batcher/coalescer/paint-gate tuning is otherwise blind to.
+   */
+  INPUT_ECHO_LATENCY: "input_echo_latency",
 
   /**
    * Bracket the synchronous `terminal.open(hostElement)` call in

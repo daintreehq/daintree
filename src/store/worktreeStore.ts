@@ -8,7 +8,7 @@ import { useFocusStore } from "@/store/focusStore";
 import { usePanelStore } from "@/store/panelStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { PERF_MARKS } from "@shared/perf/marks";
-import { markRendererPerformance } from "@/utils/performance";
+import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getFleetArmedIds, getFleetLastArmedId } from "./storeAccessors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -202,6 +202,29 @@ function loadClientsModule(): Promise<ClientsModule> {
   return clientsModulePromise;
 }
 
+// Double-rAF after the selection commit lands the paint-anchored companion to
+// WORKTREE_SWITCH_END (which measures store mutation + terminal policy, not
+// when the user sees the new panels). Scheduling is skipped entirely unless a
+// capture run or consumer buffer is active, so the steady-state cost is one
+// boolean check per switch.
+function scheduleWorktreeSwitchPaintedMark(
+  fromWorktreeId: string | null,
+  toWorktreeId: string | null,
+  switchStartedAt: number
+): void {
+  if (typeof window === "undefined" || typeof requestAnimationFrame === "undefined") return;
+  if (!isRendererPerfCaptureEnabled() && !Array.isArray(window.__DAINTREE_PERF_MARKS__)) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_PAINTED, {
+        fromWorktreeId,
+        toWorktreeId,
+        durationMs: Date.now() - switchStartedAt,
+      });
+    });
+  });
+}
+
 function persistActiveWorktree(id: string | null): void {
   if (id === lastPersistedActiveWorktreeId || id === pendingPersistActiveWorktreeId) {
     return;
@@ -302,6 +325,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }
 
     set(updates);
+    scheduleWorktreeSwitchPaintedMark(previousId ?? null, id ?? null, switchStartedAt);
 
     persistActiveWorktree(id);
 
@@ -356,6 +380,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       expandedTerminals: new Set<string>(),
       ...(source === "user" ? { restoreWorktreeId: id } : {}),
     });
+    scheduleWorktreeSwitchPaintedMark(previousId ?? null, id, switchStartedAt);
 
     if (source === "user") {
       persistActiveWorktree(id);

@@ -4,6 +4,7 @@ import {
   isRendererPerfCaptureEnabled,
   markRendererPerformance,
   startRendererMemoryMonitor,
+  startSteadyStatePerfFlush,
   withRendererSpan,
 } from "../performance";
 
@@ -57,6 +58,19 @@ describe("markRendererPerformance", () => {
     expect(debugSpy).toHaveBeenCalledWith("[perf]", "captured-mark", { value: 2 });
   });
 
+  it("lands marks on the User Timing timeline only during capture runs", () => {
+    vi.spyOn(console, "debug").mockImplementation(() => {});
+    const markSpy = vi.spyOn(performance, "mark");
+
+    window.__DAINTREE_PERF_MARKS__ = [];
+    markRendererPerformance("buffered-only");
+    expect(markSpy).not.toHaveBeenCalled();
+
+    process.env.DAINTREE_PERF_CAPTURE = "1";
+    markRendererPerformance("timeline-mark", { value: 3 });
+    expect(markSpy).toHaveBeenCalledWith("timeline-mark", { detail: { value: 3 } });
+  });
+
   it("reports whether renderer perf capture is enabled", () => {
     process.env.DAINTREE_PERF_CAPTURE = "1";
     expect(isRendererPerfCaptureEnabled()).toBe(true);
@@ -97,5 +111,47 @@ describe("markRendererPerformance", () => {
     const stop = startRendererMemoryMonitor(10);
     expect(typeof stop).toBe("function");
     stop();
+  });
+
+  it("caps the mark buffer by dropping the oldest entries", () => {
+    window.__DAINTREE_PERF_MARKS__ = [];
+
+    for (let i = 0; i < 2105; i++) {
+      markRendererPerformance(`mark-${i}`);
+    }
+
+    const buffer = window.__DAINTREE_PERF_MARKS__!;
+    expect(buffer.length).toBe(2000);
+    expect(buffer[0]!.mark).toBe("mark-105");
+    expect(buffer[buffer.length - 1]!.mark).toBe("mark-2104");
+  });
+
+  it("steady-state flush drains buffered marks on the interval during capture runs", () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, "debug").mockImplementation(() => {});
+      process.env.DAINTREE_PERF_CAPTURE = "1";
+      const flushMarks = vi.fn();
+      (window as { electron?: unknown }).electron = { perf: { flushMarks } };
+
+      const stop = startSteadyStatePerfFlush(1000);
+
+      vi.advanceTimersByTime(1000);
+      expect(flushMarks).not.toHaveBeenCalled();
+
+      markRendererPerformance("steady-mark");
+      vi.advanceTimersByTime(1000);
+      expect(flushMarks).toHaveBeenCalledTimes(1);
+      expect(flushMarks.mock.calls[0]![0].marks).toHaveLength(1);
+      expect(window.__DAINTREE_PERF_MARKS__).toHaveLength(0);
+
+      stop();
+      markRendererPerformance("after-stop");
+      vi.advanceTimersByTime(5000);
+      expect(flushMarks).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      delete (window as { electron?: unknown }).electron;
+    }
   });
 });
