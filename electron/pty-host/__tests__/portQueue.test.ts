@@ -6,6 +6,7 @@ import {
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_LOW_WATERMARK_PERCENT,
   IPC_MAX_PAUSE_MS,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
 } from "../../services/pty/types.js";
 
 function createMockDeps(): PortQueueDeps {
@@ -480,6 +481,97 @@ describe("PortQueueManager", () => {
       const byId = new Map(snap.perTerminal.map((e) => [e.terminalId, e.pendingBytes]));
       expect(byId.get("t1")).toBe(1000);
       expect(byId.get("t2")).toBe(2500);
+    });
+  });
+
+  describe("aggregate watermark gate", () => {
+    // Spread bytes across terminals so each stays below its own ~2MB high
+    // watermark while the window-level total crosses the 16MB aggregate gate.
+    function fillBelowPerTerminalWatermark(mgr: PortQueueManager, count: number, bytes: number) {
+      for (let i = 0; i < count; i++) {
+        mgr.addBytes(`t${i}`, bytes);
+      }
+    }
+
+    it("pauses a producing terminal when the aggregate crosses the high watermark", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      // 16 terminals × 1MB = 16MB aggregate; each is far below its own gate.
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      expect(mgr.getTotalQueuedBytes()).toBe(IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES);
+
+      const result = mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      expect(result).toBe(true);
+      expect(mgr.isPaused("t0")).toBe(true);
+    });
+
+    it("does not pause below the aggregate watermark when per-terminal is also below", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      fillBelowPerTerminalWatermark(mgr, 8, 1024 * 1024);
+
+      expect(mgr.applyBackpressure("t0", mgr.getUtilization("t0"))).toBe(false);
+      expect(mgr.isPaused("t0")).toBe(false);
+    });
+
+    it("never pauses a terminal with no in-flight bytes of its own", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+
+      expect(mgr.applyBackpressure("idle", mgr.getUtilization("idle"))).toBe(false);
+      expect(mgr.isPaused("idle")).toBe(false);
+    });
+
+    it("holds the resume while the aggregate stays over the low watermark", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      // t0's own queue fully drains, but the aggregate is still 15MB.
+      mgr.removeBytes("t0", 1024 * 1024);
+      mgr.tryResume("t0");
+      expect(mgr.isPaused("t0")).toBe(true);
+    });
+
+    it("sweeps paused terminals when the aggregate drains below the low watermark", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
+      mgr.applyBackpressure("t0", mgr.getUtilization("t0"));
+      mgr.removeBytes("t0", 1024 * 1024);
+      expect(mgr.isPaused("t0")).toBe(true);
+
+      // Acks from OTHER terminals drain the aggregate below 8MB — t0 gets no
+      // acks of its own, so the removeBytes sweep must resume it.
+      for (let i = 1; i < 9; i++) {
+        mgr.removeBytes(`t${i}`, 1024 * 1024);
+      }
+
+      expect(mgr.isPaused("t0")).toBe(false);
+      const coordinator = deps.getPauseCoordinator("t0");
+      expect(coordinator!.resume).toHaveBeenCalledWith("port-queue");
+    });
+
+    it("per-terminal pauses still resume normally while the aggregate is low", () => {
+      const deps = createMockDeps();
+      const mgr = new PortQueueManager(deps);
+
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      expect(mgr.isPaused("t1")).toBe(true);
+
+      mgr.removeBytes("t1", highWatermark + 1);
+      mgr.tryResume("t1");
+      expect(mgr.isPaused("t1")).toBe(false);
     });
   });
 

@@ -3,6 +3,8 @@ import {
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_LOW_WATERMARK_PERCENT,
   IPC_MAX_PAUSE_MS,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
+  IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES,
 } from "../services/pty/types.js";
 import type {
   PtyHostEvent,
@@ -60,7 +62,20 @@ export class IpcQueueManager {
     } else {
       this.queuedBytes.set(id, next);
     }
+    const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
+    // Aggregate-gate resume sweep — mirrors PortQueueManager.removeBytes: a
+    // terminal paused by the aggregate watermark may receive no further acks
+    // of its own, so re-check every paused terminal when the total drains
+    // below the low watermark.
+    if (
+      previousTotal >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES &&
+      this.totalQueuedBytes < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
+    ) {
+      for (const pausedId of [...this.pausedTerminals.keys()]) {
+        this.tryResume(pausedId);
+      }
+    }
   }
 
   getQueuedBytes(id: string): number {
@@ -95,7 +110,12 @@ export class IpcQueueManager {
     const highWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
     const currentBytes = this.queuedBytes.get(id) ?? 0;
 
-    if (currentBytes < highWatermarkBytes || this.pausedTerminals.has(id)) {
+    // Pause on the per-terminal watermark OR the aggregate watermark — see
+    // PortQueueManager.applyBackpressure for the multi-agent-burst rationale.
+    const overOwnWatermark = currentBytes >= highWatermarkBytes;
+    const overAggregateWatermark =
+      currentBytes > 0 && this.totalQueuedBytes >= IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES;
+    if ((!overOwnWatermark && !overAggregateWatermark) || this.pausedTerminals.has(id)) {
       return false;
     }
 
@@ -187,6 +207,9 @@ export class IpcQueueManager {
     const lowWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
     const currentBytes = this.queuedBytes.get(id) ?? 0;
     if (currentBytes >= lowWatermarkBytes) return;
+    // Hold while the aggregate is over its low watermark — see
+    // PortQueueManager.tryResume; bounded by the IPC_MAX_PAUSE_MS timeout.
+    if (this.totalQueuedBytes >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES) return;
 
     const pauseStart = this.pauseStartTimes.get(id);
     const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
