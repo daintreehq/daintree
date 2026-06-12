@@ -100,6 +100,9 @@ export const APP_THEME_TOKEN_KEYS = [
   "scrim-soft",
   "scrim-medium",
   "scrim-strong",
+  // Backdrop blur depth behind modal/palette scrims (lengths; 0 is legal)
+  "scrim-blur",
+  "scrim-blur-palette",
 
   // Shadow
   "shadow-color",
@@ -196,6 +199,9 @@ export const APP_THEME_TOKEN_KEYS = [
   "state-modified",
   "focus-ring-offset",
   "chrome-noise-texture",
+  // Grid grain material (.bg-noise texture strength / compositing)
+  "grain-opacity",
+  "grain-blend",
 
   // Diff viewer (theme-controlled)
   "diff-insert-background",
@@ -235,11 +241,22 @@ export const EXTENSION_KEYS = [
   "dock-bg",
   "dock-border",
   "dock-input-bg",
+  "dock-item-bg",
+  "dock-item-bg-active",
+  "dock-item-border-active",
   "dock-shadow",
+
+  // Grid grain texture (conditionally emitted from strategy.grainCharacter)
+  "grain-image",
 
   // Panel chrome (per-pane title bars)
   "panel-header-bg",
   "panel-header-focus-bg",
+
+  // Panel focus chrome (focused/selected pane border ink, glow, fill)
+  "panel-focus-border",
+  "panel-focus-shadow",
+  "panel-selected-bg",
 
   // Panel grid background
   "panel-grid-bg",
@@ -326,6 +343,10 @@ export const EXTENSION_KEYS = [
 
   // Review hub
   "review-commit-input-bg",
+
+  // Welcome screen
+  "welcome-field-wash",
+  "welcome-mark-color",
 
   // Worktree section
   "worktree-section-hover-bg",

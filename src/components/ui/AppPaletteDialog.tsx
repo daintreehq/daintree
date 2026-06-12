@@ -184,7 +184,7 @@ export function AppPaletteDialog({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-sm backdrop-saturate-[var(--theme-material-saturation)]",
+        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
         "transition-opacity",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"

@@ -180,11 +180,15 @@ Atmospheric tinted fills using `overlay-base`:
 
 ## Scrim Tokens
 
-| Token          | Dark default       | Light default     |
-| -------------- | ------------------ | ----------------- |
-| `scrim-soft`   | `rgba(0,0,0,0.2)`  | `rgba(0,0,0,0.3)` |
-| `scrim-medium` | `rgba(0,0,0,0.45)` | `rgba(0,0,0,0.5)` |
-| `scrim-strong` | `rgba(0,0,0,0.62)` | `rgba(0,0,0,0.7)` |
+| Token                | Dark default       | Light default     |
+| -------------------- | ------------------ | ----------------- |
+| `scrim-soft`         | `rgba(0,0,0,0.2)`  | `rgba(0,0,0,0.3)` |
+| `scrim-medium`       | `rgba(0,0,0,0.45)` | `rgba(0,0,0,0.5)` |
+| `scrim-strong`       | `rgba(0,0,0,0.62)` | `rgba(0,0,0,0.7)` |
+| `scrim-blur`         | `12px`             | `12px`            |
+| `scrim-blur-palette` | `4px`              | `4px`             |
+
+`scrim-blur` (modal/dialog backdrops, `AppDialog`) and `scrim-blur-palette` (command/panel palettes, `AppPaletteDialog`) control the backdrop blur depth behind the scrim — optical depth, which scrim color alpha cannot fake. This axis is legitimately pulled in both directions: fog biomes thicken it (16-20px reads as mist arriving), arid/clarity biomes sharpen it (0-4px dims without hazing) — `0px` is legal. Scrim _color_ stays on the `scrim-*` color tokens, so WCAG scrim-contrast gates are unaffected by blur changes.
 
 ## Shadow Tokens
 
@@ -323,6 +327,19 @@ Theme-controlled colors for the diff viewer. Derived from `status-success` and `
 | `panel-state-edge-radius` | Rail end-cap radius | `2px` | `2px` |
 | `focus-ring-offset` | Offset between element and ring | `2px` | `2px` |
 | `chrome-noise-texture` | CSS `background-image` grain layer | `none` | `none` |
+| `grain-opacity` | `.bg-noise` grid texture opacity | `0.02` | `0.02` |
+| `grain-blend` | `.bg-noise` grid texture `mix-blend-mode` | `overlay` | `overlay` |
+
+`chrome-noise-texture` accepts ANY CSS `background-image` string, not just the engine's generated radial — the token replaces the generated value wholesale (see `resolveChromeNoiseTexture` in `shared/theme/themes.ts`), so the override carries its own alpha inside the string. Vertical sheens, relocated sun gradients, and `feTurbulence` data-URIs are all legitimate values; the surrounding chrome surface remains the contrast source of truth.
+
+### Grid Grain
+
+The `.bg-noise` grid texture is themeable on two axes: strength/compositing via the `grain-opacity` / `grain-blend` semantic tokens above, and texture choice via the `grainCharacter` strategy field.
+
+- **Opacity ceiling:** keep `grain-opacity` ≤ `0.05`. Texture above ~4-5% reads as costume, not material; most themes should sit between `0.012` (mirror-quiet) and `0.035` (present weather).
+- **`strategy.grainCharacter`** (`"fine" | "coarse" | "paper" | "none"`, optional): selects WHICH texture tiles on the grid. `coarse` is a granular turbulence tile (sand/basalt/salt biomes), `paper` a fractal-noise mottle (washi/fiber). Unset or `"fine"` emits nothing — the CSS fallback keeps the bundled `noise.png` (the asset reference must stay in `src/index.css` because a relative `url()` inside a `:root` custom property resolves against the document, not the stylesheet). `"none"` disables the layer.
+- The resolved value is emitted as the conditionally-present `--grain-image` extension var (`resolveGrainImage` in `shared/theme/themes.ts`); an explicitly authored `grain-image` extension wins over the strategy field.
+- The grain layer inherits all existing `.bg-noise` behavior (performance mode, polarity compositing) since the tokens only drive the existing pseudo-element's declarations.
 
 ## Form State Tokens
 
@@ -377,7 +394,7 @@ Create a new file in `shared/theme/builtInThemes/` exporting a `BuiltInThemeSour
 - 4 status colors + 4 activity states
 - terminal palette (selection + 12 ANSI colors + brightWhite required; background/foreground/muted/cursor optional with fallbacks)
 - 10 syntax colors
-- optional strategy (shadowStyle, materialBlur, materialSaturation, radiusScale, noiseOpacity, panelStateEdge)
+- optional strategy (shadowStyle, materialBlur, materialSaturation, radiusScale, noiseOpacity, panelStateEdge, borderInkOverride, statusSurfaceOpacity, grainCharacter)
 
 ### 2. Override derived tokens as needed
 
@@ -395,6 +412,14 @@ Add a `tokens` object to override any semantic values that don't derive well. Co
 Add an `extensions` object for component-specific overrides. These become bare CSS custom properties. Only add what you need — omitted extensions fall back to semantic tokens.
 
 Common extension families: `toolbar-*`, `sidebar-*`, `settings-*`, `pulse-*`, `dock-*`, `panel-grid-bg`, `worktree-section-hover-bg`, `worktree-filter-bar-bg` (opt-in distinct surface for the worktree sidebar's filter/search bar — unset themes keep the bar transparent), `worktree-search-input-bg` (opt-in raised field for the sidebar search input — unset themes keep the canvas-toned field), `sidebar-card-bg` / `sidebar-card-shadow` (opt-in opaque card plane + hairline ring for idle worktree cards — the light "white cards on tinted field" idiom; unset themes keep transparent cards), `dock-input-bg` (opt-in raised fill for the QuickRun command field — unset themes keep the overlay-soft ink wash), `review-commit-input-bg` (opt-in raised fill for the review-hub commit field — canvas fallback), `worktree-quick-state-active-bg` (opt-in lift for the active quick-state segment — overlay-subtle fallback), `settings-scope-bg` (opt-in fill for the settings scope select trigger — transparent fallback), `project-tile-wash` / `project-tile-shadow` (opt-in overlay + shadow for the project emoji tiles — black-wash/dark-inset fallbacks), `panel-header-bg` / `panel-header-focus-bg` (opt-in pane title-bar caps — transparent/overlay-subtle fallbacks).
+
+Newer opt-in extension keys (all OPTIONAL; omission renders exactly the legacy recipe):
+
+- `panel-focus-border` / `panel-focus-shadow` / `panel-selected-bg` — the focused/selected pane's border ink, glow shadow stack, and fill (`.terminal-selected` / `.assistant-focused` / `.terminal-focused` in `src/index.css`; fallbacks are the legacy `color-mix` recipes). Accent budget: focus is the one load-bearing signal per focus region, so accent-family ink here is legitimate — but a theme inking focus chrome from its accent must not also carry another accent fill in the panel region. High-contrast (`prefers-contrast: more` / `forced-colors`) recipes stay hardcoded and win over these keys.
+- `panel-grid-bg` / `terminal-grid-bg` — accept full CSS `background` shorthand, gradients included. The audited flat `surfaces.grid` token stays the contrast/ramp source of truth: gradients must keep the flat hex as their final layer. The boot splash skeleton reads the flat `--theme-surface-grid`, so boot theming is unaffected.
+- `welcome-field-wash` / `welcome-mark-color` — a full `background` shorthand layered behind `WelcomeScreen` (fallback `none`) and the brand-mark tint (fallback: tint at 50%). Washes stay whisper-alpha (≤8%) and existing text alphas must still clear their contrast floors over the composited wash — a design-review gate, and the wash counts against the theme's narrative-quote budget.
+- `dock-item-bg` / `dock-item-bg-active` / `dock-item-border-active` — the dock pill's item fills/borders. Fallbacks (in the `:root` block of `src/index.css`) are the legacy idle overlay-subtle fill, accent@12% active fill, and accent@0.32 active border; light themes can replace the accent-tinted membership fill with a lift-toward-white plane.
+- `grain-image` — not authored directly by built-ins; resolved from `strategy.grainCharacter` (see Grid Grain above).
 
 ### 4. Register the theme
 
@@ -423,7 +448,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Overlay         | 10 (base + 5 ladder + hover/active/selected/elevated) |
 | Filter-selected | 2                                                     |
 | Wash            | 3                                                     |
-| Scrim           | 3                                                     |
+| Scrim           | 5 (3 colors + 2 blur depths)                          |
 | Shadow          | 4 (color + ambient + floating + dialog)               |
 | Tint            | 1                                                     |
 | Material/Radius | 4                                                     |
@@ -432,10 +457,10 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Terminal        | 22 (6 base + 16 ANSI)                                 |
 | Syntax          | 10                                                    |
 | Category        | 12                                                    |
-| UI Utility      | 13                                                    |
+| UI Utility      | 15                                                    |
 | Form            | 2 (knob-base + state-modified)                        |
 | Diff            | 8                                                     |
-| **Total**       | **146**                                               |
+| **Total**       | **150**                                               |
 
 ## Tailwind Consumption
 

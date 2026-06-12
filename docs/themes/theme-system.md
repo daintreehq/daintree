@@ -59,12 +59,12 @@ Semantic tokens are app-wide values exposed as `--theme-*` CSS variables. The fu
 
 - Surfaces: `surface-canvas`, `surface-sidebar`, `surface-toolbar`, `surface-panel`, `surface-panel-elevated`, `surface-grid`, `surface-input`, `surface-inset`, `surface-hover`, `surface-active`
 - Text, border, accent (primary + optional secondary lane), status, activity
-- Overlay ladder (tintable via `overlay-base`), atmospheric wash, scrim
+- Overlay ladder (tintable via `overlay-base`), atmospheric wash, scrim (colors plus the `scrim-blur` / `scrim-blur-palette` backdrop depths)
 - Shadow profiles (`shadow-ambient`, `shadow-floating`, `shadow-dialog`)
 - Material/radius strategy outputs (`material-blur`, `material-saturation`, `material-opacity`, `radius-scale`)
 - Terminal (first-class, independent of workbench), syntax highlighting
 - GitHub states, search highlighting, diff viewer, category hues
-- UI utility tokens: scrollbar, panel state edge, focus ring offset, chrome noise texture, state chip/label pill opacities
+- UI utility tokens: scrollbar, panel state edge, focus ring offset, chrome noise texture, grid grain (`grain-opacity` / `grain-blend`), state chip/label pill opacities
 
 Component-specific styling does not belong in this layer.
 
@@ -133,6 +133,17 @@ Before adding a file to `DURABLE_ALLOWLIST` in `src/config/__tests__/accentGuard
 ### Grayscale Test
 
 Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. This is the definitive check for accent overuse. The primary CTA must remain visually dominant even when color is removed. If removing color collapses the hierarchy, the design relies too heavily on accent.
+
+### Theme material review (panel focus chrome, grid/chrome materials)
+
+Additional checks when reviewing a theme that authors the material extension keys:
+
+1. **Focus chrome vs accent budget.** A theme inking `panel-focus-border` / `panel-focus-shadow` / `panel-selected-bg` from its accent family is using the contract as intended — focus IS the load-bearing signal per focus region — but it must NOT also carry another accent fill in the panel region. One accent signal per region still holds.
+2. **Focus chrome never touches high contrast.** The `prefers-contrast: more` and `forced-colors: active` recipes for `.terminal-selected` / `.terminal-focused` / `.assistant-focused` in `src/index.css` stay hardcoded to system colors and win over the extension keys — do not "unify" them into the extension surface.
+3. **Grid gradients keep the audited flat layer.** `panel-grid-bg` / `terminal-grid-bg` accept full `background` shorthand, but the flat audited `surfaces.grid` hex must remain the gradient's final layer — it is the contrast/ramp source of truth, and the boot splash reads the flat `--theme-surface-grid` directly.
+4. **`chrome-noise-texture` overrides are wholesale.** Any gradient string is legal and replaces the generated radial entirely; alpha lives inside the string. Review the composited result on the chrome surface, not the string.
+5. **Welcome washes are whisper-alpha.** `welcome-field-wash` stays ≤8% effective alpha and every existing text alpha on the welcome screen must still clear its contrast floor over the composited wash — eyeball gate, since gradient strings defeat perceptibility regexes.
+6. **Grain stays material.** `grain-opacity` ≤ 0.05; review `grainCharacter` textures composited on both polarities at 1x and 2x DPR (moiré check).
 
 ## File Map
 
