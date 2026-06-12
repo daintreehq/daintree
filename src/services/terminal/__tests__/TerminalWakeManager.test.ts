@@ -30,7 +30,7 @@ import type { ManagedTerminal } from "../types";
 
 type MockManagedTerminal = Pick<
   ManagedTerminal,
-  "terminal" | "isAltBuffer" | "lastAppliedTier" | "everWoken"
+  "terminal" | "isAltBuffer" | "lastAppliedTier" | "everWoken" | "wakeSynced"
 > & {
   isOpened?: boolean;
   isAttaching?: boolean;
@@ -203,6 +203,84 @@ describe("TerminalWakeManager", () => {
 
     expect(result).toEqual({ ok: true, replayedMainBuffer: true });
     expect(deps.restoreFromSerialized).toHaveBeenCalledWith("term-normal", "serialized-state");
+  });
+
+  it("treats a noChange wake as a successful no-op: no replay, held bytes still flush", async () => {
+    wakeMock.mockResolvedValueOnce({ state: null, noChange: true });
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      wakeSynced: true,
+    };
+    const onDeclined = vi.fn();
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => true),
+      restoreFromSerializedIncremental: vi.fn(async () => true),
+      onDeclined,
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    const result = await manager.wakeAndRestore("term-nochange");
+
+    // replayedMainBuffer false: the pane was not reset+replayed, so bytes held
+    // while backgrounded must still be flushed by the caller (#9910 contract).
+    expect(result).toEqual({ ok: true, replayedMainBuffer: false });
+    expect(deps.restoreFromSerialized).not.toHaveBeenCalled();
+    expect(deps.restoreFromSerializedIncremental).not.toHaveBeenCalled();
+    // Not a decline: no marker, no retry sequence, sync claim retained.
+    expect(onDeclined).not.toHaveBeenCalled();
+    expect(manager.hasPendingWake("term-nochange")).toBe(false);
+    expect(managed.wakeSynced).toBe(true);
+  });
+
+  it("asserts canSkipUnchanged only while the pane holds its last applied sync", async () => {
+    wakeMock.mockResolvedValue({ state: "serialized-state" });
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+    };
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => true),
+      restoreFromSerializedIncremental: vi.fn(async () => true),
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    // Fresh instance: no sync claim yet.
+    await manager.wakeAndRestore("term-skip");
+    expect(wakeMock).toHaveBeenLastCalledWith("term-skip", { canSkipUnchanged: false });
+    // The successful replay establishes the claim for the next wake.
+    expect(managed.wakeSynced).toBe(true);
+
+    await manager.wakeAndRestore("term-skip");
+    expect(wakeMock).toHaveBeenLastCalledWith("term-skip", { canSkipUnchanged: true });
+  });
+
+  it("drops the sync claim when the replay fails so the next wake forces a serialize", async () => {
+    wakeMock.mockResolvedValueOnce({ state: "serialized-state" });
+    const managed: MockManagedTerminal = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+      terminal: { rows: 24, refresh: vi.fn(), hasSelection: vi.fn(() => false) } as any,
+      wakeSynced: true,
+    };
+    const deps: WakeManagerDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      getInstance: vi.fn(() => managed as unknown as ManagedTerminal),
+      hasInstance: vi.fn(() => true),
+      restoreFromSerialized: vi.fn(() => false),
+      restoreFromSerializedIncremental: vi.fn(async () => false),
+    };
+    const manager = new TerminalWakeManager(deps);
+
+    const result = await manager.wakeAndRestore("term-fail");
+
+    expect(result).toEqual({ ok: false, replayedMainBuffer: false });
+    expect(managed.wakeSynced).toBe(false);
   });
 
   it("fails wake for non-alt-screen terminals when serialized state is missing", async () => {

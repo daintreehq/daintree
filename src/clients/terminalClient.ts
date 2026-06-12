@@ -15,7 +15,9 @@ import type {
   PtyHostToRendererMessage,
   TerminalReliabilityMetricPayload,
 } from "@shared/types/pty-host";
+import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
+import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
@@ -24,8 +26,21 @@ let pendingToken: string | null = null;
 
 const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>();
 const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
+const earlyDataBufferBytes = new Map<string, number>();
 const pendingPortAckBytes = new Map<string, number[]>();
+// The early buffer only needs to cover the spawn→attach race window — late
+// attachers recover full history through the serialized-state restore path.
+// Cap both chunk count and retained bytes, evicting the OLDEST chunks: the
+// dropped head is recoverable from the host snapshot, the live tail is not,
+// and without a byte cap a never-attached terminal (e.g. a dev server whose
+// console pane is never opened) retains up to 500 × 64KB batches for the
+// whole app session.
 const MAX_EARLY_BUFFER_CHUNKS = 500;
+const MAX_EARLY_BUFFER_BYTES = 512 * 1024;
+
+function earlyChunkSize(data: string | Uint8Array): number {
+  return typeof data === "string" ? data.length : data.byteLength;
+}
 
 // Single global subscriber set — the host pushes tier-changed reconciliation
 // messages for any terminal, and the lone consumer (TerminalInstanceService)
@@ -40,6 +55,63 @@ const tierChangedCallbacks = new Set<(id: string, tier: "active" | "background")
 // `onStatus` subscribers as the IPC path. No ACK, no byte accounting — pulses.
 const terminalStatusCallbacks = new Set<(data: TerminalStatusPayload) => void>();
 
+// Wake requests ride the per-window port so the serialized snapshot crosses
+// one process boundary (host → renderer) instead of being structured-cloned
+// twice through Main. Correlated by requestId; rejected entries fall back to
+// the IPC wake in `terminalClient.wake`.
+interface WakeResponse {
+  state: string | null;
+  warnings?: string[];
+  /** Port path only: buffer unchanged since this pane's last faithful sync. */
+  noChange?: boolean;
+}
+const pendingPortWakes = new Map<
+  string,
+  { resolve: (r: WakeResponse) => void; reject: (e: Error) => void; timeoutId: number }
+>();
+let wakeRequestCounter = 0;
+// Generous bound — the host always answers a wake (even a failed serialize
+// responds with a null state), so this only fires when the host or port is
+// gone without a close event.
+const WAKE_PORT_TIMEOUT_MS = 15_000;
+
+function rejectPendingPortWakes(reason: string): void {
+  for (const pending of pendingPortWakes.values()) {
+    window.clearTimeout(pending.timeoutId);
+    pending.reject(new Error(reason));
+  }
+  pendingPortWakes.clear();
+}
+
+// Sampled keystroke→echo probe (DAINTREE_PERF_CAPTURE only): ~1/32 port
+// writes stamp performance.now(); the next port data chunk for the same
+// terminal closes the pair as INPUT_ECHO_LATENCY. Pairs older than 250ms are
+// discarded — that's ambient output, not echo. Env is fixed per session, so
+// the gate is read once; when disabled the write path pays one boolean check.
+let echoProbeEnabled: boolean | null = null;
+let echoProbeCounter = 0;
+const pendingEchoProbes = new Map<string, number>();
+const ECHO_PROBE_SAMPLE_INTERVAL = 32;
+const ECHO_PROBE_MAX_PAIR_MS = 250;
+
+function maybeStartEchoProbe(id: string): void {
+  echoProbeEnabled ??= isRendererPerfCaptureEnabled();
+  if (!echoProbeEnabled) return;
+  if (++echoProbeCounter % ECHO_PROBE_SAMPLE_INTERVAL !== 0) return;
+  if (pendingEchoProbes.has(id)) return;
+  pendingEchoProbes.set(id, performance.now());
+}
+
+function maybeFinishEchoProbe(id: string): void {
+  if (pendingEchoProbes.size === 0) return;
+  const startedAt = pendingEchoProbes.get(id);
+  if (startedAt === undefined) return;
+  pendingEchoProbes.delete(id);
+  const latencyMs = performance.now() - startedAt;
+  if (latencyMs > ECHO_PROBE_MAX_PAIR_MS) return;
+  markRendererPerformance(PERF_MARKS.INPUT_ECHO_LATENCY, { terminalId: id, latencyMs });
+}
+
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data as PtyHostToRendererMessage;
@@ -47,6 +119,19 @@ function installPortDataHandler(port: MessagePort): void {
       // Host-pushed tier reconciliation — no ACK, no byte accounting.
       for (const cb of tierChangedCallbacks) {
         cb(msg.id, msg.tier);
+      }
+      return;
+    }
+    if (msg?.type === "wake-result" && typeof msg.requestId === "string") {
+      const pending = pendingPortWakes.get(msg.requestId);
+      if (pending) {
+        pendingPortWakes.delete(msg.requestId);
+        window.clearTimeout(pending.timeoutId);
+        pending.resolve({
+          state: msg.state ?? null,
+          warnings: msg.warnings,
+          noChange: msg.noChange === true,
+        });
       }
       return;
     }
@@ -65,6 +150,7 @@ function installPortDataHandler(port: MessagePort): void {
       return;
     }
     if (msg?.type === "data" && typeof msg.id === "string") {
+      maybeFinishEchoProbe(msg.id);
       const byteCount = msg.bytes ?? 0;
 
       const cbs = dataCallbacks.get(msg.id);
@@ -96,21 +182,34 @@ function installPortDataHandler(port: MessagePort): void {
           buf = [];
           earlyDataBuffer.set(msg.id, buf);
         }
-        if (buf.length < MAX_EARLY_BUFFER_CHUNKS) {
-          buf.push(msg.data);
+        buf.push(msg.data);
+        let bytes = (earlyDataBufferBytes.get(msg.id) ?? 0) + earlyChunkSize(msg.data);
+        // Evict oldest-first so the buffer holds the most recent output; the
+        // attach-time flush is best-effort anyway and the serialized restore
+        // replays anything older.
+        while (buf.length > MAX_EARLY_BUFFER_CHUNKS || bytes > MAX_EARLY_BUFFER_BYTES) {
+          if (buf.length === 1) break;
+          bytes -= earlyChunkSize(buf.shift()!);
         }
+        earlyDataBufferBytes.set(msg.id, bytes);
       }
     }
   });
 }
 
 function activatePort(port: MessagePort): void {
-  if (messagePort) messagePort.close();
+  if (messagePort) {
+    // Closing our own end won't fire this side's close listener — settle
+    // in-flight wakes now so they fall back to the IPC path.
+    rejectPendingPortWakes("port replaced");
+    messagePort.close();
+  }
   messagePort = port;
   installPortDataHandler(port);
   port.addEventListener("close", () => {
     if (messagePort === port) {
       messagePort = null;
+      rejectPendingPortWakes("port closed");
     }
   });
   port.start();
@@ -186,6 +285,7 @@ export const terminalClient = {
 
   write: (id: string, data: string): void => {
     if (messagePort) {
+      maybeStartEchoProbe(id);
       try {
         messagePort.postMessage({ type: "write", id, data });
       } catch (error) {
@@ -264,19 +364,25 @@ export const terminalClient = {
 
   kill: (id: string): Promise<void> => {
     earlyDataBuffer.delete(id);
+    earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
+    pendingEchoProbes.delete(id);
     return window.electron.terminal.kill(id);
   },
 
   gracefulKill: (id: string): Promise<string | null> => {
     earlyDataBuffer.delete(id);
+    earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
+    pendingEchoProbes.delete(id);
     return window.electron.terminal.gracefulKill(id);
   },
 
   trash: (id: string): Promise<void> => {
     earlyDataBuffer.delete(id);
+    earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
+    pendingEchoProbes.delete(id);
     return window.electron.terminal.trash(id);
   },
 
@@ -297,6 +403,7 @@ export const terminalClient = {
     const buffered = earlyDataBuffer.get(id);
     if (buffered) {
       earlyDataBuffer.delete(id);
+      earlyDataBufferBytes.delete(id);
       for (const data of buffered) {
         callback(data);
       }
@@ -377,7 +484,45 @@ export const terminalClient = {
     window.electron.terminal.setActivityTier(id, tier, pollingIntervalMs);
   },
 
-  wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> => {
+  /**
+   * Request a wake snapshot. Prefers the per-window MessagePort (the host
+   * serializes and answers on the same port, skipping both Main-process
+   * structured clones of the scrollback); falls back to the IPC invoke when
+   * the port is missing or fails mid-flight. `canSkipUnchanged` asserts the
+   * caller's pane currently reflects its last applied snapshot plus every
+   * port chunk received since, letting the host answer `noChange` instead of
+   * serializing when nothing mutated the buffer. Port path only — the IPC
+   * fallback always serializes.
+   */
+  wake: async (id: string, opts?: { canSkipUnchanged?: boolean }): Promise<WakeResponse> => {
+    const port = messagePort;
+    if (port) {
+      try {
+        return await new Promise<WakeResponse>((resolve, reject) => {
+          const requestId = `wake-${++wakeRequestCounter}`;
+          const timeoutId = window.setTimeout(() => {
+            pendingPortWakes.delete(requestId);
+            reject(new Error("wake-result timeout"));
+          }, WAKE_PORT_TIMEOUT_MS);
+          pendingPortWakes.set(requestId, { resolve, reject, timeoutId });
+          try {
+            port.postMessage({
+              type: "wake",
+              id,
+              requestId,
+              canSkipUnchanged: opts?.canSkipUnchanged === true,
+            });
+          } catch (error) {
+            pendingPortWakes.delete(requestId);
+            window.clearTimeout(timeoutId);
+            if (messagePort === port) messagePort = null;
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      } catch (error) {
+        logWarn("[TerminalClient] MessagePort wake failed, falling back to IPC", { error });
+      }
+    }
     return window.electron.terminal.wake(id);
   },
 
@@ -391,19 +536,29 @@ export const terminalClient = {
   /**
    * Acknowledge processed data bytes via the MessagePort (Flow Control — port path).
    * Called from TerminalInstanceService.writeToTerminal() after xterm consumes the chunk.
-   * Uses the original pty-host byte count queued by installPortDataHandler, not the
+   * Uses the original pty-host byte counts queued by installPortDataHandler, not the
    * caller's byte count, to avoid UTF-16 vs UTF-8 length mismatches.
-   * No-op when the queue is empty (data came via IPC or early-buffer flush).
+   * `chunkCount` is how many host-sent chunks the completed write coalesced —
+   * that many FIFO entries are settled and summed into ONE ack message (the
+   * host's removeBytes accepts aggregate counts, same as discardPortAcks).
+   * Shifts at most what is queued: entries for IPC or early-buffer-flushed
+   * data never exist, so over-counted requests degrade to a no-op.
    */
-  acknowledgePortData: (id: string, _bytes: number): void => {
+  acknowledgePortData: (id: string, _bytes: number, chunkCount = 1): void => {
     if (!messagePort) return;
     const queue = pendingPortAckBytes.get(id);
     if (!queue || queue.length === 0) return;
-    const bytes = queue.shift()!;
+    const take = Math.min(chunkCount, queue.length);
+    let bytes = 0;
+    for (let i = 0; i < take; i++) {
+      bytes += queue[i]!;
+    }
+    queue.splice(0, take);
     // Clean up empty queue to prevent unbounded map growth
     if (queue.length === 0) {
       pendingPortAckBytes.delete(id);
     }
+    if (bytes === 0) return;
     try {
       messagePort.postMessage({ type: "ack", id, bytes });
     } catch {

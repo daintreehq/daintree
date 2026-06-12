@@ -214,6 +214,49 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("evicts the OLDEST early-buffered chunks when the byte cap is exceeded", () => {
+    const port = acquirePort();
+
+    // 3 × 200KB chunks exceed the 512KB early-buffer byte cap — the first
+    // chunk must be evicted (the head is recoverable from the host snapshot;
+    // the live tail is not).
+    const big = "x".repeat(200 * 1024);
+    port.postMessage({ type: "data", id: "term-early", data: `${big}1`, bytes: 1 });
+    port.postMessage({ type: "data", id: "term-early", data: `${big}2`, bytes: 1 });
+    port.postMessage({ type: "data", id: "term-early", data: `${big}3`, bytes: 1 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const received: string[] = [];
+        terminalClient.onData("term-early", (data) => {
+          received.push((data as string).slice(-1));
+        });
+
+        expect(received).toEqual(["2", "3"]);
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("keeps a single over-cap chunk rather than dropping everything", () => {
+    const port = acquirePort();
+
+    const huge = "y".repeat(600 * 1024);
+    port.postMessage({ type: "data", id: "term-early", data: huge, bytes: 1 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const received: string[] = [];
+        terminalClient.onData("term-early", (data) => {
+          received.push(data as string);
+        });
+
+        expect(received).toEqual([huge]);
+        resolve();
+      }, 50);
+    });
+  });
+
   it("does NOT send immediate ack when live callbacks are registered", () => {
     const port = acquirePort();
 
@@ -297,6 +340,41 @@ describe("terminalClient MessagePort data routing", () => {
           }
         });
         port.start();
+      }, 50);
+    });
+  });
+
+  it("acknowledgePortData settles chunkCount FIFO entries as one summed ack, leaving the rest", () => {
+    const port = acquirePort();
+
+    terminalClient.onData("term-1", () => {});
+    // Three pending entries — a coalesced write of the first two must ack
+    // 10 + 20 in ONE message and leave the 12-byte entry queued.
+    port.postMessage({ type: "data", id: "term-1", data: "aaaaaaaaaa", bytes: 10 });
+    port.postMessage({ type: "data", id: "term-1", data: "bbbbbbbbbbbbbbbbbbbb", bytes: 20 });
+    port.postMessage({ type: "data", id: "term-1", data: "cccccccccccc", bytes: 12 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const acks: Record<string, unknown>[] = [];
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack" && msg.id === "term-1") acks.push(msg);
+        });
+        port.start();
+
+        terminalClient.acknowledgePortData("term-1", 999, 2);
+        terminalClient.acknowledgePortData("term-1", 999);
+        // FIFO is now empty — an over-counted request degrades to a no-op.
+        terminalClient.acknowledgePortData("term-1", 999, 5);
+
+        setTimeout(() => {
+          expect(acks).toEqual([
+            { type: "ack", id: "term-1", bytes: 30 },
+            { type: "ack", id: "term-1", bytes: 12 },
+          ]);
+          resolve();
+        }, 100);
       }, 50);
     });
   });

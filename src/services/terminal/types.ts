@@ -110,6 +110,14 @@ export interface ManagedTerminal {
   // snapshot represents a genuine gap. Never reset on tier transitions or in
   // clearWakeState; it is a property of the instance, cleared only on teardown.
   everWoken?: boolean;
+  // Renderer half of the wake no-change handshake: true only while this xterm
+  // instance provably holds its last applied wake snapshot plus every port
+  // chunk received since. Set by a successful wake replay; cleared wherever
+  // the pane diverges from that stream — restore-controller reset/replay,
+  // restore failure, post-await wake declines, hibernation's placeholder swap,
+  // the local `clear` interception. While true, wakes send `canSkipUnchanged`
+  // so an idle terminal's switch-back skips the host serialize + xterm replay.
+  wakeSynced?: boolean;
 
   // First-paint perf instrumentation (#9809). terminalOpenStartedAt is stamped
   // (performance.now()) just before terminal.open() in attach(); the first real
@@ -191,6 +199,13 @@ export interface ManagedTerminal {
 
   // Hibernation: xterm.js Terminal instance disposed to free memory
   isHibernated?: boolean;
+  // Scrollback the terminal should wake with. The hibernation placeholder is
+  // constructed with scrollback 0 — xterm's constructor eagerly allocates a
+  // CircularList of rows+scrollback slots, which would retain ~100-200KB per
+  // hibernated pane in the exact path meant to release memory. Scrollback
+  // policy writes that land during hibernation target this stash (see
+  // TerminalScrollbackController); unhibernate() restores from it.
+  hibernatedScrollback?: number;
   hibernationTimer?: ReturnType<typeof setTimeout>;
   // Delayed re-check for active-state agent terminals (working/waiting/directing)
   // that are not yet idle-eligible because their last write was too recent.
