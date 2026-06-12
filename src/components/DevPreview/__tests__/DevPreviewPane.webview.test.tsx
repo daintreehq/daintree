@@ -298,6 +298,12 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
 }));
 
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("@/components/DevPreview/ConsoleDrawer", () => ({
   ConsoleDrawer: ({ onRestartDevServer }: { onRestartDevServer?: () => void }) => (
     <button
@@ -2359,6 +2365,32 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
     };
 
+    type RunnerFixture = { id: string; name: string; command: string; source: "package.json" };
+
+    const defaultRunners: RunnerFixture[] = [
+      { id: "r1", name: "dev", command: "pnpm dev", source: "package.json" },
+    ];
+
+    const setSettingsStoreState = (devServerCommand: string, runners = defaultRunners) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand,
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: runners,
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        })
+      );
+    };
+
     beforeEach(() => {
       terminalStoreState.getTerminal.mockImplementation(() => ({
         kind: "dev-preview",
@@ -2368,25 +2400,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         devPreviewConsoleOpen: false,
         devCommand: "",
       }));
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
-        selector({
-          projectId: "project-1",
-          settings: {
-            devServerCommand: "",
-            environmentVariables: {},
-            runCommands: [],
-          },
-          detectedRunners: [],
-          allDetectedRunners: [
-            { id: "r1", name: "dev", command: "npm run dev", source: "package.json" as const },
-          ],
-          isLoading: false,
-          error: null,
-          loadSettings: vi.fn(),
-          setSettings: vi.fn(),
-        })
-      );
+      setSettingsStoreState("");
       devServerStateRef.current = {
         ...devServerStateRef.current,
         status: "stopped",
@@ -2401,7 +2415,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       saveSettingsMock.mockResolvedValue(undefined);
     });
 
-    const getRunButton = () => screen.getByRole("button", { name: "Run `npm run dev`" });
+    const getRunButton = () => screen.getByRole("button", { name: "Run `pnpm dev`" });
 
     it("saves the displayed candidate command without re-running detection", async () => {
       render(<DevPreviewPane {...baseProps} />);
@@ -2411,7 +2425,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
       expect(saveSettingsMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          devServerCommand: "npm run dev",
+          devServerCommand: "pnpm dev",
           devServerAutoDetected: true,
           devServerDismissed: false,
         })
@@ -2441,6 +2455,17 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(screen.getByText("Couldn't start preview")).toBeTruthy();
     });
 
+    it("shows the error banner when loading settings rejects", async () => {
+      projectClientGetSettingsMock.mockRejectedValueOnce(new Error("IPC failure"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+    });
+
     it("clears the banner on retry and saves the same command", async () => {
       saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
       render(<DevPreviewPane {...baseProps} />);
@@ -2455,8 +2480,48 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(screen.queryByText("Couldn't start preview")).toBeNull();
       expect(saveSettingsMock).toHaveBeenCalledTimes(2);
       expect(saveSettingsMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({ devServerCommand: "npm run dev" })
+        expect.objectContaining({ devServerCommand: "pnpm dev" })
       );
+    });
+
+    it("retries the alternate command that failed, not the primary candidate", async () => {
+      setSettingsStoreState("", [
+        { id: "r1", name: "dev", command: "pnpm dev", source: "package.json" },
+        { id: "r2", name: "start", command: "npm start", source: "package.json" },
+      ]);
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      // The popover mock renders the picker entries inline; pick the alternate.
+      fireEvent.click(screen.getByText("npm start"));
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).toHaveBeenCalledTimes(2);
+      expect(saveSettingsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ devServerCommand: "npm start" })
+      );
+    });
+
+    it("does not resurface a stale failure after the pane is reconfigured", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      setSettingsStoreState("pnpm dev");
+      rerender(<DevPreviewPane {...baseProps} />);
+      await flushAutoDetect();
+
+      setSettingsStoreState("");
+      rerender(<DevPreviewPane {...baseProps} />);
+
+      expect(screen.queryByText("Couldn't start preview")).toBeNull();
     });
   });
 
