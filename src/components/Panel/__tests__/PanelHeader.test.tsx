@@ -209,6 +209,25 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("headerContent slot", () => {
+    it("renders headerContent before the overflow menu button", () => {
+      render(
+        <PanelHeader
+          {...makeProps({ headerContent: <div data-testid="custom-header-content" /> })}
+        />
+      );
+      const content = screen.getByTestId("custom-header-content");
+      const overflowButton = screen.getByLabelText("More panel actions");
+      const closeButton = screen.getByTestId("panel-close");
+      expect(
+        content.compareDocumentPosition(overflowButton) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(
+        content.compareDocumentPosition(closeButton) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+  });
+
   describe("overflow menu items", () => {
     const findMenuButton = (menu: HTMLElement, label: string) =>
       Array.from(menu.querySelectorAll("button")).find((btn) => btn.textContent?.trim() === label);
