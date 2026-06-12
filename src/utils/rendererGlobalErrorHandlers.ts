@@ -1,4 +1,4 @@
-import * as Sentry from "@sentry/electron/renderer";
+import { captureRendererException } from "@/utils/rendererSentry";
 import { useErrorStore, type ErrorType } from "@/store/errorStore";
 import { logError } from "@/utils/logger";
 import {
@@ -113,22 +113,15 @@ export function reportRendererGlobalError(
       console.error("[Renderer] Failed to add error to store:", storeError);
     }
 
-    try {
-      const sentryError = rawError instanceof Error ? rawError : new Error(message);
-      Sentry.captureException(sentryError, {
-        tags: { source: kind === "unhandledrejection" ? "renderer-rejection" : "renderer-error" },
-        extra: {
-          correlationId,
-          filename: metadata.filename,
-          lineno: metadata.lineno,
-          colno: metadata.colno,
-        },
-      });
-    } catch (sentryError) {
-      // Last-resort sink: Sentry capture failed.
-      // eslint-disable-next-line no-console
-      console.error("[Renderer] Failed to report error to Sentry:", sentryError);
-    }
+    captureRendererException(rawError instanceof Error ? rawError : new Error(message), {
+      tags: { source: kind === "unhandledrejection" ? "renderer-rejection" : "renderer-error" },
+      extra: {
+        correlationId,
+        filename: metadata.filename,
+        lineno: metadata.lineno,
+        colno: metadata.colno,
+      },
+    });
 
     try {
       logError(`[${source}] ${message}`, rawError, {

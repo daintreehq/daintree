@@ -421,8 +421,11 @@ describe("ReviewHub", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((callback: (state: WorktreeState) => void) => {
-      capturedUpdateCallback = callback;
+    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+      // The component subscribes to the per-view worktree port; tests keep
+      // driving it with a plain WorktreeState by wrapping it in the port
+      // event envelope here.
+      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
       return mockUnsubscribe;
     });
 
@@ -481,7 +484,7 @@ describe("ReviewHub", () => {
           onPushProgress: vi.fn().mockReturnValue(vi.fn()),
         },
         system: { openInEditor: openInEditorMock },
-        worktree: { onUpdate: onUpdateMock },
+        worktreePort: { onEvent: onUpdateMock },
         plugin: {
           // Default to no decorations; per-describe blocks can override via
           // `getDecorationsMock.mockResolvedValueOnce(...)` once a worktree
@@ -1026,10 +1029,13 @@ describe("ReviewHub", () => {
 
       fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"));
 
-      expect(fileDiffModalNavCapture.value).toMatchObject({
-        filePath: "src/b.ts",
-        currentFileIndex: 1,
-        totalFileCount: 4,
+      // First open mounts the lazy modal chunk — wait for the capture.
+      await waitFor(() => {
+        expect(fileDiffModalNavCapture.value).toMatchObject({
+          filePath: "src/b.ts",
+          currentFileIndex: 1,
+          totalFileCount: 4,
+        });
       });
 
       act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(1));
@@ -1120,10 +1126,13 @@ describe("ReviewHub", () => {
 
       fireEvent.click(screen.getByText("component.tsx"));
 
-      expect(baseBranchModalNavCapture.value).toMatchObject({
-        filePath: "src/component.tsx",
-        currentFileIndex: 0,
-        totalFileCount: 2,
+      // First open mounts the lazy modal chunk — wait for the capture.
+      await waitFor(() => {
+        expect(baseBranchModalNavCapture.value).toMatchObject({
+          filePath: "src/component.tsx",
+          currentFileIndex: 0,
+          totalFileCount: 2,
+        });
       });
 
       act(() => baseBranchModalNavCapture.value?.onNavigateFile?.(1));
