@@ -373,7 +373,7 @@
 /* Selection styling */
 .diff-viewer .diff-code::selection,
 .diff-viewer .diff-code *::selection {
-  background: color-mix(in oklch, var(--color-accent-primary) 30%, transparent);
+  background: color-mix(in srgb, var(--color-accent-primary) 30%, transparent);
 }
 
 /* Scrollbar styling for diff viewer */

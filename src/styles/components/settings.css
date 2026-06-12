@@ -1,14 +1,37 @@
+/* Alpha washes in this file mix `in srgb`, NOT `in oklch`: Chromium 148's
+   color-mix toward `transparent` in oklch collapses the result's hue to
+   `none`, which paints as hue 0 (warm red) — a teal panel renders a maroon
+   band. The srgb mix yields the exact source color at reduced alpha, which
+   also matches how the layer alpha-composites over what's beneath it. */
+
 .settings-shell {
   --_bg: var(--settings-dialog-bg, var(--theme-surface-panel));
   background: var(--_bg);
+  /* ScrollShadow fades inside the shell must match the shell's own paint —
+     the AppDialog inline default (--color-surface-dialog) diverges from it on
+     light themes (panel-elevated vs panel) and when themes author
+     --settings-dialog-bg. Same precedent as .surface-overlay in index.css. */
+  --scroll-shadow-color: var(--_bg);
 }
 
 .settings-sidebar {
   --_bg: var(
     --settings-sidebar-bg,
-    color-mix(in oklch, var(--theme-surface-canvas) 50%, transparent)
+    color-mix(in srgb, var(--theme-surface-canvas) 50%, transparent)
   );
   background: var(--_bg);
+  /* The sidebar's painted background is the 50% canvas wash composited over
+     the dialog shell; the scroll fade must match that composite, not
+     surface-panel. Themes that author a custom --settings-sidebar-bg can
+     color-match exactly via the optional --settings-sidebar-scroll-fade key. */
+  --scroll-shadow-color: var(
+    --settings-sidebar-scroll-fade,
+    color-mix(
+      in srgb,
+      var(--theme-surface-canvas) 50%,
+      var(--settings-dialog-bg, var(--theme-surface-panel))
+    )
+  );
 }
 
 .settings-search {
@@ -22,10 +45,7 @@
 }
 
 .dialog-header {
-  --_bg: var(
-    --dialog-header-bg,
-    color-mix(in oklch, var(--theme-surface-sidebar) 50%, transparent)
-  );
+  --_bg: var(--dialog-header-bg, color-mix(in srgb, var(--theme-surface-sidebar) 50%, transparent));
   background: var(--_bg);
 }
 
@@ -59,7 +79,7 @@
 .settings-section-header {
   --_bg: var(
     --settings-section-header-bg,
-    color-mix(in oklch, var(--theme-surface-panel) 80%, transparent)
+    color-mix(in srgb, var(--theme-surface-panel) 80%, transparent)
   );
   background: var(--_bg);
   backdrop-filter: blur(8px);

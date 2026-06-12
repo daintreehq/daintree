@@ -234,6 +234,10 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-section-header-bg": OPTIONAL,
   "settings-section-header-bg-solid": OPTIONAL,
   "settings-sidebar-bg": OPTIONAL,
+  // Scroll-fade color for the settings sidebar's ScrollShadow. Only needed by
+  // themes that author a custom settings-sidebar-bg; the CSS fallback in
+  // settings.css composites the default 50% canvas wash over the dialog shell.
+  "settings-sidebar-scroll-fade": OPTIONAL,
 
   // Sidebar — required keys whose CSS fallback (white-tint) is invisible on
   // light themes. See #8175 lineage.

@@ -303,6 +303,7 @@ export const EXTENSION_KEYS = [
   "settings-section-header-bg",
   "settings-section-header-bg-solid",
   "settings-sidebar-bg",
+  "settings-sidebar-scroll-fade",
 
   // Sidebar interaction
   "sidebar-action-hover-bg",
