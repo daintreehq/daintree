@@ -53,6 +53,16 @@ export const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id";
  */
 export const INSTANCE_ROLE_ARG = "--daintree-instance-role";
 
+/**
+ * E2E-only preload flags. These mirror the first-paint/project identity args:
+ * the main process reads the launch environment, then threads stable argv
+ * flags into each sandboxed renderer preload. Relying on preload `process.env`
+ * alone is brittle under sandboxed Electron contexts.
+ */
+export const E2E_MODE_ARG = "--daintree-e2e-mode";
+export const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
+export const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+
 export type InstanceRole = "attended" | "worker";
 
 /**
@@ -63,6 +73,16 @@ export type InstanceRole = "attended" | "worker";
  */
 export function resolveInstanceRole(): InstanceRole {
   return process.env.DAINTREE_INSTANCE_ROLE === "worker" ? "worker" : "attended";
+}
+
+export function resolveE2EPreloadArgs(): string[] {
+  const args: string[] = [];
+  if (process.env.DAINTREE_E2E_MODE === "1") args.push(E2E_MODE_ARG);
+  if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+    args.push(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+  }
+  if (process.env.DAINTREE_E2E_FAULT_MODE === "1") args.push(E2E_FAULT_MODE_ARG);
+  return args;
 }
 
 /**

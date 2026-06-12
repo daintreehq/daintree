@@ -938,7 +938,8 @@ describe("WorktreeMonitor", () => {
       // A background fetch writes the loose remote base ref without touching
       // packed-refs — the cache key must notice and recompute.
       vi.mocked(stat).mockImplementation(async (p) => {
-        const mtimeMs = String(p).endsWith("origin/main") ? 2_000 : 1_000;
+        const normalizedPath = String(p).replace(/\\/g, "/");
+        const mtimeMs = normalizedPath.endsWith("origin/main") ? 2_000 : 1_000;
         return { mtimeMs } as unknown as Awaited<ReturnType<typeof stat>>;
       });
       mockGitRaw.mockResolvedValue("0\t5\n");

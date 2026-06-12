@@ -32,6 +32,7 @@ import {
   insertSkeletonCss,
   injectSkeletonCss,
   resolveInitialColorSchemeId,
+  resolveE2EPreloadArgs,
   resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
@@ -275,6 +276,7 @@ export function setupBrowserWindow(
       additionalArguments: [
         `${INITIAL_COLOR_SCHEME_ARG}=${colorSchemeId}`,
         `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
+        ...resolveE2EPreloadArgs(),
         // Thread the demo-mode flag into renderer argv (Electron does not
         // forward main-process CLI switches), so window.electron.demo and the
         // demo overlay components are available when launched with --demo-mode.

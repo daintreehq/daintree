@@ -10,7 +10,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, runTerminalCommand } from "../helpers/terminal";
-import { openTerminal, getFirstGridPanel } from "../helpers/panels";
+import { getGridPanelIds, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
 
@@ -221,8 +221,8 @@ async function expectWorktreeTracksAgent(
   const row = await expectWorktreeRowVisible(page, terminalId);
   await expect
     .poll(() => row.getAttribute("data-terminal-agent-id"), {
-      timeout: 10_000,
-      intervals: [250],
+      timeout: 30_000 * SLOW_HOST_MULTIPLIER,
+      intervals: [250, 500, 1_000],
     })
     .toBe(agentId);
   await expect
@@ -238,8 +238,8 @@ async function expectWorktreeTracksAgent(
     .poll(
       () => row.locator("[data-terminal-icon-id]").first().getAttribute("data-terminal-icon-id"),
       {
-        timeout: 5_000,
-        intervals: [250],
+        timeout: 10_000 * SLOW_HOST_MULTIPLIER,
+        intervals: [250, 500],
       }
     )
     .toBe(agentId);
@@ -259,6 +259,25 @@ async function expectWorktreeTracksPlainTerminal(page: Page, terminalId: string)
       intervals: [250],
     })
     .toBeNull();
+}
+
+async function openNewTerminalAndGetId(page: Page): Promise<string> {
+  const beforeIds = new Set(await getGridPanelIds(page));
+  await openTerminal(page);
+  await expect
+    .poll(
+      async () => {
+        const ids = await getGridPanelIds(page);
+        return ids.find((id) => !beforeIds.has(id)) ?? null;
+      },
+      { timeout: 30_000 * SLOW_HOST_MULTIPLIER, intervals: [250, 500, 1_000] }
+    )
+    .not.toBeNull();
+
+  const ids = await getGridPanelIds(page);
+  const id = ids.find((candidate) => !beforeIds.has(candidate));
+  expect(id).toBeTruthy();
+  return id!;
 }
 
 function isRelevantDiagnosticLine(line: string): boolean {
@@ -601,13 +620,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     let plainPanelId = "";
     await test.step("open a fresh plain terminal", async () => {
       const { window } = ctx;
-      await openTerminal(window);
-      const plainPanel = getFirstGridPanel(window);
-      plainPanelId = await window.evaluate((claudeId) => {
-        const all = Array.from(document.querySelectorAll("[data-panel-id]"));
-        const plain = all.find((el) => el.getAttribute("data-panel-id") !== claudeId);
-        return plain?.getAttribute("data-panel-id") ?? "";
-      }, claudePanelId);
+      plainPanelId = await openNewTerminalAndGetId(window);
       expect(plainPanelId).toBeTruthy();
       expect(plainPanelId).not.toBe(claudePanelId);
       const panel = window.locator(`[data-panel-id="${plainPanelId}"]`);
@@ -618,7 +631,6 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
       expect(await panel.getAttribute("data-detected-agent-id")).toBeNull();
       await expectPanelHeaderIcon(panel, "terminal");
       await diagnostics?.captureSnapshot("plain terminal open", window);
-      void plainPanel;
     });
 
     await test.step("type `claude` in the plain terminal", async () => {

@@ -156,14 +156,36 @@ test.describe.serial("UI: Dock popover drag resize", () => {
     expect(before).toBeGreaterThan(0);
 
     // Drag the handle upward — the dock is at the bottom so up means taller.
-    const box = await handle.boundingBox();
-    if (!box) throw new Error("resize handle has no bounding box");
-    const cx = box.x + box.width / 2;
-    const cy = box.y + box.height / 2;
-    await w.mouse.move(cx, cy);
-    await w.mouse.down();
-    await w.mouse.move(cx, cy - 120, { steps: 12 });
-    await w.mouse.up();
+    const startY = await handle.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+    await handle.dispatchEvent("mousedown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      clientY: startY,
+    });
+    await expect
+      .poll(() => w.evaluate(() => document.body.style.cursor), { timeout: T_MEDIUM })
+      .toBe("row-resize");
+    await w.evaluate((clientY) => {
+      document.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          cancelable: true,
+          clientY,
+        })
+      );
+    }, startY - 120);
+    await w.evaluate(() => {
+      document.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
 
     await expect.poll(heightOf, { timeout: T_MEDIUM }).toBeGreaterThan(before + 40);
 

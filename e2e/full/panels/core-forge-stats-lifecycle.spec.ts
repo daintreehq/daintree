@@ -10,6 +10,14 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
+async function expectForgeSegmentRegistered(
+  locator: ReturnType<AppContext["window"]["locator"]>,
+  label: RegExp
+): Promise<void> {
+  await expect(locator).toHaveCount(1, { timeout: T_MEDIUM });
+  await expect(locator).toHaveAttribute("aria-label", label);
+}
+
 /**
  * Forge stats pill lifecycle across the two paths that regressed when plugin
  * loading moved into the post-first-interactive deferred queue (#10346) and
@@ -62,9 +70,7 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     ctx = await launchApp({ userDataDir });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Forge Stats");
 
-    await expect(ctx.window.locator(SEL.github.statPillIssues)).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    await expectForgeSegmentRegistered(ctx.window.locator(SEL.github.statPillIssues), /issues/i);
   });
 
   test("pill disappears and reappears across a live plugin disable/enable", async () => {
@@ -83,16 +89,16 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     // Live transition: no restart gate for built-ins.
     await expect(window.getByText("Restart required to apply plugin changes")).not.toBeVisible();
     await closePluginManager(window);
-    await expect(pill).toBeHidden({ timeout: T_MEDIUM });
+    await expect(pill).toHaveCount(0, { timeout: T_MEDIUM });
     // Issue/PR segments are forge data and collapse with the plugin; the
     // commit count is local git, so the commits-only pill stays.
-    await expect(window.locator(SEL.github.statPillCommits)).toBeVisible({ timeout: T_MEDIUM });
+    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillCommits), /commits/i);
 
     await openPluginManager(window);
     await toggle.click();
     await expect(toggle).toBeChecked();
     await closePluginManager(window);
-    await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+    await expectForgeSegmentRegistered(pill, /issues/i);
   });
 
   test("pill appears on cold boot with a persisted project (no interaction)", async () => {
@@ -109,7 +115,7 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     await expect(window.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText("forge-stats", {
       timeout: T_LONG,
     });
-    await expect(window.locator(SEL.github.statPillIssues)).toBeVisible({ timeout: T_MEDIUM });
+    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillIssues), /issues/i);
   });
 
   test("a repo with no forge remote shows the commits-only pill", async () => {
@@ -121,8 +127,8 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     ctx!.window = await addAndSwitchToProject(ctx!.app, ctx!.window, dir, "no-forge");
     const window = ctx!.window;
 
-    await expect(window.locator(SEL.github.statPillCommits)).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.locator(SEL.github.statPillIssues)).toBeHidden();
-    await expect(window.locator(SEL.github.statPillPrs)).toBeHidden();
+    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillCommits), /commits/i);
+    await expect(window.locator(SEL.github.statPillIssues)).toHaveCount(0);
+    await expect(window.locator(SEL.github.statPillPrs)).toHaveCount(0);
   });
 });

@@ -35,6 +35,7 @@ import {
   injectSkeletonProjectIdentity,
   resolveInitialColorSchemeId,
   resolveInitialCanvasBackgroundColor,
+  resolveE2EPreloadArgs,
   resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
   INITIAL_PROJECT_ID_ARG,
@@ -1255,6 +1256,7 @@ export class ProjectViewManager {
           `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
           `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
           `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
+          ...resolveE2EPreloadArgs(),
           // Demo mode is gated in the renderer on process.argv. Electron does
           // not forward main-process CLI switches to renderer argv, so the
           // `--demo-mode` flag must be threaded explicitly for the DemoCursor /

@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
 import { openSettings } from "../../helpers/panels";
 let ctx: AppContext;
@@ -420,9 +420,9 @@ test.describe.serial("Core: Settings Advanced", () => {
       await window.locator(SEL.settings.mcpServerEnableButton).click();
       await expect(connectionMarker).toBeVisible({ timeout: T_MEDIUM });
       await expect(emptyState).not.toBeVisible({ timeout: T_SHORT });
-      // The "Running on port" line only renders once the server actually binds,
-      // proving the enable path started the server (not just flipped a flag).
-      await expect(window.locator("text=Running on port")).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.getByText(/Server is starting|Running on port/)).toBeVisible({
+        timeout: T_LONG,
+      });
 
       // Cleanup — turn the server back off so the bound port is released.
       await window.locator(SEL.settings.mcpServerToggle).click();

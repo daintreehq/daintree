@@ -94,6 +94,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   INSTANCE_ROLE_ARG: "--daintree-instance-role",
   resolveInstanceRole: vi.fn(() => "attended"),
+  resolveE2EPreloadArgs: vi.fn(() => []),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));

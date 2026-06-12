@@ -13,6 +13,7 @@ import { app, BrowserWindow, crashReporter, protocol } from "electron";
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
+import { isE2EMode } from "./setup/runtimeFlags.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -189,7 +190,9 @@ if (!gotTheLock) {
     () => BrowserWindow.getAllWindows().length > 0
   );
 
-  crashReporter.start({ uploadToServer: false });
+  if (!isE2EMode) {
+    crashReporter.start({ uploadToServer: false });
+  }
   initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
 

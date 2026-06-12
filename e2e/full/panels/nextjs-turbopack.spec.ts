@@ -4,6 +4,7 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_LONG } from "../../helpers/timeouts";
 
@@ -114,15 +115,7 @@ server.listen(0, '127.0.0.1', () => {
     const { window } = ctx;
 
     // Configure dev server command, then open dev preview via action dispatch
-    await window.evaluate(async () => {
-      const current = await window.electron.project.getCurrent();
-      if (!current?.id) return;
-      const settings = await window.electron.project.getSettings(current.id);
-      await window.electron.project.saveSettings(current.id, {
-        ...settings,
-        devServerCommand: "npm run dev",
-      });
-    });
+    await saveCurrentProjectSettings(window, { devServerCommand: "npm run dev" });
 
     // Open dev preview panel via the exposed E2E action dispatcher
     await window.evaluate(async () => {

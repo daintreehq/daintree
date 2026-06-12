@@ -25,6 +25,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, getGridPanelIds } from "../../helpers/panels";
+import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { switchWorktree } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
@@ -107,15 +108,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
 
     // Set the project-level devServerCommand BEFORE opening any panels so
     // both panels auto-start on open (no reload required).
-    await ctx.window.evaluate(async () => {
-      const current = await window.electron.project.getCurrent();
-      if (!current?.id) return;
-      const settings = await window.electron.project.getSettings(current.id);
-      await window.electron.project.saveSettings(current.id, {
-        ...settings,
-        devServerCommand: "node dev-server.cjs",
-      });
-    });
+    await saveCurrentProjectSettings(ctx.window, { devServerCommand: "node dev-server.cjs" });
 
     // Resolve the stable worktree IDs we'll use for IPC assertions later.
     const worktrees = await ctx.window.evaluate(() => window.electron.worktree.getAll());

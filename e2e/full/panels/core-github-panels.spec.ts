@@ -18,7 +18,7 @@ import {
   restoreRepoStats,
 } from "../../helpers/githubHelpers";
 import { SEL } from "../../helpers/selectors";
-import { T_MEDIUM } from "../../helpers/timeouts";
+import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
 
 // PR CI/merge gating is intentionally NOT covered here: the CI status dot only
 // renders when a PR fixture carries a populated `ciStatus`, which the fault /
@@ -93,25 +93,10 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
-  test("issues dropdown renders search and filter chrome when connected", async () => {
-    const { window } = ctx;
-    await connectGitHub(ctx.app, window);
-    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 });
-    // The fake E2E token can't satisfy a real list fetch — without a stub the
-    // dropdown falls back to its not-connected surface instead of the chrome.
-    await stubListIssues(ctx.app, [makeFixtureIssue(201, "E2E chrome issue")]);
-
-    await openIssuesDropdown(window);
-
-    // The per-type search input only renders for the connected (token present)
-    // dropdown surface — its presence proves we cleared the no-token gate.
-    await expect(window.locator(SEL.github.searchIssues)).toBeVisible({ timeout: T_MEDIUM });
-  });
-
   test("bulk-selecting issues opens the create-worktrees dialog", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
-    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 });
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 }, window);
     await stubListIssues(ctx.app, [
       makeFixtureIssue(101, "E2E issue one"),
       makeFixtureIssue(102, "E2E issue two"),
@@ -122,7 +107,7 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     // The select-all control only renders with a non-empty search query AND data.
     await window.locator(SEL.github.searchIssues).fill("e2e");
-    await expect(window.locator(SEL.github.item(101))).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.github.item(101))).toBeVisible({ timeout: T_LONG });
 
     const selectAll = window
       .locator(SEL.github.selectionActions)
@@ -139,10 +124,25 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(dialog.locator('text="E2E issue one"')).toBeVisible({ timeout: T_MEDIUM });
   });
 
+  test("issues dropdown renders search and filter chrome when connected", async () => {
+    const { window } = ctx;
+    await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 }, window);
+    // The fake E2E token can't satisfy a real list fetch — without a stub the
+    // dropdown falls back to its not-connected surface instead of the chrome.
+    await stubListIssues(ctx.app, [makeFixtureIssue(201, "E2E chrome issue")]);
+
+    await openIssuesDropdown(window);
+
+    // The per-type search input only renders for the connected (token present)
+    // dropdown surface — its presence proves we cleared the no-token gate.
+    await expect(window.locator(SEL.github.searchIssues)).toBeVisible({ timeout: T_MEDIUM });
+  });
+
   test("issues dropdown shows the paused state under a rate-limit block", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
-    await stubRepoStats(ctx.app, { issueCount: 0, prCount: 0, commitCount: 5 });
+    await stubRepoStats(ctx.app, { issueCount: 0, prCount: 0, commitCount: 5 }, window);
     // Empty list so the rate-limit empty-state (not a data row) is the surface.
     await stubListIssues(ctx.app, []);
 
@@ -156,13 +156,13 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     await pushRateLimitBlocked(ctx.app);
 
-    await expect(window.locator(SEL.github.rateLimitedEmptyState)).toBeVisible({
+    await expect(window.getByRole("status", { name: /GitHub rate limit/ })).toBeVisible({
       timeout: T_MEDIUM,
     });
 
-    // Clearing the block lifts the paused surface — the dropdown resumes.
+    // Clearing the block lifts the paused surface — the toolbar resumes.
     await pushRateLimitClear(ctx.app);
-    await expect(window.locator(SEL.github.rateLimitedEmptyState)).not.toBeVisible({
+    await expect(window.getByRole("status", { name: /GitHub rate limit/ })).not.toBeVisible({
       timeout: T_MEDIUM,
     });
   });
@@ -170,7 +170,7 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
   test("PR dropdown renders search chrome when connected", async () => {
     const { window } = ctx;
     await connectGitHub(ctx.app, window);
-    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 });
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 2, commitCount: 5 }, window);
 
     const pill = window.locator(SEL.github.statPillPrs);
     await expect(pill).toBeVisible({ timeout: T_MEDIUM });

@@ -8,4 +8,5 @@ import { app } from "electron";
 
 export const isDemoMode = !app.isPackaged && process.argv.includes("--demo-mode");
 export const isSmokeTest = process.argv.includes("--smoke-test");
+export const isE2EMode = process.env.DAINTREE_E2E_MODE === "1";
 export const smokeTestStart = isSmokeTest ? Date.now() : 0;

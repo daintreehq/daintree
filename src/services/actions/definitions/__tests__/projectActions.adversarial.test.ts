@@ -13,12 +13,16 @@ const projectClientMock = vi.hoisted(() => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const projectSettingsStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const projectMruMock = vi.hoisted(() => ({
   getMruProjects: vi.fn<(projects: readonly Project[]) => Project[]>(() => []),
 }));
 
 vi.mock("@/clients", () => ({ projectClient: projectClientMock }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
+vi.mock("@/store/projectSettingsStore", () => ({
+  useProjectSettingsStore: projectSettingsStoreMock,
+}));
 vi.mock("@shared/utils/projectMru", () => projectMruMock);
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
@@ -47,6 +51,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const fn of Object.values(projectClientMock)) fn.mockResolvedValue(undefined);
   projectStoreMock.getState.mockReturnValue({ currentProject: null, projects: [] });
+  projectSettingsStoreMock.getState.mockReturnValue({
+    projectId: null,
+    setSettings: vi.fn(),
+  });
   projectMruMock.getMruProjects.mockReturnValue([]);
 });
 
@@ -142,6 +150,63 @@ describe("projectActions adversarial", () => {
       const { run } = setupActions();
       await expect(run("project.getStats", undefined)).rejects.toThrow("No active project");
       expect(projectClientMock.getStats).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("project.saveSettings", () => {
+    it("writes through to the active project settings store after saving", async () => {
+      const setSettings = vi.fn();
+      projectClientMock.getSettings.mockResolvedValueOnce({
+        runCommands: [],
+        devServerCommand: "",
+      });
+      projectStoreMock.getState.mockReturnValue({
+        currentProject: { id: "proj-active" },
+        projects: [],
+      });
+      projectSettingsStoreMock.getState.mockReturnValue({
+        projectId: "proj-active",
+        setSettings,
+      });
+
+      const { run } = setupActions();
+      await run("project.saveSettings", {
+        projectId: "proj-active",
+        settings: {
+          devServerCommand: "npm run dev",
+          daintreeMcpTier: "all",
+        },
+      });
+
+      expect(projectClientMock.saveSettings).toHaveBeenCalledWith("proj-active", {
+        runCommands: [],
+        devServerCommand: "npm run dev",
+      });
+      expect(setSettings).toHaveBeenCalledWith({
+        runCommands: [],
+        devServerCommand: "npm run dev",
+      });
+    });
+
+    it("does not mutate the store when saving an inactive project", async () => {
+      const setSettings = vi.fn();
+      projectClientMock.getSettings.mockResolvedValueOnce({ runCommands: [] });
+      projectStoreMock.getState.mockReturnValue({
+        currentProject: { id: "proj-active" },
+        projects: [],
+      });
+      projectSettingsStoreMock.getState.mockReturnValue({
+        projectId: "proj-active",
+        setSettings,
+      });
+
+      const { run } = setupActions();
+      await run("project.saveSettings", {
+        projectId: "proj-other",
+        settings: { devServerCommand: "npm run dev" },
+      });
+
+      expect(setSettings).not.toHaveBeenCalled();
     });
   });
 });

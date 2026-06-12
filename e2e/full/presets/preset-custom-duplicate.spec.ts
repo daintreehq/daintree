@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -17,6 +17,38 @@ import {
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
+
+type PersistedPreset = { id: string; name?: string };
+type PersistedAgentEntry = {
+  customPresets?: PersistedPreset[];
+  presetId?: string;
+} & Record<string, unknown>;
+type PersistedAgentSettings = {
+  agents?: Record<string, PersistedAgentEntry | undefined>;
+};
+
+async function getClaudeCustomPresets(window: Page): Promise<PersistedPreset[]> {
+  return window.evaluate(async () => {
+    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    return settings.agents?.claude?.customPresets ?? [];
+  });
+}
+
+async function deleteFirstOriginalClaudePreset(window: Page): Promise<void> {
+  await window.evaluate(async () => {
+    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const entry = settings.agents?.claude ?? {};
+    const presets = entry.customPresets ?? [];
+    const target = presets.find((preset) => !(preset.name ?? "").includes("(copy)")) ?? presets[0];
+    if (!target) throw new Error("No Claude custom preset available to delete");
+
+    await window.electron.agentSettings.set("claude", {
+      ...entry,
+      customPresets: presets.filter((preset) => preset.id !== target.id),
+      presetId: entry.presetId === target.id ? undefined : entry.presetId,
+    });
+  });
+}
 
 test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
   test.beforeAll(async () => {
@@ -146,25 +178,36 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
   });
 
   test("42. Deleting original does not affect duplicate", async () => {
+    removeCcrConfig();
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
+    const customCountBeforeDuplicate = (await getClaudeCustomPresets(ctx.window)).length;
 
     const dupBtn = await getVisibleDuplicateButton();
     await dupBtn.scrollIntoViewIfNeeded().catch(() => undefined);
     await dupBtn.click({ force: true, noWaitAfter: true });
-    await ctx.window.waitForTimeout(T_SETTLE);
-    await goToClaudeSettings();
+    await expect
+      .poll(() => getClaudeCustomPresets(ctx.window).then((presets) => presets.length), {
+        timeout: process.env.CI ? 10_000 : 5_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe(customCountBeforeDuplicate + 1);
 
-    const countBefore = await countPresetOptions(ctx.window);
+    const presetsAfterDuplicate = await getClaudeCustomPresets(ctx.window);
+    expect(presetsAfterDuplicate.some((preset) => (preset.name ?? "").includes("(copy)"))).toBe(
+      true
+    );
 
-    const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).last();
-    await expect(delBtn).toBeVisible({ timeout: T_SHORT });
-    await delBtn.click({ force: true, noWaitAfter: true });
-    await ctx.window.waitForTimeout(T_SETTLE);
-    await goToClaudeSettings();
+    await deleteFirstOriginalClaudePreset(ctx.window);
+    await expect
+      .poll(() => getClaudeCustomPresets(ctx.window).then((presets) => presets.length), {
+        timeout: process.env.CI ? 10_000 : 5_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe(customCountBeforeDuplicate);
 
-    const countAfter = await countPresetOptions(ctx.window);
-    expect(countAfter).toBe(countBefore - 1);
+    const presetsAfterDelete = await getClaudeCustomPresets(ctx.window);
+    expect(presetsAfterDelete.some((preset) => (preset.name ?? "").includes("(copy)"))).toBe(true);
   });
 
   test("43. Duplicate multiple times creates independent copies", async () => {

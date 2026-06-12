@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import type { ProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -251,7 +252,14 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       const sanitized: Record<string, unknown> = { ...settings };
       delete sanitized.daintreeMcpTier;
       delete sanitized.exposeDaintreeMcpToAgents;
-      await projectClient.saveSettings(projectId, { ...current, ...sanitized } as any);
+      const updated = { ...current, ...sanitized } as ProjectSettings;
+      await projectClient.saveSettings(projectId, updated);
+
+      const currentProjectId = useProjectStore.getState().currentProject?.id;
+      const projectSettingsState = useProjectSettingsStore.getState();
+      if (projectId === currentProjectId && projectSettingsState.projectId === projectId) {
+        projectSettingsState.setSettings(updated);
+      }
     },
   }));
 

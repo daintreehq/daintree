@@ -218,6 +218,24 @@ const rawInstanceRole =
   process.env.DAINTREE_INSTANCE_ROLE;
 const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "worker" : "attended";
 
+const E2E_MODE_ARG = "--daintree-e2e-mode";
+const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
+const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+const hasE2EModeEnv = process.env.DAINTREE_E2E_MODE === "1";
+const hasE2ESkipFirstRunDialogsEnv = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
+const hasE2EFaultModeEnv = process.env.DAINTREE_E2E_FAULT_MODE === "1";
+const isE2EMode = !isPackagedBuild && hasE2EModeEnv && process.argv.includes(E2E_MODE_ARG);
+const isE2ESkipFirstRunDialogs =
+  !isPackagedBuild &&
+  hasE2ESkipFirstRunDialogsEnv &&
+  process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+const isE2EFaultMode =
+  !isPackagedBuild && hasE2EFaultModeEnv && process.argv.includes(E2E_FAULT_MODE_ARG);
+
+function e2eGlobalKey(name: string): string {
+  return ["__", "DAINTREE", "_", "E2E", "_", name, "__"].join("");
+}
+
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
 // Instead, we use window.postMessage to transfer it to the main world.
@@ -2902,8 +2920,8 @@ _eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
 
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
 // Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
-if (process.env.DAINTREE_E2E_FAULT_MODE === "1" && !isPackagedBuild) {
-  contextBridge.exposeInMainWorld("__DAINTREE_E2E_IPC__", {
+if (isE2EFaultMode) {
+  contextBridge.exposeInMainWorld(e2eGlobalKey("IPC"), {
     getRendererListenerCount: (channel: string) => ipcRenderer.listenerCount(channel),
   });
 }
@@ -2912,8 +2930,8 @@ if (process.env.DAINTREE_E2E_FAULT_MODE === "1" && !isPackagedBuild) {
 // Used by the renderer to suppress side effects (like the auto-launched
 // primary agent at the end of onboarding) that would otherwise pollute
 // panel-count assertions in tests.
-if (process.env.DAINTREE_E2E_MODE === "1" && !isPackagedBuild) {
-  contextBridge.exposeInMainWorld("__DAINTREE_E2E_MODE__", true);
+if (isE2EMode) {
+  contextBridge.exposeInMainWorld(e2eGlobalKey("MODE"), true);
 }
 
 // E2E test bridge: expose the "skip first-run dialogs" flag to the renderer at
@@ -2922,8 +2940,8 @@ if (process.env.DAINTREE_E2E_MODE === "1" && !isPackagedBuild) {
 // only set when the E2E harness launches Electron. The sandboxed renderer
 // cannot read `process.env` directly, so the preload (which does have a
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
-if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" && !isPackagedBuild) {
-  contextBridge.exposeInMainWorld("__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
+if (isE2ESkipFirstRunDialogs) {
+  contextBridge.exposeInMainWorld(e2eGlobalKey("SKIP_FIRST_RUN_DIALOGS"), true);
 }
 
 // Surface the persisted color scheme id (seeded via additionalArguments) so the
