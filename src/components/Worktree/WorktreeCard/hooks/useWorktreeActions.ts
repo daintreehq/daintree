@@ -177,32 +177,44 @@ export function useWorktreeActions({
     void actionService.dispatch("system.openPath", { path: worktree.path }, { source: "user" });
   }, [worktree.path]);
 
+  // Promise-method cleanup instead of try/finally: a statement-level finally
+  // clause bails React Compiler memoization for the whole per-card hook.
   const handleRunRecipe = useCallback(
-    async (recipeId: string) => {
+    (recipeId: string) => {
       if (runningRecipeId !== null) {
-        return;
+        return Promise.resolve();
       }
 
       setRunningRecipeId(recipeId);
-      try {
-        const recipeState = useRecipeStore.getState();
-        const results = await runRecipeWithResults(recipeId, worktree.path, worktree.id, {
-          issueNumber: worktree.issueNumber,
-          prNumber: worktree.linked?.pr?.ref.number,
-          worktreePath: worktree.path,
-          branchName: worktree.branch,
+      const recipeState = useRecipeStore.getState();
+      return runRecipeWithResults(recipeId, worktree.path, worktree.id, {
+        issueNumber: worktree.issueNumber,
+        prNumber: worktree.linked?.pr?.ref.number,
+        worktreePath: worktree.path,
+        branchName: worktree.branch,
+      })
+        .then((results) => {
+          notifyRecipeSpawnFailures(results, {
+            recipeName: recipeState.getRecipeById(recipeId)?.name,
+            projectId: recipeState.currentProjectId ?? undefined,
+          });
+        })
+        .catch((error) => {
+          logError("Failed to run recipe", error);
+        })
+        .finally(() => {
+          setRunningRecipeId(null);
         });
-        notifyRecipeSpawnFailures(results, {
-          recipeName: recipeState.getRecipeById(recipeId)?.name,
-          projectId: recipeState.currentProjectId ?? undefined,
-        });
-      } catch (error) {
-        logError("Failed to run recipe", error);
-      } finally {
-        setRunningRecipeId(null);
-      }
     },
-    [runRecipeWithResults, worktree.path, worktree.id, runningRecipeId]
+    [
+      runRecipeWithResults,
+      worktree.path,
+      worktree.id,
+      worktree.issueNumber,
+      worktree.linked?.pr?.ref.number,
+      worktree.branch,
+      runningRecipeId,
+    ]
   );
 
   const handleDockAll = useCallback(() => {
@@ -315,7 +327,7 @@ export function useWorktreeActions({
         setConfirmDialog({ isOpen: false });
       },
     });
-  }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, teardownCommands]);
+  }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, teardownCommands, source]);
 
   const handleCopyTree = useCallback(async () => {
     await onCopyTree();

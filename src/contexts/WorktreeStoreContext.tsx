@@ -164,7 +164,8 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     }
 
     function fetchInitialState() {
-      const thisGen = ++generation;
+      generation += 1;
+      const thisGen = generation;
       // Only show loading spinner on cold start (no cached data).
       // Wake refreshes should be silent — users see existing cached data.
       const isWake = store.getState().isInitialized;
@@ -747,7 +748,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     }
 
     return () => {
-      generation++;
+      generation += 1;
       for (const cleanup of cleanups) {
         cleanup();
       }

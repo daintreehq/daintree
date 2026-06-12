@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ExternalLink, Settings2, ShieldAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
@@ -159,7 +160,26 @@ export function HelpPanel({
     setOpen,
     dismissIntro,
     clearDroppedPreferredAgent,
-  } = useHelpPanelStore();
+  } = useHelpPanelStore(
+    useShallow((s) => ({
+      isOpen: s.isOpen,
+      width: s.width,
+      terminalId: s.terminalId,
+      sessionId: s.sessionId,
+      agentId: s.agentId,
+      preferredAgentId: s.preferredAgentId,
+      droppedPreferredAgentId: s.droppedPreferredAgentId,
+      introDismissed: s.introDismissed,
+      conversationTouched: s.conversationTouched,
+      focusRequest: s.focusRequest,
+      figures: s.figures,
+      markConversationStarted: s.markConversationStarted,
+      setWidth: s.setWidth,
+      setOpen: s.setOpen,
+      dismissIntro: s.dismissIntro,
+      clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
+    }))
+  );
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;

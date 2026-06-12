@@ -271,17 +271,20 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       // unresolved IPC promise would otherwise call `setSnippetMap` after
       // close, leaking state into the (potentially still-mounted) component.
       // Bumping the counter guarantees the late `.then()` sees a stale id.
-      currentRequestRef.current = ++nextSearchRequestId;
+      nextSearchRequestId += 1;
+      currentRequestRef.current = nextSearchRequestId;
       return;
     }
     const trimmed = deferredQuery.trim();
     if (trimmed === "") {
       setSnippetMap(new Map());
-      currentRequestRef.current = ++nextSearchRequestId;
+      nextSearchRequestId += 1;
+      currentRequestRef.current = nextSearchRequestId;
       return;
     }
 
-    const issueId = ++nextSearchRequestId;
+    nextSearchRequestId += 1;
+    const issueId = nextSearchRequestId;
     currentRequestRef.current = issueId;
 
     const timer = window.setTimeout(() => {

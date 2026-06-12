@@ -55,42 +55,47 @@ export const WslGitBanner = React.memo(function WslGitBanner({
   const showProbeSkeleton = useDeferredLoading(probePending, UI_DOHERTY_THRESHOLD);
   const probeStuck = useDeferredLoading(probePending, WSL_PROBE_STUCK_MS);
 
-  const handleEnable = useCallback(async () => {
+  // Promise-method cleanup instead of try/finally: statement-level finally
+  // clauses bail React Compiler memoization for the whole component.
+  const handleEnable = useCallback(() => {
     if (busy) return;
     setBusy(true);
-    try {
-      await worktreeConfigClient.setWslGit(worktreeId, true);
-    } catch (err) {
-      logError("Failed to enable WSL git for worktree", err, { worktreeId });
-    } finally {
-      setBusy(false);
-    }
+    worktreeConfigClient
+      .setWslGit(worktreeId, true)
+      .catch((err) => {
+        logError("Failed to enable WSL git for worktree", err, { worktreeId });
+      })
+      .finally(() => {
+        setBusy(false);
+      });
   }, [worktreeId, busy]);
 
-  const handleDismiss = useCallback(async () => {
+  const handleDismiss = useCallback(() => {
     if (busy) return;
     setBusy(true);
-    try {
-      await worktreeConfigClient.dismissWslBanner(worktreeId);
-    } catch (err) {
-      logError("Failed to dismiss WSL git banner", err, { worktreeId });
-    } finally {
-      setBusy(false);
-    }
+    worktreeConfigClient
+      .dismissWslBanner(worktreeId)
+      .catch((err) => {
+        logError("Failed to dismiss WSL git banner", err, { worktreeId });
+      })
+      .finally(() => {
+        setBusy(false);
+      });
   }, [worktreeId, busy]);
 
-  const handleReprobe = useCallback(async () => {
+  const handleReprobe = useCallback(() => {
     if (reprobing) return;
     setReprobing(true);
     setReprobeFailed(false);
-    try {
-      await worktreeConfigClient.reprobeWsl(worktreeId);
-    } catch (err) {
-      logError("Failed to re-check WSL distro for worktree", err, { worktreeId });
-      setReprobeFailed(true);
-    } finally {
-      setReprobing(false);
-    }
+    worktreeConfigClient
+      .reprobeWsl(worktreeId)
+      .catch((err) => {
+        logError("Failed to re-check WSL distro for worktree", err, { worktreeId });
+        setReprobeFailed(true);
+      })
+      .finally(() => {
+        setReprobing(false);
+      });
   }, [worktreeId, reprobing]);
 
   if (eligibility === "eligible") {

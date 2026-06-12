@@ -45,17 +45,21 @@ export function useTerminalLogic({
     setExitCode(safeCode);
   }, []);
 
+  // Promise-method cleanup instead of try/finally: a statement-level finally
+  // clause bails React Compiler memoization for the whole per-terminal hook.
   const handleErrorRetry = useCallback(
-    async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
-      try {
-        await errorsClient.retry(errorId, action, args);
-        removeError(errorId);
-      } catch (error) {
-        logError("Error retry failed", error);
-      } finally {
-        clearRetryProgress(errorId);
-      }
-    },
+    (errorId: string, action: RetryAction, args?: Record<string, unknown>) =>
+      errorsClient
+        .retry(errorId, action, args)
+        .then(() => {
+          removeError(errorId);
+        })
+        .catch((error) => {
+          logError("Error retry failed", error);
+        })
+        .finally(() => {
+          clearRetryProgress(errorId);
+        }),
     [removeError, clearRetryProgress]
   );
 

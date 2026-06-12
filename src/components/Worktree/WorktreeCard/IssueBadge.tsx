@@ -1,10 +1,10 @@
-import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { CircleDot, CloudOff } from "lucide-react";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { useIssueTooltip } from "@/hooks/useForgeTooltip";
 import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
+import { useColdNumberGap } from "./hooks/useColdNumberGap";
 import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import { freshnessClass } from "@/components/Layout/FreshnessUtils";
 import {
@@ -34,12 +34,6 @@ export function IssueBadge({
   isActive,
   underlineOnHover,
 }: IssueBadgeProps) {
-  // Detects the cold-title gap by comparing issueNumber to its previous-render
-  // value via a ref; the lag (ref written in effect, no re-render) is what
-  // keeps `isColdTitleGap` true across the 400ms suppression window. Replacing
-  // the ref with state breaks that lag and flashes the #NNN fallback.
-  "use no memo";
-
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } =
     useIssueTooltip(worktreePath, issueNumber);
 
@@ -58,13 +52,9 @@ export function IssueBadge({
   // first 400ms rather than flashing the number, then fall through (#8079).
   // Title preservation for *unchanged* issue numbers is handled upstream in
   // the store, so this gate only fires on genuine issue-number transitions.
-  const prevIssueNumber = useRef<number | undefined>(undefined);
-  const isColdTitleGap = !issueTitle && issueNumber !== prevIssueNumber.current;
+  const isColdTitleGap = useColdNumberGap(issueNumber, issueTitle);
   const showColdFallback = useDohertyGate(isColdTitleGap);
   const showTooltipLoading = useDohertyGate(loading);
-  useEffect(() => {
-    prevIssueNumber.current = issueNumber;
-  }, [issueNumber]);
 
   const { freshnessLevel, freshnessCause, rateLimitResetAt, now } = useForgeBadgeFreshness("issue");
 

@@ -226,6 +226,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // unrelated render trigger.
   const [, forceTick] = useState(0);
   const now = Date.now();
+  // Quantized to the minute so every row doesn't get a fresh prop on each
+  // unrelated re-render — snooze expiry only needs minute resolution, and the
+  // quiet-hours tick already re-renders on minute boundaries.
+  const snoozeRenderTime = now - (now % 60_000);
   const isSessionMuted = quietUntil > now;
   const isScheduledMuted = isScheduledQuietNow({
     quietHoursEnabled,
@@ -1079,7 +1083,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   onDismissThread={dismissByCorrelationId}
                   snoozePendingIndex={snoozePendingIndex}
                   snoozedThreads={snoozedThreads}
-                  snoozeRenderTime={now}
+                  snoozeRenderTime={snoozeRenderTime}
                   onConsumeSnoozePending={consumeSnoozePending}
                   onSnoozeRow={handleSnoozeForRow}
                   onUnsnoozeRow={handleUnsnoozeForRow}
@@ -1106,7 +1110,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   onMarkIdsRead={markIdsReadWithUndo}
                   snoozePendingIndex={snoozePendingIndex}
                   snoozedThreads={snoozedThreads}
-                  snoozeRenderTime={now}
+                  snoozeRenderTime={snoozeRenderTime}
                   onConsumeSnoozePending={consumeSnoozePending}
                   onSnoozeRow={handleSnoozeForRow}
                   onUnsnoozeRow={handleUnsnoozeForRow}
@@ -1284,7 +1288,12 @@ function ChronoSection({
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
           const flatIndex = indexOffset + idx;
           return (
-            <div key={groupKey}>
+            <div
+              key={groupKey}
+              // Off-screen rows skip layout/paint — the popover mounts up to
+              // 200 heavy rows in a plain scroll container (sidebar precedent).
+              style={{ contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
+            >
               {isDivider && (
                 <NewSinceLastLookedDivider
                   ref={dividerRef}

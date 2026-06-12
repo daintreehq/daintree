@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -85,7 +86,19 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     setActiveTab,
     setHeight,
     setMaxHeight,
-  } = useDiagnosticsStore();
+  } = useDiagnosticsStore(
+    useShallow((s) => ({
+      isOpen: s.isOpen,
+      activeTab: s.activeTab,
+      height: s.height,
+      maxHeight: s.maxHeight,
+      openDock: s.openDock,
+      closeDock: s.closeDock,
+      setActiveTab: s.setActiveTab,
+      setHeight: s.setHeight,
+      setMaxHeight: s.setMaxHeight,
+    }))
+  );
   const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
   const failedBudgetCount = usePerfMetricsStore((state) => state.failedBudgetCount);
   const prevErrorCountRef = useRef(0);
