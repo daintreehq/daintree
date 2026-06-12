@@ -1,5 +1,4 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
@@ -171,17 +170,7 @@ export function AgentSettings({
     updateAgent,
     setAgentPinned,
     reset,
-  } = useAgentSettingsStore(
-    useShallow((s) => ({
-      settings: s.settings,
-      error: s.error,
-      initialize: s.initialize,
-      refresh: s.refresh,
-      updateAgent: s.updateAgent,
-      setAgentPinned: s.setAgentPinned,
-      reset: s.reset,
-    }))
-  );
+  } = useAgentSettingsStore();
 
   const cliAvailability = useCliAvailabilityStore((state) => state.availability);
   const isCliLoading = useCliAvailabilityStore((state) => state.isLoading);
