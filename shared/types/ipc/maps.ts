@@ -1,7 +1,6 @@
 import type { StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
-import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
   ProjectSettings,
@@ -1368,7 +1367,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
  */
 export interface IpcEventMap {
   // Worktree events
-  "worktree:update": { worktree: WorktreeState };
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };
 
@@ -1899,8 +1897,6 @@ export type IpcEventBusMap = Pick<
   | "agent:detected"
   | "agent:exited"
   | "agent:fallback-triggered"
-  // Worktree updates (window-scoped — routed via EVENTS_PUSH directly by sender)
-  | "worktree:update"
   // Window lifecycle (window-scoped)
   | "window:fullscreen-change"
   | "window:reclaim-memory"

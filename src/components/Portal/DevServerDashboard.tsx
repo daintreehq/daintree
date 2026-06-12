@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { RotateCw, Square } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
@@ -116,7 +117,20 @@ function DevServerRow({
 
 export function DevServerDashboard() {
   const { sessions: allSessions, hydrated, fetchError } = useAllDevSessions();
-  const worktrees = useWorktreeStore((s) => s.worktrees);
+  // Select only the names this dashboard renders: the worktrees Map identity
+  // changes on every polled git-status delta, but a flat Record of primitives
+  // lets useShallow skip the re-render unless a relevant name changes.
+  const worktreeNames = useWorktreeStore(
+    useShallow((s) => {
+      const names: Record<string, string> = {};
+      for (const session of allSessions) {
+        if (!session.worktreeId) continue;
+        const name = s.worktrees.get(session.worktreeId)?.name;
+        if (name !== undefined) names[session.worktreeId] = name;
+      }
+      return names;
+    })
+  );
 
   const visibleSessions = useMemo(
     () => allSessions.filter((s) => !HIDDEN_STATUSES.has(s.status)),
@@ -143,7 +157,7 @@ export function DevServerDashboard() {
               session={session}
               worktreeName={
                 session.worktreeId
-                  ? (worktrees.get(session.worktreeId)?.name ?? session.worktreeId)
+                  ? (worktreeNames[session.worktreeId] ?? session.worktreeId)
                   : session.panelId
               }
             />

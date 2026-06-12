@@ -287,6 +287,13 @@ export interface PtyHostTerminalSnapshot {
  */
 export type PtyHostEvent =
   | { type: "data"; id: string; data: string }
+  // Main-process-only copy of a chunk the renderer already received on its
+  // visual path (MessagePort) or that the background gate suppressed. Consumed
+  // by Main-side monitors (DevPreviewSessionService/UrlDetector) and NEVER
+  // re-broadcast to renderers — broadcasting it would double-deliver into the
+  // same xterm (terminalClient.onData subscribes to both the port and IPC
+  // paths on the strength of the one-visual-path invariant).
+  | { type: "data-mirror"; id: string; data: string }
   | { type: "exit"; id: string; exitCode: number; signal?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
@@ -769,7 +776,21 @@ export interface TerminalReliabilityMetricPayload {
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "ack"; id: string; bytes: number };
+  | { type: "ack"; id: string; bytes: number }
+  | {
+      /**
+       * Wake request on the direct channel: the snapshot returns as a
+       * `wake-result` on the same port, skipping both Main-process structured
+       * clones of the serialized scrollback. `canSkipUnchanged` asserts the
+       * pane currently reflects the last snapshot it applied plus every port
+       * chunk received since — only then may the host answer `noChange`
+       * instead of serializing.
+       */
+      type: "wake";
+      id: string;
+      requestId: string;
+      canSkipUnchanged?: boolean;
+    };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
@@ -810,6 +831,24 @@ export type PtyHostToRendererMessage =
       /** Byte count discarded — only set when status is "data-loss". */
       droppedBytes?: number;
       timestamp: number;
+    }
+  | {
+      /**
+       * Response to a port `wake` request. Posted on the requesting window's
+       * own port after that window's pending batch for the terminal is
+       * flushed, so the snapshot is FIFO-ordered after every chunk it already
+       * contains.
+       */
+      type: "wake-result";
+      requestId: string;
+      id: string;
+      state: string | null;
+      warnings?: string[];
+      /**
+       * The buffer provably hasn't changed since this window's last faithful
+       * sync — the renderer keeps its pane as-is instead of replaying.
+       */
+      noChange?: boolean;
     };
 
 /** Per-process resource breakdown entry */

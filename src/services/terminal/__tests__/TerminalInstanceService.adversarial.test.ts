@@ -370,7 +370,7 @@ describe("TerminalInstanceService adversarial", () => {
 
     service.writeToTerminal("t1", "abc");
 
-    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
     // Hibernated output is dropped, never replayed — IPC-delivered string
     // chunks were charged to the host's IPC ledger, so it must be drained here
     // or it leaks into permanent backpressure (#9893). ASCII "abc" = 3 bytes.
@@ -412,7 +412,7 @@ describe("TerminalInstanceService adversarial", () => {
 
     expect(managed.pendingWrites).toBe(0);
     expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledTimes(1);
-    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+    expect(testState.clientMocks.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
     expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledTimes(1);
     expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledWith("t1", 3);
     expect(notifyWriteCompleteSpy).toHaveBeenCalledTimes(1);

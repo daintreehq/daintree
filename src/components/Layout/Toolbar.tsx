@@ -645,15 +645,16 @@ export function Toolbar({
     };
   }, []);
 
-  const handleCopyTreeClick = useCallback(async () => {
+  // Promise-method cleanup instead of try/finally: a statement-level finally
+  // clause bails React Compiler memoization for the whole Toolbar component.
+  const handleCopyTreeClick = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
 
     setIsCopyingTree(true);
 
-    try {
-      const resultMessage = await handleCopyTree(activeWorktree);
-
-      if (resultMessage) {
+    return handleCopyTree(activeWorktree)
+      .then((resultMessage) => {
+        if (!resultMessage) return;
         setTreeCopied(true);
         setCopyFeedback(resultMessage);
         shortcutHintStore.getState().hide();
@@ -667,10 +668,10 @@ export function Toolbar({
           setCopyFeedback("");
           treeCopyTimeoutRef.current = null;
         }, COPY_TREE_FEEDBACK_RESET_MS);
-      }
-    } finally {
-      setIsCopyingTree(false);
-    }
+      })
+      .finally(() => {
+        setIsCopyingTree(false);
+      });
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
   // Copy-tree invoked from the overflow menu. The visible toolbar button shows
@@ -678,12 +679,12 @@ export function Toolbar({
   // overflow — so the overflow path surfaces a transient success toast instead
   // (issue #9821). `transient: true` keeps it out of the inbox: the result is
   // already on the clipboard, so no durable record is warranted.
-  const handleCopyTreeOverflow = useCallback(async () => {
+  const handleCopyTreeOverflow = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
     setIsCopyingTree(true);
-    try {
-      const resultMessage = await handleCopyTree(activeWorktree);
-      if (resultMessage) {
+    return handleCopyTree(activeWorktree)
+      .then((resultMessage) => {
+        if (!resultMessage) return;
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "success",
@@ -691,10 +692,10 @@ export function Toolbar({
           message: resultMessage,
           transient: true,
         });
-      }
-    } finally {
-      setIsCopyingTree(false);
-    }
+      })
+      .finally(() => {
+        setIsCopyingTree(false);
+      });
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
   const getToolbarItems = useCallback(

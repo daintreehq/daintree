@@ -207,6 +207,15 @@ export class TerminalWebGLManager {
   private pendingReleaseDrainScheduled = false;
   private pendingReleaseRafId: number | null = null;
 
+  // Focus pin: in DOM mode, exactly one WebGL context stays attached to the
+  // focused terminal so the pane the user is reading keeps fast, glyph-correct
+  // rendering above the mode-switch threshold. One context is far below
+  // Chromium's 16-cap, and its churn is bounded by user focus clicks — not the
+  // N-terminal output/visibility cycling the wholesale mode switch replaced
+  // (see header comment). In WebGL mode the pin is bookkeeping only; it takes
+  // effect when the fleet flips to DOM.
+  private pinnedId: string | null = null;
+
   // xterm shares one module-global TextureAtlas across every terminal with a
   // matching font/theme config. A page-merge (TextureAtlas._mergePages) splices
   // pages and rewrites glyph texturePage indices, but each WebGL renderer keeps
@@ -234,7 +243,15 @@ export class TerminalWebGLManager {
     const wasAvailable = this.hardwareAvailable;
     this.hardwareAvailable = available;
     if (wasAvailable && !available) {
-      // Hardware degraded — force DOM mode regardless of count and stay there.
+      // Hardware degraded — force DOM mode regardless of count and stay
+      // there. The focus pin offers no exemption here: clear it (and drop its
+      // context if already in DOM mode, where flipToDom early-returns) so no
+      // WebGL context outlives the breaker trip.
+      const pinned = this.pinnedId;
+      this.pinnedId = null;
+      if (pinned !== null && this.pool.has(pinned)) {
+        this.dropPoolEntry(pinned);
+      }
       this.flipToDom();
     }
   }
@@ -255,15 +272,21 @@ export class TerminalWebGLManager {
       this.evaluateMode();
     }
     // In WebGL mode, queue an attach for this id if not already pooled. In
-    // DOM mode the want is tracked but no attach happens until the next flip
-    // back. attachWithLoadedAddon dedups via pool.has(id), so a repeat ensure
-    // on an already-attached terminal is a cheap no-op.
-    if (this.mode === "webgl" && !this.pool.has(id)) {
+    // DOM mode only the focus-pinned terminal attaches; other wants are
+    // tracked but wait for the next flip back. attachWithLoadedAddon dedups
+    // via pool.has(id), so a repeat ensure on an already-attached terminal is
+    // a cheap no-op.
+    if (!this.pool.has(id) && (this.mode === "webgl" || id === this.pinnedId)) {
       this.queueAttach(id, managed);
     }
   }
 
   releaseContext(id: string): void {
+    if (this.pinnedId === id) {
+      // The consumer no longer wants WebGL here (hidden/demoted); the pin is
+      // re-established by the next focus event.
+      this.pinnedId = null;
+    }
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
     this.pendingReleases.delete(id);
@@ -273,6 +296,40 @@ export class TerminalWebGLManager {
     if (wasWanted) {
       this.evaluateMode();
     }
+  }
+
+  // Move the focus pin. Called on every terminal focus change; in DOM mode the
+  // previous pinned context is released through the paced drain and the new
+  // one attaches through the rAF attach queue (one GPU IPC roundtrip per
+  // frame, same as a mode flip).
+  pinFocus(id: string, managed: ManagedTerminal): void {
+    if (this.pinnedId === id) {
+      if (this.mode === "dom") this.queuePinnedAttach(id, managed);
+      return;
+    }
+    const previous = this.pinnedId;
+    this.pinnedId = id;
+    if (this.mode !== "dom") return;
+    if (previous !== null) {
+      this.pendingEnsures.delete(previous);
+      const prevEntry = this.pool.get(previous);
+      if (prevEntry) {
+        this.pendingReleases.set(previous, prevEntry.managed);
+        this.scheduleReleaseDrain();
+      }
+    }
+    this.pendingReleases.delete(id);
+    this.queuePinnedAttach(id, managed);
+  }
+
+  private queuePinnedAttach(id: string, managed: ManagedTerminal): void {
+    if (!this.hardwareAvailable) return;
+    if (!managed.isOpened) return;
+    if (this.pool.has(id)) return;
+    // drainOne re-checks wants.has(id): a pin that lands before the consumer's
+    // ensureContext stays queued-but-skipped until the want exists, and
+    // ensureContext re-queues the pinned id in DOM mode.
+    this.queueAttach(id, managed);
   }
 
   // External re-evaluation hook. Threshold changes pushed from the main
@@ -332,7 +389,14 @@ export class TerminalWebGLManager {
     return this.wants.size;
   }
 
+  getPinnedId(): string | null {
+    return this.pinnedId;
+  }
+
   onTerminalDestroyed(id: string): void {
+    if (this.pinnedId === id) {
+      this.pinnedId = null;
+    }
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
     this.pendingReleases.delete(id);
@@ -387,6 +451,7 @@ export class TerminalWebGLManager {
     this.pendingReleaseDrainScheduled = false;
     this.pendingReleases.clear();
     this.wants.clear();
+    this.pinnedId = null;
     if (this.atlasResyncRafId !== null) {
       try {
         cancelAnimationFrame(this.atlasResyncRafId);
@@ -433,22 +498,30 @@ export class TerminalWebGLManager {
       );
       this.hasLoggedModeFlip = true;
     }
-    // Cancel any pending attaches — none will be honored in DOM mode.
-    this.pendingEnsures.clear();
-    if (this.pendingEnsureRafId !== null) {
-      try {
-        cancelAnimationFrame(this.pendingEnsureRafId);
-      } catch {
-        // ignore
+    // Cancel pending attaches — only the focus pin is honored in DOM mode.
+    for (const id of [...this.pendingEnsures.keys()]) {
+      if (id !== this.pinnedId) {
+        this.pendingEnsures.delete(id);
       }
-      this.pendingEnsureRafId = null;
     }
-    this.pendingDrainScheduled = false;
+    if (this.pendingEnsures.size === 0) {
+      if (this.pendingEnsureRafId !== null) {
+        try {
+          cancelAnimationFrame(this.pendingEnsureRafId);
+        } catch {
+          // ignore
+        }
+        this.pendingEnsureRafId = null;
+      }
+      this.pendingDrainScheduled = false;
+    }
 
-    // Release active contexts progressively. Each terminal falls back to
-    // xterm's DOM renderer on its next paint. Visible terminals refresh when
-    // their release lands so the renderer swap is not deferred until output.
+    // Release active contexts progressively, keeping the focus pin attached.
+    // Each released terminal falls back to xterm's DOM renderer on its next
+    // paint. Visible terminals refresh when their release lands so the
+    // renderer swap is not deferred until output.
     for (const [id, entry] of this.pool) {
+      if (id === this.pinnedId) continue;
       this.pendingReleases.set(id, entry.managed);
     }
     this.scheduleReleaseDrain();
@@ -505,11 +578,15 @@ export class TerminalWebGLManager {
       this.pendingEnsures.clear();
       return;
     }
-    // A mode flip during an in-flight drain is honored — flipToDom clears
-    // pendingEnsures so the next entries().next() returns done immediately.
+    // A mode flip during an in-flight drain is honored — flipToDom drops the
+    // queued attaches, except the focus pin which stays valid in DOM mode.
     if (this.mode !== "webgl") {
-      this.pendingEnsures.clear();
-      return;
+      for (const id of [...this.pendingEnsures.keys()]) {
+        if (id !== this.pinnedId) {
+          this.pendingEnsures.delete(id);
+        }
+      }
+      if (this.pendingEnsures.size === 0) return;
     }
     const next = this.pendingEnsures.entries().next();
     if (next.done) return;
@@ -566,6 +643,15 @@ export class TerminalWebGLManager {
     if (next.done) return;
     const [id, managed] = next.value;
     this.pendingReleases.delete(id);
+
+    // The pin may have moved onto an id queued for release before the focus
+    // change landed — keep its context.
+    if (id === this.pinnedId) {
+      if (this.pendingReleases.size > 0) {
+        this.scheduleReleaseDrain();
+      }
+      return;
+    }
 
     if (this.pool.has(id)) {
       this.dropPoolEntry(id);
@@ -652,7 +738,7 @@ export class TerminalWebGLManager {
     if (this.pool.get(id) !== entry) return;
     const managed = entry.managed;
     this.dropPoolEntry(id);
-    if (managed.isOpened && this.wants.has(id) && this.mode === "webgl") {
+    if (managed.isOpened && this.wants.has(id) && (this.mode === "webgl" || id === this.pinnedId)) {
       this.queueAttach(id, managed);
     }
   }
@@ -669,10 +755,12 @@ export class TerminalWebGLManager {
     // between when this attach was queued and when the rAF drain landed —
     // refreshMode() is best-effort but the queue can already be in flight.
     // Re-evaluating here flips to DOM and clears pendingEnsures, so the next
-    // drain iteration bails immediately.
+    // drain iteration bails immediately. The focus pin is the exception: it
+    // attaches regardless of the count, since DOM mode keeps exactly one
+    // context on the focused terminal.
     if (this.wants.size > getWebglUpperThreshold()) {
       this.evaluateMode();
-      return;
+      if (id !== this.pinnedId || this.mode !== "dom") return;
     }
 
     let addon: WebglAddonType | null = null;

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
 import { isBuiltInAgentId } from "../../shared/config/agentIds";
@@ -241,7 +241,7 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
     }),
     {
       name: "help-panel-storage",
-      storage: createSafeJSONStorage(),
+      storage: createDebouncedSafeJSONStorage(300),
       version: 4,
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state) => ({

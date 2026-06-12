@@ -35,6 +35,7 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
+import { stashViewFileRequest } from "./components/FileViewer/pendingViewFileRequest";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
@@ -84,6 +85,14 @@ import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
+
+// Module-scope loaders: raw import() expressions inside component effects bail
+// React Compiler memoization for AppInner; hoisting keeps the specifiers
+// static for chunking while letting the component compile.
+const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor");
+const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
+const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
+const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
 
 // Direct file import (not the Project barrel) so the lazy chunk doesn't pull
 // in barrel siblings. Renders only when no project is open, so it stays off
@@ -435,7 +444,7 @@ function AppInner() {
       // stays out of the production first-paint chunk. Fire-and-forget: the helper
       // side in e2e/helpers/notifications.ts waits for __daintreeNotificationsE2E
       // before use, so the async resolve doesn't need to block the effect.
-      void import("./lib/e2eNotificationBackdoor")
+      void loadE2ENotificationBackdoor()
         .then(({ installE2ENotificationBackdoor }) => {
           installE2ENotificationBackdoor();
         })
@@ -651,7 +660,12 @@ function AppInner() {
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
   useEffect(() => {
     const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
-    const onViewFile = () => setFileViewerResetKey((k) => k + 1);
+    const onViewFile = (e: Event) => {
+      // Stash for FileViewerModalHost's mount replay — the host's own listener
+      // lives in a lazy chunk and may not be registered yet.
+      stashViewFileRequest(e);
+      setFileViewerResetKey((k) => k + 1);
+    };
     window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
     window.addEventListener("daintree:view-file", onViewFile);
     return () => {
@@ -736,13 +750,13 @@ function AppInner() {
       void preloadWorktreeOverviewModal();
       void preloadShortcutReferenceDialog();
       void preloadCrossWorktreeDiff();
-      import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
-      import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
+      loadJetbrainsMono500().catch(() => {});
+      loadJetbrainsMono600().catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
       // closure (#8626). It is reached through a lazy boundary in
       // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
       // it snappy on first use.
-      import("@/components/FileViewer/FileViewerModal").catch(() => {});
+      preloadFileViewerModal().catch(() => {});
     };
 
     if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {

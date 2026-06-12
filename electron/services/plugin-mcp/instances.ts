@@ -1,4 +1,6 @@
-import { auditLogsStore, store } from "../../store.js";
+import { auditRingStore } from "../persistence/auditRingStore.js";
+import { store } from "../../store.js";
+import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/pluginMcpAudit.js";
 import { PluginMcpAuditService } from "./PluginMcpAuditService.js";
 import { PluginMcpConsentService } from "./PluginMcpConsentService.js";
 import { PluginMcpConsentStore } from "./PluginMcpConsentStore.js";
@@ -24,8 +26,13 @@ export function getPluginMcpAuditService(): PluginMcpAuditService {
       },
       () => (store.get("pluginMcpAudit") ?? {}) as Record<string, unknown>,
       {
-        read: () => auditLogsStore.get("pluginMcpAuditLog"),
-        write: (records) => auditLogsStore.set("pluginMcpAuditLog", records),
+        read: () => auditRingStore.readAll("pluginMcpAuditLog"),
+        write: (records) =>
+          auditRingStore.writeAll(
+            "pluginMcpAuditLog",
+            records,
+            PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS
+          ),
       }
     );
   }

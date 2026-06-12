@@ -1,7 +1,7 @@
 import { UI_EXIT_DURATION } from "../lib/animationUtils";
 import { prefersReducedMotion } from "../lib/appThemeViewTransition";
 import { flushFinalCls } from "./layoutShiftMonitor";
-import { flushPendingPerfMarks } from "./performance";
+import { flushPendingPerfMarks, startSteadyStatePerfFlush } from "./performance";
 
 const SKELETON_ID = "startup-skeleton";
 
@@ -45,6 +45,10 @@ function notifyFirstInteractive(): void {
   flushPendingPerfMarks();
   if (firstInteractiveNotified) return;
   firstInteractiveNotified = true;
+  // From here on the buffer has no boundary flush left — keep steady-state
+  // marks flowing into the NDJSON capture for the rest of the session.
+  // No-op unless DAINTREE_PERF_CAPTURE is set; runs for the context lifetime.
+  startSteadyStatePerfFlush();
   try {
     window.electron?.app?.notifyFirstInteractive?.().catch(() => {
       // Main process may already have drained the queue or fallback fired — safe to ignore

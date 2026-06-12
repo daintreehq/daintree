@@ -13,6 +13,9 @@ type ConsoleMessageHandler = (event: unknown, ...args: unknown[]) => void;
 
 const RATE_WINDOW_MS = 5_000;
 const RATE_MAX_PER_WINDOW = 5;
+// Above this size, expired entries are swept before inserting — project-view
+// WebContents live for days and the map is otherwise insert-only.
+const RATE_SWEEP_THRESHOLD = 256;
 
 const attached = new WeakSet<WebContents>();
 const handlers = new WeakMap<WebContents, ConsoleMessageHandler>();
@@ -38,6 +41,11 @@ function shouldAllow(
   const now = Date.now();
   const entry = map.get(key);
   if (!entry || now >= entry.resetAt) {
+    if (map.size >= RATE_SWEEP_THRESHOLD) {
+      for (const [k, v] of map) {
+        if (now >= v.resetAt) map.delete(k);
+      }
+    }
     map.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
     return true;
   }

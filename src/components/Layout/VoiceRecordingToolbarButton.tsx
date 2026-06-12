@@ -47,7 +47,6 @@ export function VoiceRecordingToolbarButton({
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
-  const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
   const shortcut = useKeybindingDisplay("voiceInput.toggle");
   const pauseShortcut = useKeybindingDisplay("voiceInput.togglePause");
   const ariaShortcut = useAriaKeyshortcuts("voiceInput.toggle");
@@ -79,14 +78,6 @@ export function VoiceRecordingToolbarButton({
   // window so the indicator never blanks out between the arming flash and
   // the orbit appearing.
   const showArming = isActive && (isArming || (isConnecting && !showConnecting));
-
-  // Mutable bridge: audioLevel updates ~60Hz; we read it inside the RAF tick
-  // rather than re-rendering on every change. Pattern lifted from
-  // VoiceInputButton.
-  const audioLevelRef = useRef(0);
-  useEffect(() => {
-    audioLevelRef.current = audioLevel;
-  }, [audioLevel]);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
@@ -137,7 +128,9 @@ export function VoiceRecordingToolbarButton({
       lastTime = now;
 
       // Force level to 0 during finishing so the ring decelerates gracefully.
-      const rawLevel = isFinishing ? 0 : audioLevelRef.current;
+      // Imperative store read: audioLevel updates ~60Hz during recording, so a
+      // React subscription would re-render this button on every frame.
+      const rawLevel = isFinishing ? 0 : useVoiceRecordingStore.getState().audioLevel;
       smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;
       const level = Math.pow(smoothLevel, 1.5);
 

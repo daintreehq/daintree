@@ -113,15 +113,28 @@ export function openDb(
   }
 }
 
-export function probeDb(dbPath: string): boolean {
+/**
+ * Probe the database for corruption. When `fullCheck` is false (default on
+ * clean-exit boots), runs a cheap `PRAGMA schema_version` open instead of the
+ * O(database-size) `PRAGMA quick_check`. Corruption only occurs after crashes
+ * or power loss, so the full scan is gated on unclean-exit detection and
+ * deferred on clean boots to the idle maintenance tick.
+ */
+export function probeDb(dbPath: string, fullCheck = true): boolean {
   if (!fs.existsSync(dbPath)) return true; // no file = fresh start, not corruption
   let testDb: Database.Database | null = null;
   try {
     testDb = new Database(dbPath, { readonly: true });
-    const quickCheckResult = testDb.pragma("quick_check", { simple: true });
-    if (quickCheckResult !== "ok") {
-      console.warn("[DB] quick_check detected corruption:", quickCheckResult);
-      return false;
+    if (fullCheck) {
+      const quickCheckResult = testDb.pragma("quick_check", { simple: true });
+      if (quickCheckResult !== "ok") {
+        console.warn("[DB] quick_check detected corruption:", quickCheckResult);
+        return false;
+      }
+    } else {
+      // Cheap structural open: reading schema_version confirms the file is a
+      // valid SQLite database without scanning every page.
+      testDb.pragma("schema_version");
     }
     return true;
   } catch (error: unknown) {

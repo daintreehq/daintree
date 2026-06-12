@@ -341,6 +341,7 @@ export function TwoPaneSplitLayout({
               sourceLocation="grid"
               sourceIndex={0}
               disabled={isInTrash(terminals[0].id)}
+              layoutDependency={`${terminals[0].id}:${terminals[1].id}:${clampedRatio}`}
             >
               <GridPanel
                 terminalId={terminals[0].id}
@@ -368,6 +369,7 @@ export function TwoPaneSplitLayout({
               sourceLocation="grid"
               sourceIndex={1}
               disabled={isInTrash(terminals[1].id)}
+              layoutDependency={`${terminals[0].id}:${terminals[1].id}:${clampedRatio}`}
             >
               <GridPanel
                 terminalId={terminals[1].id}

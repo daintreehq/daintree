@@ -967,7 +967,7 @@ export function WorktreeOverviewModal({
                       />
                       <span
                         className={cn(
-                          "transition",
+                          "transition-colors",
                           hideMainWorktree && "line-through decoration-daintree-text/30"
                         )}
                       >

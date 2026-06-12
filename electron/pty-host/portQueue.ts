@@ -3,6 +3,8 @@ import {
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_LOW_WATERMARK_PERCENT,
   IPC_MAX_PAUSE_MS,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
+  IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES,
 } from "../services/pty/types.js";
 import type {
   PtyHostEvent,
@@ -64,7 +66,20 @@ export class PortQueueManager {
     } else {
       this.queuedBytes.set(id, next);
     }
+    const previousTotal = this.totalQueuedBytes;
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
+    // Aggregate-gate resume sweep: a terminal paused by the window-level
+    // watermark may have an empty queue of its own, so no further acks (and
+    // therefore no tryResume calls) ever arrive for it. When the aggregate
+    // crosses back below the low watermark, re-check every paused terminal.
+    if (
+      previousTotal >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES &&
+      this.totalQueuedBytes < IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES
+    ) {
+      for (const pausedId of [...this.pausedTerminals.keys()]) {
+        this.tryResume(pausedId);
+      }
+    }
   }
 
   getQueuedBytes(id: string): number {
@@ -111,7 +126,16 @@ export class PortQueueManager {
     const highWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
     const currentBytes = this.queuedBytes.get(id) ?? 0;
 
-    if (currentBytes < highWatermarkBytes || this.pausedTerminals.has(id)) {
+    // Two pause triggers: this terminal's own queue crossing its watermark,
+    // or the window-level aggregate crossing the total watermark (a
+    // simultaneous multi-agent burst can otherwise put N × ~2MB in flight to
+    // one renderer before any single terminal trips its own gate). The
+    // aggregate trigger pauses the currently producing terminal — under a
+    // fleet burst every active producer reaches here within one batch flush.
+    const overOwnWatermark = currentBytes >= highWatermarkBytes;
+    const overAggregateWatermark =
+      currentBytes > 0 && this.totalQueuedBytes >= IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES;
+    if ((!overOwnWatermark && !overAggregateWatermark) || this.pausedTerminals.has(id)) {
       return false;
     }
 
@@ -128,7 +152,9 @@ export class PortQueueManager {
     try {
       coordinator.pause(this.pauseToken);
       console.warn(
-        `[PtyHost] Port queue high (${utilization.toFixed(1)}%). Pausing PTY ${id} for backpressure.`
+        overOwnWatermark
+          ? `[PtyHost] Port queue high (${utilization.toFixed(1)}%). Pausing PTY ${id} for backpressure.`
+          : `[PtyHost] Aggregate port queue high (${this.totalQueuedBytes} bytes). Pausing PTY ${id} for backpressure.`
       );
 
       const pauseStartTime = Date.now();
@@ -200,6 +226,11 @@ export class PortQueueManager {
     const lowWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
     const currentBytes = this.queuedBytes.get(id) ?? 0;
     if (currentBytes >= lowWatermarkBytes) return;
+    // Hold the pause while the window-level aggregate is still over its low
+    // watermark — resuming a producer into a swamped window just re-grows the
+    // backlog. The removeBytes sweep re-runs this check when the aggregate
+    // drains; the IPC_MAX_PAUSE_MS safety timeout bounds the worst case.
+    if (this.totalQueuedBytes >= IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES) return;
 
     const pauseStart = this.pauseStartTimes.get(id);
     const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;

@@ -372,6 +372,7 @@ export class TerminalProcess {
       lastInputTime: spawnedAt,
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
+      contentEpoch: 0,
       semanticBuffer: [],
       headlessTerminal,
       serializeAddon,
@@ -610,6 +611,11 @@ export class TerminalProcess {
         }
       }
       terminal.preservedSnapshot = snapshot;
+      // The buffer is final from here on: bump the epoch so the next wake
+      // serves the preserved snapshot, and zero the parse counter (disposed
+      // headless write callbacks never fire) so that serve can serve-mark.
+      terminal.contentEpoch++;
+      terminal.pendingHeadlessWrites = 0;
       this.disposeHeadless();
     });
   }
@@ -1031,7 +1037,11 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     if (terminal.isExited) {
       try {
-        terminal.headlessTerminal?.resize(cols, rows);
+        if (terminal.headlessTerminal) {
+          terminal.headlessTerminal.resize(cols, rows);
+          // Reflow rewraps the buffer — invalidate any wake no-change skip.
+          terminal.contentEpoch++;
+        }
       } catch (error) {
         console.error(`Failed to resize terminal ${this.id}:`, error);
       }
@@ -1049,6 +1059,8 @@ export class TerminalProcess {
 
       if (terminal.headlessTerminal) {
         terminal.headlessTerminal.resize(cols, rows);
+        // Reflow rewraps the buffer — invalidate any wake no-change skip.
+        terminal.contentEpoch++;
       }
 
       // Notify activity monitor so reflow bytes are suppressed. Issue #2364.
@@ -1167,13 +1179,13 @@ export class TerminalProcess {
   }
 
   getVisibleActivitySnapshot(n: number): VisibleContentSnapshot | undefined {
-    const cells = this.getVisibleActivityCells();
+    const cells = this.getVisibleActivityCells(n);
     return cells
       ? createVisibleCellContentSnapshot(cells)
       : createVisibleContentSnapshot(this.getVisibleActivityLines(n));
   }
 
-  private getVisibleActivityCells(): VisibleContentCell[][] | undefined {
+  private getVisibleActivityCells(n: number): VisibleContentCell[][] | undefined {
     const terminal = this.terminalInfo.headlessTerminal;
     if (!terminal) return undefined;
 
@@ -1189,7 +1201,14 @@ export class TerminalProcess {
     const viewportTop = buffer.baseY;
     const viewportBottom = buffer.baseY + terminal.rows;
     const end = viewportBottom;
-    const start = viewportTop;
+    // Bottom-n window, extended upward to include the cursor row: on a fresh
+    // or just-cleared screen the agent draws near the top of the viewport, and
+    // a purely bottom-anchored window would scan only blank rows there —
+    // blinding the sustained-change recovery path. Steady-state terminals
+    // (cursor at the bottom) keep the cheap n-row scan.
+    const cursorAbs =
+      viewportTop + (typeof buffer.cursorY === "number" ? buffer.cursorY : terminal.rows - 1);
+    const start = Math.max(viewportTop, Math.min(end - n, cursorAbs));
     const reusableCell = buffer.getNullCell();
 
     const rows: VisibleContentCell[][] = [];
@@ -1655,7 +1674,10 @@ export class TerminalProcess {
     terminal.lastOutputTime = now;
 
     if (terminal.headlessTerminal) {
-      terminal.headlessTerminal.write(prelude);
+      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      terminal.headlessTerminal.write(prelude, () => {
+        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+      });
     }
     this.sessionSnapshotter.schedule();
     this.emitData(prelude);
@@ -1721,7 +1743,12 @@ export class TerminalProcess {
     }
 
     if (terminal.headlessTerminal) {
+      // Outstanding-parse counter: the wake path only trusts a serialized
+      // snapshot to cover the current contentEpoch when no headless writes
+      // are still queued in xterm's async parser.
+      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       terminal.headlessTerminal.write(data, () => {
+        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         this.noteAgentOutputActivity(beforeContentSnapshot);
       });
     } else {

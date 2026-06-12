@@ -48,6 +48,9 @@ interface SetupOptions {
   /** Mirrors the real `notifyError` import — kept as an injected fn so the test
    *  doesn't need to vi.mock the module. Auto-reload branch only. */
   notifyError?: (err: Error, ctx: { source: string }) => void;
+  /** Mirrors `evictDeadView` in the real PVM — a crashed CACHED view is
+   *  evicted instead of background-reloaded. */
+  onEvictDeadView?: () => void;
 }
 
 /**
@@ -66,6 +69,7 @@ function setupCrashRecovery(
     onViewCrashed,
     isActiveProject = true,
     notifyError,
+    onEvictDeadView,
   } = options;
   const crashTimestamps: number[] = entry?.crashTimestamps ?? [];
 
@@ -100,9 +104,15 @@ function setupCrashRecovery(
         }
         wc.loadURL(`app://daintree/recovery.html?${params}`);
       });
+    } else if (!isActiveProject && entry?.state === "cached") {
+      // Mirrors the real handler: a crashed cached view is evicted instead
+      // of background-reloaded — no toast, no renderer respawn.
+      setImmediate(() => {
+        onEvictDeadView?.();
+      });
     } else {
       // Mirrors the gated notifyError in the real handler: only the active
-      // view's auto-reload is observable to the user; cached views stay quiet.
+      // view's auto-reload is observable to the user.
       if (isActiveProject) {
         notifyError?.(new Error("A project view crashed and was automatically reloaded."), {
           source: "renderer-crash",
@@ -361,10 +371,12 @@ describe("ProjectViewManager — auto-reload notifyError gate (#7565)", () => {
     expect(wc.reload).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT fire notifyError when a cached (non-active) view auto-reloads", () => {
+  it("does NOT fire notifyError when a cached (non-active) view crashes — it is evicted, not reloaded", () => {
     // Per CLAUDE.md notify() policy: only emit for events the user could not
-    // otherwise observe. A cached view crash-reload is invisible — the user
-    // is looking at a different project — so demote to console.warn.
+    // otherwise observe. A cached-view crash is invisible — the user is
+    // looking at a different project — and resurrecting the renderer in the
+    // background would pay a full respawn for nothing, so the view is
+    // evicted and revives through the cold-start path on the next visit.
     const win = createMockWindow();
     const wc = createMockWebContents();
     const entry: ViewEntryLike = {
@@ -373,14 +385,15 @@ describe("ProjectViewManager — auto-reload notifyError gate (#7565)", () => {
       state: "cached",
     };
     const notifyError = vi.fn();
-    setupCrashRecovery(win, wc, { entry, notifyError, isActiveProject: false });
+    const onEvictDeadView = vi.fn();
+    setupCrashRecovery(win, wc, { entry, notifyError, isActiveProject: false, onEvictDeadView });
 
     wc._emit("render-process-gone", { reason: "crashed", exitCode: 1 });
     vi.advanceTimersByTime(0);
 
     expect(notifyError).not.toHaveBeenCalled();
-    // Reload still happens — the gate is on the toast, not the recovery action.
-    expect(wc.reload).toHaveBeenCalledTimes(1);
+    expect(wc.reload).not.toHaveBeenCalled();
+    expect(onEvictDeadView).toHaveBeenCalledTimes(1);
   });
 
   it("does not fire notifyError on the crash-loop branch (recovery page)", () => {

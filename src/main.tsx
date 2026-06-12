@@ -43,13 +43,13 @@ let cleanupOrchestrator: (() => void) | undefined;
 ensureLatin400Preload(latin400Woff2Url);
 
 async function bootstrap() {
-  // Fire-and-forget — `Sentry.init` runs synchronously inside, then the
-  // consent snapshot hydrates as a detached IPC continuation. Awaiting
-  // here would block the first React render on a renderer→main round-trip
-  // (#8632); the SDK is ready for `captureException` the moment this
-  // call returns, and `bootstrap().catch()` below has its own dynamic
+  // Fire-and-forget — the SDK module loads via dynamic import off the
+  // first-render path, with a pre-init capture queue replaying anything
+  // recorded before `Sentry.init` runs. Awaiting here would block the
+  // first React render on the chunk fetch plus a renderer→main consent
+  // round-trip (#8632); `bootstrap().catch()` below has its own dynamic
   // import fallback in case this throws before init.
-  initRendererSentry();
+  void initRendererSentry();
 
   cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 

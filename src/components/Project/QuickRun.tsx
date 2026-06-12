@@ -432,7 +432,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         type="button"
                         onClick={handleToggleAutoRestart}
                         className={cn(
-                          "p-1.5 rounded-[var(--radius-sm)] transition",
+                          "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           autoRestart
                             ? "bg-overlay-medium text-daintree-text"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
@@ -455,7 +455,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         type="button"
                         onClick={() => setRunAsDocked(!runAsDocked)}
                         className={cn(
-                          "p-1.5 rounded-[var(--radius-sm)] transition",
+                          "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           runAsDocked
                             ? "bg-overlay-medium text-daintree-text"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
@@ -489,7 +489,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           onClick={() => handleRun(input)}
                           disabled={!input.trim()}
                           className={cn(
-                            "p-1.5 rounded-[var(--radius-sm)] transition",
+                            "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                             input.trim()
                               ? "text-accent-primary hover:bg-accent-soft"
                               : "cursor-not-allowed text-text-muted/50"

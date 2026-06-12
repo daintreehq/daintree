@@ -1,4 +1,4 @@
-import { enableCompileCache } from "node:module";
+import { enableCompileCache, flushCompileCache } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -16,3 +16,13 @@ if (userData) {
 }
 
 await import("./watchdog-host.js");
+
+// Flush compile-cache entries written during this host's boot. See the
+// equivalent block in pty-host-bootstrap.ts for rationale.
+setImmediate(() => {
+  try {
+    flushCompileCache();
+  } catch {
+    // Non-fatal: next boot will re-parse from source.
+  }
+});

@@ -1,9 +1,10 @@
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import os from "node:os";
 import { promisify } from "util";
 import { logDebug } from "../utils/logger.js";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const BACKOFF_MULTIPLIER = 1.5;
 const BACKOFF_CEILING_MS = 15_000;
@@ -191,8 +192,10 @@ export class ProcessTreeCache {
   }
 
   private async refreshUnix(): Promise<boolean> {
-    // Include %cpu for activity detection
-    const { stdout } = await execAsync("ps -eo pid,ppid,%cpu,rss,comm,command", {
+    // Include %cpu for activity detection. execFile avoids the shell fork that
+    // exec() introduces — ps takes no shell features, so the intermediate
+    // /bin/sh -c is pure overhead on every poll.
+    const { stdout } = await execFileAsync("ps", ["-eo", "pid,ppid,%cpu,rss,comm,command"], {
       timeout: 5000,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },

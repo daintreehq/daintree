@@ -191,7 +191,12 @@ export class DevPreviewSessionService {
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
+    // Mirrored dev-server output arrives as "data-mirror" (Main-process-only
+    // copy of chunks the renderer already received on its visual path); plain
+    // "data" still carries the IPC-fallback case where no window's port took
+    // the chunk. URL detection needs both.
     this.ptyClient.on("data", this.onDataListener);
+    this.ptyClient.on("data-mirror", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
     for (const entry of restoredEntries) {
       this.restoredEntries.set(createSessionKey(entry.projectId, entry.panelId), entry);
@@ -339,6 +344,7 @@ export class DevPreviewSessionService {
   dispose(): void {
     this.disposed = true;
     this.ptyClient.off("data", this.onDataListener);
+    this.ptyClient.off("data-mirror", this.onDataListener);
     this.ptyClient.off("exit", this.onExitListener);
     for (const session of this.sessions.values()) {
       this.clearStartupReplay(session);

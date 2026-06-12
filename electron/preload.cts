@@ -59,6 +59,7 @@ import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.prel
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
+import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -72,7 +73,6 @@ import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayou
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
 
 import type {
-  WorktreeState,
   Project,
   ProjectSettings,
   TerminalSpawnOptions,
@@ -919,9 +919,6 @@ function buildElectronApi(): ElectronAPI {
 
       retryAuthFetch: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_AUTH_FETCH),
 
-      onUpdate: (callback: (state: WorktreeState) => void) =>
-        _eventBusOn("worktree:update", (payload) => callback(payload.worktree)),
-
       onRemove: (callback: (data: { worktreeId: string }) => void) =>
         _typedOn(CHANNELS.WORKTREE_REMOVE, callback),
 
@@ -1306,6 +1303,8 @@ function buildElectronApi(): ElectronAPI {
 
       onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) =>
         _eventBusOn("resource:profile-changed", callback),
+
+      ...buildResourceProfilePreloadBindings(_unwrappingInvoke),
     },
 
     // App State API

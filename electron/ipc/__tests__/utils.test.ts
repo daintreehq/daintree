@@ -8,6 +8,8 @@ const ipcMainMock = vi.hoisted(() => ({
 const browserWindowFromWebContentsMock = vi.hoisted(() => vi.fn());
 const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
 const isCachedViewWebContentsMock = vi.hoisted(() => vi.fn((_id: number) => false));
+const getWebContentsForProjectMock = vi.hoisted(() => vi.fn((_projectId: string) => [] as never[]));
+const hasRegisteredProjectViewsMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -36,6 +38,8 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
       .map((w) => w.webContents);
   }),
   isCachedViewWebContents: isCachedViewWebContentsMock,
+  getWebContentsForProject: getWebContentsForProjectMock,
+  hasRegisteredProjectViews: hasRegisteredProjectViewsMock,
 }));
 
 vi.mock("../../window/windowRef.js", () => ({
@@ -45,6 +49,7 @@ vi.mock("../../window/windowRef.js", () => ({
 import {
   sendToRenderer,
   broadcastToRenderer,
+  broadcastToProjectRenderers,
   broadcastToVisibleRenderers,
   sendToRendererContext,
   typedHandle,
@@ -394,6 +399,81 @@ describe("broadcastToVisibleRenderers", () => {
 
     expect(() => broadcastToVisibleRenderers("logs:batch")).not.toThrow();
     expect(send2).toHaveBeenCalledWith("logs:batch");
+  });
+});
+
+describe("broadcastToProjectRenderers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hasRegisteredProjectViewsMock.mockReturnValue(false);
+    getWebContentsForProjectMock.mockReturnValue([]);
+  });
+
+  it("sends only to the owning project's views when registered", () => {
+    const sendOwn = vi.fn();
+    const sendOther = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    getWebContentsForProjectMock.mockImplementation((projectId: string) =>
+      projectId === "p1" ? ([{ send: sendOwn }] as never[]) : ([] as never[])
+    );
+    // A full broadcast would reach this window — it must NOT be used here.
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: sendOther } },
+    ]);
+
+    broadcastToProjectRenderers("p1", "terminal:status", { id: "t1" });
+
+    expect(sendOwn).toHaveBeenCalledWith("terminal:status", { id: "t1" });
+    expect(sendOther).not.toHaveBeenCalled();
+  });
+
+  it("drops the event when project views exist but none host the project", () => {
+    const sendOther = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    getWebContentsForProjectMock.mockReturnValue([]);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: sendOther } },
+    ]);
+
+    broadcastToProjectRenderers("closed-project", "terminal:status", { id: "t1" });
+
+    expect(sendOther).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a full broadcast when the project is unknown", () => {
+    const send = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send } },
+    ]);
+
+    broadcastToProjectRenderers(null, "terminal:status", { id: "t1" });
+
+    expect(send).toHaveBeenCalledWith("terminal:status", { id: "t1" });
+  });
+
+  it("falls back to a full broadcast when no project views are registered", () => {
+    const send = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(false);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send } },
+    ]);
+
+    broadcastToProjectRenderers("p1", "terminal:status", { id: "t1" });
+
+    expect(send).toHaveBeenCalledWith("terminal:status", { id: "t1" });
+  });
+
+  it("does not throw when a scoped webContents.send throws", () => {
+    const send1 = vi.fn(() => {
+      throw new Error("send failed");
+    });
+    const send2 = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    getWebContentsForProjectMock.mockReturnValue([{ send: send1 }, { send: send2 }] as never[]);
+
+    expect(() => broadcastToProjectRenderers("p1", "terminal:status")).not.toThrow();
+    expect(send2).toHaveBeenCalledWith("terminal:status");
   });
 });
 

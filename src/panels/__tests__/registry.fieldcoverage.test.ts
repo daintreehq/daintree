@@ -73,7 +73,6 @@ const PTY_FIELD_CLASSIFICATION = {
   activityHeadline: false,
   activityStatus: false,
   activityType: false,
-  activityTimestamp: false,
   lastCommand: false,
   restartKey: false,
   isRestarting: false,

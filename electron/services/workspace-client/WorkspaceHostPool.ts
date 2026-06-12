@@ -86,6 +86,13 @@ export class WorkspaceHostPool {
    * created after the registry last changed. `null` until the first relay. */
   private forgeProviderMatchersCache: ForgeProviderMatcher[] | null = null;
 
+  /** Merged monitor config (profile polling, fetch cadence, watcher cap) —
+   * seeded into hosts created after the last push so a project opened while
+   * a non-balanced profile is active doesn't run the in-host defaults. */
+  private monitorConfigCache:
+    | import("../../../shared/types/workspace-host.js").MonitorConfig
+    | null = null;
+
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
   private routeHostEventFn: RouteHostEventFn | null = null;
@@ -222,6 +229,9 @@ export class WorkspaceHostPool {
     if (this.forgeProviderMatchersCache !== null) {
       host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
     }
+    if (this.monitorConfigCache !== null) {
+      host.updateMonitorConfig(this.monitorConfigCache);
+    }
 
     const initPromise = this.makeInitPromise(host, normalizedPath);
 
@@ -269,6 +279,9 @@ export class WorkspaceHostPool {
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
     if (this.forgeProviderMatchersCache !== null) {
       host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
+    }
+    if (this.monitorConfigCache !== null) {
+      host.updateMonitorConfig(this.monitorConfigCache);
     }
 
     const initPromise = this.makeInitPromise(host, normalizedPath);
@@ -530,6 +543,17 @@ export class WorkspaceHostPool {
     this.fetchThrottleMultiplierCache = multiplier;
     for (const entry of this.entries.values()) {
       entry.host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    }
+  }
+
+  // ── Monitor config ──
+
+  updateMonitorConfig(
+    config: import("../../../shared/types/workspace-host.js").MonitorConfig
+  ): void {
+    this.monitorConfigCache = { ...this.monitorConfigCache, ...config };
+    for (const entry of this.entries.values()) {
+      entry.host.updateMonitorConfig(config);
     }
   }
 

@@ -82,6 +82,12 @@ export class CrashRecoveryService {
   // whole config.json on every call, which is sync main-thread work inside
   // the boot IPC handler. setConfig keeps the memo in sync with writes.
   private cachedConfig: CrashRecoveryConfig | null = null;
+  // Serialized state-dependent snapshot fields (appState + windowStates,
+  // excluding capturedAt which changes on every call) from the last successful
+  // write. Used to skip the rotate+write on periodic timer ticks when state
+  // hasn't changed. Explicit scheduleBackup() calls clear this field so
+  // change-driven writes always go through.
+  private lastWrittenStateJson: string | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -310,6 +316,9 @@ export class CrashRecoveryService {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
+    // Clear the idempotency guard so the upcoming write goes through regardless
+    // of what was written last — a scheduleBackup() call means state changed.
+    this.lastWrittenStateJson = null;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       this.takeBackup();
@@ -321,6 +330,21 @@ export class CrashRecoveryService {
       const backupDir = path.join(this.userData, BACKUP_DIR);
       fs.mkdirSync(backupDir, { recursive: true });
 
+      const snapshot = this.captureSessionSnapshot();
+
+      // Skip the rotate+write on periodic timer ticks when the state-bearing
+      // fields are identical to the last write. capturedAt is excluded because
+      // it changes on every call regardless of app state. Explicit
+      // scheduleBackup() calls clear lastWrittenStateJson so change-driven
+      // writes always go through.
+      const stateJson = JSON.stringify({
+        appState: snapshot.appState,
+        windowStates: snapshot.windowStates,
+      });
+      if (stateJson === this.lastWrittenStateJson) {
+        return;
+      }
+
       // Rotate current → previous BEFORE writing new current. If a future
       // write produces corrupt JSON, the previous-generation file still holds
       // the last good snapshot. Rotation is best-effort: a rename failure on
@@ -328,8 +352,8 @@ export class CrashRecoveryService {
       // the write and the previous file just isn't refreshed this cycle.
       this.rotateBackup();
 
-      const snapshot = this.captureSessionSnapshot();
       resilientAtomicWriteFileSync(this.backupPath, JSON.stringify(snapshot), "utf-8");
+      this.lastWrittenStateJson = stateJson;
     } catch (err) {
       console.error("[CrashRecovery] Failed to take backup:", err);
     }

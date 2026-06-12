@@ -51,7 +51,8 @@ vi.mock("../../../persistence/panelPersistence", () => ({
 }));
 
 const { usePanelStore } = await import("../../../panelStore");
-const { useConsoleCaptureStore } = await import("../../../consoleCaptureStore");
+const { useConsoleCaptureStore, flushConsoleCaptureBuffer } =
+  await import("../../../consoleCaptureStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../../../rendererStoreOrchestrator");
 
@@ -109,6 +110,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       timestamp: Date.now(),
       navigationGeneration: 0,
     });
+    flushConsoleCaptureBuffer();
 
     expect(useConsoleCaptureStore.getState().messages.has(panelId)).toBe(true);
 
@@ -146,6 +148,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       timestamp: Date.now(),
       navigationGeneration: 0,
     });
+    flushConsoleCaptureBuffer();
 
     usePanelStore.getState().removePanel(panelId);
 
@@ -205,6 +208,7 @@ describe("removePanel consoleCaptureStore cleanup", () => {
       timestamp: Date.now(),
       navigationGeneration: 0,
     });
+    flushConsoleCaptureBuffer();
 
     usePanelStore.getState().removePanel("browser-a");
 

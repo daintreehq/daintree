@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { PortBatcher, type PortBatcherDeps } from "../portBatcher.js";
+import {
+  PortBatcher,
+  setPortBatchThroughputDelayMs,
+  type PortBatcherDeps,
+} from "../portBatcher.js";
 import type { PortQueueManager } from "../portQueue.js";
-import { PORT_BATCH_THRESHOLD_BYTES } from "../../services/pty/types.js";
+import {
+  PORT_BATCH_THRESHOLD_BYTES,
+  PORT_BATCH_THROUGHPUT_DELAY_MS,
+} from "../../services/pty/types.js";
 
 function bytes(text: string): Uint8Array {
   return new Uint8Array(Buffer.from(text, "utf8"));
@@ -32,6 +39,7 @@ function createDeps(overrides?: Partial<PortBatcherDeps>): PortBatcherDeps {
 describe("PortBatcher", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    setPortBatchThroughputDelayMs(PORT_BATCH_THROUGHPUT_DELAY_MS);
   });
 
   afterEach(() => {
@@ -81,6 +89,83 @@ describe("PortBatcher", () => {
     vi.advanceTimersByTime(16);
     expect(deps.postMessage).toHaveBeenCalledOnce();
     expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("abc"), 3);
+  });
+
+  it("interactive write in throughput mode swaps the 16ms timer for an immediate", () => {
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+
+    batcher.write("t1", bytes("aaa"), 3);
+    batcher.write("t1", bytes("bbb"), 3); // upgrade to throughput (16ms timer)
+    batcher.write("t1", bytes("x"), 1, false, true); // keystroke echo
+
+    // Flushes on the immediate, well before the 16ms throughput window —
+    // and the echo byte rides behind the already-queued chunks in order.
+    vi.advanceTimersByTime(1);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbbx"), 7);
+
+    // The swapped-out throughput timer must not fire a second flush.
+    vi.advanceTimersByTime(16);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+  });
+
+  it("interactive write in latency mode keeps the pending immediate (no escalation)", () => {
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+
+    batcher.write("t1", bytes("a"), 1);
+    batcher.write("t1", bytes("b"), 1, false, true); // would normally escalate to 16ms
+
+    vi.advanceTimersByTime(1);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("ab"), 2);
+  });
+
+  it("non-interactive write after an interactive swap does not re-escalate the pending immediate", () => {
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+
+    batcher.write("t1", bytes("a"), 1);
+    batcher.write("t1", bytes("b"), 1); // throughput
+    batcher.write("t1", bytes("c"), 1, false, true); // swap timer → immediate
+    batcher.write("t1", bytes("d"), 1); // mode is still throughput: must not reschedule
+
+    vi.advanceTimersByTime(1);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("abcd"), 4);
+  });
+
+  it("profile-tuned cadence: a longer throughput delay stretches the flush window", () => {
+    setPortBatchThroughputDelayMs(40);
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+
+    batcher.write("t1", bytes("aaa"), 3);
+    batcher.write("t1", bytes("bbb"), 3); // upgrade to throughput
+
+    // Past the default 16ms window — must NOT have flushed yet.
+    vi.advanceTimersByTime(PORT_BATCH_THROUGHPUT_DELAY_MS);
+    expect(deps.postMessage).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(40 - PORT_BATCH_THROUGHPUT_DELAY_MS);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbb"), 6);
+  });
+
+  it("profile-tuned cadence: rejects non-positive and non-finite values", () => {
+    setPortBatchThroughputDelayMs(0);
+    setPortBatchThroughputDelayMs(-5);
+    setPortBatchThroughputDelayMs(Number.NaN);
+
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+    batcher.write("t1", bytes("aaa"), 3);
+    batcher.write("t1", bytes("bbb"), 3);
+
+    // Cadence unchanged — flushes at the default window.
+    vi.advanceTimersByTime(PORT_BATCH_THROUGHPUT_DELAY_MS);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
   });
 
   it("threshold bypass: sync flush when bytes exceed 64KB", () => {

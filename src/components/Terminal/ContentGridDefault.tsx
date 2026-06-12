@@ -50,6 +50,18 @@ export function ContentGridDefault({
     [bindCombinedGrid, setGridScrollRoot]
   );
 
+  // Everything that can move a grid panel, folded into one key so the FLIP
+  // wrappers only re-measure when grid geometry actually changed (see
+  // SortableTerminal.layoutDependency).
+  const gridLayoutDependency = [
+    ctx.gridCols,
+    ctx.isScrollMode ? ctx.scrollRowHeight : "fit",
+    ctx.maximizedId ?? "",
+    ctx.gridWidth ?? 0,
+    ctx.showPlaceholder && ctx.placeholderInGrid ? ctx.placeholderIndex : "",
+    ctx.tabGroups.map((g) => `${g.id}/${g.panelIds.length}`).join(","),
+  ].join("|");
+
   return (
     <GridScrollRootContext.Provider value={ctx.gridScrollRoot}>
       <div
@@ -162,6 +174,7 @@ export function ContentGridDefault({
                             disabled={isGroupDisabled}
                             layoutTransition={ctx.layoutTransition}
                             layoutEnabled={ctx.layoutAnimationEnabled}
+                            layoutDependency={gridLayoutDependency}
                           >
                             <GridPanel
                               terminalId={terminal.id}
@@ -184,6 +197,7 @@ export function ContentGridDefault({
                             groupPanelIds={group.panelIds}
                             layoutTransition={ctx.layoutTransition}
                             layoutEnabled={ctx.layoutAnimationEnabled}
+                            layoutDependency={gridLayoutDependency}
                           >
                             <GridTabGroup
                               group={group}

@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -37,11 +39,22 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
-import { FileDiffModal } from "../FileDiffModal";
-import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
+// Lazy: these modals statically reach the DiffViewer/CodeViewer/vendor-editor
+// chunks (~223 KB gzip), and ReviewPane is a first-render preload seed — a
+// static import drags the whole editor stack into every boot's modulepreload
+// list. The modals open only on row click, so the chunk fetch overlaps user
+// think-time; useKeepMounted gates the first mount so nothing is fetched (or
+// rendered) until a diff is actually opened.
+const LazyFileDiffModal = lazy(() =>
+  import("../FileDiffModal").then((m) => ({ default: m.FileDiffModal }))
+);
+const LazyBaseBranchDiffModal = lazy(() =>
+  import("./BaseBranchDiffModal").then((m) => ({ default: m.BaseBranchDiffModal }))
+);
 import { ForcePushConfirmDialog } from "./ForcePushConfirmDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -282,6 +295,11 @@ export function ReviewHubContent({
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
+  // First-open mount gates for the lazy diff modals (chunk fetch + mount are
+  // both deferred until a row is clicked; kept mounted after so the modal's
+  // own isOpen gate drives exit animations).
+  const mountFileDiffModal = useKeepMounted(selectedFile !== null);
+  const mountBaseBranchDiffModal = useKeepMounted(selectedBaseBranchFile !== null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
   // Keyboard-navigation focus across the flat staged+unstaged file list. -1 means
@@ -843,8 +861,12 @@ export function ReviewHubContent({
     const debouncedBgRefresh = debounce(() => void backgroundRefresh(), 800);
     debouncedBgRefreshRef.current = debouncedBgRefresh;
 
-    const unsubscribe = window.electron.worktree.onUpdate((state) => {
-      if (state.path === worktreePath) {
+    // Per-view worktree MessagePort — the same delivery the worktree store
+    // consumes. The main-relayed events:push copy of worktree-update was
+    // removed (this component was its only subscriber).
+    const unsubscribe = window.electron.worktreePort.onEvent("worktree-update", (data) => {
+      const event = data as { worktree?: { path?: string } };
+      if (event?.worktree?.path === worktreePath) {
         debouncedBgRefresh();
       }
     });
@@ -2459,32 +2481,40 @@ export function ReviewHubContent({
       </div>
 
       {/* File diff modal — working-tree mode */}
-      <FileDiffModal
-        isOpen={selectedFile !== null}
-        filePath={selectedFile?.path ?? ""}
-        status={selectedFile?.status ?? "modified"}
-        worktreePath={worktreePath}
-        onClose={() => setSelectedFile(null)}
-        restoreFocusTo={diffTriggerRef}
-        currentFileIndex={selectedFileIndex ?? undefined}
-        totalFileCount={navigableItems.length}
-        onNavigateFile={navigateWorkingTreeFile}
-        getAdjacentFile={getAdjacentWorkingTreeFile}
-      />
+      {mountFileDiffModal && (
+        <Suspense fallback={null}>
+          <LazyFileDiffModal
+            isOpen={selectedFile !== null}
+            filePath={selectedFile?.path ?? ""}
+            status={selectedFile?.status ?? "modified"}
+            worktreePath={worktreePath}
+            onClose={() => setSelectedFile(null)}
+            restoreFocusTo={diffTriggerRef}
+            currentFileIndex={selectedFileIndex ?? undefined}
+            totalFileCount={navigableItems.length}
+            onNavigateFile={navigateWorkingTreeFile}
+            getAdjacentFile={getAdjacentWorkingTreeFile}
+          />
+        </Suspense>
+      )}
 
       {/* File diff modal — base-branch mode */}
-      <BaseBranchDiffModal
-        isOpen={selectedBaseBranchFile !== null}
-        filePath={selectedBaseBranchFile?.path ?? ""}
-        worktreePath={worktreePath}
-        mainBranch={mainBranch}
-        currentBranch={status?.currentBranch ?? "HEAD"}
-        onClose={() => setSelectedBaseBranchFile(null)}
-        restoreFocusTo={diffTriggerRef}
-        currentFileIndex={selectedBaseBranchIndex ?? undefined}
-        totalFileCount={sortedBaseBranchFiles?.length ?? 0}
-        onNavigateFile={navigateBaseBranchFile}
-      />
+      {mountBaseBranchDiffModal && (
+        <Suspense fallback={null}>
+          <LazyBaseBranchDiffModal
+            isOpen={selectedBaseBranchFile !== null}
+            filePath={selectedBaseBranchFile?.path ?? ""}
+            worktreePath={worktreePath}
+            mainBranch={mainBranch}
+            currentBranch={status?.currentBranch ?? "HEAD"}
+            onClose={() => setSelectedBaseBranchFile(null)}
+            restoreFocusTo={diffTriggerRef}
+            currentFileIndex={selectedBaseBranchIndex ?? undefined}
+            totalFileCount={sortedBaseBranchFiles?.length ?? 0}
+            onNavigateFile={navigateBaseBranchFile}
+          />
+        </Suspense>
+      )}
 
       {pushError?.leaseSha && pushError.branchName && (
         <ForcePushConfirmDialog

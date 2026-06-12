@@ -35,7 +35,10 @@ import {
   startEventLoopLagMonitor,
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
-import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
+import {
+  startAppMetricsMonitor,
+  hasSustainedRendererSaturation,
+} from "../services/ProcessMemoryMonitor.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -664,6 +667,7 @@ export async function initGlobalServices(
         getUserCachedViewLimit: () =>
           store.get("terminalConfig")?.cachedProjectViews ??
           (process.env.DAINTREE_E2E_MODE ? 4 : 1),
+        hasSustainedRendererSaturation: () => hasSustainedRendererSaturation(),
       });
       setResourceProfileService(svc);
       svc.start();

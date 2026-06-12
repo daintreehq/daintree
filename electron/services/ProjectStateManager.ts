@@ -145,7 +145,7 @@ export class ProjectStateManager {
       ...validatedState,
       _schemaVersion: PROJECT_STATE_SCHEMA_VERSION,
     };
-    const jsonString = JSON.stringify(writePayload, null, 2);
+    const jsonString = JSON.stringify(writePayload);
     const bytes = Buffer.byteLength(jsonString, "utf-8");
 
     const attemptSave = async (ensureDir: boolean): Promise<void> => {

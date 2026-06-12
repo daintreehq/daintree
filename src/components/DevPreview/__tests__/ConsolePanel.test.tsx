@@ -4,7 +4,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConsolePanel, serializeConsoleMessage, serializeConsoleMessages } from "../ConsolePanel";
-import { useConsoleCaptureStore, type ConsoleMessage } from "@/store/consoleCaptureStore";
+import {
+  useConsoleCaptureStore,
+  flushConsoleCaptureBuffer,
+  type ConsoleMessage,
+} from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 
 vi.mock("react-virtuoso", () => ({
@@ -51,6 +55,7 @@ function seedConsoleRow(overrides: Partial<SerializedConsoleRow> = {}): void {
     ...overrides,
   };
   useConsoleCaptureStore.getState().addStructuredMessage(row);
+  flushConsoleCaptureBuffer();
 }
 
 function makeMessage(overrides: Partial<ConsoleMessage> = {}): ConsoleMessage {

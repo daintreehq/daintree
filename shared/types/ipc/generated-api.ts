@@ -554,6 +554,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["slash-commands:list"]["args"]
     ): Promise<IpcInvokeMap["slash-commands:list"]["result"]>;
   };
+  system: {
+    getResourceProfile(
+      ...args: IpcInvokeMap["system:get-resource-profile"]["args"]
+    ): Promise<IpcInvokeMap["system:get-resource-profile"]["result"]>;
+  };
   systemSleep: {
     getAwakeTime(
       ...args: IpcInvokeMap["system-sleep:get-awake-time"]["args"]

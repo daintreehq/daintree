@@ -1290,14 +1290,17 @@ body,
   will-change: opacity;
 }
 
-/* Agent status working state - pulsing gradient animation */
+/* Agent status working state - pulsing animation. Animates opacity, not
+   color: color keyframes tick style-recalc + paint on the main thread for
+   every visible working badge — the steady state of this app, often across
+   many worktree cards at once — while opacity runs on the compositor. */
 @keyframes status-pulse {
   0%,
   100% {
-    color: var(--color-state-working);
+    opacity: 1;
   }
   50% {
-    color: color-mix(in oklab, var(--color-state-working) 70%, var(--color-daintree-text));
+    opacity: 0.7;
   }
 }
 

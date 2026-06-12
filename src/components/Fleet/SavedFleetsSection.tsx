@@ -11,7 +11,6 @@ import {
 import { SavedFleetRow } from "./SavedFleetRow";
 import { SaveFleetForm } from "./SaveFleetForm";
 import { rankSavedFleets, rankPredicateFleets } from "./fleetRanking";
-import { isSnapshotStale } from "./fleetStaleness";
 import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleetActions";
 import type { FleetSavedScope } from "@shared/types";
 
@@ -37,11 +36,24 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
   const savedScopes = useProjectSettingsStore(
     useShallow((s) => s.settings?.fleetSavedScopes ?? [])
   );
-  // Subscribe so the stale sub-group re-derives when panes open/close. The
-  // value is read by `isSnapshotStale` inside the memo below.
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
+  // Primitive-valued selection (FleetCountChip pattern): re-derive counts when
+  // panes open/close, but return a flat Record so unrelated panel ticks —
+  // agent-state churn while the dropdown is open — reuse the previous
+  // reference and skip the re-render entirely. A snapshot scope is stale
+  // exactly when none of its stored ids is still arm-eligible (count 0).
+  const countById = usePanelStore(
+    useShallow(() => {
+      const counts: Record<string, number> = {};
+      for (const scope of savedScopes) {
+        if (scope.kind === "snapshot" || !isPresetPredicate(scope)) {
+          counts[scope.id] = computeSavedScopePaneCount(scope);
+        }
+      }
+      return counts;
+    })
+  );
 
-  const { snapshotUsable, snapshotStale, predicateRanked, countById, isStaleById } = useMemo(() => {
+  const { snapshotUsable, snapshotStale, predicateRanked, isStaleById } = useMemo(() => {
     const snapshots: FleetSavedScope[] = [];
     const predicates: FleetSavedScope[] = [];
     for (const scope of savedScopes) {
@@ -53,10 +65,11 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
     }
     const now = Date.now();
     const isStaleByIdLocal = new Map<string, boolean>();
-    const countByIdLocal = new Map<string, number>();
-    for (const scope of [...snapshots, ...predicates]) {
-      isStaleByIdLocal.set(scope.id, isSnapshotStale(scope, panelsById));
-      countByIdLocal.set(scope.id, computeSavedScopePaneCount(scope));
+    for (const scope of snapshots) {
+      isStaleByIdLocal.set(scope.id, (countById[scope.id] ?? 0) === 0);
+    }
+    for (const scope of predicates) {
+      isStaleByIdLocal.set(scope.id, false);
     }
     const { usable, stale } = rankSavedFleets(snapshots, now, isStaleByIdLocal);
     return {
@@ -64,9 +77,8 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
       snapshotStale: stale,
       predicateRanked: rankPredicateFleets(predicates, now),
       isStaleById: isStaleByIdLocal,
-      countById: countByIdLocal,
     };
-  }, [savedScopes, panelsById]);
+  }, [savedScopes, countById]);
 
   const hasSnapshots = snapshotUsable.length + snapshotStale.length > 0;
   const showStaleSeparator = snapshotUsable.length > 0 && snapshotStale.length > 0;
@@ -82,7 +94,7 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
               key={scope.id}
               scope={scope}
               onRequestDelete={onRequestDelete}
-              count={countById.get(scope.id) ?? 0}
+              count={countById[scope.id] ?? 0}
               isStale={isStaleById.get(scope.id) ?? false}
             />
           ))}
@@ -92,7 +104,7 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
               key={scope.id}
               scope={scope}
               onRequestDelete={onRequestDelete}
-              count={countById.get(scope.id) ?? 0}
+              count={countById[scope.id] ?? 0}
               isStale={isStaleById.get(scope.id) ?? false}
             />
           ))}
@@ -106,7 +118,7 @@ export function SavedFleetsSection({ onRequestDelete }: SavedFleetsSectionProps)
               key={scope.id}
               scope={scope}
               onRequestDelete={onRequestDelete}
-              count={countById.get(scope.id) ?? 0}
+              count={countById[scope.id] ?? 0}
               isStale={false}
             />
           ))}

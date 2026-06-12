@@ -1029,6 +1029,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "system:get-resource-profile": {
+    args: [];
+    result: import("../resourceProfile.js").ResourceProfilePayload;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };

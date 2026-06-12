@@ -163,7 +163,13 @@ export class TerminalHibernationManager {
     // with it the whole scrollback buffer graph — becomes GC-eligible for the
     // duration of hibernation. The placeholder carries the options for
     // unhibernate(); it must never be open()-ed or given listeners.
-    managed.terminal = new Terminal(options);
+    // Scrollback is clamped to 0: xterm's constructor eagerly allocates the
+    // full rows+scrollback CircularList, so an agent-policy placeholder would
+    // retain ~100-200KB for the duration of hibernation. The real value is
+    // stashed on `managed` (where scrollback-policy writes also land while
+    // hibernated) and restored by unhibernate().
+    managed.hibernatedScrollback = options.scrollback;
+    managed.terminal = new Terminal({ ...options, scrollback: 0 });
     // Re-point the eager addons at the placeholder. loadAddon() left each of
     // them holding a _terminal reference, so keeping the old instances on
     // `managed` would retain the disposed terminal's buffer graph anyway.
@@ -178,6 +184,9 @@ export class TerminalHibernationManager {
     managed.isHibernated = true;
     managed.isOpened = false;
     managed.keyHandlerInstalled = false;
+    // The placeholder terminal is empty — the wake no-change claim no longer
+    // describes what this instance holds.
+    managed.wakeSynced = false;
 
     // Clear resize state
     this.deps.clearResizeJob(managed);
@@ -194,8 +203,14 @@ export class TerminalHibernationManager {
 
     logDebug(`[TIS.unhibernate] Restoring terminal ${id}`);
 
-    // Create fresh Terminal with same options
-    const terminal = new Terminal(managed.terminal.options);
+    // Create fresh Terminal with same options, undoing the placeholder's
+    // scrollback clamp before the serialized replay (replaying history into a
+    // zero-scrollback buffer would drop it).
+    const terminal = new Terminal({
+      ...managed.terminal.options,
+      scrollback: managed.hibernatedScrollback ?? managed.terminal.options.scrollback,
+    });
+    managed.hibernatedScrollback = undefined;
     managed.terminal = terminal;
 
     // Create fresh eager-core addons, then rebuild the deferred Image/link set

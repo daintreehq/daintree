@@ -2,7 +2,8 @@
 import type { ForgeAuditResult, ForgeProviderMethodName } from "../../../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { auditLogsStore, store } from "../../store.js";
+import { auditRingStore } from "../persistence/auditRingStore.js";
+import { store } from "../../store.js";
 import { ForgeAuditService, type ForgeAuditLogStore } from "./auditLog.js";
 
 export { summarizeForgeArgs } from "./auditLog.js";
@@ -38,8 +39,9 @@ function persistConfig(patch: Record<string, unknown>): void {
 // small and audit appends never re-serialize it. `auditEnabled` /
 // `auditMaxRecords` stay in config.json (`forgeAudit`).
 const forgeAuditLogStore: ForgeAuditLogStore = {
-  read: () => auditLogsStore.get("forgeAuditLog"),
-  write: (records) => auditLogsStore.set("forgeAuditLog", records),
+  read: () => auditRingStore.readAll("forgeAuditLog"),
+  write: (records) =>
+    auditRingStore.writeAll("forgeAuditLog", records, FORGE_AUDIT_DEFAULT_MAX_RECORDS),
 };
 
 export const forgeAuditService = new ForgeAuditService(

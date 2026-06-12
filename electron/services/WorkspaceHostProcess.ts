@@ -9,6 +9,7 @@ import type {
   WorkspaceHostRequest,
   WorkspaceHostEvent,
   WorkspaceClientConfig,
+  MonitorConfig,
 } from "../../shared/types/workspace-host.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
@@ -103,6 +104,14 @@ export class WorkspaceHostProcess extends EventEmitter {
    * before the registry has reported, keeping monitors at their unmatched
    * initial state. */
   private forgeProviderMatchersCache: ForgeProviderMatcher[] | null = null;
+
+  /** Accumulated monitor config (poll/fetch intervals, watcher cap) relayed
+   * from main. Merged per-field because callers push partial configs (the
+   * focus throttle sends poll intervals only; the resource profile adds fetch
+   * cadence and watcher cap). Replayed on every `ready` so a host restart
+   * doesn't silently revert to the in-host balanced defaults. `null` until
+   * the first push. */
+  private monitorConfigCache: MonitorConfig | null = null;
 
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
@@ -265,6 +274,21 @@ export class WorkspaceHostProcess extends EventEmitter {
     this.fetchThrottleMultiplierCache = multiplier;
     if (this.isInitialized && this.child) {
       this.send({ type: "apply-fetch-throttle", multiplier: this.fetchThrottleMultiplierCache });
+    }
+  }
+
+  /**
+   * Merge the partial config into the cache and push immediately if
+   * initialized. On restart, `ready` replays the merged cache automatically.
+   */
+  updateMonitorConfig(config: MonitorConfig): void {
+    this.monitorConfigCache = { ...this.monitorConfigCache, ...config };
+    if (this.isInitialized && this.child) {
+      this.send({
+        type: "update-monitor-config",
+        requestId: this.generateRequestId(),
+        config,
+      });
     }
   }
 
@@ -840,6 +864,17 @@ export class WorkspaceHostProcess extends EventEmitter {
           this.send({
             type: "forge-provider-matchers",
             matchers: this.forgeProviderMatchersCache,
+          });
+        }
+
+        // Replay the merged monitor config so a restarted host doesn't run
+        // the in-host balanced defaults until the next profile transition or
+        // focus event.
+        if (this.monitorConfigCache !== null) {
+          this.send({
+            type: "update-monitor-config",
+            requestId: this.generateRequestId(),
+            config: this.monitorConfigCache,
           });
         }
 

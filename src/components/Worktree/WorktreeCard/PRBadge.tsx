@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
 import type { CIStatus } from "@shared/types/forge";
@@ -7,6 +6,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { usePRTooltip } from "@/hooks/useForgeTooltip";
 import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
+import { useColdNumberGap } from "./hooks/useColdNumberGap";
 import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import {
   PRTooltipContent,
@@ -50,23 +50,17 @@ export function PRBadge({
   isHeadline,
   prTitle,
 }: PRBadgeProps) {
-  // Mirror IssueBadge: when a freshly-set PR number has no title yet, suppress
-  // the raw "#NNN" fallback for the first 400ms (Doherty) rather than flashing
-  // the number while the title fetch is in-flight.
-  "use no memo";
-
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } = usePRTooltip(
     worktreePath,
     prNumber
   );
 
-  const prevPrNumber = useRef<number | undefined>(undefined);
-  const isColdTitleGap = isHeadline === true && !prTitle && prNumber !== prevPrNumber.current;
+  // Mirror IssueBadge: when a freshly-set PR number has no title yet, suppress
+  // the raw "#NNN" fallback for the first 400ms (Doherty) rather than flashing
+  // the number while the title fetch is in-flight.
+  const isColdTitleGap = useColdNumberGap(prNumber, prTitle, isHeadline === true);
   const showColdFallback = useDohertyGate(isColdTitleGap);
   const showTooltipLoading = useDohertyGate(loading);
-  useEffect(() => {
-    prevPrNumber.current = prNumber;
-  }, [prNumber]);
 
   const { isOpen, handleOpenChange, handleClick } = useForgeBadgeTooltip({
     fetchTooltip,

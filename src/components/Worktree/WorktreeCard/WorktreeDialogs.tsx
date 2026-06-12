@@ -2,10 +2,16 @@ import { Suspense, lazy } from "react";
 import type { WorktreeState } from "@/types";
 import type { Issue } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
-import { IssuePickerDialog } from "../IssuePickerDialog";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
+
+const LazyWorktreeDeleteDialog = lazy(() =>
+  import("../WorktreeDeleteDialog").then((m) => ({ default: m.WorktreeDeleteDialog }))
+);
+
+const LazyIssuePickerDialog = lazy(() =>
+  import("../IssuePickerDialog").then((m) => ({ default: m.IssuePickerDialog }))
+);
 
 // Lazy boundary keeps ReviewHubContent/DiffViewer (~50KB gz) out of App's
 // first-paint eval closure — the hub only renders when a card opens it. The
@@ -61,6 +67,8 @@ export function WorktreeDialogs({
   // cleanup semantics identical to the previously-static mount.
   const reviewHubMounted = useKeepMounted(showReviewHub);
   const planViewerMounted = useKeepMounted(showPlanViewer);
+  const deleteDialogMounted = useKeepMounted(showDeleteDialog);
+  const issuePickerMounted = useKeepMounted(showIssuePicker);
   return (
     <>
       <ConfirmDialog
@@ -75,20 +83,28 @@ export function WorktreeDialogs({
         {confirmDialog.isOpen ? confirmDialog.children : undefined}
       </ConfirmDialog>
 
-      <WorktreeDeleteDialog
-        isOpen={showDeleteDialog}
-        onClose={onCloseDeleteDialog}
-        worktree={worktree}
-      />
+      {deleteDialogMounted && (
+        <Suspense fallback={null}>
+          <LazyWorktreeDeleteDialog
+            isOpen={showDeleteDialog}
+            onClose={onCloseDeleteDialog}
+            worktree={worktree}
+          />
+        </Suspense>
+      )}
 
-      <IssuePickerDialog
-        isOpen={showIssuePicker}
-        onClose={onCloseIssuePicker}
-        worktree={worktree}
-        currentIssueNumber={worktree.issueNumber}
-        onAttach={onAttachIssue}
-        onDetach={onDetachIssue}
-      />
+      {issuePickerMounted && (
+        <Suspense fallback={null}>
+          <LazyIssuePickerDialog
+            isOpen={showIssuePicker}
+            onClose={onCloseIssuePicker}
+            worktree={worktree}
+            currentIssueNumber={worktree.issueNumber}
+            onAttach={onAttachIssue}
+            onDetach={onDetachIssue}
+          />
+        </Suspense>
+      )}
 
       {reviewHubMounted && (
         <Suspense fallback={null}>

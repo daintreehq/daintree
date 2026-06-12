@@ -3,6 +3,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useProjectStore } from "@/store";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
+import { consumePendingViewFileRequest, parseViewFileEvent } from "./pendingViewFileRequest";
 
 const LazyFileViewerModal = lazy(() =>
   import("./FileViewerModal").then((m) => ({ default: m.FileViewerModal }))
@@ -27,22 +28,28 @@ export function FileViewerModalHost() {
   const branch = useBranchForPath(effectiveRootPath);
 
   useEffect(() => {
-    const handleOpen = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const detail = e.detail as unknown;
-      const d = detail as { path?: unknown; rootPath?: unknown; line?: unknown; col?: unknown };
-      if (typeof d?.path !== "string" || !d.path) return;
-      setFileView({
-        path: d.path,
-        rootPath: typeof d.rootPath === "string" && d.rootPath ? d.rootPath : undefined,
-        line: typeof d.line === "number" ? d.line : undefined,
-        col: typeof d.col === "number" ? d.col : undefined,
-      });
+    const open = (request: { path: string; rootPath?: string; line?: number; col?: number }) => {
+      setFileView(request);
       setOpenSeq((s) => s + 1);
+    };
+
+    const handleOpen = (e: Event) => {
+      const request = parseViewFileEvent(e);
+      if (!request) return;
+      // This event supersedes anything stashed for the mount replay below.
+      consumePendingViewFileRequest();
+      open(request);
     };
 
     const controller = new AbortController();
     window.addEventListener("daintree:view-file", handleOpen, { signal: controller.signal });
+
+    // Replay a request dispatched before this listener existed: this host lives
+    // in a lazy chunk, so the first open right after hydration — and the
+    // re-dispatch that resets a crashed boundary — can fire before mount.
+    const pending = consumePendingViewFileRequest();
+    if (pending) open(pending);
+
     return () => controller.abort();
   }, []);
 

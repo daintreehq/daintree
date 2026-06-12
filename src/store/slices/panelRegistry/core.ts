@@ -347,7 +347,7 @@ export const createCorePanelActions = (
     });
   },
 
-  updateActivity: (id, headline, status, type, timestamp, lastCommand) => {
+  updateActivity: (id, headline, status, type, lastCommand) => {
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal || !isPtyPanel(terminal)) return state;
@@ -356,7 +356,6 @@ export const createCorePanelActions = (
         terminal.activityHeadline === headline &&
         terminal.activityStatus === status &&
         terminal.activityType === type &&
-        terminal.activityTimestamp === timestamp &&
         terminal.lastCommand === lastCommand
       ) {
         return state;
@@ -370,7 +369,6 @@ export const createCorePanelActions = (
             activityHeadline: headline,
             activityStatus: status,
             activityType: type,
-            activityTimestamp: timestamp,
             lastCommand,
           },
         },

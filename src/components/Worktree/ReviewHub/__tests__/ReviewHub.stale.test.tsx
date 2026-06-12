@@ -172,8 +172,11 @@ describe("ReviewHub stale visual", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((callback: (state: WorktreeState) => void) => {
-      capturedUpdateCallback = callback;
+    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+      // The component subscribes to the per-view worktree port; tests keep
+      // driving it with a plain WorktreeState by wrapping it in the port
+      // event envelope here.
+      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
       return mockUnsubscribe;
     });
 
@@ -202,7 +205,7 @@ describe("ReviewHub stale visual", () => {
           continueRepositoryOperation: continueRepositoryOperationMock,
         },
         system: { openInEditor: openInEditorMock },
-        worktree: { onUpdate: onUpdateMock },
+        worktreePort: { onEvent: onUpdateMock },
       },
       writable: true,
       configurable: true,

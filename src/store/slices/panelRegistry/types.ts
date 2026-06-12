@@ -124,7 +124,6 @@ export interface PanelRegistrySlice {
     headline: string,
     status: "working" | "waiting" | "success" | "failure",
     type: "interactive" | "background" | "idle",
-    timestamp: number,
     lastCommand?: string
   ) => void;
   updateLastCommand: (id: string, lastCommand: string) => void;

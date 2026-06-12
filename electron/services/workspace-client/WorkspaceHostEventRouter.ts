@@ -48,10 +48,15 @@ export class WorkspaceHostEventRouter {
         if (worktree.path) {
           this.worktreePathToProject.set(path.resolve(worktree.path), entry.projectPath);
         }
-        sendToEntryWindows(entry, CHANNELS.EVENTS_PUSH, {
-          name: "worktree:update",
-          payload: { worktree },
-        });
+        // No renderer relay: the host already fans every worktree-update
+        // directly to each per-view worktree MessagePort
+        // (DIRECT_RENDERER_EVENTS in electron/workspace-host.ts), and the
+        // full snapshot (incl. the per-file changes array) is the heaviest
+        // worktree stream — relaying it again via EVENTS_PUSH doubled the
+        // renderer-bound serialization for a copy only ReviewHubContent
+        // consumed (now migrated to the port). Same shape as the
+        // worktree-activated migration below. The main-side emits stay for
+        // PluginService and sys-bus consumers.
         this.emit("worktree-update", {
           worktree,
           projectPath: entry.projectPath,

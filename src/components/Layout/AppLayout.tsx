@@ -4,7 +4,9 @@ import { cn } from "@/lib/utils";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
-import { DiagnosticsDock } from "../Diagnostics";
+const LazyDiagnosticsDock = lazy(() =>
+  import("../Diagnostics").then((m) => ({ default: m.DiagnosticsDock }))
+);
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
 import { ThemeBrowser } from "../ThemeBrowser";
@@ -30,10 +32,12 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
+import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { logError } from "@/utils/logger";
@@ -115,6 +119,7 @@ export function AppLayout({
 }: AppLayoutProps) {
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
+  useDiagnosticsAutoOpen();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
   // the 250ms ease-out-expo width transition during the drag (the transition
@@ -136,6 +141,7 @@ export function AppLayout({
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();
+  const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
   const themeBrowserOpen = useThemeBrowserStore((s) => s.isOpen);
   // The plugin manager (#9558) is a full-screen overlay; while it owns the
@@ -714,9 +720,13 @@ export function AppLayout({
           </ErrorBoundary>
         </div>
         {/* Unified diagnostics dock replaces LogsPanel, EventInspectorPanel, and ProblemsPanel */}
-        <ErrorBoundary variant="section" componentName="DiagnosticsDock">
-          <DiagnosticsDock onRetry={onRetry} onCancelRetry={onCancelRetry} />
-        </ErrorBoundary>
+        {diagnosticsMounted && (
+          <ErrorBoundary variant="section" componentName="DiagnosticsDock">
+            <Suspense fallback={null}>
+              <LazyDiagnosticsDock onRetry={onRetry} onCancelRetry={onCancelRetry} />
+            </Suspense>
+          </ErrorBoundary>
+        )}
       </div>
 
       <ProjectSwitchOverlay isSwitching={false} projectName={undefined} />
@@ -726,9 +736,12 @@ export function AppLayout({
       {themeBrowserOpen &&
         createPortal(
           <>
+            {/* Opacity-only scrim: a hover-animated backdrop-filter here forced
+                a full-viewport blur re-rasterization on every underlying frame
+                exactly while the live theme preview is repainting beneath it. */}
             <div
               aria-hidden="true"
-              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-[backdrop-filter] duration-150 hover:backdrop-blur-[2px]"
+              className="fixed inset-0 z-30 bg-scrim-soft/30 transition-colors duration-150 hover:bg-scrim-soft/45"
             />
             <ErrorBoundary
               variant="section"

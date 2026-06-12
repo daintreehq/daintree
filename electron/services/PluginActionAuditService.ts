@@ -16,7 +16,8 @@ import {
 import type { ActionSource, ActionDanger } from "../../shared/types/actions.js";
 import { events } from "./events.js";
 import type { TypedEventBus } from "./events.js";
-import { auditLogsStore, store } from "../store.js";
+import { auditRingStore } from "./persistence/auditRingStore.js";
+import { store } from "../store.js";
 
 const FLUSH_DEBOUNCE_MS = 1000;
 const MAX_PLAINTEXT_CHARS = 4096;
@@ -51,8 +52,9 @@ export interface PluginAuditLogStore {
 // `auditEnabled` / `auditMaxRecords` stay in config.json (`plugins`), read via
 // the injected config closures.
 const defaultLogStore: PluginAuditLogStore = {
-  read: () => auditLogsStore.get("pluginAuditLog"),
-  write: (records) => auditLogsStore.set("pluginAuditLog", records),
+  read: () => auditRingStore.readAll("pluginAuditLog"),
+  write: (records) =>
+    auditRingStore.writeAll("pluginAuditLog", records, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS),
 };
 
 /**

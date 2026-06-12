@@ -46,6 +46,7 @@ function createMockWebContents() {
 }
 
 const mockGetAppMetrics = vi.fn<() => Electron.ProcessMetric[]>(() => []);
+const mockGetAllWebContents = vi.fn<() => unknown[]>(() => []);
 
 vi.mock("electron", () => {
   function MockWebContentsView() {
@@ -63,6 +64,7 @@ vi.mock("electron", () => {
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
     nativeTheme: { shouldUseDarkColors: true },
+    webContents: { getAllWebContents: () => mockGetAllWebContents() },
   };
 });
 
@@ -188,7 +190,19 @@ import { events } from "../../services/events.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
-import { throttleCpuWebContents } from "../../utils/webContentsLifecycle.js";
+import {
+  throttleCpuWebContents,
+  unthrottleCpuWebContents,
+} from "../../utils/webContentsLifecycle.js";
+import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+
+// The shared snapshot is module-level state; without a reset, a test could be
+// served metrics cached by the previous test's differently-mocked sweep.
+beforeEach(() => {
+  resetAppMetricsSnapshotForTesting();
+  mockGetAllWebContents.mockReset();
+  mockGetAllWebContents.mockReturnValue([]);
+});
 
 const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -227,6 +241,74 @@ describe("ProjectViewManager — eviction safety", () => {
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
+    });
+  });
+
+  describe("dead cached views (render-process-gone)", () => {
+    function emitProcessGone(wc: ReturnType<typeof createMockWebContents>, reason: string): void {
+      const call = wc.on.mock.calls.find(([event]) => event === "render-process-gone");
+      expect(call).toBeDefined();
+      (call![1] as Handler)({}, { reason, exitCode: 1 });
+    }
+
+    it("memory-eviction of a cached view evicts it instead of reloading in the background", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+      await manager.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      // proj-b is now cached with handlers wired by setupViewHandlers.
+
+      emitProcessGone(wcB, "memory-eviction");
+      await flushImmediates();
+
+      expect(wcB.reload).not.toHaveBeenCalled();
+      expect(wcB.close).toHaveBeenCalled();
+      expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+    });
+
+    it("memory-eviction of the ACTIVE view still reloads it", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      emitProcessGone(wcB, "memory-eviction");
+      await flushImmediates();
+
+      expect(wcB.reload).toHaveBeenCalledTimes(1);
+      expect(wcB.close).not.toHaveBeenCalled();
+      expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+    });
+
+    it("a crashed cached view is evicted instead of auto-reloaded", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+      await manager.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      emitProcessGone(wcB, "crashed");
+      await flushImmediates();
+
+      expect(wcB.reload).not.toHaveBeenCalled();
+      expect(wcB.close).toHaveBeenCalled();
+      expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+    });
+
+    it("a crashed ACTIVE view still auto-reloads", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      emitProcessGone(wcB, "crashed");
+      await flushImmediates();
+
+      expect(wcB.reload).toHaveBeenCalledTimes(1);
+      expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
     });
   });
 
@@ -1222,6 +1304,52 @@ describe("ProjectViewManager — telemetry", () => {
     });
   });
 
+  it("sampleCachedViewMemory reports guest footprint separately from the host", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    // A dev-preview guest hosted by cached proj-a, with its own pid.
+    const guestPid = 9_999;
+    const guest = {
+      isDestroyed: () => false,
+      hostWebContents: wcA,
+      getOSProcessId: () => guestPid,
+    };
+    mockGetAllWebContents.mockReturnValue([guest]);
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: guestPid, memory: { privateBytes: 400 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-a",
+      memoryKb: 250 * 1024,
+      guestMemoryKb: 400 * 1024,
+    });
+  });
+
   it("sampleCachedViewMemory is a no-op when no views are cached", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -1614,6 +1742,40 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await flushImmediates();
     expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
   });
+
+  it("throttles <webview> guests when their host view is cached and unthrottles on reactivation", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    // A dev-preview guest embedded in proj-a, plus an unrelated webContents
+    // that must NOT be touched.
+    const guest = { isDestroyed: () => false, hostWebContents: wcA };
+    const unrelated = { isDestroyed: () => false, hostWebContents: null };
+    mockGetAllWebContents.mockReturnValue([guest, unrelated]);
+
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(guest);
+    expect(vi.mocked(throttleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+
+    // Reactivate proj-a — its guest must be unthrottled along with the host.
+    await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
+
+    expect(vi.mocked(unthrottleCpuWebContents)).toHaveBeenCalledWith(guest);
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+  });
 });
 
 describe("ProjectViewManager — listener cleanup", () => {
@@ -1955,6 +2117,52 @@ describe("ProjectViewManager — low-memory eviction", () => {
     const remaining = manager.getAllViews().map((v) => v.projectId);
     expect(remaining).toEqual(["proj-c"]);
     expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("periodic pressure check evicts cached views while idle — no project switch needed", async () => {
+    // Healthy at switch time so the switch-driven eviction pass does nothing.
+    let freeKb = 2 * 1024 * 1024;
+    stubSystemMemoryInfo(() => ({ free: freeKb, purgeable: 0, total: 8 * 1024 * 1024 }));
+    manager.setLowMemoryFreeThresholdMb(768);
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+    expect(manager.getAllViews().length).toBe(3);
+
+    // Free RAM drifts below the floor while the session idles. The sampler
+    // tick's pressure check must reclaim without waiting for a switch.
+    freeKb = 128 * 1024;
+    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("periodic pressure check is a no-op above the floor or with a null threshold", async () => {
+    stubSystemMemoryInfo({ free: 128 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    // Null threshold (performance profile): pressure check must not run.
+    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+    expect(manager.getAllViews().length).toBe(2);
+
+    // Threshold set but memory healthy: still a no-op.
+    stubSystemMemoryInfo({ free: 2 * 1024 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    manager.setLowMemoryFreeThresholdMb(768);
+    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+    expect(manager.getAllViews().length).toBe(2);
+    expect(wcA.close).not.toHaveBeenCalled();
   });
 
   it("uses free + purgeable on macOS so healthy systems do not trigger override", async () => {

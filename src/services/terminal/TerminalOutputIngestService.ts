@@ -32,6 +32,16 @@ type TerminalIngestQueue = {
   drainScheduled: boolean;
 };
 
+// A drained batch plus how many raw queue chunks it merged. The count must
+// travel with the write: port-delivered chunks map 1:1 to host port-ack FIFO
+// entries, so a write that coalesced N chunks must settle N entries on
+// completion (acknowledgePortData's chunkCount) or the host ledger drifts
+// toward permanent backpressure.
+type CoalescedBatch = {
+  data: string | Uint8Array;
+  chunkCount: number;
+};
+
 export class TerminalOutputIngestService {
   private worker: Worker | null = null;
   private sabAvailable = false;
@@ -41,7 +51,11 @@ export class TerminalOutputIngestService {
   private queues = new Map<string, TerminalIngestQueue>();
 
   constructor(
-    private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void,
+    private readonly writeToTerminal: (
+      id: string,
+      data: string | Uint8Array,
+      chunkCount: number
+    ) => void,
     private readonly getTier?: (id: string) => TerminalRefreshTier,
     // Invoked once per chunk dropped by the background queue cap (#9906). The
     // chunk was received over the MessagePort (and counted in the host's
@@ -283,66 +297,77 @@ export class TerminalOutputIngestService {
   private tryDrain(id: string, queue: TerminalIngestQueue): void {
     while (queue.chunks.length > 0 && queue.inFlightBytes < RENDERER_HIGH_WATERMARK_BYTES) {
       const batch = this.coalesceBatch(queue);
-      const batchBytes = this.chunkByteSize(batch);
+      const batchBytes = this.chunkByteSize(batch.data);
       queue.inFlightBytes += batchBytes;
-      this.writeToTerminal(id, batch);
+      this.writeToTerminal(id, batch.data, batch.chunkCount);
     }
   }
 
-  private coalesceBatch(queue: TerminalIngestQueue): string | Uint8Array {
+  // Merge the longest same-type chunk prefix into one write, capped at
+  // COALESCE_BATCH_CAP_BYTES (#4853 — xterm yields between write-buffer
+  // entries, not within one chunk, so an unbounded merge would block the main
+  // thread). The first chunk is always taken even when it alone exceeds the
+  // cap. Uint8Array prefixes merge into one freshly-allocated array — the
+  // MessagePort path delivers binary chunks, so without this branch a
+  // backpressure/wake backlog drains as hundreds of per-chunk writes.
+  private coalesceBatch(queue: TerminalIngestQueue): CoalescedBatch {
     if (queue.chunks.length === 1) {
       const chunk = queue.chunks[0]!;
       queue.chunks.length = 0;
       queue.queuedBytes = 0;
-      return chunk;
+      return { data: chunk, chunkCount: 1 };
     }
 
-    const allStrings = queue.chunks.every((c) => typeof c === "string");
-    if (allStrings) {
-      if (queue.queuedBytes <= COALESCE_BATCH_CAP_BYTES) {
-        const merged = (queue.chunks as string[]).join("");
-        queue.chunks.length = 0;
-        queue.queuedBytes = 0;
-        return merged;
-      }
-      let taken = 0;
-      let i = 0;
-      do {
-        taken += (queue.chunks[i] as string).length;
-        i++;
-      } while (
-        i < queue.chunks.length &&
-        taken + (queue.chunks[i] as string).length <= COALESCE_BATCH_CAP_BYTES
-      );
-      const merged = (queue.chunks.splice(0, i) as string[]).join("");
-      queue.queuedBytes -= merged.length;
-      return merged;
+    const first = queue.chunks[0]!;
+    const firstIsString = typeof first === "string";
+    let taken = this.chunkByteSize(first);
+    let count = 1;
+    while (count < queue.chunks.length) {
+      const next = queue.chunks[count]!;
+      if ((typeof next === "string") !== firstIsString) break;
+      const size = this.chunkByteSize(next);
+      if (taken + size > COALESCE_BATCH_CAP_BYTES) break;
+      taken += size;
+      count++;
     }
 
-    const chunk = queue.chunks.shift()!;
-    queue.queuedBytes -= this.chunkByteSize(chunk);
-    return chunk;
+    if (count === 1) {
+      queue.chunks.shift();
+      queue.queuedBytes -= taken;
+      return { data: first, chunkCount: 1 };
+    }
+
+    const merged = queue.chunks.splice(0, count);
+    queue.queuedBytes -= taken;
+    if (queue.chunks.length === 0) {
+      queue.queuedBytes = 0;
+    }
+    if (firstIsString) {
+      return { data: (merged as string[]).join(""), chunkCount: count };
+    }
+    const out = new Uint8Array(taken);
+    let offset = 0;
+    for (const chunk of merged as Uint8Array[]) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { data: out, chunkCount: count };
   }
 
   private clearQueue(id: string): void {
     this.queues.delete(id);
   }
 
+  // Flush everything held for a terminal, bypassing the in-flight watermark
+  // but still emitting cap-bounded batches — a resize/teardown flush of a
+  // multi-MB hold must not become one synchronous xterm.write (#4853).
   private forceDrain(id: string): void {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0) return;
 
-    if (queue.chunks.length === 1) {
-      this.writeToTerminal(id, queue.chunks[0]!);
-    } else {
-      const allStrings = queue.chunks.every((c) => typeof c === "string");
-      if (allStrings) {
-        this.writeToTerminal(id, (queue.chunks as string[]).join(""));
-      } else {
-        for (const chunk of queue.chunks) {
-          this.writeToTerminal(id, chunk);
-        }
-      }
+    while (queue.chunks.length > 0) {
+      const batch = this.coalesceBatch(queue);
+      this.writeToTerminal(id, batch.data, batch.chunkCount);
     }
 
     this.queues.delete(id);

@@ -65,6 +65,7 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { logInfo } from "../../utils/logger.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
+import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
@@ -198,6 +199,9 @@ describe("ResourceProfileService adversarial", () => {
     // Pin total RAM so MB-based test values cross the intended threshold bands
     // regardless of the CI host's actual memory.
     vi.spyOn(os, "totalmem").mockReturnValue(EIGHT_GB);
+    // Module-level snapshot cache would otherwise serve a previous test's
+    // mocked metrics within the TTL window.
+    resetAppMetricsSnapshotForTesting();
     mockGetAppMetrics.mockReturnValue([]);
     mockIsOnBatteryPower.mockReturnValue(false);
     mockGetCurrentThermalState.mockReturnValue("unknown" as const);

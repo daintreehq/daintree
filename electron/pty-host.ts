@@ -58,6 +58,7 @@ import {
   type HostContext,
   type RendererConnection,
 } from "./pty-host/handlers/index.js";
+import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
@@ -473,6 +474,12 @@ function disconnectWindow(windowId: number, reason: string): void {
   }
 
   rendererConnections.delete(windowId);
+  // Drop this window's wake-sync epochs: chunks accepted by the disposed
+  // batcher may never have reached the renderer, so a reconnecting window
+  // must not be served a no-change wake against them.
+  for (const terminal of ptyManager.getAll()) {
+    terminal.wakeSyncedEpochByWindow?.delete(windowId);
+  }
   // Keep the active project mapping across transient renderer-port failures.
   // Without it, a multi-view window whose MessagePort just failed falls back
   // to the single-consumer SAB path and another cached view can consume/drop
@@ -623,6 +630,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   const isSuspended = backpressureManager.isSuspended(id);
   const terminalInfo = ptyManager.getTerminal(id);
 
+  // Every chunk mutates the headless buffer regardless of routing — bump the
+  // epoch unconditionally so a suppressed/suspended/dropped chunk invalidates
+  // the wake no-change skip for every window.
+  if (terminalInfo) {
+    terminalInfo.contentEpoch++;
+  }
+
   // Background tier: suppress visual streaming entirely (wake snapshots will resync state)
   // Analysis buffer writes still occur for agent state detection
   const activityTier = backpressureManager.getActivityTier(id);
@@ -644,12 +658,12 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     !isSmokeTestTerminalId(id)
   ) {
     const termProject = terminalInfo?.projectId ?? null;
-    const targets: RendererConnection[] = [];
+    const targets: Array<{ windowId: number; conn: RendererConnection }> = [];
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
       const filtered = windowProject !== null && termProject !== windowProject;
       if (filtered) continue;
-      targets.push(conn);
+      targets.push({ windowId, conn });
     }
 
     // Encode only when a target window remains after project filtering — a
@@ -670,10 +684,27 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // timing is independent, so with 2+ targets any flush would neuter the chunk
       // out from under siblings still waiting to copy it. Sole target → owned.
       const owned = targets.length === 1;
+      // Output landing within the input window is likely keystroke echo — let
+      // the batcher accelerate a pending throughput flush so typing into a
+      // flooding terminal isn't held a frame behind the flood.
+      const interactive =
+        terminalInfo !== undefined &&
+        Date.now() - terminalInfo.lastInputTime < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
       const saturated: RendererConnection[] = [];
-      for (const conn of targets) {
-        if (conn.batcher.write(id, chunk, byteCount, owned)) {
+      for (const { windowId, conn } of targets) {
+        if (conn.batcher.write(id, chunk, byteCount, owned, interactive)) {
           visualWritten = true;
+          // Port-clean delivery: this window's view now tracks the buffer
+          // through this chunk (the port is FIFO, so any wake-result for the
+          // terminal is ordered behind it). Anything less — saturation,
+          // IPC/SAB fallback, suppression — leaves the synced epoch stale and
+          // forces the next wake to serialize.
+          if (terminalInfo) {
+            (terminalInfo.wakeSyncedEpochByWindow ??= new Map()).set(
+              windowId,
+              terminalInfo.contentEpoch
+            );
+          }
         } else {
           saturated.push(conn);
         }
@@ -692,10 +723,10 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // loss and deliver a `data-loss` pulse on each starved window's own port,
       // FIFO-ordered with its data, letting the next wake snapshot resync it.
       //
-      // Skip mirrored terminals: the IPC data mirror below broadcasts the chunk to
-      // every window (the renderer's onData also listens on IPC), so a starved
-      // window still receives it — a pulse here would be a spurious discontinuity.
-      if (visualWritten && saturated.length > 0 && !ipcDataMirrorTerminals.has(id)) {
+      // Mirrored terminals are no exception: the IPC data mirror below is
+      // Main-process-only (`data-mirror` is never re-broadcast to renderers),
+      // so a starved window really does lose the chunk and needs the pulse.
+      if (visualWritten && saturated.length > 0) {
         for (const conn of saturated) {
           // Counter is unconditional — regression detection must work even when
           // metrics are gated off (mirrors the IPC at-capacity path).
@@ -876,12 +907,18 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
-  // IPC Data Mirror: Always send data via IPC for terminals that need main-process
-  // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB
-  // write succeeded. Background terminals still need this low-volume mirror
-  // because their visual stream is intentionally suppressed.
+  // IPC Data Mirror: send a Main-process-only copy for terminals that need
+  // main-process monitoring (e.g., UrlDetector for dev preview URL detection),
+  // even when the visual path already delivered the chunk. Background
+  // terminals still need this mirror because their visual stream is
+  // intentionally suppressed. Sent as `data-mirror`, not `data`: the renderer
+  // already has the chunk (or the background gate suppressed it on purpose),
+  // so a `data` event here would be re-broadcast to every WebContents and
+  // dispatched into the same xterm a second time. The genuinely-undelivered
+  // case (visualWritten false, not backgrounded) falls through to the
+  // accounted IPC fallback below, which UrlDetector also receives.
   if (ipcDataMirrorTerminals.has(id) && !isSuspended && (visualWritten || isBackgrounded)) {
-    sendEvent({ type: "data", id, data: toStringForIpc(data) });
+    sendEvent({ type: "data-mirror", id, data: toStringForIpc(data) });
   }
 
   // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure

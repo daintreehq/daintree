@@ -122,6 +122,14 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       emitter.emit("data", event.id, event.data);
       return true;
 
+    // Main-process-only mirror copy (the renderer already received this chunk
+    // on its visual path, or the background gate suppressed it). Routed on its
+    // own event so the TERMINAL_DATA broadcast in ipc/handlers/terminal/events
+    // never re-delivers it to renderers.
+    case "data-mirror":
+      emitter.emit("data-mirror", event.id, event.data);
+      return true;
+
     case "exit": {
       callbacks.onTerminalRemovedFromTrash(event.id);
       const killCount = state.pendingKillCount.get(event.id) ?? 0;

@@ -20,13 +20,17 @@ class DatabaseMaintenanceService {
   private disposed = false;
   private initialized = false;
 
-  initialize(): void {
+  initialize(wasCleanExit = false): void {
     if (this.initialized) return;
     this.initialized = true;
 
     const dbPath = getDbPath();
 
-    if (!probeDb(dbPath)) {
+    // On clean-exit boots corruption is impossible — skip the O(size) page scan
+    // and do a cheap open instead. The full quick_check runs from the idle
+    // maintenance tick. On unclean exits (crash, power loss, SIGKILL) run the
+    // full scan immediately so recovery happens before getSharedDb() opens the file.
+    if (!probeDb(dbPath, !wasCleanExit)) {
       console.error("[DatabaseMaintenance] Database corruption detected, attempting recovery");
       const recovered = attemptRecovery(dbPath);
       if (recovered) {
@@ -166,9 +170,9 @@ export function getDatabaseMaintenanceService(): DatabaseMaintenanceService {
   return instance;
 }
 
-export function initializeDatabaseMaintenance(): DatabaseMaintenanceService {
+export function initializeDatabaseMaintenance(wasCleanExit = false): DatabaseMaintenanceService {
   const service = getDatabaseMaintenanceService();
-  service.initialize();
+  service.initialize(wasCleanExit);
   return service;
 }
 

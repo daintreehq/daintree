@@ -2100,23 +2100,28 @@ export class WorkspaceService {
       return;
     }
 
-    // #6669: prune before listing so externally-deleted worktrees (which Git
-    // 2.31+ keeps in `worktree list --porcelain` with a `prunable` marker)
-    // are dropped from the list. Without this, `syncMonitors` re-creates a
-    // monitor for the phantom path and the sidebar entry never clears.
-    // `prune` skips locked worktrees, so this is safe to run on every refresh.
-    // Best-effort: if prune fails (e.g. EPERM on .git/worktrees/), don't block
-    // the rest of the refresh — that would recreate the original "refresh is a
-    // no-op" symptom under a different trigger.
-    try {
-      await this.git.raw(["worktree", "prune"]);
-    } catch (pruneError) {
-      console.warn(
-        `[WorkspaceHost] worktree prune during refresh failed: ${(pruneError as Error).message}`
-      );
+    // #6669: list first, then prune only when a prunable entry is present. Git
+    // 2.31+ surfaces externally-deleted worktrees with a `prunable` marker in
+    // `worktree list --porcelain`; without a prune pass `syncMonitors` would
+    // re-create a monitor for the phantom path and the sidebar entry would
+    // never clear. Listing first lets us skip the write-lock-taking prune
+    // command on every steady-state cycle (where nothing is prunable), cutting
+    // the per-90s topology reconcile from 2 spawns to 1. When prunable entries
+    // are found we prune then re-list so the sync sees the cleaned topology.
+    // Best-effort: if prune fails (e.g. EPERM on .git/worktrees/), fall through
+    // with the original list — same recovery behaviour as before.
+    let rawWorktrees = await this.listService.list({ forceRefresh: true });
+    if (rawWorktrees.some((wt) => wt.isPrunable)) {
+      try {
+        await this.git.raw(["worktree", "prune"]);
+        rawWorktrees = await this.listService.list({ forceRefresh: true });
+      } catch (pruneError) {
+        console.warn(
+          `[WorkspaceHost] worktree prune during refresh failed: ${(pruneError as Error).message}`
+        );
+      }
     }
 
-    const rawWorktrees = await this.listService.list({ forceRefresh: true });
     const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);

@@ -331,6 +331,101 @@ export function NotificationCenterEntry({
   );
 }
 
+// Module-level so the try/catch/finally and awaited import() expressions stay
+// outside RowOptionsMenu — both bail React Compiler memoization for the
+// per-row component.
+async function reportNotificationOnGitHub(
+  entry: NotificationHistoryEntry,
+  messageString: string
+): Promise<void> {
+  const correlationId = entry.correlationId;
+  if (!correlationId) return;
+  try {
+    // Lazy-load the report-flow dependencies so they stay off the boot
+    // path — appClient + buildNotificationReportUrl + logger together push
+    // the renderer eager-import count past budget when imported statically.
+    const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
+      import("@/clients/appClient"),
+      import("@/components/ErrorBoundary/buildReportIssueUrl"),
+      import("@/utils/logger"),
+    ]);
+    let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
+    try {
+      envInfo = await appClient.getVersionInfo();
+    } catch (envError) {
+      logError("Failed to load version info for inbox report", envError);
+      envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
+    }
+
+    const reportMessage =
+      entry.title && messageString
+        ? `${entry.title} — ${messageString}`
+        : entry.title || messageString || "Notification";
+
+    const { url, fullBody, usedClipboardFallback } = buildNotificationReportUrl({
+      correlationId,
+      message: reportMessage,
+      notificationType: entry.type,
+      context: entry.context,
+      envInfo,
+    });
+
+    if (usedClipboardFallback) {
+      const writeText = window.electron?.clipboard?.writeText;
+      let clipboardOk = false;
+      if (writeText) {
+        try {
+          await writeText(fullBody);
+          clipboardOk = true;
+        } catch (clipboardError) {
+          logError("Failed to copy notification report to clipboard", clipboardError);
+        }
+      }
+      if (clipboardOk) {
+        notify({
+          type: "info",
+          title: "Report details copied",
+          message:
+            "The full notification report was copied to your clipboard — paste it into the issue body.",
+          transient: true,
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      } else {
+        notify({
+          type: "info",
+          title: "Report too long to send",
+          message: "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
+          inboxMessage: "Couldn't copy notification report to clipboard.",
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      }
+    }
+
+    if (!window.electron?.system?.openExternal) return;
+    try {
+      const result = await actionService.dispatch(
+        "system.openExternal",
+        { url },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        await window.electron.system.openExternal(url);
+      }
+    } catch (dispatchError) {
+      logError("Failed to open notification report URL", dispatchError);
+    }
+  } catch (reportError) {
+    // buildNotificationReportUrl can surface URIError (lone surrogates in
+    // title/message) and JSON.stringify can surface TypeError (circular
+    // refs / BigInt in context). Without this catch the rejection escapes
+    // the fire-and-forget call site as an unhandled promise.
+
+    console.warn("Failed to build notification report", reportError);
+  }
+}
+
 interface RowOptionsMenuProps {
   entry: NotificationHistoryEntry;
   onDropdownOpenChange?: (open: boolean) => void;
@@ -406,98 +501,14 @@ function RowOptionsMenu({
     void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
   };
 
-  const handleReportOnGitHub = async () => {
+  const handleReportOnGitHub = () => {
     if (reportInFlight) return;
     if (!entry.correlationId) return;
     if (entry.type !== "error" && entry.type !== "warning") return;
     setReportInFlight(true);
-    try {
-      // Lazy-load the report-flow dependencies so they stay off the boot
-      // path — appClient + buildNotificationReportUrl + logger together push
-      // the renderer eager-import count past budget when imported statically.
-      const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
-        import("@/clients/appClient"),
-        import("@/components/ErrorBoundary/buildReportIssueUrl"),
-        import("@/utils/logger"),
-      ]);
-      let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
-      try {
-        envInfo = await appClient.getVersionInfo();
-      } catch (envError) {
-        logError("Failed to load version info for inbox report", envError);
-        envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
-      }
-
-      const reportMessage =
-        entry.title && messageString
-          ? `${entry.title} — ${messageString}`
-          : entry.title || messageString || "Notification";
-
-      const { url, fullBody, usedClipboardFallback } = buildNotificationReportUrl({
-        correlationId: entry.correlationId,
-        message: reportMessage,
-        notificationType: entry.type,
-        context: entry.context,
-        envInfo,
-      });
-
-      if (usedClipboardFallback) {
-        const writeText = window.electron?.clipboard?.writeText;
-        let clipboardOk = false;
-        if (writeText) {
-          try {
-            await writeText(fullBody);
-            clipboardOk = true;
-          } catch (clipboardError) {
-            logError("Failed to copy notification report to clipboard", clipboardError);
-          }
-        }
-        if (clipboardOk) {
-          notify({
-            type: "info",
-            title: "Report details copied",
-            message:
-              "The full notification report was copied to your clipboard — paste it into the issue body.",
-            transient: true,
-            priority: "high",
-            context: { eventKind: "uiFeedback" },
-          });
-        } else {
-          notify({
-            type: "info",
-            title: "Report too long to send",
-            message:
-              "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
-            inboxMessage: "Couldn't copy notification report to clipboard.",
-            priority: "high",
-            context: { eventKind: "uiFeedback" },
-          });
-        }
-      }
-
-      if (!window.electron?.system?.openExternal) return;
-      try {
-        const result = await actionService.dispatch(
-          "system.openExternal",
-          { url },
-          { source: "user" }
-        );
-        if (!result.ok) {
-          await window.electron.system.openExternal(url);
-        }
-      } catch (dispatchError) {
-        logError("Failed to open notification report URL", dispatchError);
-      }
-    } catch (reportError) {
-      // buildNotificationReportUrl can surface URIError (lone surrogates in
-      // title/message) and JSON.stringify can surface TypeError (circular
-      // refs / BigInt in context). Without this catch the rejection escapes
-      // the `void handleReportOnGitHub()` site as an unhandled promise.
-
-      console.warn("Failed to build notification report", reportError);
-    } finally {
+    void reportNotificationOnGitHub(entry, messageString).finally(() => {
       setReportInFlight(false);
-    }
+    });
   };
 
   return (

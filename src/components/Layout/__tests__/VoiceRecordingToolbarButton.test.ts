@@ -76,11 +76,11 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
   });
 
   describe("RAF-driven orbit ring (off-React animation)", () => {
-    it("uses an audioLevelRef bridge so per-frame audio updates do not trigger React work", () => {
-      expect(source).toContain("audioLevelRef");
-      expect(source).toMatch(
-        /useEffect\(\(\)\s*=>\s*{\s*audioLevelRef\.current\s*=\s*audioLevel;?\s*},\s*\[audioLevel\]\)/
-      );
+    it("reads the audio level imperatively in the tick so per-frame updates do not trigger React work", () => {
+      // No React subscription to audioLevel — the store field updates ~60Hz
+      // during recording, and a subscription re-renders the button per frame.
+      expect(source).not.toMatch(/useVoiceRecordingStore\(\s*\(state\)\s*=>\s*state\.audioLevel/);
+      expect(source).toMatch(/useVoiceRecordingStore\.getState\(\)\.audioLevel/);
     });
 
     it("drives the ring with requestAnimationFrame and cleans up via cancelAnimationFrame", () => {
@@ -107,7 +107,9 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
     });
 
     it("forces level=0 during finishing so the ring decelerates instead of snapping off", () => {
-      expect(source).toMatch(/isFinishing\s*\?\s*0\s*:\s*audioLevelRef\.current/);
+      expect(source).toMatch(
+        /isFinishing\s*\?\s*0\s*:\s*useVoiceRecordingStore\.getState\(\)\.audioLevel/
+      );
     });
   });
 

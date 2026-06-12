@@ -451,6 +451,32 @@ describe("TerminalHibernationManager", () => {
       expect(ctorArgs?.linkHandler).toBe(linkHandler);
     });
 
+    it("constructs the placeholder with scrollback 0 and stashes the real value", () => {
+      manager.hibernate("t1");
+
+      const ctorArgs = vi.mocked(Terminal).mock.calls.at(-1)?.[0] as
+        | { scrollback?: number }
+        | undefined;
+      expect(ctorArgs?.scrollback).toBe(0);
+      expect(managed.hibernatedScrollback).toBe(5000);
+    });
+
+    it("restores the stashed scrollback on unhibernate so replay keeps history", () => {
+      manager.hibernate("t1");
+      // A scrollback-policy write during hibernation lands in the stash (see
+      // TerminalScrollbackController) — it must propagate to the woken
+      // terminal, not the original snapshot value.
+      managed.hibernatedScrollback = 2500;
+
+      manager.unhibernate("t1");
+
+      const ctorArgs = vi.mocked(Terminal).mock.calls.at(-1)?.[0] as
+        | { scrollback?: number }
+        | undefined;
+      expect(ctorArgs?.scrollback).toBe(2500);
+      expect(managed.hibernatedScrollback).toBeUndefined();
+    });
+
     it("should clear the cached selection (#10387)", () => {
       manager.hibernate("t1");
       expect(deps.deleteCachedSelection).toHaveBeenCalledWith("t1");

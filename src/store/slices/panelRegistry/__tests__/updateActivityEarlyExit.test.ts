@@ -57,7 +57,6 @@ const baseTerminal = {
   activityHeadline: "Running tests",
   activityStatus: "working" as const,
   activityType: "background" as const,
-  activityTimestamp: 1000,
   lastCommand: "npm test",
 };
 
@@ -93,7 +92,6 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.activityHeadline,
         baseTerminal.activityStatus,
         baseTerminal.activityType,
-        baseTerminal.activityTimestamp,
         baseTerminal.lastCommand
       );
 
@@ -115,7 +113,6 @@ describe("updateActivity early-exit (#2701)", () => {
         "Tests passed",
         baseTerminal.activityStatus,
         baseTerminal.activityType,
-        baseTerminal.activityTimestamp,
         baseTerminal.lastCommand
       );
 
@@ -139,37 +136,12 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.activityHeadline,
         "success",
         baseTerminal.activityType,
-        baseTerminal.activityTimestamp,
         baseTerminal.lastCommand
       );
 
     const after = usePanelStore.getState().panelsById;
     expect(after).not.toBe(before);
     expect((after[baseTerminal.id] as PtyPanelData)!.activityStatus).toBe("success");
-  });
-
-  it("replaces array reference when timestamp changes", () => {
-    usePanelStore.setState({
-      panelsById: { [baseTerminal.id]: baseTerminal },
-      panelIds: [baseTerminal.id],
-    });
-
-    const before = usePanelStore.getState().panelsById;
-
-    usePanelStore
-      .getState()
-      .updateActivity(
-        baseTerminal.id,
-        baseTerminal.activityHeadline,
-        baseTerminal.activityStatus,
-        baseTerminal.activityType,
-        2000,
-        baseTerminal.lastCommand
-      );
-
-    const after = usePanelStore.getState().panelsById;
-    expect(after).not.toBe(before);
-    expect((after[baseTerminal.id] as PtyPanelData)!.activityTimestamp).toBe(2000);
   });
 
   it("replaces array reference when activityType changes", () => {
@@ -187,7 +159,6 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.activityHeadline,
         baseTerminal.activityStatus,
         "interactive",
-        baseTerminal.activityTimestamp,
         baseTerminal.lastCommand
       );
 
@@ -211,7 +182,6 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.activityHeadline,
         baseTerminal.activityStatus,
         baseTerminal.activityType,
-        baseTerminal.activityTimestamp,
         "npm run build"
       );
 
@@ -237,7 +207,6 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.activityHeadline,
         baseTerminal.activityStatus,
         baseTerminal.activityType,
-        baseTerminal.activityTimestamp,
         baseTerminal.lastCommand
       );
 
@@ -263,7 +232,6 @@ describe("updateActivity early-exit (#2701)", () => {
         "Updated headline",
         baseTerminal.activityStatus,
         baseTerminal.activityType,
-        2000,
         baseTerminal.lastCommand
       );
 
@@ -281,9 +249,7 @@ describe("updateActivity early-exit (#2701)", () => {
 
     const before = usePanelStore.getState().panelsById;
 
-    usePanelStore
-      .getState()
-      .updateActivity("nonexistent-id", "Working", "working", "background", 1000);
+    usePanelStore.getState().updateActivity("nonexistent-id", "Working", "working", "background");
 
     expect(usePanelStore.getState().panelsById).toBe(before);
   });
