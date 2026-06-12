@@ -66,6 +66,21 @@ export interface ResourceProfileConfig {
    * signal path instead of falling through.
    */
   paintGateHardTimeoutMs: number;
+  /**
+   * Warm-reactivation paint-gate SOFT timeout (ms). Bounds the wait for a
+   * cached view's renderer to finish its wake fan-out (atlas repair +
+   * missed-buffer replay across the grid) and emit `APP_VIEW_WARM_PAINTED`.
+   * Crossing it only logs; the bridge view stays attached until the signal
+   * or the hard timeout.
+   */
+  warmPaintGateTimeoutMs: number;
+  /**
+   * Warm-reactivation paint-gate HARD timeout (ms). Ceiling that drops the
+   * bridge view even without a paint signal. Should stay comfortably above
+   * `warmPaintGateTimeoutMs` so slow-but-live wake fan-outs complete via the
+   * signal path instead of revealing a partially repainted grid.
+   */
+  warmPaintGateHardTimeoutMs: number;
 }
 
 export interface ResourceProfilePayload {
@@ -102,6 +117,8 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     fetchIntervalBackgroundMs: 3 * 60_000,
     paintGateTimeoutMs: 1_500,
     paintGateHardTimeoutMs: 4_000,
+    warmPaintGateTimeoutMs: 500,
+    warmPaintGateHardTimeoutMs: 1_500,
   },
   balanced: {
     pollIntervalActive: 2000,
@@ -115,12 +132,14 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     lowMemoryFreeThresholdMb: 768,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
-    // Balanced cold-start paint-gate values must match
-    // `DEFAULT_PAINT_GATE_TIMEOUT_MS` / `DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS` in
+    // Balanced paint-gate values (cold and warm) must match the
+    // `DEFAULT_*_PAINT_GATE_*_MS` constants in
     // `electron/window/ProjectViewManager.ts` — those constants are the
     // fallback used until the profile push lands. Keep them in lockstep.
     paintGateTimeoutMs: 1_500,
     paintGateHardTimeoutMs: 4_000,
+    warmPaintGateTimeoutMs: 500,
+    warmPaintGateHardTimeoutMs: 1_500,
   },
   efficiency: {
     pollIntervalActive: 4000,
@@ -142,5 +161,11 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     // warning spam on degraded hardware.
     paintGateTimeoutMs: 2_500,
     paintGateHardTimeoutMs: 6_000,
+    // The warm gate waits on the full wake fan-out (atlas repair + buffer
+    // replay per terminal at concurrency 2), which routinely outlasts the
+    // perf/balanced 1.5s ceiling on degraded hardware — same headroom
+    // rationale as the cold-gate values above.
+    warmPaintGateTimeoutMs: 800,
+    warmPaintGateHardTimeoutMs: 2_500,
   },
 };

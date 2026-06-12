@@ -134,6 +134,8 @@ interface MockProjectViewManager {
   setEfficiencyFreeze: Mock;
   setPaintGateTimeoutMs: Mock;
   setPaintGateHardTimeoutMs: Mock;
+  setWarmPaintGateTimeoutMs: Mock;
+  setWarmPaintGateHardTimeoutMs: Mock;
 }
 interface MockProjectStatsService {
   updatePollInterval: Mock;
@@ -157,6 +159,8 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
+    setWarmPaintGateTimeoutMs: vi.fn(),
+    setWarmPaintGateHardTimeoutMs: vi.fn(),
   };
   const mockProjectStatsService: MockProjectStatsService = {
     updatePollInterval: vi.fn(),
@@ -180,6 +184,8 @@ function makeMockPvm(): MockProjectViewManager {
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
+    setWarmPaintGateTimeoutMs: vi.fn(),
+    setWarmPaintGateHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -711,6 +717,12 @@ describe("ResourceProfileService", () => {
     expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.paintGateHardTimeoutMs
     );
+    expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
+    );
 
     service.stop();
   });
@@ -731,6 +743,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.paintGateHardTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
     );
 
     service.stop();
@@ -767,6 +785,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.paintGateHardTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
     );
 
     service.stop();

@@ -273,6 +273,16 @@ export class ResourceProfileService {
       } catch {
         // non-critical
       }
+      try {
+        pvm.setWarmPaintGateTimeoutMs(initialConfig.warmPaintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setWarmPaintGateHardTimeoutMs(initialConfig.warmPaintGateHardTimeoutMs);
+      } catch {
+        // non-critical
+      }
     }
 
     this.startLagMonitor();
@@ -801,11 +811,11 @@ export class ResourceProfileService {
         // non-critical
       }
 
-      // Push per-profile paint-gate timeouts. Cold starts run measurably
-      // slower under efficiency (memory/thermal/battery pressure), so the
-      // soft warning bound stretches from 3s to 5s and the hard fall-through
-      // bound from 8s to 12s. Each setter wrapped in its own try/catch so a
-      // throw from one doesn't skip the other.
+      // Push per-profile paint-gate timeouts (cold and warm). Both cold
+      // starts and warm wake fan-outs run measurably slower under efficiency
+      // (memory/thermal/battery pressure), so the bounds stretch with the
+      // profile. Each setter wrapped in its own try/catch so a throw from
+      // one doesn't skip the others.
       try {
         pvm.setPaintGateTimeoutMs(config.paintGateTimeoutMs);
       } catch {
@@ -813,6 +823,16 @@ export class ResourceProfileService {
       }
       try {
         pvm.setPaintGateHardTimeoutMs(config.paintGateHardTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setWarmPaintGateTimeoutMs(config.warmPaintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
       } catch {
         // non-critical
       }

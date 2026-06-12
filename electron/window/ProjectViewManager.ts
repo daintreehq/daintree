@@ -889,6 +889,26 @@ export class ProjectViewManager {
   }
 
   /**
+   * Set the soft warm-reactivation paint-gate timeout (ms). Does NOT retime
+   * an in-flight gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setWarmPaintGateTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.warmPaintGateTimeoutMs = ms;
+  }
+
+  /**
+   * Set the hard warm-reactivation paint-gate timeout (ms). Does NOT retime
+   * an in-flight gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setWarmPaintGateHardTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.warmPaintGateHardTimeoutMs = ms;
+  }
+
+  /**
    * Set the available-memory floor (MB) below which eviction clamps the
    * effective cap to 1 view for the current pass without mutating
    * `maxCachedViews`. `null` disables the override.
