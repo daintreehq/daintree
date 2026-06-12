@@ -218,8 +218,12 @@ describe("PanelHeader", () => {
       );
       const content = screen.getByTestId("custom-header-content");
       const overflowButton = screen.getByLabelText("More panel actions");
+      const closeButton = screen.getByTestId("panel-close");
       expect(
         content.compareDocumentPosition(overflowButton) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(
+        content.compareDocumentPosition(closeButton) & Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy();
     });
   });
