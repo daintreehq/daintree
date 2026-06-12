@@ -172,7 +172,7 @@ export interface DiffViewerProps {
  */
 const renderGutterWithMarker: RenderGutter = ({ change, renderDefault, wrapInAnchor }) => (
   <>
-    {wrapInAnchor(renderDefault())}
+    <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
     <span className="diff-line-marker">
       {change.type === "insert" ? "+" : change.type === "delete" ? "-" : ""}
     </span>
@@ -184,7 +184,7 @@ function makeGutterRenderer(movedKeys: ReadonlySet<string>): RenderGutter {
   if (movedKeys.size === 0) return renderGutterWithMarker;
   const render: RenderGutter = ({ change, renderDefault, wrapInAnchor }) => (
     <>
-      {wrapInAnchor(renderDefault())}
+      <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
       <span className="diff-line-marker">
         {change.type === "insert" ? "+" : change.type === "delete" ? "-" : ""}
       </span>
