@@ -1754,6 +1754,13 @@ export interface IpcEventMap {
   // Config reload events
   "app:config-reloaded": void;
 
+  // Fired by ProjectViewManager after a warm cached view is detached from the
+  // anti-flash bridge and focused as the foreground surface (#10362). The
+  // renderer re-runs its terminal redraw here — the wake fan-out driven by
+  // visibilitychange/resume ran while the view was still occluded, where
+  // Chromium culls the paint, so it can fail to stick until the user clicks.
+  "app:view-revealed": void;
+
   // Privacy events
   "privacy:telemetry-consent-changed": {
     level: "off" | "errors" | "full";

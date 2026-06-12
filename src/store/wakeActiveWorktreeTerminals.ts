@@ -49,7 +49,15 @@ export async function wakeActiveWorktreeTerminals(): Promise<void> {
   }
 }
 
-async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
+/**
+ * Build the list of grid terminals in the active worktree that a visibility
+ * restore or post-reveal repaint should touch — every grid pane plus the
+ * persistently-rendered Daintree Assistant. Shared by the wake fan-out and the
+ * post-reveal repaint so both target exactly the same set.
+ *
+ * Dock and trash terminals are excluded — they manage their own visibility.
+ */
+function collectActiveWorktreeTerminalTargets(): string[] {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
   const { panelIds, panelsById } = usePanelStore.getState();
 
@@ -70,18 +78,21 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   // Without this it stays frozen — accumulating headless-mirror output but
   // never syncing its xterm buffer — until a manual resize (#9637). Pull its
   // id straight from the help-panel store and fold it into the same fan-out;
-  // `fullWakeForVisibilityRestore` guards on disposal internally, so a stale
-  // id whose panel was cleared on project switch safely misses the lookup.
+  // the per-terminal methods guard on disposal internally, so a stale id whose
+  // panel was cleared on project switch safely misses the lookup.
   const assistantId = useHelpPanelStore.getState().terminalId;
   if (assistantId && panelsById[assistantId] && !targets.includes(assistantId)) {
     targets.push(assistantId);
   }
 
-  if (targets.length === 0) return;
+  return targets;
+}
 
-  // Move the focused panel to slot 0 so it gets the first execution slot.
-  // It still runs inside the same worker pool, so a hang on the focused
-  // panel doesn't block the other visible panels.
+/**
+ * Move the focused terminal to slot 0 so it's serviced first — it's the pane the
+ * user is reading, so it should wake/repaint before the rest. Mutates in place.
+ */
+function prioritizeFocusedFirst(targets: string[]): void {
   let focusedIndex = -1;
   for (let i = 0; i < targets.length; i++) {
     const id = targets[i];
@@ -96,6 +107,16 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
       targets.unshift(focused);
     }
   }
+}
+
+async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
+  const targets = collectActiveWorktreeTerminalTargets();
+
+  if (targets.length === 0) return;
+
+  // Slot the focused panel first. It still runs inside the same worker pool, so
+  // a hang on the focused panel doesn't block the other visible panels.
+  prioritizeFocusedFirst(targets);
 
   const wakeOne = async (id: string): Promise<void> => {
     try {
@@ -123,4 +144,52 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
     workers.push(worker());
   }
   await Promise.all(workers);
+}
+
+const REPAINT_CHUNK = 2;
+
+function nextFrame(): Promise<void> {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Re-run the terminal redraw across every visible agent terminal AFTER the
+ * project view has been revealed and focused as the foreground surface (#10362).
+ *
+ * The wake fan-out in {@link wakeActiveWorktreeTerminals} fires on
+ * visibilitychange/resume — while the cached view is still occluded behind the
+ * warm anti-flash bridge (#9679), where Chromium culls the paint. The byte sync
+ * it does still lands (IPC data isn't culled like a paint), so this pass only
+ * needs to repaint: {@link TerminalInstanceService.repaintForReveal} re-attaches
+ * a dropped WebGL context, repairs the stale glyph model, re-fits, and unpauses
+ * IO — without stealing focus.
+ *
+ * `repaintForReveal` is synchronous and heavier than a bare reflow (it can fit +
+ * full-refresh), so the sweep is spread across frames in small chunks to keep a
+ * large grid from producing one long task on the reveal frame.
+ */
+export async function repaintActiveWorktreeTerminals(): Promise<void> {
+  const targets = collectActiveWorktreeTerminalTargets();
+  if (targets.length === 0) return;
+
+  // Repaint the pane the user is reading first — the rest stagger in behind it.
+  prioritizeFocusedFirst(targets);
+
+  for (let i = 0; i < targets.length; i += REPAINT_CHUNK) {
+    for (let j = i; j < Math.min(i + REPAINT_CHUNK, targets.length); j++) {
+      const id = targets[j];
+      if (!id) continue;
+      try {
+        terminalInstanceService.repaintForReveal(id);
+      } catch (error) {
+        // One broken terminal must not abort the sweep — the next visible
+        // terminal still needs its post-reveal repaint.
+        logWarn("[repaintActiveWorktreeTerminals] repaint failed", { id, error });
+      }
+    }
+    if (i + REPAINT_CHUNK < targets.length) {
+      await nextFrame();
+    }
+  }
 }

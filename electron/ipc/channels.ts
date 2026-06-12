@@ -146,6 +146,7 @@ export const CHANNELS = {
   APP_FIRST_INTERACTIVE: "app:first-interactive",
   APP_VIEW_PAINTED: "app:view-painted",
   APP_VIEW_WARM_PAINTED: "app:view-warm-painted",
+  APP_VIEW_REVEALED: "app:view-revealed",
   APP_DISMISS_ROSETTA_WARNING: "app:dismiss-rosetta-warning",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",

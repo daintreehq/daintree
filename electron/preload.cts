@@ -1347,6 +1347,8 @@ function buildElectronApi(): ElectronAPI {
       reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
 
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
+
+      onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
     },
 
     menu: buildMenuPreloadBindings(_unwrappingInvoke),

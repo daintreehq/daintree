@@ -13,7 +13,10 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
-import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
+import {
+  repaintActiveWorktreeTerminals,
+  wakeActiveWorktreeTerminals,
+} from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
 import { mutateCacheEntries } from "@/lib/forgeResourceCache";
 import { notify } from "@/lib/notify";
@@ -738,13 +741,48 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     document.addEventListener("resume", handleResume);
     cleanups.push(() => document.removeEventListener("resume", handleResume));
 
+    // Post-reveal repaint (#10362): the wake fan-out above runs on
+    // visibilitychange/resume — while this cached view is still occluded behind
+    // the warm anti-flash bridge (#9679), where Chromium culls the paint, so the
+    // redraw can fail to stick and agent terminals stay garbled until clicked.
+    // Main fires `app:view-revealed` once it detaches the bridge and focuses the
+    // now-foreground view; re-run the redraw then. Separate double-rAF gate from
+    // scheduleWake so a repaint can't be coalesced away by an in-flight wake (and
+    // vice versa); the repaint skips the byte-pull the wake already did.
+    let repaintPending = false;
+    let repaintRafId: number | null = null;
+    function scheduleRepaint() {
+      if (repaintPending) return;
+      repaintPending = true;
+      repaintRafId = requestAnimationFrame(() => {
+        repaintRafId = requestAnimationFrame(() => {
+          repaintRafId = null;
+          repaintPending = false;
+          if (document.visibilityState === "visible") {
+            void repaintActiveWorktreeTerminals();
+          }
+        });
+      });
+    }
+    cleanups.push(() => {
+      if (repaintRafId !== null) cancelAnimationFrame(repaintRafId);
+    });
+
+    const offViewRevealed = window.electron?.app?.onViewRevealed?.(() => {
+      if (document.visibilityState !== "visible") return;
+      scheduleRepaint();
+    });
+    if (offViewRevealed) cleanups.push(offViewRevealed);
+
     // Missed-event guard: if the view is already visible by the time this
     // listener installs (fast cached reactivation), the visibilitychange
     // event has already fired (#4935). Worktree state is fetched via the
     // worktreePort.isReady() / onReady paths above, so only the wake fan-out
-    // needs to run here.
+    // needs to run here. Route through scheduleWake (not a bare call) so it
+    // inherits the same double-rAF settle the visibilitychange/resume paths use
+    // and can't fire mid-frame before layout settles (#10362).
     if (document.visibilityState === "visible") {
-      void wakeActiveWorktreeTerminals();
+      scheduleWake();
     }
 
     return () => {

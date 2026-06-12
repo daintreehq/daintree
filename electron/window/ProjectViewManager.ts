@@ -510,6 +510,18 @@ export class ProjectViewManager {
       // can move focus, and the warm gate may have run for hundreds of ms.
       if (!cached.view.webContents.isDestroyed()) {
         cached.view.webContents.focus();
+        // Post-reveal repaint (#10362): the renderer's wake fan-out ran while
+        // this view was occluded behind the anti-flash bridge, where Chromium
+        // culls paints for a non-foreground WebContentsView — so agent
+        // terminals can stay garbled until the user clicks each pane. Now the
+        // bridge is gone and the view is the focused foreground surface: force a
+        // fresh composite and tell the renderer to re-run its terminal redraw.
+        // Skip when a superseding switch has already moved on — this view is no
+        // longer the revealed foreground, so repainting it would be wasted work.
+        if (this.activeProjectId === projectId) {
+          cached.view.webContents.invalidate();
+          cached.view.webContents.send(CHANNELS.APP_VIEW_REVEALED);
+        }
       }
       const cachedIntent = this.consumePendingFocusIntent(projectId);
       if (cachedIntent) {

@@ -1012,6 +1012,67 @@ class TerminalInstanceService {
   }
 
   /**
+   * Post-reveal repaint for a visible terminal whose project view has just been
+   * detached from the warm anti-flash bridge and focused as the foreground
+   * surface (#10362).
+   *
+   * `fullWakeForVisibilityRestore` runs the redraw on visibilitychange/resume —
+   * while the cached view is still occluded BEHIND the bridge (#9679). Chromium
+   * culls paints for a non-foreground WebContentsView, so that repair can fail
+   * to stick and agent terminals stay garbled until the user clicks each pane.
+   * This re-runs the render repair once the compositor will actually present
+   * the frame, driven by the `app:view-revealed` signal.
+   *
+   * Self-heals both failure modes a manual click fixes: a WebGL context the
+   * freeze/thaw cycle dropped (VRAM reclaim) is re-attached, then the stale
+   * local glyph model is repaired (or a DOM-renderer pane plain-refreshed) and
+   * the grid re-fit. Unlike a click it does NOT call `terminal.focus()` —
+   * focusing every pane would steal DOM focus and emit focus-reporting
+   * sequences into every agent; exactly one pane owns focus, this is a
+   * fleet-wide repaint. The byte-pull is intentionally skipped: the headless
+   * mirror sync already ran behind the bridge (IPC data is not culled like a
+   * paint is), so only the repaint needs replaying.
+   */
+  repaintForReveal(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return;
+    if (!managed.isOpened || !managed.isVisible) return;
+
+    const element = managed.terminal.element;
+    if (!element || !element.isConnected) return;
+
+    // A not-yet-laid-out grid has no model worth repainting — its first real
+    // resize builds it fresh. Mirrors resetRenderer's size guard.
+    if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
+      return;
+    }
+
+    // Re-attach a WebGL context the freeze/thaw cycle may have dropped before
+    // repairing the local model. Same idiom as the post-reparent restore.
+    if (!this.webGLManager.isActive(id) && this.shouldRestoreWebGL(managed)) {
+      this.webGLManager.ensureContext(id, managed);
+    }
+
+    // Drop the stale local glyph model and repaint. repairAtlasForReactivation
+    // returns false for DOM-renderer terminals — fall back to a plain refresh so
+    // the pane still repaints.
+    try {
+      if (!this.webGLManager.repairAtlasForReactivation(id)) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
+    } catch (error) {
+      logWarn(`repaintForReveal repair failed for ${id}`, { error });
+    }
+
+    // Re-fit and unpause IO through the shared post-wake resize path. Going via
+    // handlePostWake (not a bare fit()) honors the settled-strategy atomic-resize
+    // contract: for settled agents a plain fit() would resize xterm ahead of the
+    // deferred PTY resize and break atomicity — handlePostWake routes those
+    // through sendPtyResize instead, and still fit()s + reflows standard agents.
+    this.handlePostWake(id);
+  }
+
+  /**
    * Drop bytes held in the ingest queue while backgrounded and ack them to
    * the pty-host. Used after a successful main-buffer replay: the snapshot
    * already contains those bytes, so flushing them would double-paint the

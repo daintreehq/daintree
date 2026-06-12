@@ -424,6 +424,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
+    /**
+     * Subscribe to the post-reveal repaint signal (#10362). Main fires this
+     * after it detaches the warm anti-flash bridge and focuses the cached view,
+     * i.e. once the view is the composited foreground surface. The renderer
+     * re-runs its terminal redraw then, since the wake fan-out driven by
+     * visibilitychange/resume ran while the view was still occluded.
+     */
+    onViewRevealed(callback: () => void): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {

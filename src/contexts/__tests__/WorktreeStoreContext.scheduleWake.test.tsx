@@ -8,9 +8,13 @@ import type { WorktreeSnapshot } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
 const wakeMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
+const repaintMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
   wakeActiveWorktreeTerminals: () => wakeMock(),
+  repaintActiveWorktreeTerminals: () => repaintMock(),
 }));
+
+let viewRevealedCb: (() => void) | null = null;
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn(() => "notif-id") }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
@@ -35,6 +39,8 @@ beforeEach(() => {
   rafQueue.clear();
   rafIdCounter = 0;
   wakeMock.mockClear();
+  repaintMock.mockClear();
+  viewRevealedCb = null;
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback): number => {
     const id = ++rafIdCounter;
     rafQueue.set(id, cb);
@@ -61,6 +67,14 @@ beforeEach(() => {
       getAllIssueAssociations: () => Promise.resolve({}),
       getPRStatus: () => Promise.resolve(null),
     },
+    app: {
+      onViewRevealed: (cb: () => void) => {
+        viewRevealedCb = cb;
+        return () => {
+          viewRevealedCb = null;
+        };
+      },
+    },
   } as unknown as typeof window.electron;
 });
 
@@ -86,10 +100,65 @@ async function renderProvider() {
 }
 
 describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
-  it("runs the missed-event guard synchronously on mount when already visible", async () => {
+  it("defers the missed-event guard through the double-rAF gate on mount when already visible", async () => {
     await renderProvider();
+    // Pre-#10362 the guard fired synchronously here; it now rides the same
+    // double-rAF settle as the visibilitychange/resume paths so it can't run
+    // before the reactivated view's layout settles.
+    expect(wakeMock).not.toHaveBeenCalled();
+
+    act(() => flushFrame());
+    expect(wakeMock).not.toHaveBeenCalled();
+
+    act(() => flushFrame());
     expect(wakeMock).toHaveBeenCalledTimes(1);
-    expect(rafQueue.size).toBe(0);
+  });
+
+  it("repaints on the post-reveal signal, deferred to the second frame, without re-waking", async () => {
+    await renderProvider();
+    // Drain the mount-scheduled missed-event wake before exercising the reveal.
+    act(() => flushFrame());
+    act(() => flushFrame());
+    wakeMock.mockClear();
+    repaintMock.mockClear();
+    expect(viewRevealedCb).not.toBeNull();
+
+    act(() => viewRevealedCb?.());
+    // First frame: not yet — the repaint must land on a settled foreground frame.
+    act(() => flushFrame());
+    expect(repaintMock).not.toHaveBeenCalled();
+
+    act(() => flushFrame());
+    expect(repaintMock).toHaveBeenCalledTimes(1);
+    // The reveal path repaints only; it must not re-run the byte-pulling wake
+    // (the headless-mirror sync already ran behind the bridge).
+    expect(wakeMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the post-reveal repaint when the view is re-hidden before the second frame", async () => {
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    repaintMock.mockClear();
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    setVisibilityState("hidden");
+    act(() => flushFrame());
+
+    expect(repaintMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending post-reveal repaint when the provider unmounts", async () => {
+    const { unmount } = await renderProvider();
+    repaintMock.mockClear();
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    unmount();
+    act(() => flushFrame());
+
+    expect(repaintMock).not.toHaveBeenCalled();
   });
 
   it("defers the wake to the second animation frame, not a microtask or first frame", async () => {
