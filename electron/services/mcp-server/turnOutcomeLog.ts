@@ -10,7 +10,7 @@ import {
   MCP_AUDIT_MAX_RECORDS,
   MCP_AUDIT_MIN_RECORDS,
 } from "../../../shared/types/ipc/mcpServer.js";
-import { auditLogsStore } from "../../store.js";
+import { auditRingStore } from "../persistence/auditRingStore.js";
 import { AUDIT_FLUSH_DEBOUNCE_MS, TIER_NOT_PERMITTED_CODE } from "./shared.js";
 
 export interface TurnOutcomeLogStore {
@@ -21,8 +21,9 @@ export interface TurnOutcomeLogStore {
 // Persists the ring in the dedicated audit-logs store; see the matching note
 // in auditLog.ts. Config flags stay in config.json.
 const defaultLogStore: TurnOutcomeLogStore = {
-  read: () => auditLogsStore.get("mcpTurnOutcomeLog"),
-  write: (records) => auditLogsStore.set("mcpTurnOutcomeLog", records),
+  read: () => auditRingStore.readAll("mcpTurnOutcomeLog"),
+  write: (records) =>
+    auditRingStore.writeAll("mcpTurnOutcomeLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS),
 };
 
 /**

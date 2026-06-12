@@ -19,7 +19,7 @@ import {
   isAuditRecord,
   isGrantRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
-import { auditLogsStore } from "../../store.js";
+import { auditRingStore } from "../persistence/auditRingStore.js";
 import type { McpTier } from "./shared.js";
 import {
   AUDIT_FLUSH_DEBOUNCE_MS,
@@ -50,8 +50,9 @@ export interface McpAuditLogStore {
 // parse cost of the rings. `auditEnabled` / `auditMaxRecords` stay in
 // config.json (`mcpServer`), read via the injected config closures.
 const defaultLogStore: McpAuditLogStore = {
-  read: () => auditLogsStore.get("mcpAuditLog"),
-  write: (records) => auditLogsStore.set("mcpAuditLog", records),
+  read: () => auditRingStore.readAll("mcpAuditLog"),
+  write: (records) =>
+    auditRingStore.writeAll("mcpAuditLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS),
 };
 
 function percentile(values: number[], p: number): number {

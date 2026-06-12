@@ -1,8 +1,9 @@
 // eager-import-allow: reads/writes the run-history ring via the lazy audit-logs store inside the persistence callbacks, invoked from runHistory IPC handlers (not at boot)
 import type { RunHistoryRecord } from "../../../shared/types/ipc/runHistory.js";
+import { RUN_HISTORY_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/runHistory.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
-import { auditLogsStore } from "../../store.js";
+import { auditRingStore } from "../persistence/auditRingStore.js";
 import { RunHistoryLog } from "./runHistoryLog.js";
 
 /**
@@ -14,11 +15,11 @@ import { RunHistoryLog } from "./runHistoryLog.js";
  * mirroring `forgeAuditService`.
  */
 function readRecords(): unknown {
-  return auditLogsStore.get("runHistoryRecords");
+  return auditRingStore.readAll("runHistoryRecords");
 }
 
 function saveRecords(records: RunHistoryRecord[]): void {
-  auditLogsStore.set("runHistoryRecords", records);
+  auditRingStore.writeAll("runHistoryRecords", records, RUN_HISTORY_DEFAULT_MAX_RECORDS);
 }
 
 export const runHistoryLog = new RunHistoryLog(saveRecords, readRecords);

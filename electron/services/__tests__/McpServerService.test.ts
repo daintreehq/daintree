@@ -180,6 +180,23 @@ vi.mock("../../store.js", () => ({
   },
 }));
 
+vi.mock("../persistence/auditRingStore.js", () => ({
+  auditRingStore: {
+    readAll: (ring: string) => {
+      if (ring !== "mcpAuditLog" && ring !== "mcpTurnOutcomeLog") {
+        throw new Error(`Unexpected audit ring: ${ring}`);
+      }
+      return auditLogsState[ring as keyof typeof auditLogsState];
+    },
+    writeAll: (ring: string, records: Array<Record<string, unknown>>) => {
+      if (ring !== "mcpAuditLog" && ring !== "mcpTurnOutcomeLog") {
+        throw new Error(`Unexpected audit ring: ${ring}`);
+      }
+      auditLogsStoreMocks.set(ring, records);
+    },
+  },
+}));
+
 const paneTokenTiers = vi.hoisted(() => new Map<string, "workbench" | "action" | "system">());
 
 vi.mock("../McpPaneConfigService.js", () => ({

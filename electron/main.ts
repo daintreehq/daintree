@@ -68,6 +68,7 @@ import {
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
 } from "./window/windowServices.js";
+import { getResourceProfileService } from "./window/serviceRefs.js";
 import {
   setupPowerMonitor,
   setupWindowFocusThrottle,
@@ -221,7 +222,10 @@ if (!gotTheLock) {
   // in globalServicesInit. See #8817.
   const { initializeDatabaseMaintenance } =
     await import("./services/DatabaseMaintenanceService.js");
-  initializeDatabaseMaintenance();
+  // Pass the clean-exit signal so probeDb can skip the O(size) quick_check
+  // on clean boots. CrashLoopGuard zeros its crash count on a clean exit and
+  // accumulates it on crashes, so count === 0 is a reliable clean-boot signal.
+  initializeDatabaseMaintenance(getCrashLoopGuard().getCrashCount() === 0);
 
   // GpuCrashMonitor must install its `child-process-gone` listener BEFORE the
   // GPU process spawns (first BrowserWindow creation), so it sees crashes in
@@ -386,6 +390,12 @@ if (!gotTheLock) {
       },
     });
     setProjectViewManager(pvm);
+
+    // Sync this window's fresh PVM to the live resource profile — the
+    // service's applyProfile fans out only on transitions, so a window
+    // created while the app sits in a non-balanced profile would otherwise
+    // keep its DEFAULT_* balanced constants until the next transition.
+    getResourceProfileService()?.applyCurrentProfileTo(pvm);
 
     // E2E hooks: expose PVM accessor and heap-snapshot writer so the
     // nightly evicted-view leak spec can read main-process state and
