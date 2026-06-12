@@ -169,8 +169,13 @@ export class TerminalResizeController {
       // Background-tier path: a ResizeObserver fired while the host element
       // is inside a content-visibility:hidden container. fitAddon.fit() would
       // read 0x0 from the DOM, so we compute cols/rows from cached cell
-      // metrics instead.
-      return this.resizePtyFromCachedCellMetrics(managed, id, width, height, wasAtBottom);
+      // metrics instead. sendPtyResize() keeps the settled-strategy timer —
+      // the renderer is live here, so coalescing drag bursts still applies.
+      const dims = this.resizePtyFromCachedCellMetrics(managed, width, height, wasAtBottom);
+      if (dims) {
+        this.sendPtyResize(id, dims.cols, dims.rows);
+      }
+      return dims;
     }
 
     try {
@@ -246,9 +251,17 @@ export class TerminalResizeController {
    * Entry point for backgrounded project views (#10415), whose terminals may
    * still carry `isVisible === true` from before the view was detached and
    * would otherwise take the foreground path's xterm reflow while hidden.
-   * The deferred reflow is reconciled at wake via `applyDeferredResize`.
+   * Delivers the PTY resize directly instead of through `sendPtyResize` —
+   * the settled-strategy timer would schedule a `terminal.resize()` in a
+   * hidden (possibly frozen) renderer, and the burst it coalesces was
+   * already debounced in Main. A pending settled timer is cleared since its
+   * stale geometry is superseded. The deferred xterm reflow is reconciled
+   * at wake via `applyDeferredResize`.
    */
   resizePtyOnly(id: string, width: number, height: number): { cols: number; rows: number } | null {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return null;
+    }
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
     if (this.isResizeLocked(id)) return null;
@@ -257,18 +270,21 @@ export class TerminalResizeController {
     }
     const buffer = managed.terminal.buffer.active;
     const wasAtBottom = buffer.viewportY >= buffer.baseY;
-    return this.resizePtyFromCachedCellMetrics(managed, id, width, height, wasAtBottom);
+    const dims = this.resizePtyFromCachedCellMetrics(managed, width, height, wasAtBottom);
+    if (dims) {
+      this.clearSettledTimer(id);
+      terminalClient.resize(id, dims.cols, dims.rows);
+    }
+    return dims;
   }
 
   // Computes cols/rows from cached cell metrics with no DOM reads and
   // deliberately skips terminal.resize() — paint is paused for these
   // terminals, so deferring the buffer reflow to wake time avoids work the
-  // user never sees. sendPtyResize() keeps the PTY in lockstep with the
-  // target size so agent output is wrapped correctly when the pane is
-  // revealed, and the settled-strategy timer is preserved.
+  // user never sees. Pure computation + state update; the caller delivers
+  // the PTY resize so each path picks its own strategy handling.
   private resizePtyFromCachedCellMetrics(
     managed: ManagedTerminal,
-    id: string,
     width: number,
     height: number,
     wasAtBottom: boolean
@@ -289,7 +305,6 @@ export class TerminalResizeController {
     managed.latestCols = cols;
     managed.latestRows = rows;
     managed.latestWasAtBottom = wasAtBottom;
-    this.sendPtyResize(id, cols, rows);
     return { cols, rows };
   }
 

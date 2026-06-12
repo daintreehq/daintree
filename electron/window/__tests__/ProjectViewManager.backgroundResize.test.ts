@@ -247,6 +247,39 @@ describe("ProjectViewManager — background resize forwarding", () => {
     expect(backgroundResizeSends(initialWc)).toHaveLength(0);
   });
 
+  it("sends to every cached view, not just the most recent", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const projBWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+    await manager.switchTo("proj-c", "/path/c");
+    const projCWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+
+    fireResize();
+    vi.advanceTimersByTime(300);
+
+    expect(backgroundResizeSends(initialWc)).toHaveLength(1);
+    expect(backgroundResizeSends(projBWc)).toHaveLength(1);
+    expect(backgroundResizeSends(projCWc)).toHaveLength(0);
+  });
+
+  it("a view cached mid-debounce receives the send; the newly active view does not", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const projBWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+
+    fireResize();
+    // proj-b backgrounds inside the debounce window; proj-a reactivates.
+    await manager.switchTo("proj-a", "/path/a");
+    vi.advanceTimersByTime(300);
+
+    expect(backgroundResizeSends(projBWc)).toHaveLength(1);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+  });
+
   it("dispose() cancels a pending notification", async () => {
     await manager.switchTo("proj-b", "/path/b");
 

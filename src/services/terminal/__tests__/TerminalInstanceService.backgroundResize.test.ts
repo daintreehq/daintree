@@ -121,14 +121,29 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     expect(resizePtyOnlySpy).not.toHaveBeenCalled();
   });
 
-  it("scales repeated resizes incrementally against the previously applied bounds", () => {
+  it("anchors repeated resizes to the session origin — targets are absolute, never compounded", () => {
     service.instances.set("a", makeManaged({ lastWidth: 800, lastHeight: 600 }));
 
     service.applyBackgroundWindowResize(1200, 840);
     service.applyBackgroundWindowResize(1500, 700);
 
-    // Second event scales against the 1200x840 basis, not the stale viewport.
-    expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * (1500 / 1200), 600 * (700 / 840));
+    // Both events scale the captured 800x600 origin against the 1000x700
+    // viewport snapshot, regardless of what earlier events applied.
+    expect(resizePtyOnlySpy).toHaveBeenNthCalledWith(1, "a", 800 * 1.2, 600 * 1.2);
+    expect(resizePtyOnlySpy).toHaveBeenNthCalledWith(2, "a", 800 * 1.5, 600 * 1.0);
+  });
+
+  it("a terminal skipped in one pass still lands on the correct absolute size in the next", () => {
+    const managed = makeManaged({ lastWidth: 800, lastHeight: 600 });
+    service.instances.set("a", managed);
+
+    // First pass skipped (e.g. resize-locked) — resizePtyOnly returns null
+    // and lastWidth is untouched. The origin snapshot must keep the second
+    // pass anchored to the original viewport, not an advanced basis.
+    service.applyBackgroundWindowResize(1200, 840);
+    service.applyBackgroundWindowResize(1500, 1400);
+
+    expect(resizePtyOnlySpy).toHaveBeenLastCalledWith("a", 800 * 1.5, 600 * 2.0);
   });
 
   it("resetBackgroundResizeBasis restores the live viewport as the basis", () => {
@@ -180,13 +195,27 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     expect(resizePtyOnlySpy).not.toHaveBeenCalled();
   });
 
-  it("invalid bounds do not corrupt the basis for a following valid event", () => {
+  it("invalid bounds do not corrupt the session for a following valid event", () => {
     service.instances.set("a", makeManaged({ lastWidth: 800, lastHeight: 600 }));
 
     service.applyBackgroundWindowResize(0, 0);
     service.applyBackgroundWindowResize(1200, 840);
 
     expect(resizePtyOnlySpy).toHaveBeenCalledWith("a", 800 * 1.2, 600 * 1.2);
+  });
+
+  it("captures the origin for a terminal measured only after the session started", () => {
+    const managed = makeManaged({ lastWidth: 0, lastHeight: 0 });
+    service.instances.set("late", managed);
+
+    service.applyBackgroundWindowResize(1200, 840);
+    expect(resizePtyOnlySpy).not.toHaveBeenCalled();
+
+    managed.lastWidth = 500;
+    managed.lastHeight = 400;
+    service.applyBackgroundWindowResize(1500, 700);
+
+    expect(resizePtyOnlySpy).toHaveBeenCalledWith("late", 500 * 1.5, 400 * 1.0);
   });
 
   it("no-ops when the stale viewport reports zero dimensions", () => {
