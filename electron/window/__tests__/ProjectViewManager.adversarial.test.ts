@@ -10,6 +10,7 @@ interface MockWebContents {
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  invalidate: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   reload: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
@@ -36,6 +37,7 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }): MockWebC
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
+    invalidate: vi.fn(),
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),

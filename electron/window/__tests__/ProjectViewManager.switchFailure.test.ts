@@ -33,6 +33,7 @@ function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
+    invalidate: vi.fn(),
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
