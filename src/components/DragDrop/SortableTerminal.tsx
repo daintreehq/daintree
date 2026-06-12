@@ -30,6 +30,15 @@ interface SortableTerminalProps {
   layoutTransition?: Transition;
   /** Disable FLIP on latency-critical paths such as optimistic close. */
   layoutEnabled?: boolean;
+  /**
+   * Key derived from the inputs that determine this wrapper's position
+   * (panel order, column count, row mode, maximize state). Forwarded to
+   * framer-motion's layoutDependency so commits that don't move the grid —
+   * focus changes, fleet-arming previews — skip the per-panel snapshot
+   * measurement (a forced layout read) that `layout="position"` otherwise
+   * performs on every render. When omitted, framer measures every commit.
+   */
+  layoutDependency?: unknown;
 }
 
 export function SortableTerminal({
@@ -42,6 +51,7 @@ export function SortableTerminal({
   groupPanelIds,
   layoutTransition,
   layoutEnabled = true,
+  layoutDependency,
 }: SortableTerminalProps) {
   const dragData: DragData = {
     terminal,
@@ -88,6 +98,7 @@ export function SortableTerminal({
   return (
     <m.div
       layout={layoutEnabled ? "position" : false}
+      layoutDependency={layoutDependency}
       transition={layoutTransition}
       transformTemplate={pixelSnapTransform}
       data-terminal-id={terminal.id}

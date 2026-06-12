@@ -52,11 +52,12 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
 
   it("renders scrim as a sibling of the panel, not an ancestor", () => {
     // Bug 2: backdrop-filter on an ancestor creates a containing block for
-    // position:fixed children (lesson #2574). The scrim must be flat sibling
-    // to the panel, with hover-driven blur via CSS hit-testing.
-    expect(source).toMatch(
-      /className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*hover:backdrop-blur-\[2px\]"/
-    );
+    // position:fixed children (lesson #2574). The scrim must be a flat sibling
+    // of the panel. The hover cue is opacity-only (no backdrop-filter at all):
+    // an animated full-viewport blur re-rasterized on every frame of the live
+    // theme preview underneath.
+    expect(source).toMatch(/className="fixed inset-0 z-30 bg-scrim-soft\/30[^"]*"/);
+    expect(source).not.toMatch(/hover:backdrop-blur/);
   });
 
   it("anchors the panel with fixed positioning below the toolbar", () => {
