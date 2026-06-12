@@ -53,6 +53,15 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterWebContents: vi.fn(),
   registerProjectView: vi.fn(),
   unregisterProjectView: vi.fn(),
+  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
+  isCachedViewWebContents: vi.fn(),
+  getWindowForWebContents: vi.fn(),
+  getAppWebContents: vi.fn(),
+  getAppView: vi.fn(),
+  getAllAppWebContents: vi.fn(() => []),
+  getProjectForWebContents: vi.fn(),
+  getWebContentsForProject: vi.fn(),
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
