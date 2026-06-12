@@ -1158,13 +1158,19 @@ describe("GitFileWatcher", () => {
         "out",
         "__pycache__",
         ".venv",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "venv",
+        ".tox",
+        ".gradle",
       ];
       for (const dir of expectedDirs) {
         expect(ignore).toContain(`**/${dir}/**`);
       }
       expect(ignore).toContain("**/.git");
       expect(ignore).toContain("**/.git/**");
-      expect(ignore).toHaveLength(13);
+      expect(ignore).toHaveLength(expectedDirs.length + 2);
     });
 
     it("events from non-ignored paths still fire onChange", async () => {

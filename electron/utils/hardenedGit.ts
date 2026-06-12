@@ -13,7 +13,12 @@ void simpleGitModule.catch(() => {});
 
 const SAFE_GIT_CONFIG = [
   "core.fsmonitor=false",
-  "core.untrackedCache=false",
+  // keep reads an existing untracked-cache without creating one and without
+  // stripping the extension on the next index write. fsmonitor (the daemon/
+  // exec-surface risk) stays false; the untracked cache is a per-worktree
+  // index extension with no shared state, so keep is safe under concurrent
+  // multi-worktree polling.
+  "core.untrackedCache=keep",
   "core.pager=cat",
   "protocol.ext.allow=never",
   "core.gitProxy=",

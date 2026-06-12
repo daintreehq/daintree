@@ -34,6 +34,15 @@ const WORKTREE_IGNORE_GLOBS = [
   "**/out/**",
   "**/__pycache__/**",
   "**/.venv/**",
+  // Python/Java agent-tooling cache dirs not covered by __pycache__/.venv.
+  // Writes here during sustained tool runs would otherwise trigger a forced
+  // full status chain (~3-5 git spawns) on every debounce flush.
+  "**/.pytest_cache/**",
+  "**/.mypy_cache/**",
+  "**/.ruff_cache/**",
+  "**/venv/**",
+  "**/.tox/**",
+  "**/.gradle/**",
   "**/.git",
   "**/.git/**",
 ];

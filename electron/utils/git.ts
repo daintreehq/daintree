@@ -62,6 +62,20 @@ export function __clearPerFileDiffStatCacheForTesting(): void {
   PER_FILE_DIFF_STAT_CACHE.clear();
 }
 
+// Cache last-commit metadata keyed on HEAD OID. The log output is a pure
+// function of the commit object, so the OID is sufficient for invalidation —
+// commits, amends, resets, and checkouts all change the OID. Per-worktree
+// bound (maxSize matches GIT_WORKTREE_CHANGES_CACHE) keeps memory stable
+// across long sessions with many worktrees.
+const LAST_COMMIT_LOG_CACHE = new Cache<string, string>({
+  maxSize: 100,
+  defaultTTL: 300_000,
+});
+
+export function __clearLastCommitLogCacheForTesting(): void {
+  LAST_COMMIT_LOG_CACHE.clear();
+}
+
 export type DiffStatMode = "staged" | "unstaged";
 
 // Cache for staging-view diff stats keyed on `(cwd, headOid, mode)`. The
@@ -385,10 +399,20 @@ export async function getWorktreeChangesWithStats(
           return { headOid: "", toplevelRaw };
         });
 
-      const [{ toplevelRaw, headOid }, logOutput] = await Promise.all([
-        revParsePromise,
-        git.raw(["log", "-1", "--format=%at%x09%an%x09%ae%x09%s"]).catch(() => ""),
-      ]);
+      // Resolve rev-parse first so we can skip the log spawn when HEAD is
+      // unchanged. The log output is a pure function of the HEAD OID, so the
+      // cache self-invalidates on every commit, amend, reset, or checkout.
+      // On cache miss we spawn the log and store the result; empty-repo
+      // paths yield headOid="" and are not cached (always spawn).
+      const { toplevelRaw, headOid } = await revParsePromise;
+      const cachedLog = headOid ? LAST_COMMIT_LOG_CACHE.get(headOid) : undefined;
+      const logOutput =
+        cachedLog !== undefined
+          ? cachedLog
+          : await git.raw(["log", "-1", "--format=%at%x09%an%x09%ae%x09%s"]).catch(() => "");
+      if (headOid && cachedLog === undefined) {
+        LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
+      }
 
       const gitRoot = realpathSync(toplevelRaw.trim());
 
