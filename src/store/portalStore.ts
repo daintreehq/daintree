@@ -10,7 +10,7 @@ import {
   DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
 import { useUIStore } from "./uiStore";
-import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 interface PortalState {
@@ -432,7 +432,7 @@ const portalStoreCreator: StateCreator<
   [["zustand/persist", Partial<PortalState>]]
 > = persist(createPortalStore, {
   name: "portal-storage",
-  storage: createSafeJSONStorage(),
+  storage: createDebouncedSafeJSONStorage(300),
   version: 0,
   migrate: (persistedState) => persistedState as PortalState & PortalActions,
   partialize: (state) => ({

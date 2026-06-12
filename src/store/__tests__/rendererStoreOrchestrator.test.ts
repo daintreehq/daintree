@@ -967,7 +967,7 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(persistMruList).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(150);
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
 
       expect(persistMruList).toHaveBeenCalledTimes(1);
@@ -999,7 +999,7 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(persistMruList).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(149);
+      vi.advanceTimersByTime(999);
       await Promise.resolve();
       expect(persistMruList).not.toHaveBeenCalled();
 
@@ -1098,7 +1098,7 @@ describe("rendererStoreOrchestrator", () => {
       // captured at schedule time and clobber this promotion.
       usePanelStore.setState({ mruList: ["worktree:wt-9", "terminal:t-1"] });
 
-      vi.advanceTimersByTime(150);
+      vi.advanceTimersByTime(1000);
       await Promise.resolve();
 
       expect(persistMruList).toHaveBeenCalledTimes(1);

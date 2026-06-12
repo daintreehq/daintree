@@ -548,59 +548,71 @@ describe("worktreeFilterStore persistence scoping", () => {
   });
 
   it("persists per-project state to the scoped key, not the global key", async () => {
-    const writes = new Map<string, string>();
-    installLocalStorage({
-      getItem: () => null,
-      setItem: (key, value) => {
-        writes.set(key, value);
-      },
-      removeItem: (key) => {
-        writes.delete(key);
-      },
-    });
+    vi.useFakeTimers();
+    try {
+      const writes = new Map<string, string>();
+      installLocalStorage({
+        getItem: () => null,
+        setItem: (key, value) => {
+          writes.set(key, value);
+        },
+        removeItem: (key) => {
+          writes.delete(key);
+        },
+      });
 
-    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+      const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
 
-    store.getState().pinWorktree("wt-scoped");
+      store.getState().pinWorktree("wt-scoped");
+      vi.advanceTimersByTime(400);
 
-    expect(writes.has(PROJECT_KEY)).toBe(true);
-    const projectBlob = JSON.parse(writes.get(PROJECT_KEY)!) as {
-      state: { pinnedWorktrees: string[] };
-    };
-    expect(projectBlob.state.pinnedWorktrees).toEqual(["wt-scoped"]);
+      expect(writes.has(PROJECT_KEY)).toBe(true);
+      const projectBlob = JSON.parse(writes.get(PROJECT_KEY)!) as {
+        state: { pinnedWorktrees: string[] };
+      };
+      expect(projectBlob.state.pinnedWorktrees).toEqual(["wt-scoped"]);
 
-    // Global key should not receive pinnedWorktrees — only prefs are written
-    // when a global setter runs, and we only ran a per-project action.
-    const globalBlob = writes.get(GLOBAL_KEY);
-    if (globalBlob) {
-      const parsed = JSON.parse(globalBlob) as { state: Record<string, unknown> };
-      expect(parsed.state).not.toHaveProperty("pinnedWorktrees");
+      // Global key should not receive pinnedWorktrees — only prefs are written
+      // when a global setter runs, and we only ran a per-project action.
+      const globalBlob = writes.get(GLOBAL_KEY);
+      if (globalBlob) {
+        const parsed = JSON.parse(globalBlob) as { state: Record<string, unknown> };
+        expect(parsed.state).not.toHaveProperty("pinnedWorktrees");
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
   it("does not serialize the transient liveQuery to the scoped key", async () => {
-    const writes = new Map<string, string>();
-    installLocalStorage({
-      getItem: () => null,
-      setItem: (key, value) => {
-        writes.set(key, value);
-      },
-      removeItem: (key) => {
-        writes.delete(key);
-      },
-    });
+    vi.useFakeTimers();
+    try {
+      const writes = new Map<string, string>();
+      installLocalStorage({
+        getItem: () => null,
+        setItem: (key, value) => {
+          writes.set(key, value);
+        },
+        removeItem: (key) => {
+          writes.delete(key);
+        },
+      });
 
-    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+      const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
 
-    store.getState().setLiveQuery("draft");
+      store.getState().setLiveQuery("draft");
+      vi.advanceTimersByTime(400);
 
-    // The in-memory live query updates, but partialize must keep it out of the
-    // persisted blob so it never leaks across sessions.
-    expect(store.getState().liveQuery).toBe("draft");
-    const blob = writes.get(PROJECT_KEY);
-    expect(blob).toBeDefined();
-    const parsed = JSON.parse(blob!) as { state: Record<string, unknown> };
-    expect(parsed.state).not.toHaveProperty("liveQuery");
+      // The in-memory live query updates, but partialize must keep it out of the
+      // persisted blob so it never leaks across sessions.
+      expect(store.getState().liveQuery).toBe("draft");
+      const blob = writes.get(PROJECT_KEY);
+      expect(blob).toBeDefined();
+      const parsed = JSON.parse(blob!) as { state: Record<string, unknown> };
+      expect(parsed.state).not.toHaveProperty("liveQuery");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("seeds liveQuery from the persisted query on hydration", async () => {
@@ -869,44 +881,54 @@ describe("worktreeFilterStore persistence scoping", () => {
   });
 
   it("isolates per-project pins across different projectIds in the URL", async () => {
-    // Shared localStorage across both project loads — backing key-value store
-    // persists through module resets, just like real localStorage does.
-    const persistent = new Map<string, string>();
-    installLocalStorage({
-      getItem: (key) => persistent.get(key) ?? null,
-      setItem: (key, value) => {
-        persistent.set(key, value);
-      },
-      removeItem: (key) => {
-        persistent.delete(key);
-      },
-    });
+    vi.useFakeTimers();
+    try {
+      // Shared localStorage across both project loads — backing key-value store
+      // persists through module resets, just like real localStorage does.
+      const persistent = new Map<string, string>();
+      installLocalStorage({
+        getItem: (key) => persistent.get(key) ?? null,
+        setItem: (key, value) => {
+          persistent.set(key, value);
+        },
+        removeItem: (key) => {
+          persistent.delete(key);
+        },
+      });
 
-    // Project A: pin wt-a
-    setProjectIdInUrl("project-a");
-    let mod = await import("../worktreeFilterStore");
-    mod.useWorktreeFilterStore.getState().pinWorktree("wt-a");
-    expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-a"]);
+      // Project A: pin wt-a
+      setProjectIdInUrl("project-a");
+      let mod = await import("../worktreeFilterStore");
+      mod.useWorktreeFilterStore.getState().pinWorktree("wt-a");
+      vi.advanceTimersByTime(400);
+      expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-a"]);
 
-    // Switch to Project B — module reset simulates a fresh WebContentsView
-    vi.resetModules();
-    setProjectIdInUrl("project-b");
-    mod = await import("../worktreeFilterStore");
+      // Switch to Project B — module reset simulates a fresh WebContentsView
+      vi.useRealTimers();
+      vi.resetModules();
+      vi.useFakeTimers();
+      setProjectIdInUrl("project-b");
+      mod = await import("../worktreeFilterStore");
 
-    // Project B must not see Project A's pin
-    expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual([]);
-    mod.useWorktreeFilterStore.getState().pinWorktree("wt-b");
-    expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-b"]);
+      // Project B must not see Project A's pin
+      expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual([]);
+      mod.useWorktreeFilterStore.getState().pinWorktree("wt-b");
+      vi.advanceTimersByTime(400);
+      expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-b"]);
 
-    // Back to Project A — its pin is intact
-    vi.resetModules();
-    setProjectIdInUrl("project-a");
-    mod = await import("../worktreeFilterStore");
-    expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-a"]);
+      // Back to Project A — its pin is intact
+      vi.useRealTimers();
+      vi.resetModules();
+      setProjectIdInUrl("project-a");
+      mod = await import("../worktreeFilterStore");
+      expect(mod.useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-a"]);
 
-    // Each project writes to its own scoped key
-    expect(persistent.has("daintree-worktree-filters:project-a")).toBe(true);
-    expect(persistent.has("daintree-worktree-filters:project-b")).toBe(true);
+      // Each project writes to its own scoped key
+      expect(persistent.has("daintree-worktree-filters:project-a")).toBe(true);
+      expect(persistent.has("daintree-worktree-filters:project-b")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recovers legacy seed when the scoped key is corrupt JSON", async () => {

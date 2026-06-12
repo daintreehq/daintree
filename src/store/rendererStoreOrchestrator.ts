@@ -41,7 +41,7 @@ import { isPtyPanel } from "@shared/types/panel";
 // sequences and dedupes, so the last writer with the live list wins.
 const debouncedPersistMruList = debounce(
   () => persistMruList(usePanelStore.getState().mruList),
-  150
+  1000
 );
 
 let cleanupFn: (() => void) | null = null;

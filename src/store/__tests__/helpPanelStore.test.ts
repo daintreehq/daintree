@@ -206,27 +206,33 @@ describe("helpPanelStore persistence migration", () => {
   });
 
   it("writes the current version with a cleared preferredAgentId after rehydrating an unsupported v0 agent", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
-    });
-    const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+    vi.useFakeTimers();
+    try {
+      const legacyBlob = JSON.stringify({
+        state: { width: 420, preferredAgentId: "gemini" },
+      });
+      const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().setWidth(450);
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setWidth(450);
+      vi.advanceTimersByTime(400);
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    const parsed = JSON.parse(written!) as {
-      version: number;
-      state: {
-        width: number;
-        preferredAgentId: string | null;
-        introDismissed: boolean;
+      const written = backing.get(STORAGE_KEY);
+      expect(written).toBeDefined();
+      const parsed = JSON.parse(written!) as {
+        version: number;
+        state: {
+          width: number;
+          preferredAgentId: string | null;
+          introDismissed: boolean;
+        };
       };
-    };
-    expect(parsed.version).toBe(4);
-    expect(parsed.state.width).toBe(450);
-    expect(parsed.state.preferredAgentId).toBeNull();
+      expect(parsed.version).toBe(4);
+      expect(parsed.state.width).toBe(450);
+      expect(parsed.state.preferredAgentId).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("migrates a v0 blob to v1 with introDismissed defaulted to false", async () => {
@@ -275,20 +281,26 @@ describe("helpPanelStore persistence migration", () => {
   });
 
   it("dismissIntro() sets introDismissed: true and persists it", async () => {
-    const backing = installLocalStorage({});
+    vi.useFakeTimers();
+    try {
+      const backing = installLocalStorage({});
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().dismissIntro();
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().dismissIntro();
+      vi.advanceTimersByTime(400);
 
-    expect(store.getState().introDismissed).toBe(true);
+      expect(store.getState().introDismissed).toBe(true);
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    const parsed: unknown = JSON.parse(written!);
-    expect(parsed).toMatchObject({
-      version: 4,
-      state: { introDismissed: true },
-    });
+      const written = backing.get(STORAGE_KEY);
+      expect(written).toBeDefined();
+      const parsed: unknown = JSON.parse(written!);
+      expect(parsed).toMatchObject({
+        version: 4,
+        state: { introDismissed: true },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("defaults isOpen to false when migrating a v1 blob without it (issue #6619)", async () => {
@@ -330,20 +342,26 @@ describe("helpPanelStore persistence migration", () => {
   });
 
   it("setOpen(true) changes runtime state but does not persist restart-open state", async () => {
-    const backing = installLocalStorage({});
+    vi.useFakeTimers();
+    try {
+      const backing = installLocalStorage({});
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().setOpen(true);
-    expect(store.getState().isOpen).toBe(true);
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setOpen(true);
+      expect(store.getState().isOpen).toBe(true);
+      vi.advanceTimersByTime(400);
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    const parsed = JSON.parse(written!) as {
-      version: number;
-      state: Record<string, unknown>;
-    };
-    expect(parsed.version).toBe(4);
-    expect(parsed.state).not.toHaveProperty("isOpen");
+      const written = backing.get(STORAGE_KEY);
+      expect(written).toBeDefined();
+      const parsed = JSON.parse(written!) as {
+        version: number;
+        state: Record<string, unknown>;
+      };
+      expect(parsed.version).toBe(4);
+      expect(parsed.state).not.toHaveProperty("isOpen");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("starts with isOpen: false on a fresh install", async () => {
@@ -443,21 +461,27 @@ describe("helpPanelStore persistence migration", () => {
   });
 
   it("conversationTouched is NOT persisted", async () => {
-    const backing = installLocalStorage({});
+    vi.useFakeTimers();
+    try {
+      const backing = installLocalStorage({});
 
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted();
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().markConversationStarted();
+      vi.advanceTimersByTime(400);
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    const parsed = JSON.parse(written!) as {
-      version: number;
-      state: Record<string, unknown>;
-    };
-    // conversationTouched is excluded from the persisted blob
-    expect(parsed.state).not.toHaveProperty("conversationTouched");
-    // The field is still true in the store
-    expect(store.getState().conversationTouched).toBe(true);
+      const written = backing.get(STORAGE_KEY);
+      expect(written).toBeDefined();
+      const parsed = JSON.parse(written!) as {
+        version: number;
+        state: Record<string, unknown>;
+      };
+      // conversationTouched is excluded from the persisted blob
+      expect(parsed.state).not.toHaveProperty("conversationTouched");
+      // The field is still true in the store
+      expect(store.getState().conversationTouched).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("conversationTouched defaults to false after rehydration regardless of persisted blob", async () => {
@@ -562,31 +586,38 @@ describe("helpPanelStore persistence migration", () => {
     });
 
     it("persists hibernateSessions across rehydration", async () => {
-      const backing = installLocalStorage({});
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
 
-      let mod = await import("../helpPanelStore");
-      mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
-        sessionId: "session-a",
-        cwd: "/tmp/a",
-        agentId: "claude",
-      });
+        let mod = await import("../helpPanelStore");
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+          sessionId: "session-a",
+          cwd: "/tmp/a",
+          agentId: "claude",
+        });
+        vi.advanceTimersByTime(400);
 
-      const written = backing.get(STORAGE_KEY);
-      expect(written).toBeDefined();
-      const parsed = JSON.parse(written!) as {
-        version: number;
-        state: { hibernateSessions: Record<string, unknown> };
-      };
-      expect(parsed.version).toBe(4);
-      expect(parsed.state.hibernateSessions).toEqual({
-        "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
-      });
+        const written = backing.get(STORAGE_KEY);
+        expect(written).toBeDefined();
+        const parsed = JSON.parse(written!) as {
+          version: number;
+          state: { hibernateSessions: Record<string, unknown> };
+        };
+        expect(parsed.version).toBe(4);
+        expect(parsed.state.hibernateSessions).toEqual({
+          "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
+        });
 
-      vi.resetModules();
-      mod = await import("../helpPanelStore");
-      expect(mod.useHelpPanelStore.getState().hibernateSessions).toEqual({
-        "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
-      });
+        vi.useRealTimers();
+        vi.resetModules();
+        mod = await import("../helpPanelStore");
+        expect(mod.useHelpPanelStore.getState().hibernateSessions).toEqual({
+          "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("rejects malformed entries during rehydration (missing sessionId/cwd/agentId)", async () => {
@@ -739,19 +770,25 @@ describe("helpPanelStore persistence migration", () => {
     });
 
     it("activeFigureNumber is NOT persisted", async () => {
-      const backing = installLocalStorage({});
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
 
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setActiveFigureNumber(2);
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().setActiveFigureNumber(2);
+        vi.advanceTimersByTime(400);
 
-      const written = backing.get(STORAGE_KEY);
-      expect(written).toBeDefined();
-      const parsed = JSON.parse(written!) as {
-        version: number;
-        state: Record<string, unknown>;
-      };
-      expect(parsed.state).not.toHaveProperty("activeFigureNumber");
-      expect(store.getState().activeFigureNumber).toBe(2);
+        const written = backing.get(STORAGE_KEY);
+        expect(written).toBeDefined();
+        const parsed = JSON.parse(written!) as {
+          version: number;
+          state: Record<string, unknown>;
+        };
+        expect(parsed.state).not.toHaveProperty("activeFigureNumber");
+        expect(store.getState().activeFigureNumber).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

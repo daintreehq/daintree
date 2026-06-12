@@ -645,24 +645,30 @@ describe("portalStore persistence migration", () => {
   });
 
   it("writes version: 0 on the next persist after rehydration", async () => {
-    const legacyBlob = JSON.stringify({
-      state: {
-        width: 600,
-        links: [],
-      },
-    });
-    const backing = installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
+    vi.useFakeTimers();
+    try {
+      const legacyBlob = JSON.stringify({
+        state: {
+          width: 600,
+          links: [],
+        },
+      });
+      const backing = installLocalStorageWith({ [STORAGE_KEY]: legacyBlob });
 
-    const { usePortalStore: store } = await import("../portalStore");
-    store.getState().setWidth(620);
+      const { usePortalStore: store } = await import("../portalStore");
+      store.getState().setWidth(620);
+      vi.advanceTimersByTime(400);
 
-    const written = backing.get(STORAGE_KEY);
-    expect(written).toBeDefined();
-    const parsed = JSON.parse(written!) as {
-      version: number;
-      state: { width: number };
-    };
-    expect(parsed.version).toBe(0);
-    expect(parsed.state.width).toBe(620);
+      const written = backing.get(STORAGE_KEY);
+      expect(written).toBeDefined();
+      const parsed = JSON.parse(written!) as {
+        version: number;
+        state: { width: number };
+      };
+      expect(parsed.version).toBe(0);
+      expect(parsed.state.width).toBe(620);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
