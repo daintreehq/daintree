@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
+import type { InsertChange, DeleteChange } from "gitdiff-parser";
 import { DiffViewer, _resetLangStateForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -530,8 +531,14 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
 
   it("wraps the line number in a .diff-line-number span for insert rows", () => {
     const renderGutter = getRenderGutter();
+    const change: InsertChange = {
+      type: "insert",
+      content: "added",
+      lineNumber: 2,
+      isInsert: true,
+    };
     const result = renderGutter({
-      change: { type: "insert", content: "added", lineNumber: 2, isInsert: true },
+      change,
       renderDefault: () => "2",
       wrapInAnchor: (n) => <a href="#L2">{n}</a>,
     });
@@ -548,8 +555,14 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
 
   it("wraps the line number in a .diff-line-number span for delete rows", () => {
     const renderGutter = getRenderGutter();
+    const change: DeleteChange = {
+      type: "delete",
+      content: "old",
+      lineNumber: 1,
+      isDelete: true,
+    };
     const result = renderGutter({
-      change: { type: "delete", content: "old", lineNumber: 1, isDelete: true },
+      change,
       renderDefault: () => "1",
       wrapInAnchor: (n) => <a href="#L1">{n}</a>,
     });
@@ -566,8 +579,14 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
 
   it("emits a sibling .diff-line-marker after the .diff-line-number, never inside it", () => {
     const renderGutter = getRenderGutter();
+    const change: InsertChange = {
+      type: "insert",
+      content: "added",
+      lineNumber: 2,
+      isInsert: true,
+    };
     const result = renderGutter({
-      change: { type: "insert", content: "added", lineNumber: 2, isInsert: true },
+      change,
       renderDefault: () => "2",
       wrapInAnchor: (n) => <a href="#L2">{n}</a>,
     });
