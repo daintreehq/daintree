@@ -35,6 +35,7 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
+import { stashViewFileRequest } from "./components/FileViewer/pendingViewFileRequest";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
@@ -659,7 +660,12 @@ function AppInner() {
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
   useEffect(() => {
     const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
-    const onViewFile = () => setFileViewerResetKey((k) => k + 1);
+    const onViewFile = (e: Event) => {
+      // Stash for FileViewerModalHost's mount replay — the host's own listener
+      // lives in a lazy chunk and may not be registered yet.
+      stashViewFileRequest(e);
+      setFileViewerResetKey((k) => k + 1);
+    };
     window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
     window.addEventListener("daintree:view-file", onViewFile);
     return () => {
