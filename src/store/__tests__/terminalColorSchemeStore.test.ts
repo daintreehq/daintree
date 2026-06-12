@@ -552,4 +552,32 @@ describe("terminalColorSchemeStore", () => {
       expect(terminalTheme).toEqual(bondiTheme);
     });
   });
+
+  describe("app theme change propagation", () => {
+    it("changes this store's snapshot when the app theme changes, so subscribed selectors re-run", () => {
+      // Regression: selectors read useAppThemeStore.getState() without
+      // subscribing; zustand only re-runs a selector when ITS store snapshot
+      // changes. Without snapshot propagation the input bar / xterm wrapper
+      // kept the old theme until remount.
+      let notified = 0;
+      const unsubscribe = useTerminalColorSchemeStore.subscribe(() => {
+        notified += 1;
+      });
+
+      const before = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+      useAppThemeStore.setState({ selectedSchemeId: "fiordland" });
+
+      expect(notified).toBeGreaterThan(0);
+      const after = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+      expect(after).not.toEqual(before);
+      expect(after).toEqual(getTerminalThemeFromAppScheme(resolveAppTheme("fiordland", [])));
+      unsubscribe();
+    });
+
+    it("does not bump the snapshot for unrelated app-store changes", () => {
+      const versionBefore = useTerminalColorSchemeStore.getState().appThemeVersion;
+      useAppThemeStore.setState({ ...useAppThemeStore.getState() });
+      expect(useTerminalColorSchemeStore.getState().appThemeVersion).toBe(versionBefore);
+    });
+  });
 });

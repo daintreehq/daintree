@@ -9,7 +9,6 @@ import {
   selectWrapperBackground,
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
-import { useAppThemeStore } from "@/store/appThemeStore";
 
 /**
  * Unified terminal appearance state consumed by `XtermAdapter` and the
@@ -65,10 +64,9 @@ export function getTerminalAppearanceSnapshot(): TerminalAppearanceState {
  * itself is a fresh reference each render — consumers should destructure and
  * pass primitive fields into their own `useMemo` deps.
  *
- * The explicit `useAppThemeStore((s) => s.selectedSchemeId)` subscription is
- * required: `selectWrapperBackground` and `selectEffectiveTheme` read
- * `useAppThemeStore.getState()` internally without subscribing, so app-theme
- * changes would not trigger a re-render here without this line.
+ * App-theme reactivity is handled inside `terminalColorSchemeStore`: it bumps
+ * its own `appThemeVersion` on app-theme changes, so the selectors re-run
+ * without an extra subscription here.
  */
 export function useTerminalAppearance(): TerminalAppearanceState {
   const fontSize = useTerminalFontStore((s) => s.fontSize);
@@ -78,10 +76,6 @@ export function useTerminalAppearance(): TerminalAppearanceState {
   const projectScrollback = useProjectSettingsStore(
     (s) => s.settings?.terminalSettings?.scrollbackLines
   );
-  // Subscribe to app theme so wrapperBackground + effectiveTheme re-compute on theme change.
-  // Value is intentionally discarded — the subscription is what drives reactivity.
-  useAppThemeStore((s) => s.selectedSchemeId);
-  useAppThemeStore((s) => s.previewSchemeId);
   const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
   const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
   const screenReaderMode = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());

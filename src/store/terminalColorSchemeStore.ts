@@ -22,6 +22,14 @@ interface TerminalColorSchemeState {
   customSchemes: TerminalColorScheme[];
   recentSchemeIds: string[];
   /**
+   * Mirrors app-theme-store changes into this store's snapshot. The selectors
+   * below read `useAppThemeStore.getState()` without subscribing, and zustand
+   * only re-runs a selector when ITS store's snapshot changes — so without
+   * this bump, app-theme changes leave every subscriber (input bar, xterm
+   * wrapper) on a stale theme until remount.
+   */
+  appThemeVersion: number;
+  /**
    * Ephemeral override used by the picker for live hover/focus preview.
    * When non-null, `selectEffectiveTheme` / `selectWrapperBackground` /
    * `getEffectiveTheme` treat this id as the currently selected scheme
@@ -172,6 +180,7 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
   customSchemes: [],
   recentSchemeIds: [],
   previewSchemeId: null,
+  appThemeVersion: 0,
 
   setSelectedSchemeId: (id) =>
     set((state) => ({
@@ -216,3 +225,13 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
     return computeEffectiveTheme(activeId, state.customSchemes);
   },
 }));
+
+useAppThemeStore.subscribe((state, prev) => {
+  if (
+    state.selectedSchemeId !== prev.selectedSchemeId ||
+    state.previewSchemeId !== prev.previewSchemeId ||
+    state.customSchemes !== prev.customSchemes
+  ) {
+    useTerminalColorSchemeStore.setState((s) => ({ appThemeVersion: s.appThemeVersion + 1 }));
+  }
+});

@@ -40,7 +40,6 @@ import {
   useTerminalColorSchemeStore,
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
-import { useAppThemeStore } from "@/store/appThemeStore";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
 
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
@@ -203,7 +202,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isAgentTerminal = agentId !== undefined;
 
     // --- Terminal color scheme ---
-    useAppThemeStore((s) => s.selectedSchemeId);
     const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
     const inputBarColors = resolveInputBarColors(effectiveTheme);
 
