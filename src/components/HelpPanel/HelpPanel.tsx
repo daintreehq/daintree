@@ -477,6 +477,34 @@ export function HelpPanel({
     return undefined;
   }, [isOpen, isVisible, focusRequest, terminalId, terminal, showHybridInputBar]);
 
+  // Post-reveal repaint for the assistant terminal (#10362). The project-level
+  // reveal sweep folds the assistant into its targets, but it repaints on a
+  // fixed double-rAF tuned to the project grid — and this slide-out panel can
+  // finish laying out a few frames later, so that pass can land before this
+  // container has real geometry and no-op. Re-run the repaint from the panel's
+  // own context, gated on the terminal container actually being sized, so it
+  // fires exactly when the assistant is paintable.
+  useEffect(() => {
+    if (!isOpen || !isVisible || !terminalId) return;
+    if (typeof requestAnimationFrame !== "function") return;
+    const off = window.electron?.app?.onViewRevealed?.(() => {
+      let frames = 0;
+      const tick = (): void => {
+        if (!useHelpPanelStore.getState().isOpen) return;
+        // Wait for the container to have real width before repainting —
+        // repaintForReveal's own size guard would otherwise no-op against a
+        // not-yet-laid-out panel. Give up after a bounded window.
+        if ((contentRef.current?.clientWidth ?? 0) >= HELP_PANEL_MIN_WIDTH / 4) {
+          terminalInstanceService.repaintForReveal(terminalId);
+          return;
+        }
+        if (++frames < 8) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    return off;
+  }, [isOpen, isVisible, terminalId]);
+
   // Resize via mouse drag
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
