@@ -10,6 +10,7 @@ interface MockWc {
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  invalidate: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   reload: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
