@@ -1522,6 +1522,7 @@ export function DevPreviewPane({
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       headerContent={headerContent}
+      headerContentPlacement="leading"
       className={
         phaseLabel === "Compiling"
           ? "panel-state-compiling"

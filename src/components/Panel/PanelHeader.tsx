@@ -150,6 +150,11 @@ export interface PanelHeaderProps {
 
   // Slots for kind-specific content
   headerContent?: ReactNode;
+  // Where the kind-specific slot renders within the right-hand control cluster.
+  // "trailing" (default) keeps it all the way right — past the close button —
+  // which is where the terminal Activity Indicator belongs. "leading" tucks it
+  // ahead of the overflow menu, used by Dev Preview's command dropdown.
+  headerContentPlacement?: "leading" | "trailing";
   headerActions?: ReactNode;
 
   // Tab support
@@ -198,6 +203,7 @@ function PanelHeaderComponent({
   isFleetFollower = false,
   isFleetPreviewed = false,
   headerContent,
+  headerContentPlacement = "trailing",
   headerActions,
   tabs,
   groupId,
@@ -913,8 +919,8 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1.5">
-        {/* Kind-specific header content slot */}
-        {headerContent}
+        {/* Kind-specific header content slot (leading placement) */}
+        {headerContentPlacement === "leading" && headerContent}
 
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
@@ -1208,6 +1214,10 @@ function PanelHeaderComponent({
             </div>
           </TooltipContent>
         </Tooltip>
+
+        {/* Kind-specific header content slot (trailing placement) — stays all
+            the way right, past the close button, for the Activity Indicator */}
+        {headerContentPlacement === "trailing" && headerContent}
       </div>
       {isFleetPreviewed ? (
         <span
