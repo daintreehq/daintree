@@ -76,11 +76,11 @@ If nothing matches, grep outward from `src/store/` or `electron/services/`.
 
 High-signal anchors for Code Mapping. Use these to ground references; do not use them as a substitute for reading the actual files.
 
-**Processes.** Three Node processes run under Electron 41: the **main process** (`electron/main.ts`, `electron/bootstrap.ts`) owns windows, menus, and service registration; the **PTY host** (`electron/pty-host.ts` + `electron/pty-host/`) is a separate UtilityProcess that owns node-pty; the **workspace host** (`electron/workspace-host.ts` + `electron/workspace-host/`) is a separate UtilityProcess that monitors worktrees and git state. The renderer (`src/`) talks to main via `contextBridge` (`electron/preload.cts`) and to the hosts via MessagePorts.
+**Processes.** Four Node process classes run under Electron: the **main process** (`electron/main.ts`, `electron/bootstrap.ts`) owns windows, menus, and service registration; the **PTY host** (`electron/pty-host.ts` + `electron/pty-host/`) is a separate UtilityProcess that owns node-pty; the **workspace host** (`electron/workspace-host.ts` + `electron/workspace-host/`) is a per-project UtilityProcess that monitors worktrees and git state; the **watchdog host** (`electron/watchdog-host.ts`) watches main-process liveness from outside the main event loop. The renderer (`src/`) talks to main via `contextBridge` (`electron/preload.cts`) and to the hosts via MessagePorts.
 
-**Dispatch layer (renderer).** `src/services/ActionService.ts` is the single dispatcher for user-facing operations; 28 domain files live in `src/services/actions/definitions/`; the union lives in `shared/types/actions.ts`; keybindings in `shared/types/keymap.ts`; registration happens in `src/hooks/useActionRegistry.ts`.
+**Dispatch layer (renderer).** `src/services/ActionService.ts` is the single dispatcher for user-facing operations; action definitions live in `src/services/actions/definitions/`; built-in runtime action IDs live in `shared/config/actionIds.ts`; action types live in `shared/types/actions.ts`; keybindings live in `shared/types/keymap.ts`; registration happens in `src/hooks/useActionRegistry.ts`.
 
-**Panel system.** `shared/types/panel.ts` defines the 5-kind discriminated union (`terminal`, `agent`, `browser`, `notes`, `dev-preview`); `shared/config/panelKindRegistry.ts` carries the shared config; `src/panels/<kind>/` provides per-kind `defaults.ts`, `serializer.ts`, component, and `index.ts`; `src/panels/registry.tsx` wires them together.
+**Panel system.** `shared/types/panel.ts` defines the built-in discriminated union (`terminal`, `browser`, `dev-preview`, `review`); `shared/config/panelKindRegistry.ts` carries the shared config; `src/panels/<kind>/` provides per-kind `defaults.ts`, `serializer.ts`, component, and `index.ts`; `src/panels/registry.tsx` wires them together. Agent identity is runtime state inside a PTY-backed terminal, not a separate panel kind.
 
 **State.** Zustand 5 stores in `src/store/` — `panelStore` (panels), `projectStore` (projects), `worktreeStore` (worktrees) all persisted; most others transient. Slice pattern in `src/store/slices/<domain>/`. Init order documented in `docs/architecture/store-init-order.md`. Cross-store reads use lazy-getter injection.
 
@@ -182,7 +182,7 @@ When the issue reads like one of these, prefer the alternative and add the rejec
 
 **New IPC channel for what should be an action.** If the operation is user-facing and fits an existing action domain, extend the domain. New IPC is a red flag. Alternative: add an Action.
 
-**New panel kind for a variant.** Only 5 kinds exist. A sixth is almost always a browser panel with a preset URL, a dev-preview with a different type, or a notes panel with a custom document. Prefer a config-driven variant.
+**New panel kind for a variant.** Only four built-in kinds ship today. Another built-in kind is almost always better modeled as browser/dev-preview/review configuration, a terminal runtime state, or a plugin-contributed kind. Prefer a config-driven variant.
 
 **State that duplicates the filesystem.** From `docs/feature-curation.md`: _"Use the file system (git) as the source of truth whenever possible. Don't sync state that can be derived from the folder structure."_ Worktrees, projects, and `.daintree/recipes/*.json` are derived from disk — plan to read, not to shadow.
 
