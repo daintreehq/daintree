@@ -10,6 +10,8 @@ export const theme: BuiltInThemeSource = {
   palette: {
     type: "dark",
     surfaces: {
+      // Neutral-earthy charcoal by design: biome green lives in accent, focus
+      // light, and data lanes only — never the field.
       grid: "#0e0e0d",
       sidebar: "#131312",
       canvas: "#19191a",
@@ -38,38 +40,43 @@ export const theme: BuiltInThemeSource = {
       waiting: "#fbbf24",
     },
     overlayTint: "#D4E8DD",
+    // Terminal background intentionally unset — inherits the canvas. Every
+    // ANSI slot must hold dL ≥ 0.18 on #19191a and base-vs-bright ΔE ≥ 0.03.
     terminal: {
       selection: "#1a2c22",
-      red: "#f87171",
-      green: "#10b981",
-      yellow: "#fbbf24",
-      blue: "#38bdf8",
-      magenta: "#a855f7",
-      cyan: "#22d3ee",
-      brightRed: "#fca5a5",
-      brightGreen: "#34d399",
-      brightYellow: "#fcd34d",
-      brightBlue: "#7dd3fc",
-      brightMagenta: "#c084fc",
-      brightCyan: "#67e8f9",
+      red: "#e07a70",
+      green: "#2fbf85",
+      yellow: "#ECB23F",
+      blue: "#5fb3e8",
+      magenta: "#bf93ec",
+      cyan: "#4fc8d8",
+      brightRed: "#eb9a91",
+      brightGreen: "#5bd6a4",
+      brightYellow: "#ecc777",
+      brightBlue: "#93cdf0",
+      brightMagenta: "#d4b0f2",
+      brightCyan: "#86dde2",
       brightWhite: "#fafafa",
     },
+    // All roles ≥ 4.5:1 on canvas except the soft-floor (3.0:1) comment/quote pair.
     syntax: {
-      comment: "#707b90",
-      punctuation: "#c5d0f5",
-      number: "#efb36b",
+      comment: "#74807a",
+      punctuation: "#ccd6cf",
+      number: "#e2b369",
       string: "#95c879",
-      operator: "#8acfe1",
-      keyword: "#bc9cef",
-      function: "#84adf8",
-      link: "#72c1ea",
-      quote: "#adb5bb",
+      operator: "#8acfd6",
+      keyword: "#c89ce8",
+      function: "#6fb7e8",
+      link: "#5fb8e4",
+      quote: "#a9b4ac",
       chip: "#7fd4cf",
     },
     strategy: {
       shadowStyle: "atmospheric",
-      materialBlur: 12,
+      // No noiseOpacity: the engine's radial chrome sheen bands on large surfaces.
+      materialBlur: 16,
       materialSaturation: 115,
+      grainCharacter: "paper",
     },
   },
   tokens: {
@@ -81,13 +88,31 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "rgba(54,206,148,0.30)",
     "search-selected-result-icon": "#36CE94",
     "surface-toolbar": "#131312",
+    // Green-black shadow/scrim ink; keep C ≤ ~0.02 or the fog reads as a
+    // colored glow instead of air.
+    "shadow-color": "rgba(6,11,8,0.55)",
+    "shadow-ambient": "0 4px 16px rgba(5,10,7,0.18)",
+    "shadow-floating": "0 14px 40px rgba(5,10,7,0.30)",
+    "shadow-dialog": "0 20px 56px rgba(5,10,7,0.36)",
+    "scrim-soft": "rgba(6,11,8,0.22)",
+    "scrim-medium": "rgba(6,11,8,0.46)",
+    "scrim-strong": "rgba(6,11,8,0.64)",
+    "scrim-blur": "18px",
+    "grain-opacity": "0.03",
   },
   extensions: {
     "pulse-before-bg": "#1A1B1A",
     "pulse-card-bg": "#1d1d1e",
-    "pulse-card-shadow": "0 1px 3px rgba(0,0,0,0.40)",
+    "pulse-card-shadow": "0 1px 3px rgba(5,10,7,0.40)",
     "pulse-control-hover-bg": "rgba(255,255,255,0.05)",
     "pulse-empty-bg": "#232324",
+    // Glow-worm heat ramp: opaque stops, level 4 = accent (a data lane, outside
+    // the accent budget); level 1 must stay ≥ JND above the empty cell.
+    "pulse-heat-color": "#36CE94",
+    "pulse-heat-1": "#23402f",
+    "pulse-heat-2": "#2b6243",
+    "pulse-heat-3": "#319966",
+    "pulse-heat-4": "#36CE94",
     "pulse-missed-bg": "rgba(200,116,108,0.18)",
     "pulse-range-bg": "#19191a",
     "pulse-ring-offset": "#1d1d1e",
@@ -96,6 +121,7 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#1d1d1e",
     "settings-card-bg": "#232324",
     "settings-list-item-bg": "#232324",
+    // rgb(19,19,18) = the sidebar surface; keep in lockstep with surfaces.sidebar.
     "dialog-header-bg": "rgba(19,19,18,0.60)",
     "settings-kbd-bg": "#19191A",
     "settings-nav-active-bg": "rgba(54,206,148,0.10)",
@@ -104,16 +130,22 @@ export const theme: BuiltInThemeSource = {
     "settings-search-bg": "#19191A",
     "settings-search-muted": "#a1a1aa",
     "settings-sidebar-bg": "rgba(19,19,18,0.50)",
+    // Composited settings-sidebar-bg over the shell.
+    "settings-sidebar-scroll-fade": "#181818",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
     "sidebar-active-bg": "rgba(255,255,255,0.05)",
     "sidebar-hover-bg": "rgba(255,255,255,0.03)",
+    // No panel-focus overrides: the default theme keeps the app's stock focus
+    // chrome by design.
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
     "toolbar-control-active-bg": "rgba(255,255,255,0.14)",
     "toolbar-control-armed-bg": "rgba(255,255,255,0.14)",
     "toolbar-control-armed-shadow": "inset 0 0 0 1px rgba(255,255,255,0.12)",
     "toolbar-control-hover-bg": "rgba(255,255,255,0.10)",
     "toolbar-divider": "rgba(40,40,40,0.5)",
-    "toolbar-project-bg": "rgba(255,255,255,0.05)",
+    // Neutral white top-light, deliberately very subtle — don't re-tint it green.
+    "toolbar-project-bg":
+      "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0) 70%), rgba(255,255,255,0.03)",
     "toolbar-project-border": "rgba(40,40,40,0.5)",
     "toolbar-project-chip-bg": "rgba(255,255,255,0.05)",
     "toolbar-project-chip-border": "rgba(40,40,40,0.6)",
