@@ -61,6 +61,11 @@
   cursor: default;
   user-select: none;
   border-right: 1px solid var(--color-daintree-border);
+  /* Keep the +/- marker on the line number's line: the column width is an
+     exact-fit calc(ch + 21px), so a subpixel deficit (fractional zoom,
+     proportional monospace fallback, high-DPI) lets the line-breaking
+     engine drop the trailing inline-block marker onto its own row. */
+  white-space: nowrap;
 }
 
 /* Unified second gutter column docks beside the first. (Split tables don't
@@ -77,6 +82,12 @@
   width: 1ch;
   margin-left: 4px;
   text-align: center;
+}
+
+/* Per-element nowrap on the line number itself: belt-and-braces with the
+   .diff-gutter rule, and a stable test/class hook. */
+.diff-viewer .diff-line-number {
+  white-space: nowrap;
 }
 
 /* Code content styling */

@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
+import React from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
+import type { InsertChange, DeleteChange } from "gitdiff-parser";
 import { DiffViewer, _resetLangStateForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -499,5 +503,115 @@ describe("DiffViewer hunk copy", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("line1\nadded\nline2");
     });
+  });
+});
+
+// #10422: the +/- marker in the gutter must stay on the same line as the
+// line number regardless of line-number width, zoom, or font. The fix lives
+// in CSS (white-space: nowrap on the gutter cell + a per-element nowrap on
+// .diff-line-number), so the test asserts the static DOM/CSS contract:
+// renderGutter always wraps the line number in a .diff-line-number span and
+// always emits a sibling .diff-line-marker span carrying the +/- glyph.
+describe("DiffViewer gutter marker never wraps (#10422)", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  type RenderGutterParams = {
+    change: ChangeData;
+    renderDefault: () => React.ReactNode;
+    wrapInAnchor: (node: React.ReactNode) => React.ReactNode;
+  };
+  type RenderGutterFn = (params: RenderGutterParams) => React.ReactNode;
+  function getRenderGutter(): RenderGutterFn {
+    render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
+    return capturedDiffProps.renderGutter as RenderGutterFn;
+  }
+
+  it("wraps the line number in a .diff-line-number span for insert rows", () => {
+    const renderGutter = getRenderGutter();
+    const change: InsertChange = {
+      type: "insert",
+      content: "added",
+      lineNumber: 2,
+      isInsert: true,
+    };
+    const result = renderGutter({
+      change,
+      renderDefault: () => "2",
+      wrapInAnchor: (n) => <a href="#L2">{n}</a>,
+    });
+    const { container } = render(<>{result}</>);
+
+    const lineNumberSpans = container.querySelectorAll(".diff-line-number");
+    const markerSpans = container.querySelectorAll(".diff-line-marker");
+
+    expect(lineNumberSpans).toHaveLength(1);
+    expect(lineNumberSpans[0]!.querySelector("a")).not.toBeNull();
+    expect(markerSpans).toHaveLength(1);
+    expect(markerSpans[0]!.textContent).toBe("+");
+  });
+
+  it("wraps the line number in a .diff-line-number span for delete rows", () => {
+    const renderGutter = getRenderGutter();
+    const change: DeleteChange = {
+      type: "delete",
+      content: "old",
+      lineNumber: 1,
+      isDelete: true,
+    };
+    const result = renderGutter({
+      change,
+      renderDefault: () => "1",
+      wrapInAnchor: (n) => <a href="#L1">{n}</a>,
+    });
+    const { container } = render(<>{result}</>);
+
+    const lineNumberSpans = container.querySelectorAll(".diff-line-number");
+    const markerSpans = container.querySelectorAll(".diff-line-marker");
+
+    expect(lineNumberSpans).toHaveLength(1);
+    expect(lineNumberSpans[0]!.querySelector("a")).not.toBeNull();
+    expect(markerSpans).toHaveLength(1);
+    expect(markerSpans[0]!.textContent).toBe("-");
+  });
+
+  it("emits a sibling .diff-line-marker after the .diff-line-number, never inside it", () => {
+    const renderGutter = getRenderGutter();
+    const change: InsertChange = {
+      type: "insert",
+      content: "added",
+      lineNumber: 2,
+      isInsert: true,
+    };
+    const result = renderGutter({
+      change,
+      renderDefault: () => "2",
+      wrapInAnchor: (n) => <a href="#L2">{n}</a>,
+    });
+    const { container } = render(<>{result}</>);
+
+    const lineNumberSpans = container.querySelectorAll(".diff-line-number");
+    const markerSpans = container.querySelectorAll(".diff-line-marker");
+
+    expect(lineNumberSpans).toHaveLength(1);
+    expect(markerSpans).toHaveLength(1);
+    // The marker is a sibling of the line number, not nested inside it — the
+    // gutter cell is what enforces nowrap; the marker span itself is the
+    // element that would wrap if the cell allowed it.
+    expect(lineNumberSpans[0]!.querySelector(".diff-line-marker")).toBeNull();
+  });
+});
+
+// Load the actual stylesheet at test time so a deleted/regressed rule breaks
+// the build, not just a hand-typed assumption. The load is async-free and
+// the file is small — the assertion guards both the gutter-level fix and the
+// per-element fallback against accidental removal.
+describe("DiffViewer gutter CSS contract (#10422)", () => {
+  it("declares white-space: nowrap on the gutter cell and on .diff-line-number", () => {
+    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-gutter\s*\{[^}]*white-space:\s*nowrap/);
+    expect(cssText).toMatch(/\.diff-viewer\s+\.diff-line-number\s*\{[^}]*white-space:\s*nowrap/);
   });
 });
