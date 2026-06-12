@@ -13,7 +13,6 @@ import type { PRServiceStatus } from "@shared/types/workspace-host";
  * import { worktreeClient } from "@/clients/worktreeClient";
  *
  * const worktrees = await worktreeClient.getAll();
- * const cleanup = worktreeClient.onUpdate((state) => console.log(state));
  * ```
  */
 export const worktreeClient = {
@@ -80,10 +79,6 @@ export const worktreeClient = {
       deleteBranch,
       mutationId,
     });
-  },
-
-  onUpdate: (callback: (state: WorktreeState) => void): (() => void) => {
-    return window.electron.worktree.onUpdate(callback);
   },
 
   attachIssue: (payload: AttachIssuePayload): Promise<void> => {

@@ -363,6 +363,72 @@ describe("PtyClient Handshake Protocol", () => {
     });
   });
 
+  describe("resource profile persistence", () => {
+    function restartHost(): any {
+      const newChild = Object.assign(new EventEmitter(), {
+        postMessage: vi.fn(),
+        kill: vi.fn(),
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      forkMock.mockReturnValue(newChild);
+      mockChild.emit("exit", 1);
+      vi.advanceTimersByTime(2000);
+      newChild.emit("message", { type: "ready" });
+      return newChild;
+    }
+
+    it("replays the last profile and a later explicit poll interval after restart", () => {
+      const client = createClient();
+      client.setResourceProfile("efficiency");
+      client.setProcessTreePollInterval(12_500);
+      mockChild.postMessage.mockClear();
+
+      const newChild = restartHost();
+
+      const profileCalls = newChild.postMessage.mock.calls.filter(
+        (c: unknown[]) => (c[0] as any)?.type === "set-resource-profile"
+      );
+      const intervalCalls = newChild.postMessage.mock.calls.filter(
+        (c: unknown[]) => (c[0] as any)?.type === "set-process-tree-poll-interval"
+      );
+      expect(profileCalls.length).toBe(1);
+      expect(profileCalls[0][0]).toMatchObject({ profile: "efficiency" });
+      expect(intervalCalls.length).toBe(1);
+      expect(intervalCalls[0][0]).toMatchObject({ ms: 12_500 });
+      // Profile replays first so the explicit interval (the later writer) wins.
+      expect(newChild.postMessage.mock.calls.indexOf(profileCalls[0])).toBeLessThan(
+        newChild.postMessage.mock.calls.indexOf(intervalCalls[0])
+      );
+    });
+
+    it("does not replay a poll interval superseded by a later profile", () => {
+      const client = createClient();
+      client.setProcessTreePollInterval(12_500);
+      client.setResourceProfile("efficiency");
+      mockChild.postMessage.mockClear();
+
+      const newChild = restartHost();
+
+      const intervalCalls = newChild.postMessage.mock.calls.filter(
+        (c: unknown[]) => (c[0] as any)?.type === "set-process-tree-poll-interval"
+      );
+      expect(intervalCalls.length).toBe(0);
+    });
+
+    it("replays nothing when neither was ever set", () => {
+      createClient();
+      mockChild.postMessage.mockClear();
+
+      const newChild = restartHost();
+
+      const calls = newChild.postMessage.mock.calls.filter((c: unknown[]) =>
+        ["set-resource-profile", "set-process-tree-poll-interval"].includes((c[0] as any)?.type)
+      );
+      expect(calls.length).toBe(0);
+    });
+  });
+
   describe("edge cases", () => {
     it("should not resume if not paused", () => {
       const client = createClient();

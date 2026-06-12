@@ -215,7 +215,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     restartService(): Promise<void>;
     retryProjectLoad(): Promise<void>;
     retryAuthFetch(): Promise<void>;
-    onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
@@ -351,7 +350,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setConfig(payload: import("../editor.js").EditorSetConfigPayload): Promise<void>;
     discover(): Promise<import("../editor.js").DiscoveredEditor[]>;
   };
-  system: {
+  // getResourceProfile comes from GeneratedElectronAPI; the rest are legacy
+  // typedHandle registrations plus event listeners.
+  system: GeneratedElectronAPI["system"] & {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
     openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;

@@ -531,35 +531,10 @@ describe("WorkspaceClient multi-process manager", () => {
   });
 
   describe("host event routing", () => {
-    it("routes worktree-update to views of the correct project", async () => {
-      const wc1 = createMockWebContents();
-      const wc2 = createMockWebContents();
-
-      const load1 = client.loadProject("/project-a", 1);
-      await readyAndResolveLoad(0);
-      await load1;
-      client.attachDirectPort(1, wc1 as any);
-
-      const load2 = client.loadProject("/project-b", 2);
-      await readyAndResolveLoad(1);
-      await load2;
-      client.attachDirectPort(2, wc2 as any);
-
-      h(0).emit("host-event", {
-        type: "worktree-update",
-        worktree: {
-          id: "wt-1",
-          path: "/a/wt",
-          name: "wt",
-          branch: "main",
-        },
-      });
-
-      expect(wc1.send).toHaveBeenCalled();
-      expect(wc2.send).not.toHaveBeenCalled();
-    });
-
-    it("includes worktree in worktree-update payload sent to renderer", async () => {
+    it("does not relay worktree-update to renderers (delivered via the per-view port)", async () => {
+      // The workspace host fans worktree-update directly to each per-view
+      // worktree MessagePort; a second main-relayed events:push copy doubled
+      // the renderer-bound serialization for the heaviest worktree stream.
       const wc = createMockWebContents();
 
       const load = client.loadProject("/project-a", 1);
@@ -572,12 +547,7 @@ describe("WorkspaceClient multi-process manager", () => {
         worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
       });
 
-      expect(wc.send).toHaveBeenCalledWith("events:push", {
-        name: "worktree:update",
-        payload: {
-          worktree: expect.objectContaining({ id: "wt-1" }),
-        },
-      });
+      expect(wc.send).not.toHaveBeenCalled();
     });
 
     it("emits top-level worktree-update event so plugin subscribers can observe", async () => {
@@ -708,10 +678,7 @@ describe("WorkspaceClient multi-process manager", () => {
       // continues serving until new host is ready). Events from A still reach
       // the renderer via directPortViews — this is by design for reliability.
       wcA.send.mockClear();
-      h(0).emit("host-event", {
-        type: "worktree-update",
-        worktree: { id: "wt-a", path: "/a/wt", name: "wt-a", branch: "main" },
-      });
+      h(0).emit("host-event", { type: "worktree-removed", worktreeId: "wt-a" });
 
       expect(wcA.send).toHaveBeenCalled();
 
@@ -727,10 +694,7 @@ describe("WorkspaceClient multi-process manager", () => {
       client.attachDirectPort(1, wcB as any);
 
       wcB.send.mockClear();
-      h(0).emit("host-event", {
-        type: "worktree-update",
-        worktree: { id: "wt-a2", path: "/a/wt2", name: "wt-a2", branch: "dev" },
-      });
+      h(0).emit("host-event", { type: "worktree-removed", worktreeId: "wt-a2" });
 
       // Project A's events should NOT reach project B's view
       expect(wcB.send).not.toHaveBeenCalled();
@@ -757,10 +721,7 @@ describe("WorkspaceClient multi-process manager", () => {
 
       // Old host (A) events should work — wcA is still in entryA.directPortViews
       wcA.send.mockClear();
-      h(0).emit("host-event", {
-        type: "worktree-update",
-        worktree: { id: "wt-a", path: "/a/wt", name: "wt-a", branch: "main" },
-      });
+      h(0).emit("host-event", { type: "worktree-removed", worktreeId: "wt-a" });
 
       expect(wcA.send).toHaveBeenCalled();
     });
@@ -791,10 +752,7 @@ describe("WorkspaceClient multi-process manager", () => {
       wcB.send.mockClear();
 
       // Project B emits an event — should NOT reach A's view
-      h(1).emit("host-event", {
-        type: "worktree-update",
-        worktree: { id: "wt-b", path: "/b/wt", name: "wt-b", branch: "main" },
-      });
+      h(1).emit("host-event", { type: "worktree-removed", worktreeId: "wt-b" });
 
       expect(wcA.send).not.toHaveBeenCalled();
       // B's view should still get its own events via directPortViews
@@ -802,10 +760,7 @@ describe("WorkspaceClient multi-process manager", () => {
 
       // Project A emits an event — should reach A's view
       wcA.send.mockClear();
-      h(0).emit("host-event", {
-        type: "worktree-update",
-        worktree: { id: "wt-a", path: "/a/wt", name: "wt-a", branch: "main" },
-      });
+      h(0).emit("host-event", { type: "worktree-removed", worktreeId: "wt-a" });
 
       expect(wcA.send).toHaveBeenCalled();
       expect(wcB.send).toHaveBeenCalledTimes(1); // only the earlier B event

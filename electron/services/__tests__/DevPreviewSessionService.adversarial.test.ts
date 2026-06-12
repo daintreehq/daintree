@@ -521,6 +521,7 @@ describe("DevPreviewSessionService adversarial", () => {
     await expect(stopPromise).resolves.toMatchObject({ status: "stopped" });
 
     expect(onStateChanged.mock.calls).toHaveLength(callCountBeforeDispose);
-    expect(ptyClient.off).toHaveBeenCalledTimes(2);
+    // data, data-mirror, and exit listeners all detach on dispose.
+    expect(ptyClient.off).toHaveBeenCalledTimes(3);
   });
 });

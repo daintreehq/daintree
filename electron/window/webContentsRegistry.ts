@@ -326,6 +326,15 @@ export function getProjectForWebContents(webContentsId: number): string | null {
 }
 
 /**
+ * Whether any project views are registered at all. Project-scoped broadcasts
+ * fall back to a full broadcast when this is false (startup / windows that
+ * don't route through ProjectViewManager).
+ */
+export function hasRegisteredProjectViews(): boolean {
+  return viewToProject.size > 0;
+}
+
+/**
  * Get all non-destroyed webContents for a given projectId.
  * Used for project-scoped IPC broadcasts.
  */

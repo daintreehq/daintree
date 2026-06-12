@@ -280,10 +280,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   updateMonitorConfig(config: MonitorConfig): void {
-    for (const entry of this.pool.entries.values()) {
-      const requestId = entry.host.generateRequestId();
-      entry.host.send({ type: "update-monitor-config", requestId, config });
-    }
+    this.pool.updateMonitorConfig(config);
   }
 
   pauseProject(projectPath: string): void {
