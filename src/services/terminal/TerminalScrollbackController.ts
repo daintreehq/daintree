@@ -12,6 +12,23 @@ function getValidScrollbackBase(value: number | undefined): number | undefined {
   return value;
 }
 
+// Hibernated terminals hold a zero-scrollback placeholder (the constructor
+// eagerly allocates the full buffer graph), so policy reads/writes target the
+// `hibernatedScrollback` stash that unhibernate() restores from — writing the
+// placeholder's options would re-allocate the buffer the clamp exists to free.
+function readScrollback(managed: ManagedTerminal): number {
+  if (managed.isHibernated) return managed.hibernatedScrollback ?? 0;
+  return managed.terminal.options.scrollback ?? 0;
+}
+
+function writeScrollback(managed: ManagedTerminal, lines: number): void {
+  if (managed.isHibernated) {
+    managed.hibernatedScrollback = lines;
+    return;
+  }
+  managed.terminal.options.scrollback = lines;
+}
+
 export interface ReduceScrollbackOptions {
   /**
    * Bypass the per-terminal cooldown. Used by deliberate bulk memory-pressure
@@ -38,11 +55,11 @@ export function reduceScrollback(
     }
   }
 
-  const currentScrollback = managed.terminal.options.scrollback ?? 0;
+  const currentScrollback = readScrollback(managed);
   if (currentScrollback <= targetLines) return;
 
   const scrollbackUsed = managed.terminal.buffer.active.length - managed.terminal.rows;
-  managed.terminal.options.scrollback = targetLines;
+  writeScrollback(managed, targetLines);
   managed.lastScrollbackReduceAt = Date.now();
 
   if (scrollbackUsed > targetLines) {
@@ -62,7 +79,7 @@ export function restoreScrollback(managed: ManagedTerminal): void {
   const { performanceMode } = usePerformanceModeStore.getState();
 
   if (performanceMode) {
-    managed.terminal.options.scrollback = PERFORMANCE_MODE_SCROLLBACK;
+    writeScrollback(managed, PERFORMANCE_MODE_SCROLLBACK);
     return;
   }
 
@@ -74,8 +91,5 @@ export function restoreScrollback(managed: ManagedTerminal): void {
     : undefined;
   const globalScrollback = getValidScrollbackBase(scrollbackLines) ?? 0;
 
-  managed.terminal.options.scrollback = getScrollbackForType(
-    isAgent,
-    projectScrollback ?? globalScrollback
-  );
+  writeScrollback(managed, getScrollbackForType(isAgent, projectScrollback ?? globalScrollback));
 }

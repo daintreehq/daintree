@@ -109,7 +109,7 @@ function canAutoInitializeTerminalIngest(): boolean {
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer = new TerminalOutputIngestService(
-    (id, data) => this.writeToTerminal(id, data),
+    (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED,
     // Ack chunks dropped by the background queue cap so the host's port
     // flow-control ledger doesn't leak (#9906). The byte arg is ignored —
@@ -160,7 +160,8 @@ class TerminalInstanceService {
 
     this.writeController = new TerminalWriteController({
       getInstance: (id) => this.instances.get(id),
-      acknowledgePortData: (id, bytes) => terminalClient.acknowledgePortData(id, bytes),
+      acknowledgePortData: (id, bytes, chunkCount) =>
+        terminalClient.acknowledgePortData(id, bytes, chunkCount),
       acknowledgeData: (id, bytes) => terminalClient.acknowledgeData(id, bytes),
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
       incrementUnseen: (id, isScrolledBack) =>
@@ -291,21 +292,24 @@ class TerminalInstanceService {
           this.ensureDeferredAddons(id, managed);
         }
 
-        if (managed.runtimeAgentId) {
-          if (isWebGLEligibleTier(tier)) {
-            this.webGLManager.ensureContext(id, managed);
-          } else if (!managed.isVisible) {
-            // Keep WebGL while visible — releasing here causes a one-frame renderer gap.
-            // Tier demotion is an authoritative signal — cancel any pending
-            // hide-dwell and release immediately.
-            this.cancelWebGLHideTimer(managed);
-            const hadWebGL = this.webGLManager.isActive(id);
-            this.webGLManager.releaseContext(id);
-            // Only refresh for a visible terminal — repainting an offscreen
-            // DOM produces a stale frame that flashes on next show (#6802).
-            if (hadWebGL && managed.isVisible && managed.terminal.rows > 0) {
-              managed.terminal.refresh(0, managed.terminal.rows - 1);
-            }
+        if (this.wantsWebGLAtTier(managed, tier)) {
+          this.webGLManager.ensureContext(id, managed);
+        } else if (!managed.isVisible || !managed.runtimeAgentId) {
+          // Agent terminals keep WebGL while visible — releasing causes a
+          // one-frame renderer gap, and VISIBLE is an eligible tier for them
+          // anyway. Plain terminals release as soon as they stop being
+          // focused (even while visible): the DOM renderer is their
+          // status-quo at VISIBLE, and a lingering want per previously
+          // focused shell would accumulate toward the mode-switch threshold.
+          // Tier demotion is an authoritative signal — cancel any pending
+          // hide-dwell and release immediately.
+          this.cancelWebGLHideTimer(managed);
+          const hadWebGL = this.webGLManager.isActive(id);
+          this.webGLManager.releaseContext(id);
+          // Only refresh for a visible terminal — repainting an offscreen
+          // DOM produces a stale frame that flashes on next show (#6802).
+          if (hadWebGL && managed.isVisible && managed.terminal.rows > 0) {
+            managed.terminal.refresh(0, managed.terminal.rows - 1);
           }
         }
 
@@ -508,18 +512,40 @@ class TerminalInstanceService {
   }
 
   /**
+   * Whether a terminal wants a WebGL context at the given tier. Agent
+   * terminals are eligible at every WebGL-eligible tier (FOCUSED/BURST/
+   * VISIBLE) — the DOM renderer mangles the block glyphs agent headers use
+   * (see isWebGLEligibleTier in types.ts). Plain terminals are eligible only
+   * while focused: FOCUSED, or a BURST on the focused pane (input bursts and
+   * streaming output must not drop the context mid-use). BURST alone is
+   * write-driven for every terminal, so granting it to unfocused plain shells
+   * would add a want per streaming build/log pane and trip the count-based
+   * mode switch; VISIBLE is excluded for the same budget reason.
+   */
+  private wantsWebGLAtTier(
+    managed: ManagedTerminal,
+    tier: TerminalRefreshTier | undefined
+  ): boolean {
+    if (!isWebGLEligibleTier(tier)) return false;
+    if (managed.runtimeAgentId) return true;
+    return (
+      tier === TerminalRefreshTier.FOCUSED ||
+      (tier === TerminalRefreshTier.BURST && managed.isFocused)
+    );
+  }
+
+  /**
    * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
-   * onTierApplied (agent identity + visible/focused tier) plus liveness
-   * checks (opened, not attaching, not hibernated). Used by the debounced
-   * timer in setVisible() before re-acquiring a context.
+   * onTierApplied (agent identity / focus + tier) plus liveness checks
+   * (opened, not attaching, not hibernated). Used by the debounced timer in
+   * setVisible() before re-acquiring a context.
    */
   private shouldRestoreWebGL(managed: ManagedTerminal): boolean {
-    if (!managed.runtimeAgentId) return false;
     if (!managed.isOpened) return false;
     if (!managed.isVisible) return false;
     if (managed.isAttaching) return false;
     if (managed.isHibernated) return false;
-    return isWebGLEligibleTier(managed.lastAppliedTier ?? managed.getRefreshTier?.());
+    return this.wantsWebGLAtTier(managed, managed.lastAppliedTier ?? managed.getRefreshTier?.());
   }
 
   private onUserInput(id: string, data: string): void {
@@ -647,8 +673,8 @@ class TerminalInstanceService {
    * service for the existing test fixtures that cast the service to a
    * structural type containing this method.
    */
-  private writeToTerminal(id: string, data: string | Uint8Array): void {
-    this.writeController.write(id, data);
+  private writeToTerminal(id: string, data: string | Uint8Array, chunkCount = 1): void {
+    this.writeController.write(id, data, chunkCount);
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
@@ -1687,7 +1713,7 @@ class TerminalInstanceService {
       if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
         this.ensureDeferredAddons(id, managed);
       }
-      if (managed.runtimeAgentId && isWebGLEligibleTier(managed.lastAppliedTier)) {
+      if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
         this.webGLManager.ensureContext(id, managed);
       }
     }
@@ -2525,6 +2551,14 @@ class TerminalInstanceService {
 
     managed.isFocused = isFocused;
     managed.lastActiveTime = Date.now();
+    // Track the focused terminal in the WebGL manager: when the count-based
+    // mode switch has the fleet on the DOM renderer, the pin keeps exactly
+    // one context on the pane the user is reading. Focus is tracked here
+    // (not in onTierApplied) because same-tier focus moves dedup away the
+    // tier application.
+    if (isFocused && !managed.isHibernated) {
+      this.webGLManager.pinFocus(id, managed);
+    }
   }
 
   isFocused(id: string): boolean {
@@ -2807,10 +2841,30 @@ class TerminalInstanceService {
     this.applyCursorBlinkPolicy(managed);
     restoreScrollback(managed);
     // Agent demotion is authoritative — cancel any pending hide-dwell so the
-    // timer can't fire later and call releaseContext on a stale slot.
+    // timer can't fire later and call releaseContext on a stale slot. A
+    // focused pane stays WebGL-eligible as a plain terminal, so keep (or
+    // acquire) its context instead of churning it through a release.
     this.cancelWebGLHideTimer(managed);
-    this.webGLManager.releaseContext(id);
+    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+      this.webGLManager.ensureContext(id, managed);
+    } else {
+      this.webGLManager.releaseContext(id);
+    }
     this.maybeReflowTerminal(managed);
+  }
+
+  // Re-derive the scrollback policy for every live foreground terminal.
+  // Called on resource-profile changes after setAgentScrollbackMaxLines so
+  // the new agent ceiling applies to terminals that are already open.
+  // Background terminals are skipped: their scrollback was deliberately
+  // reduced and is restored by the tier-upgrade path.
+  restoreScrollbackAllForeground(): void {
+    for (const managed of this.instances.values()) {
+      if (managed.isHibernated) continue;
+      const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
+      if (tier === TerminalRefreshTier.BACKGROUND) continue;
+      restoreScrollback(managed);
+    }
   }
 
   reduceScrollbackAllBackground(targetLines: number): void {

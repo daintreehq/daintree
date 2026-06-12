@@ -275,7 +275,23 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });
 
-  it("standard (non-agent) terminal does not acquire WebGL on show", () => {
+  it("standard (non-agent) unfocused terminal does not acquire WebGL on show", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      runtimeAgentId: undefined,
+      launchAgentId: undefined,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
+    service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+    service.setVisible("t1", true);
+    vi.advanceTimersByTime(100);
+
+    expect(service.webGLManager.isActive("t1")).toBe(false);
+  });
+
+  it("standard (non-agent) focused terminal acquires WebGL on show", () => {
     const managed = makeMockManaged({
       isVisible: false,
       runtimeAgentId: undefined,
@@ -286,7 +302,7 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     service.setVisible("t1", true);
     vi.advanceTimersByTime(100);
 
-    expect(service.webGLManager.isActive("t1")).toBe(false);
+    expect(service.webGLManager.isActive("t1")).toBe(true);
   });
 
   it("show while attaching defers WebGL restore (no addon load)", () => {
@@ -436,19 +452,24 @@ describe("TerminalInstanceService - visibility-driven WebGL lease", () => {
     expect(managed.webGLHideTimer).toBeUndefined();
   });
 
-  it("agent demotion during debounce window cancels WebGL restore", () => {
-    const managed = makeMockManaged({ isVisible: false });
+  it("agent demotion during debounce window cancels WebGL restore for an unfocused pane", () => {
+    const managed = makeMockManaged({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.VISIBLE,
+      getRefreshTier: () => TerminalRefreshTier.VISIBLE,
+    });
     service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
     service.setVisible("t1", true);
     expect(service.webGLManager.isActive("t1")).toBe(false);
 
     // Demotion happens inside the debounce window — runtimeAgentId clears.
+    // VISIBLE keeps an agent eligible but not a plain terminal.
     managed.runtimeAgentId = undefined;
 
     vi.advanceTimersByTime(100);
 
-    // shouldRestoreWebGL re-checks runtimeAgentId in the timer callback,
+    // shouldRestoreWebGL re-checks eligibility in the timer callback,
     // so the deferred restore must not fire after demotion.
     expect(service.webGLManager.isActive("t1")).toBe(false);
   });

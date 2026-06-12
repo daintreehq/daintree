@@ -1,5 +1,16 @@
-import { describe, it, expect } from "vitest";
-import { estimateMemoryUsage, getScrollbackForType } from "../scrollbackConfig";
+import { describe, it, expect, afterEach } from "vitest";
+import {
+  estimateMemoryUsage,
+  getAgentScrollbackMaxLines,
+  getScrollbackForType,
+  setAgentScrollbackMaxLines,
+} from "../scrollbackConfig";
+
+const originalAgentMax = getAgentScrollbackMaxLines();
+
+afterEach(() => {
+  setAgentScrollbackMaxLines(originalAgentMax);
+});
 
 describe("estimateMemoryUsage", () => {
   it("computes per-type and total bytes for a typical 8-agent + 8-shell session", () => {
@@ -65,5 +76,29 @@ describe("getScrollbackForType", () => {
   it("applies the minLines floor for tiny bases", () => {
     expect(getScrollbackForType(true, 1)).toBe(500);
     expect(getScrollbackForType(false, 1)).toBe(200);
+  });
+
+  describe("resource-profile agent ceiling", () => {
+    it("lowering the ceiling clamps agent terminals but leaves plain terminals alone", () => {
+      const plainBefore = getScrollbackForType(false, 1000);
+      setAgentScrollbackMaxLines(2500);
+
+      expect(getScrollbackForType(true, 1000)).toBe(2500);
+      expect(getScrollbackForType(true, 0)).toBe(2500);
+      expect(getScrollbackForType(false, 1000)).toBe(plainBefore);
+    });
+
+    it("never raises the ceiling above the policy max", () => {
+      setAgentScrollbackMaxLines(50_000);
+      expect(getScrollbackForType(true, 0)).toBe(5000);
+    });
+
+    it("clamps the ceiling to the policy floor and ignores non-finite input", () => {
+      setAgentScrollbackMaxLines(10);
+      expect(getScrollbackForType(true, 0)).toBe(500);
+
+      setAgentScrollbackMaxLines(Number.NaN);
+      expect(getScrollbackForType(true, 0)).toBe(500);
+    });
   });
 });
