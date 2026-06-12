@@ -314,7 +314,7 @@ describe("hydration batch (#5196)", () => {
     // missing. With deferred `panelIds`, the entry is already in `panelsById`,
     // so the updates must stick.
     updateAgentState("term-1", "waiting");
-    updateActivity("term-1", "writing code", "working", "interactive", 100);
+    updateActivity("term-1", "writing code", "working", "interactive");
 
     const mid = usePanelStore.getState().panelsById["term-1"] as PtyPanelData | undefined;
     expect(mid?.agentState).toBe("waiting");

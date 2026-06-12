@@ -14,7 +14,6 @@ export function setupActivityListeners(): DisposableStore {
           data.headline,
           data.status,
           data.type,
-          data.timestamp,
           data.lastCommand
         );
       })

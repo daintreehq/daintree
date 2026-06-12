@@ -51,6 +51,77 @@ function formatConsoleTime(ts: number): string {
   return `${h}:${m}:${s}.${ms}`;
 }
 
+// RAF-flushed ingest buffer, mirroring panelStatusBuffer: one IPC console row
+// per setState would notify every subscriber synchronously per row (Zustand 5),
+// so a guest page logging in a loop drives hundreds of array-copy + filter
+// cycles per second. Rows enqueue here and fold into a single setState per
+// frame, applying the MAX_MESSAGES cap once per pane per flush.
+const pendingRows = new Map<string, ConsoleMessage[]>();
+// Boolean flag rather than a stored rAF id: a synchronous rAF shim (the
+// vitest node-env stub runs callbacks inline) would otherwise leave the id
+// assigned after the flush already cleared it, wedging the guard closed.
+let flushScheduled = false;
+
+function schedule(): void {
+  if (flushScheduled) return;
+  if (typeof requestAnimationFrame === "undefined") {
+    // Non-DOM environments (some test contexts) — flush synchronously to keep
+    // semantics observable without a polyfill.
+    flushConsoleCaptureBuffer();
+    return;
+  }
+  flushScheduled = true;
+  requestAnimationFrame(flushConsoleCaptureBuffer);
+}
+
+export function flushConsoleCaptureBuffer(): void {
+  flushScheduled = false;
+  if (pendingRows.size === 0) return;
+
+  // Snapshot and clear before the setState updater runs so re-entrant
+  // enqueues during subscriber callbacks land in a fresh frame.
+  const batches = new Map(pendingRows);
+  pendingRows.clear();
+
+  useConsoleCaptureStore.setState((state) => {
+    const nextMessages = new Map(state.messages);
+    let nextCounters: Map<string, ConsoleCounts> | null = null;
+
+    for (const [paneId, batch] of batches) {
+      const existing = nextMessages.get(paneId) ?? [];
+      let combined = existing.concat(batch);
+      let evicted: ConsoleMessage[] = EMPTY_MESSAGES;
+      if (combined.length > MAX_MESSAGES) {
+        evicted = combined.slice(0, combined.length - MAX_MESSAGES);
+        combined = combined.slice(combined.length - MAX_MESSAGES);
+      }
+      nextMessages.set(paneId, combined);
+
+      let errorDelta = 0;
+      let warnDelta = 0;
+      for (const msg of batch) {
+        if (msg.level === "error") errorDelta += 1;
+        else if (msg.level === "warning") warnDelta += 1;
+      }
+      for (const msg of evicted) {
+        if (msg.level === "error") errorDelta -= 1;
+        else if (msg.level === "warning") warnDelta -= 1;
+      }
+
+      if (errorDelta !== 0 || warnDelta !== 0) {
+        if (!nextCounters) nextCounters = new Map(state.counters);
+        const current = nextCounters.get(paneId) ?? ZERO_COUNTS;
+        nextCounters.set(paneId, {
+          errorCount: current.errorCount + errorDelta,
+          warnCount: current.warnCount + warnDelta,
+        });
+      }
+    }
+
+    return { messages: nextMessages, counters: nextCounters ?? state.counters };
+  });
+}
+
 export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) => ({
   messages: new Map(),
   counters: new Map(),
@@ -65,47 +136,22 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
       isGroupHeader: GROUP_HEADER_TYPES.has(row.cdpType),
     };
 
-    set((state) => {
-      const existing = state.messages.get(row.paneId) ?? [];
-      const willEvict = existing.length >= MAX_MESSAGES;
-      // `slice` already yields a fresh, unshared array — push into it in place
-      // to avoid a second copy from spreading the slice back out.
-      let updated: ConsoleMessage[];
-      if (willEvict) {
-        updated = existing.slice(1);
-        updated.push(msg);
-      } else {
-        updated = existing.slice();
-        updated.push(msg);
-      }
-
-      const nextMessages = new Map(state.messages);
-      nextMessages.set(row.paneId, updated);
-
-      let errorDelta = msg.level === "error" ? 1 : 0;
-      let warnDelta = msg.level === "warning" ? 1 : 0;
-      if (willEvict) {
-        const evicted = existing[0]!;
-        if (evicted.level === "error") errorDelta -= 1;
-        if (evicted.level === "warning") warnDelta -= 1;
-      }
-
-      let nextCounters = state.counters;
-      if (errorDelta !== 0 || warnDelta !== 0) {
-        const current = state.counters.get(row.paneId) ?? ZERO_COUNTS;
-        const updatedCounts: ConsoleCounts = {
-          errorCount: current.errorCount + errorDelta,
-          warnCount: current.warnCount + warnDelta,
-        };
-        nextCounters = new Map(state.counters);
-        nextCounters.set(row.paneId, updatedCounts);
-      }
-
-      return { messages: nextMessages, counters: nextCounters };
-    });
+    let batch = pendingRows.get(row.paneId);
+    if (!batch) {
+      batch = [];
+      pendingRows.set(row.paneId, batch);
+    }
+    batch.push(msg);
+    // A log storm can outpace the frame; rows beyond the cap can never
+    // survive the flush fold, so drop them here to bound buffer growth.
+    if (batch.length > MAX_MESSAGES) batch.splice(0, batch.length - MAX_MESSAGES);
+    schedule();
   },
 
   markStale(paneId: string, navigationGeneration: number) {
+    // Commit pending rows first: rows captured before the navigation must be
+    // present so this generation sweep marks them stale.
+    flushConsoleCaptureBuffer();
     set((state) => {
       const existing = state.messages.get(paneId);
       if (!existing || existing.length === 0) return state;
@@ -126,6 +172,8 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
   },
 
   clearMessages(paneId: string) {
+    // Rows enqueued before the clear must not resurrect on the next flush.
+    pendingRows.delete(paneId);
     set((state) => {
       const nextMessages = new Map(state.messages);
       nextMessages.set(paneId, []);
@@ -149,6 +197,7 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
   },
 
   removePane(paneId: string) {
+    pendingRows.delete(paneId);
     set((state) => {
       const nextMessages = new Map(state.messages);
       nextMessages.delete(paneId);
