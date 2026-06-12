@@ -913,6 +913,9 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1.5">
+        {/* Kind-specific header content slot */}
+        {headerContent}
+
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <DropdownMenu
@@ -1205,9 +1208,6 @@ function PanelHeaderComponent({
             </div>
           </TooltipContent>
         </Tooltip>
-
-        {/* Kind-specific header content slot */}
-        {headerContent}
       </div>
       {isFleetPreviewed ? (
         <span

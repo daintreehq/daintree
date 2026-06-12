@@ -264,6 +264,8 @@ vi.mock("@/components/Browser/BrowserToolbar", () => ({
   },
 }));
 
+const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@/components/Panel", () => ({
   ContentPanel: ({
     children,
@@ -273,7 +275,11 @@ vi.mock("@/components/Panel", () => ({
     headerContent?: React.ReactNode;
   }) => (
     <div data-testid="content-panel">
-      {headerContent && <div data-testid="panel-header-content">{headerContent}</div>}
+      {headerContent && (
+        <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
+          {headerContent}
+        </div>
+      )}
       {children}
     </div>
   ),
@@ -2353,6 +2359,35 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
       expect(container.textContent).toContain("npm run custom");
+    });
+
+    it("does not propagate pointerdown from the trigger to header ancestors", () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
+
+      render(<DevPreviewPane {...baseProps} />);
+      headerContentPointerDownSpy.mockClear();
+      const trigger = screen.getByLabelText("Switch dev script");
+      fireEvent.pointerDown(trigger);
+      expect(headerContentPointerDownSpy).not.toHaveBeenCalled();
     });
   });
 
