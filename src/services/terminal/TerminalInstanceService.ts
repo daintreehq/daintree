@@ -1966,6 +1966,58 @@ class TerminalInstanceService {
     return this.resizeController.resize(id, width, height, options);
   }
 
+  private backgroundResizeBasis: { width: number; height: number } | null = null;
+
+  /**
+   * PTY-tracking resize for a backgrounded project view (#10415). A detached
+   * WebContentsView keeps its stale viewport until reattach — setBounds()
+   * does not propagate while detached and ResizeObservers never fire in a
+   * hidden page — so per-panel pixel sizes cannot be re-measured here.
+   * Instead each terminal's last measured host size is scaled by the
+   * window-bounds ratio, which is exact for 1fr grid tracks and at worst off
+   * by ~1 col where fixed chrome doesn't scale. The PTY-only resize keeps
+   * agents wrapping at the right width the whole time; the wake path
+   * (`fullWakeForVisibilityRestore` → `applyDeferredResize`) reconciles
+   * xterm and corrects any residual error from real layout on reattach.
+   *
+   * The basis is the bounds the current `lastWidth`/`lastHeight` values were
+   * derived from: the live viewport for the first event of a background
+   * session, then the previously applied bounds — so repeated resizes scale
+   * incrementally instead of compounding against the stale viewport.
+   */
+  applyBackgroundWindowResize(width: number, height: number): void {
+    if (document.visibilityState === "visible") {
+      // Queued delivery after reactivation — real layout owns geometry again.
+      this.backgroundResizeBasis = null;
+      return;
+    }
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+    const basis = this.backgroundResizeBasis ?? {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+    if (basis.width <= 0 || basis.height <= 0) return;
+    const widthRatio = width / basis.width;
+    const heightRatio = height / basis.height;
+    for (const [id, managed] of this.instances) {
+      if (managed.isHibernated) continue;
+      if (!managed.isOpened) continue;
+      if (managed.lastWidth <= 0 || managed.lastHeight <= 0) continue;
+      this.resizeController.resizePtyOnly(
+        id,
+        managed.lastWidth * widthRatio,
+        managed.lastHeight * heightRatio
+      );
+    }
+    this.backgroundResizeBasis = { width, height };
+  }
+
+  resetBackgroundResizeBasis(): void {
+    this.backgroundResizeBasis = null;
+  }
+
   /**
    * Resize a set of panels in a single read-all / write-all pass (#8597).
    *

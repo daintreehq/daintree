@@ -497,6 +497,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
     onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
+    onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;

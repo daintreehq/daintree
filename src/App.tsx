@@ -55,6 +55,7 @@ import {
   useAgentWaitingNudge,
   useForgeEnableRecommendation,
   useFocusOnActivateIntent,
+  useBackgroundWindowResize,
   usePluginDeepLink,
   useNotificationHistoryPruning,
   useUnloadCleanup,
@@ -664,6 +665,9 @@ function AppInner() {
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
+  // Background window-resize receiver — keeps PTY geometry tracking the
+  // window while this project view is detached (#10415).
+  useBackgroundWindowResize();
   // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
   // settles; the effect below opens the Plugin Manager, which consumes it.
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);

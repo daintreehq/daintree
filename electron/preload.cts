@@ -1457,6 +1457,9 @@ function buildElectronApi(): ElectronAPI {
       onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
         _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 
+      onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
+        _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
+
       onUpdated: (callback: (project: Project) => void) =>
         _typedOn(CHANNELS.PROJECT_UPDATED, callback),
 
