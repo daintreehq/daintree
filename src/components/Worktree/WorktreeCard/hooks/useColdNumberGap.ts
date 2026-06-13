@@ -8,6 +8,11 @@ import { useEffect, useRef } from "react";
 // components themselves out of compiler memoization; the compiler never
 // caches values derived from ref.current, so the lag survives compilation.
 export function useColdNumberGap(num: number, title: string | undefined, enabled = true): boolean {
+  // The render-time `prev.current` read below is intentional (it's the whole
+  // mechanism). Opt this hook out of the React Compiler so the read is a
+  // deliberate non-reactive value rather than a "Cannot access refs during
+  // render" compile error.
+  "use no memo";
   const prev = useRef<number | undefined>(undefined);
   const gap = enabled && !title && num !== prev.current;
   useEffect(() => {

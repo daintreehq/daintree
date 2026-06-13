@@ -397,39 +397,45 @@ export function AgentButton({
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleClick}
-                  aria-disabled={isLoading || undefined}
-                  data-toolbar-item={dataToolbarItem}
-                  onPointerEnter={(e) => {
-                    clearFocusRestoreSuppression();
-                    hover.onPointerEnter(e);
-                  }}
-                  onPointerLeave={hover.onPointerLeave}
-                  onPointerDown={hover.onPointerDown}
-                  onFocus={hover.onFocus}
-                  onBlur={hover.onBlur}
-                  className={cn(
-                    "toolbar-agent-button text-daintree-text relative",
-                    needsSetup && "opacity-70",
-                    "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  )}
-                  aria-label={ariaLabel}
-                  aria-keyshortcuts={ariaShortcut}
-                >
-                  {iconElement}
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent(tooltipLabel, tooltipShortcut)}
-            </TooltipContent>
-          </Tooltip>
+          {/* Real DOM element as the trigger child: ContextMenuTrigger's
+              asChild Slot binds onContextMenu + ref here. Wrapping <Tooltip>
+              directly drops both (Tooltip.Root is a non-DOM provider), so
+              right-click never opens the menu. Mirrors the presets branch. */}
+          <span className="inline-flex">
+            <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleClick}
+                    aria-disabled={isLoading || undefined}
+                    data-toolbar-item={dataToolbarItem}
+                    onPointerEnter={(e) => {
+                      clearFocusRestoreSuppression();
+                      hover.onPointerEnter(e);
+                    }}
+                    onPointerLeave={hover.onPointerLeave}
+                    onPointerDown={hover.onPointerDown}
+                    onFocus={hover.onFocus}
+                    onBlur={hover.onBlur}
+                    className={cn(
+                      "toolbar-agent-button text-daintree-text relative",
+                      needsSetup && "opacity-70",
+                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                    )}
+                    aria-label={ariaLabel}
+                    aria-keyshortcuts={ariaShortcut}
+                  >
+                    {iconElement}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent(tooltipLabel, tooltipShortcut)}
+              </TooltipContent>
+            </Tooltip>
+          </span>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
           <ContextMenuActionItem
