@@ -43,6 +43,24 @@ function escapePowerShellSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+/**
+ * Sanitize an assistant-supplied terminal name for use as a panel title.
+ * Strips ASCII control characters (an LLM could emit newlines, tabs, or ANSI
+ * escape sequences), collapses internal whitespace, and trims. Returns "" when
+ * nothing printable remains, which the caller treats as "no name" (falls back
+ * to the default computed title with no `titleMode` pin).
+ */
+function sanitizeTerminalName(raw: string): string {
+  let out = "";
+  for (const ch of raw) {
+    const code = ch.codePointAt(0) ?? 0;
+    // Drop C0 controls (0x00–0x1f) and DEL (0x7f); replace with a space so
+    // adjacent words don't fuse, then collapse the runs below.
+    out += code <= 0x1f || code === 0x7f ? " " : ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
 export interface LaunchAgentOptions {
   location?: AddPanelOptions["location"];
   cwd?: string;
@@ -486,9 +504,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         const presetTitle = isAgent && preset ? preset.name : title;
         // A caller-supplied name overrides the computed title and pins it so
-        // agent detection can't rewrite it. Empty/whitespace is treated as no
-        // name — fall back to the default title with no `titleMode`.
-        const trimmedName = launchOptions?.name?.trim();
+        // agent detection can't rewrite it. Strip control characters (an LLM
+        // assistant could emit newlines/ANSI/tabs) and collapse whitespace so
+        // tab chrome and aria labels stay intact. Empty/whitespace after
+        // sanitizing is treated as no name — fall back to the default title
+        // with no `titleMode`.
+        const trimmedName = launchOptions?.name
+          ? sanitizeTerminalName(launchOptions.name)
+          : undefined;
         const customTitle = trimmedName ? { titleMode: "custom" as const } : {};
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =

@@ -44,6 +44,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       force: z.boolean().optional(),
       name: z
         .string()
+        .max(200)
         .optional()
         .describe(
           'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor") so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'

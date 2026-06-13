@@ -218,6 +218,47 @@ describe("agentActions adversarial", () => {
     });
   });
 
+  it("agent.launch accepts 'name' through ActionService schema validation", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) service.register(factory());
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", name: "Claude: auth refactor" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ name: "Claude: auth refactor" })
+    );
+  });
+
+  it("agent.launch rejects a 'name' longer than the 200-char cap", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) service.register(factory());
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", name: "x".repeat(201) },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
   it("agent.palette only opens the quick switcher and does not launch", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);
