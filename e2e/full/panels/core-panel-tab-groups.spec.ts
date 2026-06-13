@@ -23,11 +23,14 @@ test.describe.serial("Core: Panel Tab Groups", () => {
     fixtureCleanup = cleanup;
     ctx = await launchApp();
 
-    // Disable two-pane split mode before the project loads. The 1→2 panel
-    // transition from "Duplicate as new tab" triggers a race condition where
-    // the split layout briefly activates during the intermediate state (two
-    // single-panel groups) and crashes the app. Seeding localStorage before
-    // the zustand store hydrates avoids this.
+    // Disable two-pane split mode for this suite's isolation. The crash this
+    // workaround originally guarded against (issue #10438 — split layout
+    // briefly activating during the 1→2 "Duplicate as new tab" transition) is
+    // now fixed by the allGroupsAreVirtual predicate guard, and the dedicated
+    // regression block below exercises the fix with split mode left enabled.
+    // We keep split mode disabled here so the suite's many duplicate/tab
+    // assertions don't have to account for the split layout. Seeding
+    // localStorage before the zustand store hydrates avoids it.
     await ctx.window.evaluate(() => {
       localStorage.setItem(
         "daintree-two-pane-split",
@@ -269,5 +272,63 @@ test.describe.serial("Core: Panel Tab Groups", () => {
         // Best-effort cleanup
       }
     });
+  });
+});
+
+// Regression for issue #10438: "Duplicate as new tab" must not crash the app
+// when two-pane split mode is enabled (the default). The 1→2 panel transition
+// briefly produced two single-panel groups — one explicit, one virtual — which
+// satisfied the old useTwoPaneSplitMode predicate and activated the split
+// layout against a panel already in an explicit group, crashing the renderer.
+// This block leaves split mode at its default (enabled) — no localStorage seed.
+test.describe.serial("Split-mode crash regression (issue #10438)", () => {
+  let splitCtx: AppContext;
+  let splitFixtureDir: string;
+  let splitFixtureCleanup: (() => void) | undefined;
+
+  test.beforeAll(async () => {
+    const { dir, cleanup } = createFixtureRepo({
+      name: "tab-groups-split",
+      withMultipleFiles: true,
+    });
+    splitFixtureDir = dir;
+    splitFixtureCleanup = cleanup;
+    splitCtx = await launchApp();
+    splitCtx.window = await openAndOnboardProject(
+      splitCtx.app,
+      splitCtx.window,
+      splitFixtureDir,
+      "Tab Groups Split Test"
+    );
+  });
+
+  test.afterAll(async () => {
+    if (splitCtx?.app) await closeApp(splitCtx.app);
+    splitFixtureCleanup?.();
+  });
+
+  test("duplicate as new tab with split mode enabled does not crash and forms a tab group", async () => {
+    const { window } = splitCtx;
+
+    await openTerminal(window);
+    const panel = getFirstGridPanel(window);
+    await expect(panel).toBeVisible({ timeout: T_LONG });
+
+    // The + button has opacity-0 on single panels, use force:true
+    const duplicateBtn = panel.locator(SEL.panel.duplicate).first();
+    await duplicateBtn.click({ force: true, timeout: T_MEDIUM });
+
+    // If the renderer crashed, every locator call below would reject with
+    // "Target closed". Reaching a visible tab list with two tabs proves the
+    // panel survived and the new panel was folded into the same tab group
+    // rather than spilling into the split layout.
+    const tabList = panel.locator(SEL.panel.tabList);
+    await expect(tabList).toBeVisible({ timeout: T_MEDIUM });
+
+    const tabs = tabList.locator(SEL.panel.tab);
+    await expect(tabs).toHaveCount(2, { timeout: T_MEDIUM });
+
+    // The two tabs stay within a single grid panel — not two split panes.
+    expect(await getGridPanelCount(window)).toBe(1);
   });
 });
