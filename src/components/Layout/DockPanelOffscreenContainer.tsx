@@ -77,6 +77,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     async (panel: PtyPanelData) => {
       let groupId: string;
       let createdNewGroup = false;
+      let newPanelId: string | undefined;
 
       try {
         const existingGroup = getPanelGroup(panel.id);
@@ -90,7 +91,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         const options = await buildPanelDuplicateOptions(panel, "dock");
         // `activateDockOnCreate` folds dock activation into the panel commit so
         // the watchdog effect cannot collapse the just-created tab. See #6590.
-        const newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
+        newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
         if (!newPanelId) {
           if (createdNewGroup && groupId!) deleteTabGroup(groupId);
           return;
@@ -109,6 +110,10 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         setActiveTab(groupId, newPanelId);
       } catch (error) {
         logError("Failed to add tab", error);
+        // Mirror the rejection path: trash a created-but-unjoined panel before
+        // deleting a group this call created, so a mid-flight throw can't orphan
+        // it for the dock watchdog to find (#10441, #6596).
+        if (newPanelId) trashPanel(newPanelId);
         if (createdNewGroup && groupId!) {
           deleteTabGroup(groupId);
         }

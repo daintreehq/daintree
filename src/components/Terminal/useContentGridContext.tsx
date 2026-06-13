@@ -114,6 +114,7 @@ export async function addTabForPanel(panel: PanelInstance): Promise<void> {
   } = panelStoreApi.getState();
   let groupId: string | undefined;
   let createdNewGroup = false;
+  let newPanelId: string | undefined;
 
   try {
     const existingGroup = getPanelGroup(panel.id);
@@ -126,7 +127,7 @@ export async function addTabForPanel(panel: PanelInstance): Promise<void> {
     }
 
     const options = await buildPanelDuplicateOptions(panel, "grid");
-    const newPanelId = await addPanel(options);
+    newPanelId = await addPanel(options);
     if (!newPanelId) {
       if (createdNewGroup && groupId) deleteTabGroup(groupId);
       return;
@@ -147,6 +148,10 @@ export async function addTabForPanel(panel: PanelInstance): Promise<void> {
     setFocused(newPanelId);
   } catch (error) {
     logError("Failed to add tab", error);
+    // Mirror the rejection path's cleanup: if a panel was created before the
+    // throw, trash it before tearing down a group this call created, so a
+    // mid-flight failure never leaves an orphaned panel behind (#10441).
+    if (newPanelId) trashPanel(newPanelId);
     if (createdNewGroup && groupId) {
       deleteTabGroup(groupId);
     }

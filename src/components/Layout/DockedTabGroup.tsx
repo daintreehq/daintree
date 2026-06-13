@@ -421,11 +421,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
 
+    let newPanelId: string | undefined;
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "dock");
       // `activateDockOnCreate` folds dock activation into the panel commit so
       // the watchdog effect cannot collapse the just-created tab. See #6590.
-      const newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
+      newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
       if (!newPanelId) return;
 
       // If the add is rejected (worktree mismatch, group vanished), trash the
@@ -438,6 +439,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       setActiveTab(group.id, newPanelId);
     } catch (error) {
       logError("Failed to add tab", error);
+      // Trash a created-but-unjoined panel so a mid-flight throw can't orphan it.
+      if (newPanelId) trashPanel(newPanelId);
     }
   }, [activePanel, group.id, addPanel, addPanelToGroup, trashPanel, setActiveTab]);
 
