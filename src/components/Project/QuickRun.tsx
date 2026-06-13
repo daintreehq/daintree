@@ -394,7 +394,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               <div
                 className={cn(
                   // Fallback keeps themes without --dock-input-bg byte-identical.
-                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
+                  "relative flex items-center rounded-[var(--radius-md)] border border-border-default bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
                   "transition focus-within:border-daintree-accent/35 focus-within:ring-1 focus-within:ring-daintree-accent/12"
                 )}
               >

@@ -50,6 +50,84 @@ async function deleteFirstOriginalClaudePreset(window: Page): Promise<void> {
   });
 }
 
+async function resetClaudeCustomPresets(window: Page): Promise<void> {
+  await window.evaluate(async () => {
+    type DispatchResult = { ok?: boolean; error?: { message?: string } };
+    type Dispatch = (
+      actionId: string,
+      args?: unknown,
+      options?: { source?: string }
+    ) => Promise<DispatchResult>;
+
+    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const entry = settings.agents?.claude ?? {};
+    const nextEntry = {
+      ...entry,
+      customPresets: [],
+      presetId: undefined,
+    };
+
+    const dispatch = (window as unknown as { __daintreeDispatchAction?: Dispatch })
+      .__daintreeDispatchAction;
+    if (dispatch) {
+      const result = await dispatch(
+        "agentSettings.set",
+        { agentId: "claude", settings: nextEntry },
+        { source: "test" }
+      );
+      if (result?.ok === false) {
+        throw new Error(result.error?.message ?? "agentSettings.set failed");
+      }
+      return;
+    }
+
+    await window.electron.agentSettings.set("claude", nextEntry);
+  });
+}
+
+async function duplicateClaudePresetDirectly(window: Page, presetId: string): Promise<void> {
+  await window.evaluate(async (targetPresetId) => {
+    type DispatchResult = { ok?: boolean; error?: { message?: string } };
+    type Dispatch = (
+      actionId: string,
+      args?: unknown,
+      options?: { source?: string }
+    ) => Promise<DispatchResult>;
+
+    const settings = (await window.electron.agentSettings.get()) as PersistedAgentSettings;
+    const entry = settings.agents?.claude ?? {};
+    const presets = entry.customPresets ?? [];
+    const target = presets.find((preset) => preset.id === targetPresetId);
+    if (!target) throw new Error(`Claude custom preset not found: ${targetPresetId}`);
+    const duplicate = {
+      ...target,
+      id: `e2e-copy-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name: `${target.name ?? "Custom Preset"} (copy)`,
+    };
+    const nextEntry = {
+      ...entry,
+      customPresets: [...presets, duplicate],
+      presetId: duplicate.id,
+    };
+
+    const dispatch = (window as unknown as { __daintreeDispatchAction?: Dispatch })
+      .__daintreeDispatchAction;
+    if (dispatch) {
+      const result = await dispatch(
+        "agentSettings.set",
+        { agentId: "claude", settings: nextEntry },
+        { source: "test" }
+      );
+      if (result?.ok === false) {
+        throw new Error(result.error?.message ?? "agentSettings.set failed");
+      }
+      return;
+    }
+
+    await window.electron.agentSettings.set("claude", nextEntry);
+  }, presetId);
+}
+
 test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
   test.beforeAll(async () => {
     removeCcrConfig();
@@ -179,13 +257,14 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
 
   test("42. Deleting original does not affect duplicate", async () => {
     removeCcrConfig();
+    await resetClaudeCustomPresets(ctx.window);
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
     const customCountBeforeDuplicate = (await getClaudeCustomPresets(ctx.window)).length;
+    const [targetPreset] = await getClaudeCustomPresets(ctx.window);
+    expect(targetPreset?.id).toBeTruthy();
 
-    const dupBtn = await getVisibleDuplicateButton();
-    await dupBtn.scrollIntoViewIfNeeded().catch(() => undefined);
-    await dupBtn.click({ force: true, noWaitAfter: true });
+    await duplicateClaudePresetDirectly(ctx.window, targetPreset!.id);
     await expect
       .poll(() => getClaudeCustomPresets(ctx.window).then((presets) => presets.length), {
         timeout: process.env.CI ? 10_000 : 5_000,

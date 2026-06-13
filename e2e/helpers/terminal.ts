@@ -234,7 +234,7 @@ export async function runTerminalCommand(
   const panelId = await getPanelId(panelLocator);
   if (!panelId) throw new Error("Could not resolve panel ID for terminal command");
 
-  await waitForTerminalReady(page, panelLocator, options.readyTimeout);
+  await waitForTerminalPty(page, panelLocator, options.readyTimeout);
   await activateTerminal(page, panelId);
 
   if (await runWindowsEchoGuardedCommand(page, panelLocator, command)) {

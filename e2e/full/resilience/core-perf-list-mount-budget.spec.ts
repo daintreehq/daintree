@@ -13,7 +13,7 @@
  * @see https://github.com/GoogleChrome/web-vitals/issues/180
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -32,6 +32,30 @@ const MAX_DOM_DELTA = 25_000;
 // Linux for the same stable DOM delta. Keep this as a count gate, but calibrate
 // by platform so runner scheduling noise does not fail otherwise healthy builds.
 const MAX_LONG_TASKS = process.platform === "darwin" ? 25 : process.platform === "win32" ? 20 : 10;
+
+const clickReviewHubSetupButton = async (locator: Locator) => {
+  await expect(locator).toBeVisible({ timeout: T_LONG });
+  await expect(locator).toBeEnabled({ timeout: T_LONG });
+  await locator.evaluate((element) => {
+    (element as HTMLElement).click();
+  });
+};
+
+const waitForReviewHubUnstagedSetup = async (hub: Locator) => {
+  const noStagedFiles = hub.locator(SEL.reviewHub.noStagedFiles);
+  await expect
+    .poll(
+      async () => {
+        return await noStagedFiles.isVisible().catch(() => false);
+      },
+      {
+        timeout: T_LONG,
+        intervals: [250, 500, 1_000],
+      }
+    )
+    .toBe(true);
+  await expect(noStagedFiles).toBeVisible({ timeout: T_SHORT });
+};
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -78,18 +102,21 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
       await expect(fileListToggle).toBeVisible({ timeout: T_LONG });
       if ((await fileListToggle.getAttribute("aria-expanded")) !== "true") {
-        await fileListToggle.click();
+        await clickReviewHubSetupButton(fileListToggle);
+        await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", {
+          timeout: T_MEDIUM,
+        });
       }
 
       await expect(hub.locator(SEL.reviewHub.unstageAllButton)).toBeVisible({ timeout: T_LONG });
-      await hub.locator(SEL.reviewHub.unstageAllButton).click();
-      await expect(hub.locator(SEL.reviewHub.noStagedFiles)).toBeVisible({ timeout: T_MEDIUM });
+      await clickReviewHubSetupButton(hub.locator(SEL.reviewHub.unstageAllButton));
+      await waitForReviewHubUnstagedSetup(hub);
       await expect(hub.locator(SEL.reviewHub.noUnstagedChanges)).not.toBeVisible({
         timeout: T_SHORT,
       });
 
       // Collapse before the measurement so the next expand is a fresh mount.
-      await fileListToggle.click();
+      await clickReviewHubSetupButton(fileListToggle);
       await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", { timeout: T_MEDIUM });
       await window.waitForTimeout(T_SETTLE);
     });
@@ -134,7 +161,7 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       const hub = window.locator(SEL.reviewHub.container);
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
 
-      await fileListToggle.click();
+      await clickReviewHubSetupButton(fileListToggle);
       await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", { timeout: T_MEDIUM });
 
       // Wait for both last and mid-range rows — confirms full list span

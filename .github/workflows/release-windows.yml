@@ -72,7 +72,7 @@ jobs:
   unit-tests:
     if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     name: Unit Tests (Windows)
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 25
     steps:
       - name: Check out repository
@@ -139,7 +139,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (Windows x64)
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 90
     steps:
       - name: Check out repository
@@ -215,7 +215,7 @@ jobs:
           $extractDir = Join-Path $env:RUNNER_TEMP "daintree-packaged-smoke"
           Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-          # 7-Zip extraction (preinstalled on windows-latest) is faster than an
+          # 7-Zip extraction (preinstalled on windows-2022) is faster than an
           # NSIS silent install and avoids registry/shortcut side effects.
           7z x $setup.FullName -o"$extractDir" -y | Out-Null
           if ($LASTEXITCODE -ne 0) { Write-Error "7z extraction of installer failed (exit $LASTEXITCODE)"; exit 1 }
@@ -485,7 +485,7 @@ jobs:
     if: always() && (github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id != '' || needs.assemble-windows-release.result == 'success')
     needs: [assemble-windows-release]
     name: Smoke (packaged NSIS)
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 20
     steps:
       - name: Check out repository

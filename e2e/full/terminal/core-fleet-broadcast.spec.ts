@@ -85,6 +85,26 @@ async function armFleet(page: Page, terminalIds: string[]): Promise<void> {
   });
 }
 
+async function resetClaudeLaunchSettings(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    type AgentSettingsEntry = {
+      customFlags?: string;
+      dangerousEnabled?: boolean;
+      presetId?: string;
+    } & Record<string, unknown>;
+    type AgentSettings = { agents?: Record<string, AgentSettingsEntry | undefined> };
+
+    const settings = (await window.electron.agentSettings.get()) as AgentSettings;
+    const entry = settings.agents?.claude ?? {};
+    await window.electron.agentSettings.set("claude", {
+      ...entry,
+      customFlags: undefined,
+      dangerousEnabled: false,
+      presetId: undefined,
+    });
+  });
+}
+
 async function ensureFleetProjectOpen(): Promise<void> {
   const projectName = path.basename(fixtureDir);
 
@@ -538,6 +558,10 @@ test.describe.serial("Core: Fleet terminal broadcast", () => {
         { source: "user" }
       );
       expect(disableHybrid.ok, disableHybrid.error?.message).toBe(true);
+    });
+
+    await test.step("Reset Claude launch flags for the fake CLI", async () => {
+      await resetClaudeLaunchSettings(window);
     });
 
     let agents: Array<{ id: string; panel: Locator }> = [];

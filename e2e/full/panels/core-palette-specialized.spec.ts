@@ -103,7 +103,9 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
 
     await searchInput.fill("term");
     await expect(searchInput).toHaveValue("term");
-    await window.keyboard.press("Escape");
+    await searchInput.press("Escape");
+    await expect(searchInput).toHaveValue("");
+    await searchInput.press("Escape");
     await expect(window.locator(SEL.panelPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
 
     await window.keyboard.press(`${mod}+N`);
@@ -142,7 +144,9 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await searchInput.fill("browser");
     await expect(searchInput).toHaveValue("browser");
 
-    await window.keyboard.press("Escape");
+    await searchInput.press("Escape");
+    await expect(searchInput).toHaveValue("");
+    await searchInput.press("Escape");
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
     // Reopening starts from a clean query (state isolation).

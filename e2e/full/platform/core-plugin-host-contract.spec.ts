@@ -177,7 +177,9 @@ test.describe.serial("Core: Plugin host-contract harness", () => {
       .filter({ hasText: "Hello: Greet" });
     await expect(greetOption.first()).toBeVisible({ timeout: T_MEDIUM });
 
-    await window.keyboard.press("Escape");
+    await searchInput.press("Escape");
+    await expect(searchInput).toHaveValue("");
+    await searchInput.press("Escape");
     await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
   });
 

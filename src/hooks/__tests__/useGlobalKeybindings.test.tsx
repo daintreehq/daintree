@@ -2,6 +2,7 @@
 import { render, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
+import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
   const parts = combo.split("+").map((p) => p.trim());
@@ -51,6 +52,9 @@ vi.mock("@/services/ActionService", () => ({
 
 vi.mock("../../store", () => ({
   usePanelStore: { getState: () => ({ focusedId: null }) },
+  usePaletteStore: {
+    getState: vi.fn(() => ({ activePaletteId: null })),
+  },
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -58,6 +62,15 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 const { useGlobalKeybindings } = await import("../useGlobalKeybindings");
+const { usePaletteStore } = await import("../../store");
+
+function makePaletteState(activePaletteId: PaletteId | null) {
+  return {
+    activePaletteId,
+    openPalette: vi.fn(),
+    closePalette: vi.fn(),
+  };
+}
 
 function Host() {
   useGlobalKeybindings(true);
@@ -77,6 +90,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.keybindingService.getPendingChord.mockReturnValue(null);
   mocks.actionService.dispatch.mockResolvedValue({ ok: true, result: undefined });
+  vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
 });
 
 describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
@@ -335,6 +349,157 @@ describe("useGlobalKeybindings — Backspace pops pending chord", () => {
     expect(mocks.keybindingService.clearPendingChord).not.toHaveBeenCalled();
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("useGlobalKeybindings — palette Escape capture", () => {
+  function dispatchEscape(target: EventTarget = document.body) {
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  it("routes bare Escape to the escape stack before the xterm guard when a palette is active", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState("quick-switcher"));
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    document.body.appendChild(xterm);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(xterm);
+
+      expect(escapeHandler).toHaveBeenCalledTimes(1);
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      xterm.remove();
+    }
+  });
+
+  it("routes bare Escape to the escape stack for non-terminal overlays even without palette state", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const overlay = document.createElement("div");
+    overlay.tabIndex = -1;
+    document.body.appendChild(overlay);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(overlay);
+
+      expect(escapeHandler).toHaveBeenCalledTimes(1);
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      overlay.remove();
+    }
+  });
+
+  it("leaves bare Escape in editable controls to the control when no palette is active", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(input);
+
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    } finally {
+      input.remove();
+    }
+  });
+
+  it("routes bare Escape before the xterm guard when a modal dialog is visible", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    dialog.appendChild(xterm);
+    document.body.appendChild(dialog);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(xterm);
+
+      expect(escapeHandler).toHaveBeenCalledTimes(1);
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("leaves bare Escape inside xterm alone when no palette is active", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    document.body.appendChild(xterm);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(xterm);
+
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    } finally {
+      xterm.remove();
+    }
   });
 });
 

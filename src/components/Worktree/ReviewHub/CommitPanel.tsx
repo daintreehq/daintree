@@ -225,13 +225,16 @@ export function CommitPanel({
       const hasModifier = e.altKey || e.metaKey || e.ctrlKey;
       const isCaretAtStart =
         e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
-      const isCyclingHistory = historyIndexRef.current >= 0 || pendingFirstApplyRef.current;
+      const visibleMessage = e.currentTarget.value;
+      const isCyclingHistory =
+        pendingFirstApplyRef.current ||
+        (historyIndexRef.current >= 0 &&
+          historyMessagesRef.current?.[historyIndexRef.current] === visibleMessage);
 
       if (isHistoryKey && !hasModifier && (isCaretAtStart || isCyclingHistory)) {
         e.preventDefault();
 
         if (e.key === "ArrowUp") {
-          const visibleMessage = e.currentTarget.value;
           if (historyIndexRef.current < 0) {
             const cachedIndex = historyMessagesRef.current?.indexOf(visibleMessage) ?? -1;
             if (cachedIndex >= 0) {

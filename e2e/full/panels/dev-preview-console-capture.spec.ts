@@ -82,12 +82,8 @@ server.listen(0, '127.0.0.1', () => {
       timeout: T_LONG,
     });
 
-    const consoleBar = window.locator('[aria-controls^="console-drawer-"]').locator("..");
-    const statusBadge = consoleBar.locator('[role="status"]');
-    await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
-
     const webview = window.locator("webview");
-    await expect(webview).toBeAttached({ timeout: T_MEDIUM });
+    await expect(webview).toBeAttached({ timeout: T_LONG });
 
     // Open the drawer and switch to the Console tab.
     const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();

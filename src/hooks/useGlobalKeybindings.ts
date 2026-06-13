@@ -3,7 +3,7 @@ import { keybindingService, normalizeKeyForBinding } from "../services/Keybindin
 import { actionService } from "../services/ActionService";
 import { logError } from "@/utils/logger";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
-import { usePanelStore } from "../store";
+import { usePaletteStore, usePanelStore } from "../store";
 
 /**
  * Global keybinding handler that provides:
@@ -88,6 +88,19 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         e.preventDefault();
         e.stopPropagation();
         keybindingService.clearPendingChord();
+        return;
+      }
+
+      const activePaletteId = usePaletteStore.getState().activePaletteId;
+      const hasModalDialog = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      if (
+        e.key === "Escape" &&
+        hasHandlers() &&
+        (activePaletteId !== null || (!isEditable && (hasModalDialog || !isInTerminal)))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        dispatchEscape();
         return;
       }
 

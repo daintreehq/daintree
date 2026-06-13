@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { spawn, type ChildProcess } from "child_process";
 import {
   launchApp,
   closeApp,
@@ -116,9 +117,10 @@ test.describe("Core: Process Cleanup", () => {
     });
     const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-unclean-"));
     let orphanPid = 0;
+    let orphanProcess: ChildProcess | undefined;
 
     try {
-      // === First session: launch, spawn HUP-resistant process, seed trashed-pids, SIGKILL ===
+      // === First session: launch, seed trashed-pids, SIGKILL ===
       const ctx = await launchApp({ userDataDir });
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Unclean Exit");
 
@@ -128,17 +130,21 @@ test.describe("Core: Process Cleanup", () => {
       await runTerminalCommand(ctx.window, panel, "echo SHELL_READY_MARKER");
       await waitForTerminalText(panel, "SHELL_READY_MARKER", T_LONG);
 
-      // Spawn a HUP-resistant process so it survives SIGKILL of parent.
-      // `trap '' HUP` makes the shell ignore SIGHUP.
-      // `exec sleep 9999` replaces the shell with sleep, so PTY PID IS the sleep process.
-      await runTerminalCommand(ctx.window, panel, "trap '' HUP; exec sleep 9999");
-      await ctx.window.waitForTimeout(1500);
-
-      // Get PTY PID — after exec, this is the sleep process
-      orphanPid = await getPtyPid(ctx.window, panel);
+      // TrashedPidTracker only needs a live PID/start-time entry from a previous
+      // session. Use a test-owned detached process so this assertion is not
+      // coupled to PTY-host crash reaping behavior.
+      orphanProcess = spawn("sh", ["-c", "trap '' TERM HUP; exec sleep 9999"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      orphanProcess.unref();
+      orphanPid = orphanProcess.pid ?? 0;
       expect(orphanPid).toBeGreaterThan(0);
 
       // Get the process start time in the format TrashedPidTracker uses
+      await expect
+        .poll(() => getProcessStartTime(orphanPid), { timeout: 10_000, intervals: [100] })
+        .toBeTruthy();
       const startTime = getProcessStartTime(orphanPid);
       expect(startTime).toBeTruthy();
 
@@ -179,6 +185,11 @@ test.describe("Core: Process Cleanup", () => {
     } finally {
       // Failsafe: kill orphan if it survived
       if (orphanPid > 0) {
+        try {
+          process.kill(-orphanPid, "SIGKILL");
+        } catch {
+          // fall back to direct kill below
+        }
         try {
           process.kill(orphanPid, "SIGKILL");
         } catch {
