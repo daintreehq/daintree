@@ -307,13 +307,37 @@ test.describe.serial("Split-mode crash regression (issue #10438)", () => {
     splitFixtureCleanup?.();
   });
 
-  test("duplicate as new tab with split mode enabled does not crash and forms a tab group", async () => {
+  // The two-pane split layout container; present only while split mode is
+  // active (TwoPaneSplitLayout renders `data-split-mode="true"`).
+  const splitLayout = '[data-split-mode="true"]';
+
+  test("split mode activates for two independent panels but duplicate-as-tab does not crash", async () => {
     const { window } = splitCtx;
+    const split = window.locator(splitLayout);
 
+    // Precondition + legitimate-path guard: two independent ungrouped panels
+    // (two virtual singleton groups) must activate the split layout. This both
+    // proves split mode is genuinely enabled in this context (so the duplicate
+    // assertion below isn't vacuously passing with split mode off) and guards
+    // the legitimate split path against regression from the new
+    // allGroupsAreVirtual predicate term.
     await openTerminal(window);
-    const panel = getFirstGridPanel(window);
-    await expect(panel).toBeVisible({ timeout: T_LONG });
+    await openTerminal(window);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(2);
+    await expect(split).toBeVisible({ timeout: T_MEDIUM });
 
+    // Reduce back to a single panel so the duplicate flow starts from the
+    // one-panel state that triggered the crash.
+    await window.locator(SEL.panel.gridPanel).last().locator(SEL.panel.close).first().click({
+      force: true,
+    });
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
+    await expect(split).toBeHidden({ timeout: T_MEDIUM });
+
+    // The actual regression: duplicate-as-tab on the solo panel. The old
+    // predicate matched the transient explicit+virtual group pair and activated
+    // the split layout against an already-grouped panel, crashing the renderer.
+    const panel = getFirstGridPanel(window);
     // The + button has opacity-0 on single panels, use force:true
     const duplicateBtn = panel.locator(SEL.panel.duplicate).first();
     await duplicateBtn.click({ force: true, timeout: T_MEDIUM });
@@ -328,7 +352,9 @@ test.describe.serial("Split-mode crash regression (issue #10438)", () => {
     const tabs = tabList.locator(SEL.panel.tab);
     await expect(tabs).toHaveCount(2, { timeout: T_MEDIUM });
 
-    // The two tabs stay within a single grid panel — not two split panes.
+    // The two tabs stay within a single grid panel — a tab group, never the
+    // split layout.
     expect(await getGridPanelCount(window)).toBe(1);
+    await expect(split).toBeHidden({ timeout: T_SHORT });
   });
 });
