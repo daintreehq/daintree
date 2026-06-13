@@ -1,20 +1,20 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { hibernationClient } from "@/clients/hibernationClient";
 import { notify } from "@/lib/notify";
 
+// One-way latch: app-lifetime, notify-only singleton listener with no teardown.
+// Never reset this — resetting on unmount allowed a remount to re-subscribe and
+// fire duplicate toasts (#10455).
 let ipcListenerAttached = false;
 
 export function useHibernationNotifications(): void {
-  const didAttachListener = useRef(false);
-
   useEffect(() => {
     if (!isElectronAvailable() || ipcListenerAttached) return;
 
     ipcListenerAttached = true;
-    didAttachListener.current = true;
 
-    const unsubscribe = hibernationClient.onProjectHibernated((payload) => {
+    hibernationClient.onProjectHibernated((payload) => {
       const { projectId, projectName, terminalsKilled, reason } = payload;
       const reasonLabel = reason === "memory-pressure" ? " (memory pressure)" : "";
 
@@ -36,12 +36,5 @@ export function useHibernationNotifications(): void {
         },
       });
     });
-
-    return () => {
-      if (didAttachListener.current) {
-        unsubscribe();
-        ipcListenerAttached = false;
-      }
-    };
   }, []);
 }

@@ -365,7 +365,7 @@ function Toast({
     <div
       ref={toastRef}
       className={cn(
-        "pointer-events-auto relative w-full max-w-[360px]",
+        "pointer-events-auto relative w-full min-w-[240px] max-w-[360px]",
         "transition-[transform,opacity]",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"

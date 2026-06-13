@@ -1,22 +1,22 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "@/hooks/useElectron";
 
 const DISK_SPACE_CORRELATION_ID = "disk-space-warning";
 const DISK_SPACE_SUPERSEDE_KEY = "disk-space";
 
+// One-way latch: app-lifetime, notify-only singleton listener with no teardown.
+// Never reset this — resetting on unmount allowed a remount to re-subscribe and
+// fire duplicate toasts (#10455).
 let ipcListenerAttached = false;
 
 export function useDiskSpaceWarnings(): void {
-  const didAttachListener = useRef(false);
-
   useEffect(() => {
     if (!isElectronAvailable() || ipcListenerAttached) return;
 
     ipcListenerAttached = true;
-    didAttachListener.current = true;
 
-    const unsubscribe = window.electron.window.onDiskSpaceStatus((payload) => {
+    window.electron.window.onDiskSpaceStatus((payload) => {
       if (payload.status === "normal") {
         // Resolution row: priority "low" routes to inbox only; `supersedeKey`
         // archives the prior warning entry automatically. Keyboard-only and
@@ -68,12 +68,5 @@ export function useDiskSpaceWarnings(): void {
         });
       }
     });
-
-    return () => {
-      if (didAttachListener.current) {
-        unsubscribe();
-        ipcListenerAttached = false;
-      }
-    };
   }, []);
 }
