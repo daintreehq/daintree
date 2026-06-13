@@ -346,6 +346,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     }
 
     if (currentProjectId) {
+      // Saved→restored panel id remap produced by restorePanelsPhase; consumed
+      // by the tab-group hydration block below. Declared here (not in the
+      // restore try) so it survives into that block even if panel restore
+      // throws, in which case it stays empty and tab groups hydrate unremapped
+      // exactly as before (#10440).
+      let savedIdToRestoredId = new Map<string, string>();
       try {
         const backendTerminals = await getForProjectPromise;
         finishGetForProjectSpan?.();
@@ -436,7 +442,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
         const prefetchedReconnectResults = await reconnectPrefetchPromise;
 
-        const { restoreTasks } = await restorePanelsPhase(appState.terminals, {
+        const restoreResult = await restorePanelsPhase(appState.terminals, {
           addPanel,
           withHydrationBatch,
           backendTerminalMap,
@@ -452,6 +458,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           safeMode: hydrateResult.safeMode,
           logHydrationInfo,
         });
+        const { restoreTasks } = restoreResult;
+        // Capture the saved→restored panel id remap so the tab-group block
+        // below (outside this try) can keep group membership intact when a
+        // panel respawned with a fresh id (#10440).
+        savedIdToRestoredId = restoreResult.savedIdToRestoredId;
 
         // Schedule scrollback restores at background priority — no blocking IPC
         // fetch on the critical path. The overlay can dismiss immediately and
@@ -494,7 +505,24 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               logHydrationInfo("Clearing stale tab groups (no groups for project)");
             }
             tabGroupRestoreCount = tabGroups.length;
-            options.hydrateTabGroups(tabGroups);
+            // Remap persisted panel ids onto the ids panels actually restored
+            // under before handing off to hydrateTabGroups. A panel whose PTY
+            // reconnect timed out respawns with a fresh id, so its persisted
+            // tab-group entry points at a now-dead saved id; without this remap
+            // hydrateTabGroups filters that id out, the group shrinks to one
+            // member, and it is discarded and persisted away — permanently
+            // destroying the grouping (#10440). The map is sparse and empty
+            // whenever every panel kept its saved id, so the fast path leaves
+            // the original array untouched.
+            const remappedTabGroups =
+              savedIdToRestoredId.size > 0
+                ? tabGroups.map((group) => ({
+                    ...group,
+                    activeTabId: savedIdToRestoredId.get(group.activeTabId) ?? group.activeTabId,
+                    panelIds: group.panelIds.map((id) => savedIdToRestoredId.get(id) ?? id),
+                  }))
+                : tabGroups;
+            options.hydrateTabGroups(remappedTabGroups);
             markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
               tabGroupCount: tabGroupRestoreCount,
             });

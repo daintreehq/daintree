@@ -56,12 +56,20 @@ vi.mock("../statePatcher", () => ({
     worktreeId: s.worktreeId,
     existingId: rt.id,
   }),
-  buildArgsForRespawn: (s: TerminalState, kind: string) => ({
+  buildArgsForRespawn: (
+    s: TerminalState,
+    kind: string,
+    _projectRoot?: string,
+    _agentSettings?: unknown,
+    reconnectTimedOut?: boolean
+  ) => ({
     cwd: s.cwd ?? "/cwd",
     kind,
     location: s.location === "dock" ? "dock" : "grid",
     worktreeId: s.worktreeId,
-    requestedId: s.id,
+    // Mirror the real buildArgsForRespawn: a timed-out reconnect drops the
+    // requested id so the store generates a fresh one (#10440).
+    requestedId: reconnectTimedOut ? undefined : s.id,
     launchAgentId: s.launchAgentId,
   }),
   buildArgsForNonPtyRecreation: (s: TerminalState, kind: string) => ({
@@ -503,5 +511,72 @@ describe("restorePanelsPhase — matched backend not re-appended as orphan", () 
       (call) => (call[0] as { existingId?: string }).existingId
     );
     expect(ids.sort()).toEqual(["matched", "orphan"]);
+  });
+});
+
+describe("restorePanelsPhase — savedIdToRestoredId remap (issue #10440)", () => {
+  it("maps the saved id to the freshly generated id when a PTY reconnect times out", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "timeout" });
+    const ctx = makeContext();
+    // A timed-out respawn passes requestedId: undefined, so the store assigns a
+    // new id — model that here and assert the map captures saved → new.
+    ctx.addPanel.mockImplementation(
+      async (args: { requestedId?: string; existingId?: string }) =>
+        args.requestedId ?? args.existingId ?? "regenerated-id"
+    );
+    const { savedIdToRestoredId } = await restorePanelsPhase(
+      [panel("p1", { kind: "agent", launchAgentId: "claude" })],
+      ctx
+    );
+    expect(savedIdToRestoredId.get("p1")).toBe("regenerated-id");
+    expect(savedIdToRestoredId.size).toBe(1);
+  });
+
+  it("leaves the map empty when a respawn keeps the saved id (not_found, no timeout)", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext();
+    // not_found respawn keeps requestedId: "p1", so addPanel returns "p1" — the
+    // restored id equals the saved id, an identity mapping that is excluded.
+    const { savedIdToRestoredId } = await restorePanelsPhase(
+      [panel("p1", { kind: "agent", launchAgentId: "claude" })],
+      ctx
+    );
+    expect(savedIdToRestoredId.size).toBe(0);
+  });
+
+  it("excludes identity mappings for cleanly reconnected backend terminals", async () => {
+    const ctx = makeContext();
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    const { savedIdToRestoredId } = await restorePanelsPhase([panel("t1")], ctx);
+    // Backend reconnect restores under existingId "t1" — same as saved, skipped.
+    expect(savedIdToRestoredId.size).toBe(0);
+  });
+
+  it("maps only the timed-out panel, leaving cleanly restored siblings out", async () => {
+    // p1 times out (new id); p2 reconnects cleanly under its saved id.
+    reconnectWithTimeoutMock.mockImplementation(async (id: string) =>
+      id === "p1" ? { status: "timeout" } : { status: "not_found" }
+    );
+    const ctx = makeContext();
+    ctx.addPanel.mockImplementation(
+      async (args: { requestedId?: string; existingId?: string }) =>
+        args.requestedId ?? args.existingId ?? "new-p1"
+    );
+    const { savedIdToRestoredId } = await restorePanelsPhase(
+      [
+        panel("p1", { kind: "agent", launchAgentId: "claude" }),
+        panel("p2", { kind: "agent", launchAgentId: "claude" }),
+      ],
+      ctx
+    );
+    expect(savedIdToRestoredId.size).toBe(1);
+    expect(savedIdToRestoredId.get("p1")).toBe("new-p1");
+    expect(savedIdToRestoredId.has("p2")).toBe(false);
+  });
+
+  it("returns an empty map when there are no saved panels", async () => {
+    const ctx = makeContext();
+    const { savedIdToRestoredId } = await restorePanelsPhase(undefined, ctx);
+    expect(savedIdToRestoredId.size).toBe(0);
   });
 });
