@@ -32,7 +32,11 @@ export function PanelTabList({
   const performanceMode = document.body.dataset.performanceMode === "true";
 
   return (
-    <div className={cn("relative min-w-0 flex-1 flex", className)}>
+    // [data-no-dnd] opts the whole tab strip out of the outer panel-move drag
+    // sensor (NoDndMouseSensor) so dragging/clicking a tab — or the add/overflow
+    // buttons — never arms the parent panel drag. Inner tab reorder is a separate
+    // DndContext using PointerSensor, which ignores [data-no-dnd], so it still works.
+    <div data-no-dnd className={cn("relative min-w-0 flex-1 flex", className)}>
       <div
         ref={tabListRef}
         className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none relative"

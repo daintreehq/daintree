@@ -666,4 +666,52 @@ describe("TabButton", () => {
       expect(onClick).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("pointer drag composition (issue #10443)", () => {
+    it("stops the tab pointerdown from bubbling to the parent panel drag surface", () => {
+      const parentPointerDown = vi.fn();
+      const sensorPointerDown = vi.fn();
+      render(
+        <div onPointerDown={parentPointerDown}>
+          <TabButton {...defaultProps} sortableListeners={{ onPointerDown: sensorPointerDown }} />
+        </div>
+      );
+      fireEvent.pointerDown(screen.getByRole("tab"));
+      // Guard stops propagation so the parent panel-move drag is never armed...
+      expect(parentPointerDown).not.toHaveBeenCalled();
+      // ...but the inner tab sortable sensor still receives the pointerdown so
+      // tab reorder can pick up. This proves the spread no longer clobbers it.
+      expect(sensorPointerDown).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not route the close button pointerdown through the sortable sensor", () => {
+      const parentPointerDown = vi.fn();
+      const sensorPointerDown = vi.fn();
+      render(
+        <div onPointerDown={parentPointerDown}>
+          <TabButton
+            {...defaultProps}
+            onClose={vi.fn()}
+            sortableListeners={{ onPointerDown: sensorPointerDown }}
+          />
+        </div>
+      );
+      fireEvent.pointerDown(screen.getByLabelText("Close Test Agent"));
+      // Close button is not a drag activator: it stops propagation outright and
+      // must NOT pick up a tab drag, so neither the parent nor the sortable fire.
+      expect(parentPointerDown).not.toHaveBeenCalled();
+      expect(sensorPointerDown).not.toHaveBeenCalled();
+    });
+
+    it("still stops propagation when no sortable listeners are wired", () => {
+      const parentPointerDown = vi.fn();
+      render(
+        <div onPointerDown={parentPointerDown}>
+          <TabButton {...defaultProps} />
+        </div>
+      );
+      fireEvent.pointerDown(screen.getByRole("tab"));
+      expect(parentPointerDown).not.toHaveBeenCalled();
+    });
+  });
 });
