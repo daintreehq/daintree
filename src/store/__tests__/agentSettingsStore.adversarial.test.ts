@@ -777,7 +777,7 @@ describe("agentSettingsStore adversarial", () => {
     const settings = useAgentSettingsStore.getState().settings;
     expect(settings?.globalSkipPermissions).toBe(true);
     // The per-agent toggle must be left untouched — the global is a live override.
-    expect(settings?.agents.claude.dangerousEnabled).toBe(true);
+    expect(settings?.agents.claude?.dangerousEnabled).toBe(true);
   });
 
   it("setGlobalSkipPermissions rolls back to the prior value when the IPC write rejects (#10432)", async () => {
