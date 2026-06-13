@@ -396,7 +396,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               </button>
             </div>
           )}
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto diff-scroll-root">
             {!selectedFile && (
               <div className="flex items-center justify-center h-full text-text-muted text-sm">
                 {result ? "Select a file to view its diff" : ""}

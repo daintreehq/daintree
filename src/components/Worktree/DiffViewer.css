@@ -387,37 +387,51 @@
   background: color-mix(in srgb, var(--color-accent-primary) 30%, transparent);
 }
 
-/* Scrollbar styling for diff viewer */
-.diff-viewer::-webkit-scrollbar {
+/* Persistent always-visible scrollbar for the external container that owns
+   DiffViewer's scroll. The .diff-viewer root is content-sized (no overflow) so
+   its host scroll container — AppDialog.BodyScroll in FileViewerModal, the
+   flex-1 wrapper in CrossWorktreeDiff — renders the only vertical scrollbar,
+   avoiding the nested double-scrollbar. The global `* { scrollbar-width: thin }`
+   in index.css opts everything into standard (overlay, auto-hiding on macOS)
+   scrollbars, which also disables ::-webkit-scrollbar in Chromium 121+. Resetting
+   scrollbar-width/color to auto re-enables the webkit pseudo-elements, and a
+   non-zero ::-webkit-scrollbar width forces a classic always-visible bar. Mirrors
+   the .diff-hscrollbar pattern used for the horizontal axis. */
+.diff-scroll-root {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.diff-scroll-root::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-.diff-viewer::-webkit-scrollbar-track {
+.diff-scroll-root::-webkit-scrollbar-track {
   background: var(--color-daintree-bg);
 }
 
-.diff-viewer::-webkit-scrollbar-thumb {
+.diff-scroll-root::-webkit-scrollbar-thumb {
   background: var(--color-state-idle);
   border-radius: var(--radius-sm);
 }
 
-.diff-viewer::-webkit-scrollbar-thumb:hover {
+.diff-scroll-root::-webkit-scrollbar-thumb:hover {
   background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
 }
 
 /* D1a (light) — diff scrollbars consume the shared --scrollbar-* tokens so
  * per-theme scrollbar tuning applies. Dark keeps the original hardcoded values
  * above (byte-for-byte unchanged). */
-.light .diff-viewer::-webkit-scrollbar-track {
+.light .diff-scroll-root::-webkit-scrollbar-track {
   background: var(--scrollbar-track);
 }
 
-.light .diff-viewer::-webkit-scrollbar-thumb {
+.light .diff-scroll-root::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
 }
 
-.light .diff-viewer::-webkit-scrollbar-thumb:hover {
+.light .diff-scroll-root::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
 

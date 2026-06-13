@@ -897,7 +897,7 @@ export function FileViewerModal({
       </AppDialog.Header>
 
       <div className="relative flex-1 min-h-0 flex flex-col">
-        <AppDialog.BodyScroll className="p-0">
+        <AppDialog.BodyScroll className="p-0 diff-scroll-root">
           {isImageMode && (
             <div className="flex items-center justify-center p-6 min-h-[300px]">
               {loadState === "image" && (
