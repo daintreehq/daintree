@@ -1461,6 +1461,7 @@ export function Toolbar({
                 onHoverProject={projectSwitcher.onHoverProject}
                 onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
                 onClose={handlePillDropdownClose}
+                onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
                 onAddProject={projectSwitcher.addProject}
                 onCloneRepo={projectSwitcher.cloneRepo}
                 onStopProject={handleStopProject}
