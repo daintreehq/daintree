@@ -78,8 +78,13 @@ type ManagedTerminalMock = {
     rows: number;
     element: HTMLElement;
     refresh: ReturnType<typeof vi.fn>;
+    open?: ReturnType<typeof vi.fn>;
+    resize?: ReturnType<typeof vi.fn>;
   };
   hostElement: HTMLElement;
+  targetCols?: number;
+  targetRows?: number;
+  lastAppliedTier?: number;
 };
 
 type FullWakeTestService = {
@@ -96,6 +101,8 @@ type FullWakeTestService = {
   handlePostWake: (id: string) => void;
   unhibernate: (id: string) => void;
   ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
+  ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
+  wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
   repaintForReveal: (id: string) => void;
   revealTerminal: (id: string) => Promise<void>;
@@ -615,7 +622,7 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     document.body.removeChild(host);
   });
 
-  it("does not open an unopened terminal whose host has no renderable box (still occluded)", async () => {
+  it("does not open an unopened terminal whose host is detached (still occluded)", async () => {
     const id = "fw-open-occluded";
     // Detached host → not connected → not renderable (mirrors a cached view
     // still behind the bridge during the visibilitychange/resume wake).
@@ -631,6 +638,59 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
 
     expect(ensureOpened).not.toHaveBeenCalled();
     expect(wakeAndRestore).not.toHaveBeenCalled();
+  });
+
+  it("does not open an unopened terminal whose connected host has a zero layout box (occluded behind bridge)", async () => {
+    const id = "fw-open-zerobox";
+    // The production occluded case: the cached view IS attached (host connected)
+    // but reports a zero box while behind the anti-flash bridge. jsdom does no
+    // layout, so an appended-but-unstyled host reports clientWidth/Height = 0,
+    // which is exactly this state.
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const instance = makeInstance({ isOpened: false, hostElement: host });
+    service.instances.set(id, instance);
+
+    const ensureOpened = vi.spyOn(service, "ensureOpened").mockImplementation(() => {});
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(ensureOpened).not.toHaveBeenCalled();
+    expect(wakeAndRestore).not.toHaveBeenCalled();
+
+    document.body.removeChild(host);
+  });
+
+  // Exercises the real ensureOpened() primitive (not a spy) so a regression that
+  // stops calling terminal.open() or stops flipping isOpened is caught — the
+  // seam test above only proves the gate decides to call it.
+  it("ensureOpened opens xterm against the host and flips isOpened without a remount", () => {
+    // An earlier test spied ensureOpened; the suite's beforeEach clears call
+    // history but keeps the implementation (clearAllMocks, not restoreAllMocks),
+    // so restore the real method to exercise the actual primitive here.
+    vi.spyOn(service, "ensureOpened").mockRestore();
+
+    const id = "eo-1";
+    const host = renderableHost();
+    const open = vi.fn();
+    const instance = makeInstance({ isOpened: false, hostElement: host });
+    instance.terminal.open = open;
+    instance.terminal.resize = vi.fn();
+    service.instances.set(id, instance);
+
+    // Isolate the open primitive from addon/WebGL wiring (covered elsewhere).
+    vi.spyOn(service, "ensureDeferredAddons").mockImplementation(() => {});
+    vi.spyOn(service, "wantsWebGLAtTier").mockReturnValue(false);
+
+    service.ensureOpened(id, instance);
+
+    expect(open).toHaveBeenCalledWith(host);
+    expect(instance.isOpened).toBe(true);
+
+    document.body.removeChild(host);
   });
 });
 

@@ -1819,6 +1819,11 @@ class TerminalInstanceService {
   private hostHasRenderableDims(managed: ManagedTerminal): boolean {
     const el = managed.hostElement;
     if (!el || !el.isConnected) return false;
+    // A visibility:hidden / content-visibility:hidden host keeps a nonzero
+    // layout box but must not be opened or measured against — mirror the
+    // checkVisibility() gate the resize controller's fit() already uses.
+    // Guarded for availability: not every DOM impl exposes checkVisibility.
+    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
     return el.clientWidth > 0 && el.clientHeight > 0;
   }
 
