@@ -922,7 +922,26 @@ class TerminalInstanceService {
     // Re-fetch after unhibernate so we operate on the current instance.
     const current = this.instances.get(id);
     if (!current) return;
-    if (!current.isOpened) return;
+    if (!current.isOpened) {
+      // The terminal was hibernated during a long dwell and unhibernate() (or a
+      // prior wake) could not re-open it: behind the warm anti-flash bridge
+      // (#9679) the cached view's host has no measurable layout box, so
+      // unhibernate left isOpened=false deferring to "attach() on next mount" —
+      // but the React tree is never remounted on a warm project-view return, so
+      // attach() never re-fires and nothing re-opens it. Result: a terminal
+      // stuck blank/wonky until the user clicks it.
+      //
+      // This same method is re-run from the foreground reveal pass
+      // (repaintActiveWorktreeTerminals on `app:view-revealed`, via
+      // revealTerminal). By then the view is foreground-presented and the host
+      // has a real layout box, so finish the open here using attach()'s exact
+      // sequence. While still occluded (zero box) we leave it deferred — the
+      // reveal pass retries once layout is valid.
+      if (this.hostHasRenderableDims(current)) {
+        this.ensureOpened(id, current);
+      }
+      if (!current.isOpened) return;
+    }
 
     // Set the deferred-wake flag before the geometry sync so an unexpected
     // throw from applyDeferredResize (e.g. a terminal disposed between the
@@ -1070,6 +1089,35 @@ class TerminalInstanceService {
     // deferred PTY resize and break atomicity — handlePostWake routes those
     // through sendPtyResize instead, and still fit()s + reflows standard agents.
     this.handlePostWake(id);
+  }
+
+  /**
+   * Foreground reveal entry point for a single grid terminal, driven by the
+   * `app:view-revealed` fan-out ({@link repaintActiveWorktreeTerminals}) once
+   * the cached project view is detached from the anti-flash bridge and actually
+   * presented.
+   *
+   * Splits the two states a long-dwell return can leave a terminal in:
+   *
+   * - **Hibernated or unopened** — a dwell past the hibernation delay tore the
+   *   xterm instance down, and the occluded warm wake could not re-open it
+   *   (no measurable host box behind the bridge). The lightweight repaint can't
+   *   help (it guards on `isOpened`), so run the full
+   *   {@link fullWakeForVisibilityRestore}: now that the host has real layout it
+   *   opens, pulls the missed range from the headless mirror, and repaints. This
+   *   is the gap the older reveal patches (#10362) left open for the long-dwell
+   *   case.
+   * - **Already opened and woken** (the common warm path) — only the culled
+   *   paint needs replaying, so take the cheap {@link repaintForReveal}.
+   */
+  async revealTerminal(id: string): Promise<void> {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    if (managed.isHibernated || !managed.isOpened) {
+      await this.fullWakeForVisibilityRestore(id);
+      return;
+    }
+    this.repaintForReveal(id);
   }
 
   /**
@@ -1718,6 +1766,67 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Open xterm against its host element — the first-paint step that builds the
+   * DOM, forces a reflow to measure the cell grid, and inits the renderer.
+   * Idempotent (no-op once `isOpened`). Extracted from {@link attach} so the
+   * foreground reveal-hydration path can re-open a terminal whose occluded warm
+   * wake could not (the host had no measurable layout box behind the anti-flash
+   * bridge) using the exact same sequence — never a divergent second open path.
+   *
+   * The caller owns the precondition that the host is measurable: `attach()`
+   * runs from the mount/reparent effect where layout is settled, and
+   * {@link fullWakeForVisibilityRestore} gates this behind
+   * {@link hostHasRenderableDims}. Opening against a zero-sized host would have
+   * xterm measure a 0/NaN cell and build a broken grid.
+   */
+  private ensureOpened(id: string, managed: ManagedTerminal): void {
+    if (managed.isOpened) return;
+    // Seed xterm's grid before open() so cold-start restore paints at the
+    // saved size instead of flashing 80x24 then snapping (#6983).
+    if (managed.targetCols && managed.targetRows) {
+      managed.terminal.resize(managed.targetCols, managed.targetRows);
+    }
+    // terminalOpenStartedAt anchors the first-write delta (#9809).
+    managed.terminalOpenStartedAt =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    managed.hasEmittedFirstWriteMark = false;
+    markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
+    try {
+      managed.terminal.open(managed.hostElement);
+    } finally {
+      markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
+    }
+    managed.isOpened = true;
+    logDebug(`[TIS] Opened terminal ${id}`);
+    // Build the deferred Image/link addons now that the terminal is live.
+    // Skip BACKGROUND terminals — the tier machinery disposes these addons
+    // there on purpose; they're rebuilt on the next promotion.
+    if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
+      this.ensureDeferredAddons(id, managed);
+    }
+    if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+      this.webGLManager.ensureContext(id, managed);
+    }
+  }
+
+  /**
+   * Whether the host element currently has a real, measurable layout box —
+   * the precondition for {@link ensureOpened}. A detached/occluded project
+   * view (cached `WebContentsView` behind the anti-flash bridge) can report a
+   * zero box; only a foreground-presented view is safe to open/measure against.
+   */
+  private hostHasRenderableDims(managed: ManagedTerminal): boolean {
+    const el = managed.hostElement;
+    if (!el || !el.isConnected) return false;
+    // A visibility:hidden / content-visibility:hidden host keeps a nonzero
+    // layout box but must not be opened or measured against — mirror the
+    // checkVisibility() gate the resize controller's fit() already uses.
+    // Guarded for availability: not every DOM impl exposes checkVisibility.
+    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
+    return el.clientWidth > 0 && el.clientHeight > 0;
+  }
+
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
     const managed = this.instances.get(id);
     if (!managed) {
@@ -1748,36 +1857,7 @@ class TerminalInstanceService {
       container.appendChild(managed.hostElement);
     }
 
-    if (!managed.isOpened) {
-      // Seed xterm's grid before open() so cold-start restore paints at the
-      // saved size instead of flashing 80x24 then snapping (#6983).
-      if (managed.targetCols && managed.targetRows) {
-        managed.terminal.resize(managed.targetCols, managed.targetRows);
-      }
-      // Bracket the synchronous open() — the first-paint step that builds
-      // xterm's DOM, forces a reflow to measure the cell grid, and inits the
-      // renderer. terminalOpenStartedAt anchors the first-write delta (#9809).
-      managed.terminalOpenStartedAt =
-        typeof performance !== "undefined" ? performance.now() : Date.now();
-      managed.hasEmittedFirstWriteMark = false;
-      markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
-      try {
-        managed.terminal.open(managed.hostElement);
-      } finally {
-        markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
-      }
-      managed.isOpened = true;
-      logDebug(`[TIS.attach] Opened terminal ${id}`);
-      // Build the deferred Image/link addons now that the terminal is live.
-      // Skip BACKGROUND terminals — the tier machinery disposes these addons
-      // there on purpose; they're rebuilt on the next promotion.
-      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
-        this.ensureDeferredAddons(id, managed);
-      }
-      if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
-        this.webGLManager.ensureContext(id, managed);
-      }
-    }
+    this.ensureOpened(id, managed);
     managed.attachGeneration++;
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;

@@ -3,6 +3,7 @@ import type { PanelInstance } from "@shared/types/panel";
 
 const fullWakeMock = vi.fn();
 const repaintForRevealMock = vi.fn();
+const revealTerminalMock = vi.fn();
 const isFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 const notifyWarmReactivationCompleteMock = vi.fn();
@@ -11,6 +12,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     fullWakeForVisibilityRestore: fullWakeMock,
     repaintForReveal: repaintForRevealMock,
+    revealTerminal: revealTerminalMock,
     isFocused: isFocusedMock,
   },
 }));
@@ -63,6 +65,8 @@ beforeEach(() => {
   fullWakeMock.mockReset();
   fullWakeMock.mockResolvedValue(undefined);
   repaintForRevealMock.mockReset();
+  revealTerminalMock.mockReset();
+  revealTerminalMock.mockResolvedValue(undefined);
   isFocusedMock.mockReset();
   isFocusedMock.mockReturnValue(false);
   logWarnMock.mockReset();
@@ -434,7 +438,7 @@ describe("wakeActiveWorktreeTerminals", () => {
 });
 
 describe("repaintActiveWorktreeTerminals (#10362)", () => {
-  it("repaints every visible terminal in the active worktree", async () => {
+  it("reveals every visible terminal in the active worktree", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const b = panel("b", { worktreeId: "wt-1" });
@@ -443,9 +447,9 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
 
     await repaintActiveWorktreeTerminals();
 
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-    expect(repaintForRevealMock).toHaveBeenCalledWith("a");
-    expect(repaintForRevealMock).toHaveBeenCalledWith("b");
+    expect(revealTerminalMock).toHaveBeenCalledTimes(2);
+    expect(revealTerminalMock).toHaveBeenCalledWith("a");
+    expect(revealTerminalMock).toHaveBeenCalledWith("b");
   });
 
   it("targets the same set as wake — folds in the assistant, excludes dock/other-worktree", async () => {
@@ -460,14 +464,14 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
 
     await repaintActiveWorktreeTerminals();
 
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(2);
-    expect(repaintForRevealMock).toHaveBeenCalledWith("a");
-    expect(repaintForRevealMock).toHaveBeenCalledWith("assistant");
-    expect(repaintForRevealMock).not.toHaveBeenCalledWith("other-dock");
-    expect(repaintForRevealMock).not.toHaveBeenCalledWith("z");
+    expect(revealTerminalMock).toHaveBeenCalledTimes(2);
+    expect(revealTerminalMock).toHaveBeenCalledWith("a");
+    expect(revealTerminalMock).toHaveBeenCalledWith("assistant");
+    expect(revealTerminalMock).not.toHaveBeenCalledWith("other-dock");
+    expect(revealTerminalMock).not.toHaveBeenCalledWith("z");
   });
 
-  it("repaints the focused pane first", async () => {
+  it("reveals the focused pane first", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const b = panel("b", { worktreeId: "wt-1" });
@@ -477,8 +481,9 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     isFocusedMock.mockImplementation((id: string) => id === "c");
 
     const callOrder: string[] = [];
-    repaintForRevealMock.mockImplementation((id: string) => {
+    revealTerminalMock.mockImplementation((id: string) => {
       callOrder.push(id);
+      return Promise.resolve();
     });
 
     await repaintActiveWorktreeTerminals();
@@ -487,7 +492,7 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     expect(callOrder).toHaveLength(3);
   });
 
-  it("isolates a per-terminal repaint throw so the sweep continues", async () => {
+  it("isolates a per-terminal reveal rejection so the sweep continues", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
     const b = panel("b", { worktreeId: "wt-1" });
@@ -495,15 +500,15 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     mockPanelIds = ["a", "b", "c"];
     mockPanelsById = { a, b, c };
 
-    repaintForRevealMock.mockImplementation((id: string) => {
-      if (id === "b") throw new Error("broken xterm");
-    });
+    revealTerminalMock.mockImplementation((id: string) =>
+      id === "b" ? Promise.reject(new Error("broken xterm")) : Promise.resolve()
+    );
 
     await expect(repaintActiveWorktreeTerminals()).resolves.toBeUndefined();
 
-    expect(repaintForRevealMock).toHaveBeenCalledTimes(3);
+    expect(revealTerminalMock).toHaveBeenCalledTimes(3);
     expect(logWarnMock).toHaveBeenCalledWith(
-      "[repaintActiveWorktreeTerminals] repaint failed",
+      "[repaintActiveWorktreeTerminals] reveal failed",
       expect.objectContaining({ id: "b" })
     );
   });
@@ -515,8 +520,8 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
 
     await repaintActiveWorktreeTerminals();
 
-    expect(repaintForRevealMock).not.toHaveBeenCalled();
-    // Repaint is a pure render pass — it must not re-fire the warm reactivation
+    expect(revealTerminalMock).not.toHaveBeenCalled();
+    // Reveal is a pure render pass — it must not re-fire the warm reactivation
     // gate (that's the wake fan-out's job).
     expect(notifyWarmReactivationCompleteMock).not.toHaveBeenCalled();
   });
