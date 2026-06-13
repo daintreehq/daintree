@@ -134,7 +134,11 @@ describe("spawnPanelsFromRecipe", () => {
       "claude",
       { modelId: "sonnet" },
       "claude",
-      { clipboardDirectory: "/tmp/daintree/daintree-clipboard", modelId: "sonnet" }
+      {
+        clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+        modelId: "sonnet",
+        globalSkipPermissions: false,
+      }
     );
     expect(mockAddPanel).toHaveBeenCalledWith(
       expect.objectContaining({

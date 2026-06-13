@@ -96,6 +96,11 @@ vi.mock("@shared/types", () => ({
   buildResumeCommand: vi.fn().mockReturnValue(null),
   buildResumeLatestCommand: vi.fn().mockReturnValue(null),
   buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude --flag"),
+  // Identity reconcile keeps persisted flags verbatim so these dispatch-path
+  // tests stay focused on restart wiring rather than bypass reconciliation
+  // (#10432, covered by agentSettings.test.ts and statePatcher.test.ts).
+  reconcileBypassFlags: (flags: readonly string[]) => [...flags],
+  resolveEffectiveBypass: () => false,
 }));
 
 vi.mock("@/store/ccrPresetsStore", () => ({

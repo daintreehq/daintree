@@ -53,6 +53,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           projectPresets,
         });
         const { preset, presetWasStale, effectiveEntry } = runtimeSettings;
+        const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
         const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
         const command = generateAgentCommand(
           agentConfig.command,
@@ -63,13 +64,14 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             clipboardDirectory,
             modelId: panel.agentModelId,
             presetArgs: preset?.args?.join(" "),
+            globalSkipPermissions,
           }
         );
         const agentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
           effectiveEntry,
           panel.launchAgentId,
           preset,
-          { modelId: panel.agentModelId }
+          { modelId: panel.agentModelId, globalSkipPermissions }
         );
         return { command, env: runtimeSettings.env, agentLaunchFlags, preset, presetWasStale };
       } catch (error) {

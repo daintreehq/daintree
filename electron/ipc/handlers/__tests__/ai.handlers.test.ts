@@ -205,6 +205,38 @@ describe("ai handler payload validation", () => {
     );
   });
 
+  it("rejects AGENT_SETTINGS_SET_GLOBAL payload that is not a boolean (#10432)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL);
+    await expect(handler({} as never, "true" as never)).rejects.toThrow(
+      "Invalid globalSkipPermissions"
+    );
+    await expect(handler({} as never, 1 as never)).rejects.toThrow("Invalid globalSkipPermissions");
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("writes AGENT_SETTINGS_SET_GLOBAL via a dot-path leaf without rewriting the slice (#10432, #6106)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET_GLOBAL);
+    (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {
+      if (key === "agentSettings") {
+        return { agents: { claude: { dangerousEnabled: true } }, settingsVersion: 1 };
+      }
+      return defaultValue;
+    });
+
+    const result = await handler({} as never, true as never);
+
+    // Dot-path leaf write — never the whole `agentSettings` slice.
+    expect(storeMock.set).toHaveBeenCalledWith("agentSettings.globalSkipPermissions", true);
+    expect(storeMock.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
+    // Per-agent records are preserved untouched (no dangerousEnabled mutation).
+    expect(result).toEqual(
+      expect.objectContaining({
+        globalSkipPermissions: true,
+        agents: { claude: { dangerousEnabled: true } },
+      })
+    );
+  });
+
   it("normalizes malformed stored agent settings in AGENT_SETTINGS_RESET", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
     (storeMock.get as Mock).mockImplementation((key: string, defaultValue?: unknown) => {

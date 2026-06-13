@@ -223,6 +223,12 @@ interface AgentSettingsActions {
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
   setAgentPinned: (agentId: string, pinned: boolean) => Promise<void>;
   /**
+   * Set the global skip-permissions override (#10432). Writes the root-level
+   * `globalSkipPermissions` field only — does not mutate any per-agent
+   * `dangerousEnabled`. Optimistic with rollback on IPC failure.
+   */
+  setGlobalSkipPermissions: (value: boolean) => Promise<void>;
+  /**
    * Set or clear the worktree-scoped preset override for an agent. Reads the
    * current `worktreePresets` map, spreads sibling keys, then writes the merged
    * map — bypasses the IPC handler's shallow-merge clobber on the submap.
@@ -411,6 +417,32 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
 
   setAgentPinned: async (agentId: string, pinned: boolean) => {
     return get().updateAgent(agentId, { pinned });
+  },
+
+  setGlobalSkipPermissions: async (value: boolean) => {
+    const myEpoch = ++normalizeEpoch;
+    set({ error: null });
+    const previous = get().settings;
+    // Optimistic top-level spread — never route through updateAgent (which
+    // merges into the agents record and would not touch this root field, #5514).
+    // This must not mutate any per-agent `dangerousEnabled`; it is a live
+    // override OR-ed in at flag-generation time (#10432).
+    if (previous) {
+      set({ settings: { ...previous, globalSkipPermissions: value } });
+    }
+    try {
+      await agentSettingsClient.setGlobal(value);
+      if (myEpoch !== normalizeEpoch) return;
+      // The IPC response echoes the persisted value; the optimistic state
+      // already reflects it, and the renderer-normalized agents record is the
+      // source of truth for per-agent state, so keep it rather than overwriting
+      // from the raw response.
+    } catch (e) {
+      if (myEpoch !== normalizeEpoch) return;
+      if (previous) set({ settings: previous });
+      set({ error: formatErrorMessage(e, "Failed to update global skip-permissions setting") });
+      throw e;
+    }
   },
 
   updateWorktreePreset: async (

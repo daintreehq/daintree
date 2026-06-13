@@ -112,6 +112,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
             scopeKind={scope.scopeKind}
             scopeLabel={scope.scopeLabel}
             effectiveSkipPerms={scope.effectiveSkipPerms}
+            globalBypassActive={scope.globalBypassActive}
             effectiveInlineMode={scope.effectiveInlineMode}
             agentDefaultDangerous={scope.agentDefaultDangerous}
             agentDefaultInline={scope.agentDefaultInline}

@@ -13,6 +13,8 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  reconcileBypassFlags,
+  resolveEffectiveBypass,
 } from "@shared/types";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
@@ -58,6 +60,8 @@ interface LoadedAgentRuntimeSettings {
   entry: AgentSettingsEntry;
   settings: AgentRuntimeSettingsResolution;
   tmpDir: string;
+  /** Global skip-permissions override at restart time (#10432). */
+  globalSkipPermissions: boolean;
 }
 
 function mergeSpawnEnv(
@@ -351,7 +355,12 @@ export const createRestartActions = (
           ccrPresets,
           projectPresets,
         });
-        loadedRuntimeSettings = { entry, settings, tmpDir };
+        loadedRuntimeSettings = {
+          entry,
+          settings,
+          tmpDir,
+          globalSkipPermissions: agentSettings?.globalSkipPermissions ?? false,
+        };
         if (settings.presetWasStale) {
           nextAgentPresetId = undefined;
           nextAgentPresetColor = undefined;
@@ -372,7 +381,10 @@ export const createRestartActions = (
         runtimeForEnv.settings.effectiveEntry,
         effectiveAgentId,
         undefined,
-        { modelId: currentTerminal.agentModelId }
+        {
+          modelId: currentTerminal.agentModelId,
+          globalSkipPermissions: runtimeForEnv.globalSkipPermissions,
+        }
       );
     }
 
@@ -382,6 +394,23 @@ export const createRestartActions = (
         nextAgentLaunchFlags = mergePresetArgsIntoLaunchFlags(
           currentTerminal.agentLaunchFlags,
           presetForLaunchFlags
+        );
+      }
+      // Reconcile the persisted bypass flag against the current effective
+      // setting before any resume/from-flags command is built (#10432, the
+      // "resume trap"): a snapshot captured while the global skip-permissions
+      // switch was on must not survive once it's toggled off, and vice-versa.
+      if (runtimeForEnv && nextAgentLaunchFlags && nextAgentLaunchFlags.length > 0) {
+        const effectiveBypass = resolveEffectiveBypass(
+          runtimeForEnv.settings.effectiveEntry,
+          effectiveAgentId,
+          runtimeForEnv.globalSkipPermissions
+        );
+        nextAgentLaunchFlags = reconcileBypassFlags(
+          nextAgentLaunchFlags,
+          effectiveAgentId,
+          effectiveBypass,
+          runtimeForEnv.settings.effectiveEntry.dangerousArgs
         );
       }
       const sessionId = currentTerminal.agentSessionId;
@@ -415,7 +444,10 @@ export const createRestartActions = (
             runtimeSettings.settings.effectiveEntry,
             effectiveAgentId,
             runtimeSettings.settings.preset,
-            { modelId: currentTerminal.agentModelId }
+            {
+              modelId: currentTerminal.agentModelId,
+              globalSkipPermissions: runtimeSettings.globalSkipPermissions,
+            }
           );
           hasPersistedFlags = nextAgentLaunchFlags.length > 0;
         }
@@ -453,6 +485,7 @@ export const createRestartActions = (
                   clipboardDirectory,
                   modelId: currentTerminal.agentModelId,
                   presetArgs: runtimeSettings.settings.preset?.args?.join(" "),
+                  globalSkipPermissions: runtimeSettings.globalSkipPermissions,
                 }
               );
             }
@@ -975,14 +1008,17 @@ export const createRestartActions = (
 
       const agentConfig = getAgentConfig(effectiveAgentId);
       const baseCommand = agentConfig?.command || effectiveAgentId;
+      const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
       const commandToRun = generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
         clipboardDirectory,
         modelId: terminal.agentModelId,
         presetArgs: nextPreset.args?.join(" "),
+        globalSkipPermissions,
       });
       const nextLaunchFlags = buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
         modelId: terminal.agentModelId,
         presetArgs: nextPreset.args,
+        globalSkipPermissions,
       });
 
       // Capture live terminal dimensions before teardown

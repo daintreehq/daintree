@@ -3,7 +3,8 @@ import { getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/age
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolveScopeKind, stripCcrPrefix } from "./scopeUtils";
-import type { AgentSettingsEntry } from "@shared/types";
+import { isAgentBypassSupported, type AgentSettingsEntry } from "@shared/types";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
 interface UseAgentScopeProps {
   agentId: string;
@@ -69,6 +70,14 @@ export function useAgentScope({
 
   const effectiveSkipPerms =
     scopeKind === "custom" ? (dangerousOverride ?? agentDefaultDangerous) : agentDefaultDangerous;
+
+  // True when the global skip-permissions override (#10432) is forcing bypass
+  // on for this bypass-supporting agent — used to explain the overridden
+  // effective state on the per-agent toggle so it doesn't look contradictory.
+  const globalSkipPermissions = useAgentSettingsStore(
+    (s) => s.settings?.globalSkipPermissions ?? false
+  );
+  const globalBypassActive = globalSkipPermissions && isAgentBypassSupported(agentId);
 
   const effectiveInlineMode =
     scopeKind === "custom" ? (inlineOverride ?? agentDefaultInline) : agentDefaultInline;
@@ -241,6 +250,7 @@ export function useAgentScope({
     isEditableScope,
     supportsInlineMode,
     effectiveSkipPerms,
+    globalBypassActive,
     effectiveInlineMode,
     customArgsValue,
     customArgsPlaceholder,

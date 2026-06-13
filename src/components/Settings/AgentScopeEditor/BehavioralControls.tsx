@@ -6,6 +6,8 @@ interface BehavioralControlsProps {
   scopeKind: ScopeKind;
   scopeLabel: string;
   effectiveSkipPerms: boolean;
+  /** Global skip-permissions override is forcing bypass on for this agent (#10432). */
+  globalBypassActive: boolean;
   effectiveInlineMode: boolean;
   agentDefaultDangerous: boolean;
   agentDefaultInline: boolean;
@@ -29,6 +31,7 @@ export function BehavioralControls({
   scopeKind,
   scopeLabel,
   effectiveSkipPerms,
+  globalBypassActive,
   effectiveInlineMode,
   agentDefaultDangerous,
   agentDefaultInline,
@@ -68,11 +71,16 @@ export function BehavioralControls({
             scopeKind === "custom" ? `Reset skip permissions override for ${scopeLabel}` : undefined
           }
         />
-        {effectiveSkipPerms && defaultDangerousArg && (
+        {(effectiveSkipPerms || globalBypassActive) && defaultDangerousArg && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
             <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
             <span className="text-xs text-daintree-text/40">added to command</span>
           </div>
+        )}
+        {globalBypassActive && !effectiveSkipPerms && (
+          <p className="text-xs text-daintree-text/40 select-text">
+            Forced on by the global "Skip permission prompts for agents" setting
+          </p>
         )}
       </div>
 

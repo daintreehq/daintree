@@ -312,6 +312,9 @@ export {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  isAgentBypassSupported,
+  resolveEffectiveBypass,
+  reconcileBypassFlags,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration

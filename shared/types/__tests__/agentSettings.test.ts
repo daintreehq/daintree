@@ -5,6 +5,11 @@ import {
   buildAgentLaunchFlags,
   buildLaunchCommandFromFlags,
   generateAgentCommand,
+  generateAgentFlags,
+  resolveEffectiveBypass,
+  reconcileBypassFlags,
+  isAgentBypassSupported,
+  DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
@@ -654,5 +659,132 @@ describe("buildLaunchCommandFromFlags", () => {
       clipboardDirectory: "/tmp/daintree-clipboard",
     });
     expect(flags).toEqual(["--yolo"]);
+  });
+});
+
+// #10432 — global skip-permissions override. claude/codex declare
+// supports.permissionBypass === true; gemini declares false but still has a
+// per-agent dangerous flag (--yolo) in DEFAULT_DANGEROUS_ARGS.
+describe("isAgentBypassSupported", () => {
+  it("is true only for agents declaring supports.permissionBypass", () => {
+    expect(isAgentBypassSupported("claude")).toBe(true);
+    expect(isAgentBypassSupported("codex")).toBe(true);
+    expect(isAgentBypassSupported("gemini")).toBe(false);
+    expect(isAgentBypassSupported(undefined)).toBe(false);
+  });
+});
+
+describe("resolveEffectiveBypass", () => {
+  it("forces bypass for a supported agent when the global is on, even with the per-agent toggle off", () => {
+    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "claude", true)).toBe(true);
+    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "codex", true)).toBe(true);
+  });
+
+  it("does not force bypass for an unsupported agent when the global is on", () => {
+    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "gemini", true)).toBe(false);
+  });
+
+  it("keeps the per-agent toggle working regardless of bypass support (unguarded)", () => {
+    // Gemini is not bypass-supported but its per-agent dangerous toggle must
+    // still resolve true — the global guard applies only to the global override.
+    expect(resolveEffectiveBypass({ dangerousEnabled: true }, "gemini", false)).toBe(true);
+  });
+
+  it("resolves false when the global is off and the per-agent toggle is off", () => {
+    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "claude", false)).toBe(false);
+    expect(resolveEffectiveBypass({}, "claude", undefined)).toBe(false);
+  });
+});
+
+describe("reconcileBypassFlags", () => {
+  const claudeFlag = DEFAULT_DANGEROUS_ARGS.claude;
+
+  it("strips the canonical bypass flag when the effective bypass is off, preserving order of other flags", () => {
+    const result = reconcileBypassFlags([claudeFlag, "--model", "opus"], "claude", false);
+    expect(result).toEqual(["--model", "opus"]);
+  });
+
+  it("re-adds the canonical bypass flag when the effective bypass is on", () => {
+    const result = reconcileBypassFlags(["--model", "opus"], "claude", true);
+    expect(result).toContain(claudeFlag);
+    expect(result.filter((f) => f === claudeFlag)).toHaveLength(1);
+  });
+
+  it("is idempotent — a flag already present is not duplicated", () => {
+    const once = reconcileBypassFlags(["--model", "opus"], "claude", true);
+    const twice = reconcileBypassFlags(once, "claude", true);
+    expect(twice).toEqual(once);
+    expect(twice.filter((f) => f === claudeFlag)).toHaveLength(1);
+  });
+
+  it("dedupes multiple stale occurrences when stripping", () => {
+    const result = reconcileBypassFlags([claudeFlag, claudeFlag, "--model"], "claude", false);
+    expect(result).toEqual(["--model"]);
+  });
+
+  it("leaves flags untouched for an agent with no canonical bypass flag", () => {
+    const flags = ["--some-flag", "value"];
+    // opencode is intentionally absent from DEFAULT_DANGEROUS_ARGS.
+    expect(reconcileBypassFlags(flags, "opencode", false)).toEqual(flags);
+    expect(reconcileBypassFlags(flags, "opencode", true)).toEqual(flags);
+  });
+
+  it("honours a custom bypassArgs value for strip-and-re-add", () => {
+    const stripped = reconcileBypassFlags(["--custom-skip", "--model"], "claude", false, "--custom-skip");
+    expect(stripped).toEqual(["--model"]);
+    const readded = reconcileBypassFlags(["--model"], "claude", true, "--custom-skip");
+    expect(readded).toContain("--custom-skip");
+  });
+
+  it("does not mutate the input array", () => {
+    const flags = [claudeFlag, "--model"];
+    reconcileBypassFlags(flags, "claude", false);
+    expect(flags).toEqual([claudeFlag, "--model"]);
+  });
+});
+
+describe("generateAgentFlags with globalSkipPermissions", () => {
+  it("injects the dangerous flag for a supported agent when the global is on", () => {
+    const flags = generateAgentFlags({ dangerousEnabled: false }, "claude", {
+      globalSkipPermissions: true,
+    });
+    expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.claude);
+  });
+
+  it("does not inject the dangerous flag for an unsupported agent when the global is on", () => {
+    const flags = generateAgentFlags({ dangerousEnabled: false }, "gemini", {
+      globalSkipPermissions: true,
+    });
+    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+  });
+
+  it("still honours the per-agent toggle for an unsupported agent when the global is off", () => {
+    const flags = generateAgentFlags({ dangerousEnabled: true }, "gemini", {
+      globalSkipPermissions: false,
+    });
+    expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+  });
+
+  it("omits the dangerous flag when both the global and per-agent toggle are off", () => {
+    const flags = generateAgentFlags({ dangerousEnabled: false }, "claude", {
+      globalSkipPermissions: false,
+    });
+    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.claude);
+  });
+});
+
+describe("buildAgentLaunchFlags with globalSkipPermissions", () => {
+  it("captures the dangerous flag for a supported agent when the global is on", () => {
+    const flags = buildAgentLaunchFlags({ dangerousEnabled: false }, "claude", {
+      globalSkipPermissions: true,
+    });
+    expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.claude);
+  });
+
+  it("does not capture the dangerous flag for an unsupported agent when the global is on", () => {
+    const flags = buildAgentLaunchFlags({ dangerousEnabled: false }, "gemini", {
+      globalSkipPermissions: true,
+    });
+    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
   });
 });

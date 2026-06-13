@@ -809,11 +809,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               ? replaceRecipeVariables(rawPrompt, resolvedContext)
               : undefined;
             const entry = agentSettings?.agents?.[agentId] ?? {};
+            const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               initialPrompt,
               clipboardDirectory,
               modelId: terminal.agentModelId,
               recipeArgs: terminal.args?.trim() || undefined,
+              globalSkipPermissions,
             });
             // Persist the process-level launch flags so restart/resume/continue
             // reproduce the same configuration. Without this the panel arrives
@@ -826,7 +828,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // raw tokens since the restart command builder applies its own
             // escaping.
             const agentLaunchFlags = terminal.agentLaunchFlags ?? [
-              ...buildAgentLaunchFlags(entry, agentId, { modelId: terminal.agentModelId }),
+              ...buildAgentLaunchFlags(entry, agentId, {
+                modelId: terminal.agentModelId,
+                globalSkipPermissions,
+              }),
               ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
             ];
             return terminalStore.addPanel({
