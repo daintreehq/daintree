@@ -934,10 +934,17 @@ export function useContentGridContext({
   ]);
 
   const allGroupsAreSinglePanel = tabGroups.every((g) => g.panelIds.length === 1);
+  // Virtual singletons use `id === panelId` (see getTabGroups in tabGroups.ts);
+  // explicit groups always use `tabgroup-${uuid}`. Requiring all groups to be
+  // virtual prevents split mode from activating during the transient window in
+  // addTabForPanel where an explicit singleton group exists before the new panel
+  // has been folded into it — which otherwise crashes the app (issue #10438).
+  const allGroupsAreVirtual = tabGroups.every((g) => g.id === (g.panelIds[0] ?? ""));
   const useTwoPaneSplitMode =
     twoPaneSplitEnabled &&
     tabGroups.length === 2 &&
     allGroupsAreSinglePanel &&
+    allGroupsAreVirtual &&
     !maximizedId &&
     !showPlaceholder;
 
