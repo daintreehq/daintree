@@ -296,6 +296,7 @@ export type { BuiltInKeyAction, KeyAction, KeymapPreset, KeyMapConfig } from "./
 export type {
   AgentSettingsEntry,
   AgentSettings,
+  DangerousMode,
   GenerateAgentCommandOptions,
   GenerateAgentFlagsOptions,
 } from "./agentSettings.js";
@@ -314,6 +315,8 @@ export {
   buildLaunchCommandFromFlags,
   isAgentBypassSupported,
   resolveEffectiveBypass,
+  resolveDangerousMode,
+  combineDangerousModes,
   reconcileBypassFlags,
 } from "./agentSettings.js";
 

@@ -160,8 +160,15 @@ export interface AgentPreset {
   description?: string;
   env?: Record<string, string>;
   args?: string[];
-  /** Per-preset override: when set, overrides the agent-level dangerousEnabled setting */
+  /** Legacy per-preset bypass override; superseded by `dangerousMode`. */
   dangerousEnabled?: boolean;
+  /**
+   * Per-preset tri-state bypass override (`DangerousMode`), layered on top of
+   * the agent's resolved mode: `"off"` vetoes the agent/global value,
+   * `"inherit"`/absent defers to the agent's Default scope. Inlined union to
+   * avoid a config→types import cycle.
+   */
+  dangerousMode?: "inherit" | "on" | "off";
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
   /** Per-preset override: when set, overrides the agent-level inlineMode setting */
@@ -188,6 +195,7 @@ export interface AgentProviderTemplate {
   env?: Record<string, string>;
   args?: string[];
   dangerousEnabled?: boolean;
+  dangerousMode?: "inherit" | "on" | "off";
   customFlags?: string;
   inlineMode?: boolean;
 }

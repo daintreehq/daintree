@@ -1,6 +1,6 @@
 import type { AgentPreset } from "@/config/agents";
 import { getMergedPreset, sanitizeAgentEnv } from "@/config/agents";
-import { buildAgentLaunchFlags } from "@shared/types";
+import { buildAgentLaunchFlags, combineDangerousModes, resolveDangerousMode } from "@shared/types";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 
 export interface AgentRuntimeSettingsResolution {
@@ -23,11 +23,19 @@ export function applyPresetBehaviorOverrides(
   preset: AgentPreset | undefined
 ): AgentSettingsEntry {
   if (!preset) return entry;
+  // Layer the preset's tri-state bypass mode on top of the agent's resolved
+  // mode and bake the combined result onto the effective entry, so the single
+  // `resolveEffectiveBypass` chokepoint sees the final intent (a preset "off"
+  // vetoes an agent/global "on"). `dangerousEnabled` is mirrored for any
+  // legacy boolean reader of the merged entry.
+  const combinedMode = combineDangerousModes(
+    resolveDangerousMode(entry),
+    resolveDangerousMode(preset)
+  );
   return {
     ...entry,
-    ...(preset.dangerousEnabled !== undefined && {
-      dangerousEnabled: preset.dangerousEnabled,
-    }),
+    dangerousMode: combinedMode,
+    dangerousEnabled: combinedMode === "on",
     ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
     ...(preset.inlineMode !== undefined && { inlineMode: preset.inlineMode }),
   };

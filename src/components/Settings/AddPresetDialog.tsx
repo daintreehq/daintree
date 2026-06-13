@@ -47,6 +47,7 @@ export function AddPresetDialog({
             env: currentPreset.env ? { ...currentPreset.env } : {},
             args: currentPreset.args ? [...currentPreset.args] : undefined,
             dangerousEnabled: currentPreset.dangerousEnabled,
+            dangerousMode: currentPreset.dangerousMode,
             customFlags: currentPreset.customFlags,
             inlineMode: currentPreset.inlineMode,
             color: currentPreset.color,
@@ -64,6 +65,7 @@ export function AddPresetDialog({
             env: selectedTemplate.env ? { ...selectedTemplate.env } : {},
             args: selectedTemplate.args ? [...selectedTemplate.args] : undefined,
             dangerousEnabled: selectedTemplate.dangerousEnabled,
+            dangerousMode: selectedTemplate.dangerousMode,
             customFlags: selectedTemplate.customFlags,
             inlineMode: selectedTemplate.inlineMode,
           });

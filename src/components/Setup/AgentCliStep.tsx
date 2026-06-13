@@ -20,7 +20,7 @@ import {
 } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
-import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
+import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
@@ -420,7 +420,9 @@ export function AgentCliStep({
               const config = AGENT_REGISTRY[agentId];
               if (!config) return null;
               const dangerousArg = DEFAULT_DANGEROUS_ARGS[agentId] ?? "";
-              const isEnabled = agentSettings?.[agentId]?.dangerousEnabled ?? false;
+              // Setup is a simple on/off: "on" force-enables, unchecking returns
+              // to "inherit" (defer to the global switch), never the "off" veto.
+              const isEnabled = resolveDangerousMode(agentSettings?.[agentId] ?? {}) === "on";
               return (
                 <label
                   key={agentId}
@@ -431,7 +433,10 @@ export function AgentCliStep({
                     className="w-3.5 h-3.5 accent-status-error shrink-0"
                     checked={isEnabled}
                     onChange={() => {
-                      void updateAgent(agentId, { dangerousEnabled: !isEnabled });
+                      void updateAgent(agentId, {
+                        dangerousMode: isEnabled ? "inherit" : "on",
+                        dangerousEnabled: !isEnabled,
+                      });
                     }}
                   />
                   <span className="text-xs text-daintree-text/70">{config.name}</span>

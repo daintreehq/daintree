@@ -99,6 +99,7 @@ export const AgentPresetSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   args: z.array(z.string()).optional(),
   dangerousEnabled: z.boolean().optional(),
+  dangerousMode: z.enum(["inherit", "on", "off"]).optional(),
   customFlags: z.string().optional(),
   inlineMode: z.boolean().optional(),
   color: z.string().optional(),
@@ -112,6 +113,7 @@ export const AgentSettingsEntrySchema = z
     customFlags: z.string().optional(),
     dangerousArgs: z.string().optional(),
     dangerousEnabled: z.boolean().optional(),
+    dangerousMode: z.enum(["inherit", "on", "off"]).optional(),
     presetId: z.string().optional(),
     customPresets: z.array(AgentPresetSchema).optional(),
   })

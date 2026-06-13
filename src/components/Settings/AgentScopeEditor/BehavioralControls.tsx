@@ -1,86 +1,85 @@
 import { RotateCcw } from "lucide-react";
 import { SettingsSwitchCard } from "../SettingsSwitchCard";
+import { SettingsChoicebox } from "../SettingsChoicebox";
 import type { ScopeKind } from "./scopeUtils";
+import type { DangerousMode } from "@shared/types";
 
 interface BehavioralControlsProps {
   scopeKind: ScopeKind;
   scopeLabel: string;
+  /** Current bypass mode for the active scope (agent Default or preset). */
+  dangerousMode: DangerousMode;
+  /** Final resolved bypass for the active scope (incl. global baseline). */
   effectiveSkipPerms: boolean;
-  /** Global skip-permissions override is forcing bypass on for this agent (#10432). */
-  globalBypassActive: boolean;
+  /** What the "Default" (inherit) option resolves to, given the parent state. */
+  inheritResolvesToOn: boolean;
+  /** Where "Default" inherits from — "global setting" or "agent default". */
+  inheritOriginLabel: string;
   effectiveInlineMode: boolean;
-  agentDefaultDangerous: boolean;
   agentDefaultInline: boolean;
   customArgsValue: string;
   customArgsPlaceholder: string;
   customArgsDescription: string;
-  dangerousOverride: boolean | undefined;
   inlineOverride: boolean | undefined;
   customFlagsOverride: string | undefined;
   supportsInlineMode: boolean;
   defaultDangerousArg: string;
-  onSkipPermsChange: () => void;
+  onDangerousModeChange: (mode: DangerousMode) => void;
   onInlineModeChange: () => void;
   onCustomFlagsChange: (value: string) => void;
-  onDangerousOverrideReset: () => void;
   onInlineOverrideReset: () => void;
   onCustomFlagsOverrideReset: () => void;
 }
 
+const DANGEROUS_MODE_OPTIONS: ReadonlyArray<{ value: DangerousMode; label: string }> = [
+  { value: "inherit", label: "Default" },
+  { value: "on", label: "On" },
+  { value: "off", label: "Off" },
+];
+
 export function BehavioralControls({
   scopeKind,
   scopeLabel,
+  dangerousMode,
   effectiveSkipPerms,
-  globalBypassActive,
+  inheritResolvesToOn,
+  inheritOriginLabel,
   effectiveInlineMode,
-  agentDefaultDangerous,
   agentDefaultInline,
   customArgsValue,
   customArgsPlaceholder,
   customArgsDescription,
-  dangerousOverride,
   inlineOverride,
   customFlagsOverride,
   supportsInlineMode,
   defaultDangerousArg,
-  onSkipPermsChange,
+  onDangerousModeChange,
   onInlineModeChange,
   onCustomFlagsChange,
-  onDangerousOverrideReset,
   onInlineOverrideReset,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
   return (
     <>
       <div id="agents-skip-permissions" className="space-y-1.5">
-        <SettingsSwitchCard
-          variant="compact"
-          title="Skip permissions"
-          subtitle={
-            scopeKind === "custom" && dangerousOverride === undefined
-              ? `Using default (${agentDefaultDangerous ? "On" : "Off"})`
-              : "Auto-approve all file, command, and network actions"
-          }
-          isEnabled={effectiveSkipPerms}
-          onChange={onSkipPermsChange}
-          ariaLabel={`Skip permissions for ${scopeLabel}`}
-          colorScheme="danger"
-          isModified={scopeKind === "custom" && dangerousOverride !== undefined}
-          onReset={scopeKind === "custom" ? onDangerousOverrideReset : undefined}
-          resetAriaLabel={
-            scopeKind === "custom" ? `Reset skip permissions override for ${scopeLabel}` : undefined
-          }
+        <SettingsChoicebox<DangerousMode>
+          label="Skip permissions"
+          description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope."
+          columns={3}
+          value={dangerousMode}
+          onChange={onDangerousModeChange}
+          options={DANGEROUS_MODE_OPTIONS}
         />
-        {(effectiveSkipPerms || globalBypassActive) && defaultDangerousArg && (
+        {dangerousMode === "inherit" && (
+          <p className="text-xs text-daintree-text/40 select-text">
+            Default &rarr; {inheritResolvesToOn ? "On" : "Off"} (from {inheritOriginLabel})
+          </p>
+        )}
+        {effectiveSkipPerms && defaultDangerousArg && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
             <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
             <span className="text-xs text-daintree-text/40">added to command</span>
           </div>
-        )}
-        {globalBypassActive && !effectiveSkipPerms && (
-          <p className="text-xs text-daintree-text/40 select-text">
-            Forced on by the global "Skip permission prompts for agents" setting
-          </p>
         )}
       </div>
 

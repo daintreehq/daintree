@@ -148,6 +148,12 @@ export function getMergedPresets(
       args: sanitizeArgs(preset.args),
       dangerousEnabled:
         typeof preset.dangerousEnabled === "boolean" ? preset.dangerousEnabled : undefined,
+      dangerousMode:
+        preset.dangerousMode === "inherit" ||
+        preset.dangerousMode === "on" ||
+        preset.dangerousMode === "off"
+          ? preset.dangerousMode
+          : undefined,
       customFlags:
         typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
           ? preset.customFlags.slice(0, 10000)

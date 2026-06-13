@@ -7,6 +7,8 @@ import {
   generateAgentCommand,
   generateAgentFlags,
   resolveEffectiveBypass,
+  resolveDangerousMode,
+  combineDangerousModes,
   reconcileBypassFlags,
   isAgentBypassSupported,
   DEFAULT_DANGEROUS_ARGS,
@@ -694,6 +696,68 @@ describe("resolveEffectiveBypass", () => {
     expect(resolveEffectiveBypass({ dangerousEnabled: false }, "claude", false)).toBe(false);
     expect(resolveEffectiveBypass({}, "claude", undefined)).toBe(false);
   });
+
+  it("honors an explicit 'off' veto over the global override (least privilege)", () => {
+    // The whole point of the tri-state: a supported agent that would otherwise
+    // inherit the global 'on' can force itself off.
+    expect(resolveEffectiveBypass({ dangerousMode: "off" }, "claude", true)).toBe(false);
+    expect(resolveEffectiveBypass({ dangerousMode: "off" }, "codex", true)).toBe(false);
+  });
+
+  it("treats 'on' as an unguarded force-enable (even for unsupported agents)", () => {
+    expect(resolveEffectiveBypass({ dangerousMode: "on" }, "gemini", false)).toBe(true);
+    expect(resolveEffectiveBypass({ dangerousMode: "on" }, "claude", false)).toBe(true);
+  });
+
+  it("'inherit' defers to the global override, gated by bypass support", () => {
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "claude", true)).toBe(true);
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "claude", false)).toBe(false);
+    // Unsupported agent never inherits the global flag.
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "gemini", true)).toBe(false);
+  });
+
+  it("prefers the tri-state field over the legacy boolean when both are present", () => {
+    // 'off' must win over a stale legacy `dangerousEnabled: true`.
+    expect(
+      resolveEffectiveBypass({ dangerousMode: "off", dangerousEnabled: true }, "claude", true)
+    ).toBe(false);
+  });
+});
+
+describe("resolveDangerousMode (legacy back-compat)", () => {
+  it("maps the legacy boolean: true → on, false/absent → inherit", () => {
+    expect(resolveDangerousMode({ dangerousEnabled: true })).toBe("on");
+    expect(resolveDangerousMode({ dangerousEnabled: false })).toBe("inherit");
+    expect(resolveDangerousMode({})).toBe("inherit");
+  });
+
+  it("prefers the explicit tri-state field over the legacy boolean", () => {
+    expect(resolveDangerousMode({ dangerousMode: "off", dangerousEnabled: true })).toBe("off");
+    expect(resolveDangerousMode({ dangerousMode: "inherit", dangerousEnabled: true })).toBe(
+      "inherit"
+    );
+    expect(resolveDangerousMode({ dangerousMode: "on" })).toBe("on");
+  });
+});
+
+describe("combineDangerousModes (preset layered over agent)", () => {
+  it("uses the preset mode when it is an explicit override", () => {
+    expect(combineDangerousModes("on", "off")).toBe("off"); // preset veto beats agent on
+    expect(combineDangerousModes("off", "on")).toBe("on"); // preset on beats agent off
+  });
+
+  it("falls back to the agent mode when the preset inherits or is absent", () => {
+    expect(combineDangerousModes("off", "inherit")).toBe("off");
+    expect(combineDangerousModes("on", undefined)).toBe("on");
+    expect(combineDangerousModes("inherit", "inherit")).toBe("inherit");
+  });
+
+  it("end-to-end: a preset 'off' vetoes an agent 'on' and the global through resolveEffectiveBypass", () => {
+    const agentMode = resolveDangerousMode({ dangerousMode: "on" });
+    const presetMode = resolveDangerousMode({ dangerousMode: "off" });
+    const merged = { dangerousMode: combineDangerousModes(agentMode, presetMode) };
+    expect(resolveEffectiveBypass(merged, "claude", true)).toBe(false);
+  });
 });
 
 describe("reconcileBypassFlags", () => {
@@ -746,6 +810,24 @@ describe("reconcileBypassFlags", () => {
     const flags = [claudeFlag, "--model"];
     reconcileBypassFlags(flags, "claude", false);
     expect(flags).toEqual([claudeFlag, "--model"]);
+  });
+
+  it("strips a stale flag for an UNSUPPORTED agent when an 'off' veto resolves bypass off (#10432 follow-up)", () => {
+    // Gemini is not bypass-supported but has a canonical --yolo. A user who
+    // flips it to "off" must have the stale token stripped on restart/resume,
+    // not replayed verbatim. effectiveBypass=false carries the veto here.
+    const geminiFlag = DEFAULT_DANGEROUS_ARGS.gemini as string;
+    expect(isAgentBypassSupported("gemini")).toBe(false);
+    expect(reconcileBypassFlags([geminiFlag, "--model", "x"], "gemini", false)).toEqual([
+      "--model",
+      "x",
+    ]);
+  });
+
+  it("keeps the flag for an UNSUPPORTED agent when 'on' resolves bypass true", () => {
+    const geminiFlag = DEFAULT_DANGEROUS_ARGS.gemini as string;
+    const result = reconcileBypassFlags(["--model"], "gemini", true);
+    expect(result).toContain(geminiFlag);
   });
 });
 

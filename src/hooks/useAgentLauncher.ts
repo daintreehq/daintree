@@ -36,6 +36,7 @@ import {
   sanitizeAgentEnv,
 } from "@/config/agents";
 import type { AgentCliDetail } from "@shared/types/ipc";
+import { applyPresetBehaviorOverrides } from "@/utils/agentRuntimeSettings";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 
@@ -427,17 +428,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             presetEnv = { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv };
           }
 
-          // Merge per-preset behavioral overrides on top of agent-level settings
-          const effectiveEntry = preset
-            ? {
-                ...entry,
-                ...(preset.dangerousEnabled !== undefined && {
-                  dangerousEnabled: preset.dangerousEnabled,
-                }),
-                ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
-                ...(preset.inlineMode !== undefined && { inlineMode: preset.inlineMode }),
-              }
-            : entry;
+          // Merge per-preset behavioral overrides (incl. tri-state bypass mode)
+          // on top of agent-level settings via the shared resolver.
+          const effectiveEntry = applyPresetBehaviorOverrides(entry, preset);
 
           // Resolve clipboard directory for agents that need it (e.g. Gemini)
           let clipboardDirectory: string | undefined;
