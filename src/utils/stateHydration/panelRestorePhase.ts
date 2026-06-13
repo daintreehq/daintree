@@ -63,6 +63,16 @@ interface PanelRestoreTaskEntry {
 
 export interface PanelRestorePhaseResult {
   restoreTasks: TerminalRestoreTask[];
+  /**
+   * Sparse map of saved panel id → restored panel id, populated only for
+   * panels whose restored id differs from their saved id (e.g. a PTY panel
+   * whose reconnect timed out and was respawned with a freshly generated id,
+   * see #10440). Consumers that reference saved ids — notably tab-group
+   * hydration — must remap through this before validating against live ids,
+   * or the membership is silently filtered out and the group destroyed.
+   * Empty when every panel restored under its original saved id.
+   */
+  savedIdToRestoredId: Map<string, string>;
 }
 
 /**
@@ -95,6 +105,7 @@ export async function restorePanelsPhase(
   } = ctx;
 
   const restoreTasks: TerminalRestoreTask[] = [];
+  const savedIdToRestoredId = new Map<string, string>();
 
   if (savedPanels && savedPanels.length > 0) {
     // Build a single-pass map of worktreeId → highest lastActiveAt across saved
@@ -442,6 +453,17 @@ export async function restorePanelsPhase(
         .map(([, id]) => id);
       restoreTerminalOrder(orderedIds);
     }
+
+    // Build the saved→restored id remap (#10440). Only panels whose restored
+    // id diverged from the saved id need an entry; identity mappings (the
+    // common clean-reconnect case) are skipped so downstream consumers can
+    // fast-path on an empty map.
+    for (const [index, restoredId] of restoredIdsByIndex.entries()) {
+      const savedId = savedPanels[index]?.id;
+      if (savedId !== undefined && savedId !== restoredId) {
+        savedIdToRestoredId.set(savedId, restoredId);
+      }
+    }
   }
 
   // Restore any orphaned backend terminals not in saved state (append at end).
@@ -527,5 +549,5 @@ export async function restorePanelsPhase(
     }
   }
 
-  return { restoreTasks };
+  return { restoreTasks, savedIdToRestoredId };
 }
