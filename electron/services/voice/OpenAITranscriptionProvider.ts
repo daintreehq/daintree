@@ -38,6 +38,15 @@ function resolveVadWorkerPath(): string {
 const OPENAI_REALTIME_URL =
   process.env.DAINTREE_REALTIME_WS_URL ?? "wss://api.openai.com/v1/realtime?intent=transcription";
 const OPENAI_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+// `gpt-realtime-whisper` does NOT support `transcription.prompt`. The GA
+// Realtime server hard-rejects a session.update that carries it with
+// "The 'prompt' parameter is not supported for this model" and kills the
+// session — it does NOT silently ignore it. Only `gpt-4o-transcribe` /
+// `gpt-4o-mini-transcribe` honor `prompt`, and neither is wired here, so keyterm
+// biasing is off for OpenAI. (Keyterms still feed Deepgram's URL params and stay
+// assembled on the snapshot for when a prompt-capable model is added.) Flip this
+// when wiring such a model.
+const MODEL_SUPPORTS_PROMPT: boolean = false;
 const CONNECT_TIMEOUT_MS = 10_000;
 // Backstop for the drain: if a committed segment's `conversation.item.done`
 // never arrives (server error, dropped frame), force-close after this long
@@ -396,10 +405,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       logInfo(`${P} WebSocket opened, sending session.update`);
       // Keyterm biasing via `transcription.prompt`, assembled at session start
       // and frozen on the settings snapshot, so reconnects reuse the same prompt.
-      // NOTE: `gpt-realtime-whisper` currently ignores `prompt` (only
-      // `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` honor it), so wiring it has
-      // no effect today — it future-proofs the path for a model that supports it.
-      const keytermPrompt = formatKeytermPrompt([...(settings.keyterms ?? [])]);
+      // Only sent when the model supports it (see MODEL_SUPPORTS_PROMPT) —
+      // `gpt-realtime-whisper` hard-rejects a `prompt` field, so we omit it.
+      const keytermPrompt = MODEL_SUPPORTS_PROMPT
+        ? formatKeytermPrompt([...(settings.keyterms ?? [])])
+        : "";
       // `turn_detection` MUST be explicitly `null` for `gpt-realtime-whisper`
       // (VAD is not supported for this model). It is not enough to omit it:
       // when absent the server applies a default VAD that this model can't
