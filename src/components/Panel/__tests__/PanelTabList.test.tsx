@@ -60,4 +60,16 @@ describe("PanelTabList", () => {
     const addButton = screen.getByLabelText("Duplicate panel as new tab");
     expect(noDnd?.contains(addButton)).toBe(true);
   });
+
+  it("keeps the overflow trigger inside the [data-no-dnd] boundary", () => {
+    // The overflow trigger renders as a sibling of the tablist (outside the inner
+    // tab-wrapping div), so it only stays protected as long as the boundary sits
+    // on the outer container. This guards against narrowing it and re-exposing
+    // the bug for that button.
+    const { container } = render(
+      <PanelTabList {...baseProps} overflowTrigger={<button data-testid="overflow">More</button>} />
+    );
+    const noDnd = container.querySelector("[data-no-dnd]");
+    expect(noDnd?.contains(screen.getByTestId("overflow"))).toBe(true);
+  });
 });
