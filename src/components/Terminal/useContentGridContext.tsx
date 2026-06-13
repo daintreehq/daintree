@@ -101,13 +101,14 @@ const GRID_CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
 // Module-level so the try/catch stays outside useContentGridContext — a
 // statement-level try block inside the hook bails React Compiler memoization
 // for the whole hook. Store actions are read at call time (see issue #8593).
-async function addTabForPanel(panel: PanelInstance): Promise<void> {
+export async function addTabForPanel(panel: PanelInstance): Promise<void> {
   const {
     getPanelGroup,
     createTabGroup,
     addPanelToGroup,
     deleteTabGroup,
     addPanel,
+    trashPanel,
     setActiveTab,
     setFocused,
   } = panelStoreApi.getState();
@@ -131,7 +132,17 @@ async function addTabForPanel(panel: PanelInstance): Promise<void> {
       return;
     }
 
-    addPanelToGroup(groupId, newPanelId);
+    // A failed add (worktree mismatch, group vanished) would otherwise leave the
+    // freshly-created duplicate orphaned outside any group. Trash it first so no
+    // reconciler ever sees a panel pointing at a deleted/empty group (#6596),
+    // then tear down the group this call created. Skip activation/focus — the
+    // panel isn't a member, so setActiveTab would no-op and setFocused would
+    // focus an orphan.
+    if (!addPanelToGroup(groupId, newPanelId)) {
+      trashPanel(newPanelId);
+      if (createdNewGroup && groupId) deleteTabGroup(groupId);
+      return;
+    }
     setActiveTab(groupId, newPanelId);
     setFocused(newPanelId);
   } catch (error) {

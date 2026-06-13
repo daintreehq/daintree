@@ -204,6 +204,12 @@ export const createTabGroupActions = (
       saveTabGroups(newTabGroups);
       return { tabGroups: newTabGroups };
     });
+
+    // Verify against the canonical store rather than a closure side-effect: the
+    // set() updater bails out (returning unchanged state) on a missing group,
+    // missing panel, or worktree mismatch, so membership is the source of truth
+    // for whether the add actually took. Callers gate cleanup on this boolean.
+    return get().tabGroups.get(groupId)?.panelIds.includes(panelId) ?? false;
   },
 
   removePanelFromGroup: (panelId) => {

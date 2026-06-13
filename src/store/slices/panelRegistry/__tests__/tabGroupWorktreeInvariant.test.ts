@@ -302,7 +302,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(true);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1", "t2"]);
@@ -316,7 +317,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(false);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1"]);
@@ -330,7 +332,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(true);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1", "t2"]);
@@ -344,7 +347,45 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(false);
+
+      const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
+      expect(updatedGroup?.panelIds).toEqual(["t1"]);
+    });
+
+    it("returns false when the target group does not exist", () => {
+      const t1 = createMockTerminal("t1", "wt-a", "grid");
+      setTerminals([t1]);
+      usePanelStore.setState({ tabGroups: new Map() });
+
+      const result = usePanelStore.getState().addPanelToGroup("missing-group", "t1");
+      expect(result).toBe(false);
+    });
+
+    it("returns false when the panel does not exist", () => {
+      const t1 = createMockTerminal("t1", "wt-a", "grid");
+      const group = createMockTabGroup("g1", "wt-a", ["t1"]);
+
+      setTerminals([t1]);
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+      const result = usePanelStore.getState().addPanelToGroup("g1", "missing-panel");
+      expect(result).toBe(false);
+
+      const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
+      expect(updatedGroup?.panelIds).toEqual(["t1"]);
+    });
+
+    it("returns true when the panel is already a member (idempotent)", () => {
+      const t1 = createMockTerminal("t1", "wt-a", "grid");
+      const group = createMockTabGroup("g1", "wt-a", ["t1"]);
+
+      setTerminals([t1]);
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t1");
+      expect(result).toBe(true);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1"]);
@@ -404,7 +445,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(false);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1"]);

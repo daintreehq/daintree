@@ -23,7 +23,7 @@ const moveTerminalToGridMock = vi.fn();
 const updateTitleMock = vi.fn();
 const reorderPanelsInGroupMock = vi.fn();
 const addPanelMock = vi.fn();
-const addPanelToGroupMock = vi.fn();
+const addPanelToGroupMock = vi.fn(() => true);
 
 let mockActiveDockTerminalId: string | null = null;
 let mockTabGroups = new Map<string, TabGroup>();

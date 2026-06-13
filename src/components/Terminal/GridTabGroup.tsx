@@ -3,7 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { logError } from "@/utils/logger";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -11,7 +10,7 @@ import { getMergedPresets } from "@/config/agents";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
-import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "./terminalFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
@@ -46,8 +45,6 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const stampLastActive = usePanelStore((state) => state.stampLastActive);
   const setMaximizedId = usePanelStore((state) => state.setMaximizedId);
   const trashPanel = usePanelStore((state) => state.trashPanel);
-  const addPanel = usePanelStore((state) => state.addPanel);
-  const addPanelToGroup = usePanelStore((state) => state.addPanelToGroup);
   const reorderPanelsInGroup = usePanelStore((state) => state.reorderPanelsInGroup);
   const updateTitle = usePanelStore((state) => state.updateTitle);
 
@@ -257,22 +254,13 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     [group.id, reorderPanelsInGroup]
   );
 
-  // Handle add tab - duplicate the current panel as a new tab
+  // Handle add tab - duplicate the current panel as a new tab. Delegates to the
+  // shared module-level helper so the create → add-to-group → activate sequence
+  // (and its orphan-cleanup on a failed add) lives in one place (#10441).
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
-
-    try {
-      const options = await buildPanelDuplicateOptions(activePanel, "grid");
-      const newPanelId = await addPanel(options);
-      if (!newPanelId) return;
-
-      addPanelToGroup(group.id, newPanelId);
-      setActiveTab(group.id, newPanelId);
-      setFocused(newPanelId);
-    } catch (error) {
-      logError("Failed to add tab", error);
-    }
-  }, [activePanel, group.id, addPanel, addPanelToGroup, setActiveTab, setFocused]);
+    await addTabForPanel(activePanel);
+  }, [activePanel]);
 
   if (!activePanel) {
     return null;

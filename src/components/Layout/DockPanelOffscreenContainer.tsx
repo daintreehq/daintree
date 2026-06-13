@@ -52,6 +52,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
   const addPanel = usePanelStore((s) => s.addPanel);
+  const trashPanel = usePanelStore((s) => s.trashPanel);
   const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
   const createTabGroup = usePanelStore((s) => s.createTabGroup);
   const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
@@ -95,7 +96,16 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
           return;
         }
 
-        addPanelToGroup(groupId, newPanelId);
+        // On a rejected add (worktree mismatch, group vanished), the freshly
+        // created panel would otherwise be orphaned outside any group — and the
+        // dock watchdog effect above could read it as a stray and tear down the
+        // dock pointer (#6596). Trash it first, then delete the group this call
+        // created, and skip activation since the panel never joined the group.
+        if (!addPanelToGroup(groupId, newPanelId)) {
+          trashPanel(newPanelId);
+          if (createdNewGroup && groupId!) deleteTabGroup(groupId);
+          return;
+        }
         setActiveTab(groupId, newPanelId);
       } catch (error) {
         logError("Failed to add tab", error);
@@ -104,7 +114,15 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         }
       }
     },
-    [getPanelGroup, createTabGroup, addPanelToGroup, deleteTabGroup, addPanel, setActiveTab]
+    [
+      getPanelGroup,
+      createTabGroup,
+      addPanelToGroup,
+      deleteTabGroup,
+      addPanel,
+      trashPanel,
+      setActiveTab,
+    ]
   );
 
   // Create the stable wrapper for each panel eagerly after the container mounts,

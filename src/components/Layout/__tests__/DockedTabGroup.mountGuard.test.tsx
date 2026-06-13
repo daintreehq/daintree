@@ -22,7 +22,7 @@ const moveTerminalToGridMock = vi.fn();
 const updateTitleMock = vi.fn();
 const reorderPanelsInGroupMock = vi.fn();
 const addPanelMock = vi.fn();
-const addPanelToGroupMock = vi.fn();
+const addPanelToGroupMock = vi.fn(() => true);
 
 let mockActiveDockTerminalId: string | null = null;
 let mockTabGroups = new Map<string, TabGroup>();
@@ -248,6 +248,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 import { DockedTabGroup } from "../DockedTabGroup";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { TerminalRefreshTier } from "@/types";
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -643,5 +644,56 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("DockedTabGroup add-tab orphan cleanup (#10441)", () => {
+  beforeEach(() => {
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups = new Map();
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"]));
+    addPanelMock.mockReset();
+    addPanelToGroupMock.mockReset();
+    vi.mocked(buildPanelDuplicateOptions).mockReset();
+  });
+
+  async function clickAddTab() {
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+    const { container } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+    const addTabButton = container.querySelector(
+      '[aria-label="Duplicate panel as new tab"]'
+    ) as HTMLElement;
+    expect(addTabButton).not.toBeNull();
+    // Isolate the click's side effects from any mount-time activation.
+    trashPanelMock.mockClear();
+    setActiveTabMock.mockClear();
+    await act(async () => {
+      fireEvent.click(addTabButton);
+    });
+  }
+
+  it("trashes the new panel and skips activation when addPanelToGroup rejects the add", async () => {
+    vi.mocked(buildPanelDuplicateOptions).mockResolvedValue({} as never);
+    addPanelMock.mockResolvedValue("t-new");
+    addPanelToGroupMock.mockReturnValue(false);
+
+    await clickAddTab();
+
+    expect(addPanelToGroupMock).toHaveBeenCalledWith("g-1", "t-new");
+    expect(trashPanelMock).toHaveBeenCalledWith("t-new");
+    expect(setActiveTabMock).not.toHaveBeenCalled();
+  });
+
+  it("activates the new panel and does not trash it when the add succeeds", async () => {
+    vi.mocked(buildPanelDuplicateOptions).mockResolvedValue({} as never);
+    addPanelMock.mockResolvedValue("t-new");
+    addPanelToGroupMock.mockReturnValue(true);
+
+    await clickAddTab();
+
+    expect(trashPanelMock).not.toHaveBeenCalled();
+    expect(setActiveTabMock).toHaveBeenCalledWith("g-1", "t-new");
   });
 });

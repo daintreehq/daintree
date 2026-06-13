@@ -428,12 +428,18 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       const newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
       if (!newPanelId) return;
 
-      addPanelToGroup(group.id, newPanelId);
+      // If the add is rejected (worktree mismatch, group vanished), trash the
+      // freshly created panel so it isn't orphaned outside any group, and skip
+      // activation since it never joined the group (#10441).
+      if (!addPanelToGroup(group.id, newPanelId)) {
+        trashPanel(newPanelId);
+        return;
+      }
       setActiveTab(group.id, newPanelId);
     } catch (error) {
       logError("Failed to add tab", error);
     }
-  }, [activePanel, group.id, addPanel, addPanelToGroup, setActiveTab]);
+  }, [activePanel, group.id, addPanel, addPanelToGroup, trashPanel, setActiveTab]);
 
   const groupBlockedState = getGroupBlockedAgentState(panels);
   const blockedState = useDockBlockedState(groupBlockedState);
