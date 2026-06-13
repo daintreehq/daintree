@@ -36,9 +36,7 @@ const MAX_LONG_TASKS = process.platform === "darwin" ? 25 : process.platform ===
 const clickReviewHubSetupButton = async (locator: Locator) => {
   await expect(locator).toBeVisible({ timeout: T_LONG });
   await expect(locator).toBeEnabled({ timeout: T_LONG });
-  await locator.evaluate((element) => {
-    (element as HTMLElement).click();
-  });
+  await locator.click({ force: true, timeout: T_LONG });
 };
 
 const waitForReviewHubUnstagedSetup = async (hub: Locator) => {

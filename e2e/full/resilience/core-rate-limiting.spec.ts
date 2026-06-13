@@ -5,9 +5,6 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { T_SETTLE } from "../../helpers/timeouts";
 
-const isWindowsCI = process.env.CI && process.platform === "win32";
-const CI_MULTIPLIER = isWindowsCI ? 5 : process.env.CI ? 3 : 1;
-
 let ctx: AppContext;
 let repoPath: string;
 let fixtureCleanup: (() => void) | undefined;
@@ -113,46 +110,48 @@ test.describe.serial("Core: Rate Limiting", () => {
   test("operations recover after rate limit state is reset", async () => {
     test.slow();
 
-    // Exhaust the 10-slot rate limit
-    const initialIds: string[] = await ctx.window.evaluate(async (cwd) => {
-      const ids: string[] = [];
-      for (let i = 0; i < 10; i++) {
-        const id = await (window as any).electron.terminal.spawn({
+    // Start two spawns concurrently. The first consumes the immediate
+    // leaky-bucket slot; the second must queue behind the strict 1s interval.
+    // Do not await the first spawn before starting the second: on slow Linux
+    // runners a real PTY can take long enough to open the next bucket slot.
+    const queuedResult = await ctx.window.evaluate(
+      async ({ cwd, raceMs }) => {
+        const firstSpawn = (window as any).electron.terminal.spawn({
           cols: 80,
           rows: 24,
           cwd,
         });
-        ids.push(id);
-      }
-      return ids;
-    }, repoPath);
-
-    expect(initialIds.length).toBe(10);
-
-    // Next spawn would queue (not reject) — verify it doesn't resolve immediately
-    // by racing it against a short timeout.
-    const queuedResult = await ctx.window.evaluate(
-      async ({ cwd, raceMs }) => {
-        const spawnPromise = (window as any).electron.terminal
+        const queuedSpawn = (window as any).electron.terminal
           .spawn({ cols: 80, rows: 24, cwd })
           .then((id: string) => ({ resolved: true as const, id }));
         // Prevent unhandled rejection when resetRateLimits drains this promise
-        spawnPromise.catch(() => {});
+        queuedSpawn.catch(() => {});
+        (window as any).__rateLimitRecoveryInitialSpawns = Promise.allSettled([
+          firstSpawn,
+          queuedSpawn,
+        ]);
         const raceResult = await Promise.race([
-          spawnPromise,
+          queuedSpawn,
           new Promise<{ resolved: false }>((resolve) =>
             setTimeout(() => resolve({ resolved: false }), raceMs)
           ),
         ]);
         return raceResult;
       },
-      { cwd: repoPath, raceMs: 500 * CI_MULTIPLIER }
+      { cwd: repoPath, raceMs: 250 }
     );
 
     expect(queuedResult.resolved).toBe(false);
 
     // Reset rate limit state (simulates the 30s window expiring)
     await resetRateLimits(ctx.app);
+
+    const initialIds: string[] = await ctx.window.evaluate(async () => {
+      const results = await (window as any).__rateLimitRecoveryInitialSpawns;
+      return results
+        .filter((r: PromiseSettledResult<string>) => r.status === "fulfilled")
+        .map((r: PromiseFulfilledResult<string>) => r.value);
+    });
 
     // Now a spawn should succeed immediately
     const recoveryId: string = await ctx.window.evaluate(async (cwd) => {

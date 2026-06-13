@@ -221,16 +221,14 @@ const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "work
 const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
 const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
-const hasE2EModeEnv = process.env.DAINTREE_E2E_MODE === "1";
-const hasE2ESkipFirstRunDialogsEnv = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
-const hasE2EFaultModeEnv = process.env.DAINTREE_E2E_FAULT_MODE === "1";
-const isE2EMode = !isPackagedBuild && hasE2EModeEnv && process.argv.includes(E2E_MODE_ARG);
+// E2E flags are threaded into renderer argv via webPreferences.additionalArguments
+// only after the main process validates the matching DAINTREE_E2E_* env values.
+// Rely on those argv switches here: sandboxed renderer preload contexts do not
+// consistently inherit the launch env on every platform/Electron build.
+const isE2EMode = !isPackagedBuild && process.argv.includes(E2E_MODE_ARG);
 const isE2ESkipFirstRunDialogs =
-  !isPackagedBuild &&
-  hasE2ESkipFirstRunDialogsEnv &&
-  process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
-const isE2EFaultMode =
-  !isPackagedBuild && hasE2EFaultModeEnv && process.argv.includes(E2E_FAULT_MODE_ARG);
+  !isPackagedBuild && process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+const isE2EFaultMode = !isPackagedBuild && process.argv.includes(E2E_FAULT_MODE_ARG);
 
 function e2eGlobalKey(name: string): string {
   return ["__", "DAINTREE", "_", "E2E", "_", name, "__"].join("");
