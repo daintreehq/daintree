@@ -503,6 +503,12 @@
    split tables use the centered-split system below instead. */
 .diff-viewer .diff-file-scroll {
   overflow-x: auto;
+  /* Re-enable the ::-webkit-scrollbar styling below for a classic always-visible
+     bar; the global `* { scrollbar-width: thin }` otherwise renders this as a
+     macOS overlay that auto-hides (Chromium 121+). Same reset as .diff-hscrollbar
+     and .diff-scroll-root. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 /* Centered split view: each pane gets a fixed half of the viewport instead of
