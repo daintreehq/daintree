@@ -134,6 +134,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   const moveToDestination = useDockPanelPortal();
   const portalContainerElementRef = useRef<HTMLDivElement | null>(null);
+  const prevActivePanelIdRef = useRef<string | undefined>(undefined);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
 
   const portalContainerRef = useCallback((node: HTMLDivElement | null) => {
@@ -149,6 +150,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   useEffect(() => {
     if (!activePanelId) return;
 
+    // Track the previously-active panel so a tab switch (activePanelId change
+    // while the group stays open) can downgrade the panel that just lost
+    // visibility. Update the ref on every valid-activePanelId path — including
+    // the early returns below — so it never goes stale across close/reopen.
+    const prevId = prevActivePanelIdRef.current;
+    prevActivePanelIdRef.current = activePanelId;
+
     if (!isOpen) {
       try {
         terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND);
@@ -156,6 +164,17 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
       return;
+    }
+
+    // On a tab switch the previous panel is no longer visible behind the new
+    // one — drop it to BACKGROUND so it stops painting at the visible tier.
+    // The policy's downgrade hysteresis absorbs rapid tab-flips (t1→t2→t1).
+    if (prevId && prevId !== activePanelId) {
+      try {
+        terminalInstanceService.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND);
+      } catch (error) {
+        console.warn(`Failed to background previous dock panel ${prevId}:`, error);
+      }
     }
 
     if (!portalContainer) return;
