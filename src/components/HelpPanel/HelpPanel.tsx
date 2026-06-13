@@ -49,7 +49,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
-import { isPtyPanel } from "@shared/types/panel";
+import { isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -226,18 +226,28 @@ export function HelpPanel({
 
   const focusedWorktreeId = useWorktreeSelectionStore((s) => s.focusedWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
-  const pinnedTerminalPanel = usePanelStore((s) =>
-    pinnedContext?.terminalId ? s.panelsById[pinnedContext.terminalId] : undefined
+  // Tool calls re-resolve their target terminal live at dispatch time, so the
+  // frozen provision-time `pinnedContext.terminalId` going stale doesn't mean
+  // they can't reach anything. Danger only when a pinned session has no live
+  // grid terminal left to dispatch into; warning when the user has since
+  // focused a different worktree than the one the session is bound to. Danger
+  // wins — nowhere to reach is the more urgent mismatch. The dock-hosted
+  // assistant terminal is excluded — it's never a tool-call target.
+  const hasAnyLiveGridPty = usePanelStore((s) =>
+    s.panelIds.some((id) => {
+      const p = s.panelsById[id];
+      return (
+        p != null &&
+        isPtyPanel(p) &&
+        isGridPanelLocation(p.location) &&
+        p.hasPty !== false &&
+        p.exitCode === undefined &&
+        p.runtimeStatus !== "exited" &&
+        p.runtimeStatus !== "error"
+      );
+    })
   );
-  // Escalation: danger when the pinned terminal is gone or has exited (its
-  // PTY can no longer receive dispatched commands), warning when the user has
-  // since focused a different worktree than the one the session is bound to.
-  // Danger wins — a dead target is the more urgent mismatch.
-  const pinnedTerminalPanelPty =
-    pinnedTerminalPanel && isPtyPanel(pinnedTerminalPanel) ? pinnedTerminalPanel : undefined;
-  const isPinnedTerminalDead =
-    pinnedContext?.terminalId != null &&
-    (!pinnedTerminalPanel || pinnedTerminalPanelPty?.exitCode !== undefined);
+  const isPinnedTerminalDead = pinnedContext?.terminalId != null && !hasAnyLiveGridPty;
   const isPinnedWorktreeDiverged =
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
@@ -969,7 +979,7 @@ export function HelpPanel({
                   )}
                   title={
                     isPinnedTerminalDead
-                      ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
+                      ? "No open terminal can receive this assistant's tool calls."
                       : "Assistant tool calls are pinned to this worktree and terminal."
                   }
                 >
@@ -996,7 +1006,7 @@ export function HelpPanel({
                   "bg-status-danger/10 text-status-danger hover:bg-status-danger/15 transition-colors duration-150",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 )}
-                title="The pinned terminal has closed — start a new session"
+                title="No open terminal to receive tool calls — start a new session"
               >
                 Start new session
               </button>
