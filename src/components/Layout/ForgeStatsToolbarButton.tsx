@@ -41,13 +41,14 @@ import {
 import { ForgeStatPill } from "./ForgeStatPill";
 import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
 
-// Hover-to-prefetch tuning. 150ms matches the codebase's Tier 1 state-change
-// timing and is long enough to filter mouse traversal across the toolbar pill
-// while remaining imperceptible to a deliberate hover. The 10s freshness skip
-// dedups against a recent click-time fetch without stacking on the 45s SWR
-// cache TTL — well under either, leaving plenty of headroom for click-time
-// `bypassCache: true` to still see fresh data.
-const HOVER_PREFETCH_DELAY_MS = 150;
+// Hover-to-prefetch tuning. The prefetch fires immediately on pointerenter
+// (mouse only) — no debounce: hovering a toolbar pill is strong click intent,
+// so warming the list the moment the cursor lands maximizes the head-start
+// before the click. The fly-by cost of firing on every hover is bounded by
+// two things: the prefetch is cache-first (`bypassCache: false`, served from
+// the main-process 60s list cache with zero GraphQL on a warm slot), and the
+// in-flight + freshness guards below collapse repeat hovers. The 10s freshness
+// skip dedups against a recent fetch without stacking on the 45s SWR cache TTL.
 const PREFETCH_FRESHNESS_MS = 10_000;
 
 // When the user opens a dropdown and its count hasn't been read from the forge
@@ -380,8 +381,6 @@ export const ForgeStatsToolbarButton = memo(
     const prsButtonRef = useRef<HTMLButtonElement>(null);
     const commitsButtonRef = useRef<HTMLButtonElement>(null);
 
-    const issuesHoverTimerRef = useRef<number | null>(null);
-    const prsHoverTimerRef = useRef<number | null>(null);
     const issuesPrefetchInFlightRef = useRef(false);
     const prsPrefetchInFlightRef = useRef(false);
 
@@ -392,12 +391,11 @@ export const ForgeStatsToolbarButton = memo(
     const issuesHiddenAtRef = useRef<number | null>(null);
     const prsHiddenAtRef = useRef<number | null>(null);
 
-    // Mirror open state into refs so the trailing-edge timer can re-check at
-    // fire time. The guard inside `handlePrefetchPointerEnter` is evaluated at
-    // schedule time; if the user clicks during the 150ms debounce window the
-    // dropdown opens and the mounted list view starts its own fetch — without
-    // this ref the timer would still fire and race a duplicate request that
-    // could overwrite fresh mount-fetch data in the cache.
+    // Mirror open state into refs so `prefetchResourceList` can re-check the
+    // live open state at fire time without widening its dependency array. If a
+    // click opens the dropdown in the same tick as the hover, the mounted list
+    // view starts its own fetch — this guard stops the hover prefetch from
+    // racing a duplicate request that could overwrite fresh mount-fetch data.
     const issuesOpenRef = useRef(issuesOpen);
     const prsOpenRef = useRef(prsOpen);
     const commitsOpenRef = useRef(commitsOpen);
@@ -577,19 +575,6 @@ export const ForgeStatsToolbarButton = memo(
       };
     }, [prsPulseAt]);
 
-    useEffect(() => {
-      return () => {
-        if (issuesHoverTimerRef.current !== null) {
-          window.clearTimeout(issuesHoverTimerRef.current);
-          issuesHoverTimerRef.current = null;
-        }
-        if (prsHoverTimerRef.current !== null) {
-          window.clearTimeout(prsHoverTimerRef.current);
-          prsHoverTimerRef.current = null;
-        }
-      };
-    }, []);
-
     // Wired to the dropdown view's `onFreshFetch` callback. When the
     // dropdown's SWR revalidation lands fresh first-page data, the provider
     // has already written the new total count to its stats cache. Calling
@@ -604,9 +589,9 @@ export const ForgeStatsToolbarButton = memo(
     const prefetchResourceList = useCallback(
       (type: "issue" | "pr") => {
         if (!currentProject || isTokenError || rateLimitActive) return;
-        // Mount-time race guard: a click during the debounce window flips the
-        // open state. Re-check here so a queued timer doesn't fire a duplicate
-        // request alongside the dropdown's own mount fetch.
+        // Open-state race guard: if a click opened the dropdown in the same
+        // tick as this hover, re-check here so the prefetch doesn't fire a
+        // duplicate request alongside the dropdown's own mount fetch.
         const isOpenRef = type === "issue" ? issuesOpenRef : prsOpenRef;
         if (isOpenRef.current) return;
 
@@ -626,10 +611,15 @@ export const ForgeStatsToolbarButton = memo(
         // refreshing stats here would flicker the toolbar status indicator.
         inFlightRef.current = true;
         const startedAt = Date.now();
+        // Cache-first: a warm main-process list cache (60s TTL) serves this
+        // hover with zero GraphQL; only a cold slot spends a query — the same
+        // query the click would have made anyway. This is what makes firing on
+        // every hover quota-safe. `bypassCache: true` stays reserved for
+        // explicit intent (dropdown open / manual refresh).
         const fetchOptions = {
           state: "open" as const,
           sort: "created",
-          bypassCache: true,
+          bypassCache: false,
         };
         const request =
           type === "issue"
@@ -650,11 +640,12 @@ export const ForgeStatsToolbarButton = memo(
               nextCursor: result.nextCursor,
               hasMore: result.hasMore,
               timestamp: now,
-              // This request bypassed the backend cache, so the entry
-              // qualifies for the SWR hook's skip-revalidate window — the
-              // whole point of the prefetch: hover→click costs one GraphQL
-              // query, not two.
-              freshBypassAt: now,
+              // Deliberately NO `freshBypassAt`: a cache-first prefetch may have
+              // been served from the main-process list cache, so it must not arm
+              // the SWR hook's skip-revalidate window (reserved for real
+              // `bypassCache: true` fetches). The dropdown still opens instantly
+              // on these warmed rows, then runs its normal cheap, cache-honoring
+              // open-time revalidate.
               // The prefetch always targets the `open` slot (see `cacheKey`),
               // so the count fingerprint arms the count-as-cache-buster.
               ...(result.totalCount != null ? { countAtWrite: result.totalCount } : {}),
@@ -677,26 +668,13 @@ export const ForgeStatsToolbarButton = memo(
         if (e.pointerType !== "mouse") return;
         const isOpen = type === "issue" ? issuesOpen : prsOpen;
         if (isOpen) return;
-        const timerRef = type === "issue" ? issuesHoverTimerRef : prsHoverTimerRef;
-        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(() => {
-          timerRef.current = null;
-          prefetchResourceList(type);
-        }, HOVER_PREFETCH_DELAY_MS);
+        // Fire immediately — no debounce. The in-flight + freshness guards in
+        // `prefetchResourceList` collapse repeat and fly-by hovers, and the
+        // cache-first fetch keeps a stray hover cheap, so warming the moment the
+        // cursor lands buys the maximum head-start before the click.
+        prefetchResourceList(type);
       },
       [issuesOpen, prsOpen, prefetchResourceList]
-    );
-
-    const handlePrefetchPointerLeave = useCallback(
-      (type: "issue" | "pr", e: React.PointerEvent) => {
-        if (e.pointerType !== "mouse") return;
-        const timerRef = type === "issue" ? issuesHoverTimerRef : prsHoverTimerRef;
-        if (timerRef.current !== null) {
-          window.clearTimeout(timerRef.current);
-          timerRef.current = null;
-        }
-      },
-      []
     );
 
     // Delta check for the digit-pulse animation. Wrapped in useEffectEvent so
@@ -944,7 +922,6 @@ export const ForgeStatsToolbarButton = memo(
                   }
                 }}
                 onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
-                onPointerLeave={(e) => handlePrefetchPointerLeave("issue", e)}
                 activityChip={
                   <span
                     aria-hidden="true"
@@ -1028,7 +1005,6 @@ export const ForgeStatsToolbarButton = memo(
                   }
                 }}
                 onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
-                onPointerLeave={(e) => handlePrefetchPointerLeave("pr", e)}
                 activityChip={
                   <span
                     aria-hidden="true"

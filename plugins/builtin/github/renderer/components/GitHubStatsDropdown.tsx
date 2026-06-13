@@ -24,7 +24,11 @@ if (typeof window !== "undefined") {
     void importCommitList();
   };
   if (typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(preload);
+    // Cap the idle wait: under sustained main-thread load (launch hydration,
+    // Electron IPC bursts) an untimed idle callback can be deferred for
+    // seconds, so a first click would still hit the Suspense skeleton. The
+    // timeout forces the preload to run within 2s regardless.
+    window.requestIdleCallback(preload, { timeout: 2000 });
   } else {
     window.setTimeout(preload, 2000);
   }
