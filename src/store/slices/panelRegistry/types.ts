@@ -238,8 +238,8 @@ export interface PanelRegistrySlice {
     panelIds: string[],
     activeTabId?: string
   ) => string;
-  /** Add a panel to an existing group at optional index */
-  addPanelToGroup: (groupId: string, panelId: string, index?: number) => void;
+  /** Add a panel to an existing group at optional index. Returns true if the panel is a member after the call, false if the add was rejected (missing group/panel, worktree mismatch). */
+  addPanelToGroup: (groupId: string, panelId: string, index?: number) => boolean;
   /** Remove a panel from its group (group deleted if only 1 panel remains) */
   removePanelFromGroup: (panelId: string) => void;
   /** Reorder panels within a group */

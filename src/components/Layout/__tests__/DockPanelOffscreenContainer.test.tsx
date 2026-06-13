@@ -74,9 +74,10 @@ function setPanels(panels: PtyPanelData[]) {
   mockState.activeDockTerminalId = null;
   mockState.closeDockTerminal = closeDockTerminalMock;
   mockState.addPanel = vi.fn();
+  mockState.trashPanel = vi.fn();
   mockState.getPanelGroup = vi.fn(() => undefined);
   mockState.createTabGroup = vi.fn();
-  mockState.addPanelToGroup = vi.fn();
+  mockState.addPanelToGroup = vi.fn(() => true);
   mockState.deleteTabGroup = vi.fn();
   mockState.setActiveTab = vi.fn();
 }

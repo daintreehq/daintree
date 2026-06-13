@@ -52,6 +52,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
   const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
   const addPanel = usePanelStore((s) => s.addPanel);
+  const trashPanel = usePanelStore((s) => s.trashPanel);
   const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
   const createTabGroup = usePanelStore((s) => s.createTabGroup);
   const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
@@ -76,6 +77,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     async (panel: PtyPanelData) => {
       let groupId: string;
       let createdNewGroup = false;
+      let newPanelId: string | null = null;
 
       try {
         const existingGroup = getPanelGroup(panel.id);
@@ -89,22 +91,43 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         const options = await buildPanelDuplicateOptions(panel, "dock");
         // `activateDockOnCreate` folds dock activation into the panel commit so
         // the watchdog effect cannot collapse the just-created tab. See #6590.
-        const newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
+        newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
         if (!newPanelId) {
           if (createdNewGroup && groupId!) deleteTabGroup(groupId);
           return;
         }
 
-        addPanelToGroup(groupId, newPanelId);
+        // On a rejected add (worktree mismatch, group vanished), the freshly
+        // created panel would otherwise be orphaned outside any group — and the
+        // dock watchdog effect above could read it as a stray and tear down the
+        // dock pointer (#6596). Trash it first, then delete the group this call
+        // created, and skip activation since the panel never joined the group.
+        if (!addPanelToGroup(groupId, newPanelId)) {
+          trashPanel(newPanelId);
+          if (createdNewGroup && groupId!) deleteTabGroup(groupId);
+          return;
+        }
         setActiveTab(groupId, newPanelId);
       } catch (error) {
         logError("Failed to add tab", error);
+        // Mirror the rejection path: trash a created-but-unjoined panel before
+        // deleting a group this call created, so a mid-flight throw can't orphan
+        // it for the dock watchdog to find (#10441, #6596).
+        if (newPanelId) trashPanel(newPanelId);
         if (createdNewGroup && groupId!) {
           deleteTabGroup(groupId);
         }
       }
     },
-    [getPanelGroup, createTabGroup, addPanelToGroup, deleteTabGroup, addPanel, setActiveTab]
+    [
+      getPanelGroup,
+      createTabGroup,
+      addPanelToGroup,
+      deleteTabGroup,
+      addPanel,
+      trashPanel,
+      setActiveTab,
+    ]
   );
 
   // Create the stable wrapper for each panel eagerly after the container mounts,
