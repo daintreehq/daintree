@@ -421,7 +421,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
 
-    let newPanelId: string | undefined;
+    let newPanelId: string | null = null;
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "dock");
       // `activateDockOnCreate` folds dock activation into the panel commit so

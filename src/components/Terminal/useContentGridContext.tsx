@@ -114,7 +114,7 @@ export async function addTabForPanel(panel: PanelInstance): Promise<void> {
   } = panelStoreApi.getState();
   let groupId: string | undefined;
   let createdNewGroup = false;
-  let newPanelId: string | undefined;
+  let newPanelId: string | null = null;
 
   try {
     const existingGroup = getPanelGroup(panel.id);

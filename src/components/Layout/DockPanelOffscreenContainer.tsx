@@ -77,7 +77,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     async (panel: PtyPanelData) => {
       let groupId: string;
       let createdNewGroup = false;
-      let newPanelId: string | undefined;
+      let newPanelId: string | null = null;
 
       try {
         const existingGroup = getPanelGroup(panel.id);
