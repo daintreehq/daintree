@@ -17,8 +17,6 @@ export function useIdleTerminalNotifications(): void {
   useEffect(() => {
     if (!isElectronAvailable() || ipcListenerAttached) return;
 
-    ipcListenerAttached = true;
-
     idleTerminalClient.onNotify((payload) => {
       const projects = payload.projects ?? [];
       if (projects.length === 0) return;
@@ -96,5 +94,10 @@ export function useIdleTerminalNotifications(): void {
         },
       });
     });
+
+    // Latch only after a successful subscribe so a throwing onNotify (e.g. a
+    // partially-initialized preload) doesn't wedge the latch and silently
+    // suppress all future notifications for this renderer.
+    ipcListenerAttached = true;
   }, []);
 }

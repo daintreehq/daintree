@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 interface DiskSpaceStatusPayload {
-  status: "normal" | "low" | "critical";
+  status: "normal" | "warning" | "critical";
   availableMb: number;
 }
 
@@ -67,15 +67,27 @@ describe("useDiskSpaceWarnings", () => {
     expect(unsubscribeMock).not.toHaveBeenCalled();
   });
 
-  it("routes critical and normal disk states to distinct notifications", async () => {
+  it("routes critical, warning, and normal disk states to distinct notifications", async () => {
     const { useDiskSpaceWarnings } = await load();
     renderHook(() => useDiskSpaceWarnings());
 
     act(() => captured!({ status: "critical", availableMb: 120 }));
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    expect(notifyMock).toHaveBeenLastCalledWith(expect.objectContaining({ type: "error" }));
+
+    act(() => captured!({ status: "warning", availableMb: 450.6 }));
+    expect(notifyMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        urgent: true,
+        correlationId: "disk-space-warning",
+        supersedeKey: "disk-space",
+        duration: 8000,
+        inboxMessage: "Low disk space: 451 MB remaining.",
+      })
+    );
 
     act(() => captured!({ status: "normal", availableMb: 5000 }));
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ type: "success" }));
+    expect(notifyMock).toHaveBeenLastCalledWith(expect.objectContaining({ type: "success" }));
   });
 
   it("does not subscribe when Electron is unavailable", async () => {

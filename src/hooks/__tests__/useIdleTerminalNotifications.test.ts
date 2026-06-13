@@ -57,6 +57,26 @@ describe("useIdleTerminalNotifications", () => {
     expect(onNotifyMock).toHaveBeenCalledTimes(1);
   });
 
+  // The surviving single listener must still deliver exactly one notification
+  // after a remount cycle — guards against the duplicate-toast regression while
+  // proving the listener is not torn down.
+  it("delivers exactly one notification after a remount cycle", async () => {
+    const { useIdleTerminalNotifications } = await load();
+
+    const first = renderHook(() => useIdleTerminalNotifications());
+    first.unmount();
+    renderHook(() => useIdleTerminalNotifications());
+
+    act(() => {
+      captured!({
+        projects: [{ projectId: "p1", projectName: "Acme", terminalCount: 1, idleMinutes: 3 }],
+        timestamp: 0,
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
   // The listener is an app-lifetime singleton; tearing it down on unmount would
   // silently kill notifications since the latch is never reset.
   it("does not unsubscribe on unmount", async () => {

@@ -12,8 +12,6 @@ export function useHibernationNotifications(): void {
   useEffect(() => {
     if (!isElectronAvailable() || ipcListenerAttached) return;
 
-    ipcListenerAttached = true;
-
     hibernationClient.onProjectHibernated((payload) => {
       const { projectId, projectName, terminalsKilled, reason } = payload;
       const reasonLabel = reason === "memory-pressure" ? " (memory pressure)" : "";
@@ -36,5 +34,8 @@ export function useHibernationNotifications(): void {
         },
       });
     });
+
+    // Latch only after a successful subscribe (see useIdleTerminalNotifications).
+    ipcListenerAttached = true;
   }, []);
 }

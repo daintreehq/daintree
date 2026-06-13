@@ -14,8 +14,6 @@ export function useDiskSpaceWarnings(): void {
   useEffect(() => {
     if (!isElectronAvailable() || ipcListenerAttached) return;
 
-    ipcListenerAttached = true;
-
     window.electron.window.onDiskSpaceStatus((payload) => {
       if (payload.status === "normal") {
         // Resolution row: priority "low" routes to inbox only; `supersedeKey`
@@ -68,5 +66,8 @@ export function useDiskSpaceWarnings(): void {
         });
       }
     });
+
+    // Latch only after a successful subscribe (see useIdleTerminalNotifications).
+    ipcListenerAttached = true;
   }, []);
 }
