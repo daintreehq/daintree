@@ -93,14 +93,50 @@ describe("panelIdsByWorktreeId invariant across mutations", () => {
       seedTerminal("t2", "wt-A");
       seedTerminal("t3", "wt-A");
 
-      // Explicit groups sort to the front of getTabGroups; the explicit
-      // [t1, t2] tab group lands at index 0, virtual t3 lands at index 1.
+      // getTabGroups interleaves explicit and virtual groups by earliest
+      // panelIds position; the explicit [t1, t2] group lands at index 0 and
+      // virtual t3 at index 1.
       usePanelStore.getState().createTabGroup("grid", "wt-A", ["t1", "t2"]);
 
       // Move the virtual t3 group (index 1) to the front of the grid scope.
       usePanelStore.getState().reorderTabGroups(1, 0, "grid", "wt-A");
 
       expect(usePanelStore.getState().panelIdsByWorktreeId["wt-A"]).toEqual(["t3", "t1", "t2"]);
+    });
+
+    it("getTabGroups interleaves explicit and virtual groups by panelIds order", () => {
+      // A panel gaining a second tab (becoming an explicit group) must keep its
+      // grid position rather than jumping to the front (#10435).
+      seedTerminal("t1", "wt-A");
+      seedTerminal("t2", "wt-A");
+      seedTerminal("t3", "wt-A");
+
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t2", "t3"]);
+
+      // Leading virtual group (t1) must precede the explicit [t2, t3] group.
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroups("grid", "wt-A")
+          .map((g) => g.panelIds)
+      ).toEqual([["t1"], ["t2", "t3"]]);
+    });
+
+    it("getTabGroups interleaves a virtual group on each side of an explicit group", () => {
+      seedTerminal("t1", "wt-A");
+      seedTerminal("t2", "wt-A");
+      seedTerminal("t3", "wt-A");
+      seedTerminal("t4", "wt-A");
+
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t2", "t3"]);
+
+      // Virtual groups must surround the explicit group in panelIds order.
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroups("grid", "wt-A")
+          .map((g) => g.panelIds)
+      ).toEqual([["t1"], ["t2", "t3"], ["t4"]]);
     });
 
     it("moveTerminalToPosition reorders the affected bucket", () => {

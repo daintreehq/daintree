@@ -330,15 +330,39 @@ export const createTabGroupActions = (
       }
     }
 
-    // Find ungrouped panels. Source from the eagerly-committed worktree index
-    // (not `panelIds`, which lags during a spawn batch) so freshly-batched
-    // panels paint immediately rather than after a worktree switch (#9649).
-    const ungroupedPanels: CarrierPanel[] = [];
+    // Map each valid explicit-group member to its sanitized group so the
+    // interleave pass below can slot the group in at its earliest member's
+    // position instead of forcing every explicit group ahead of the virtual
+    // ones — the latter made a panel jump to grid position 0 the moment it
+    // gained a second tab (#10435).
+    const memberToGroup = new Map<string, TabGroup>();
+    for (const group of explicitGroups) {
+      for (const id of group.panelIds) memberToGroup.set(id, group);
+    }
+    const emittedGroupIds = new Set<string>();
+
+    // Interleave explicit and virtual (single-panel) groups in one ordered pass.
+    // Source from the eagerly-committed worktree index (not `panelIds`, which
+    // lags during a spawn batch) so freshly-batched panels paint immediately
+    // rather than after a worktree switch (#9649). Each explicit group is
+    // emitted once, when its earliest member is first encountered; every other
+    // panel becomes a virtual single-panel group in place — preserving the
+    // panelIds grid order across both kinds (#10435).
+    const result: TabGroup[] = [];
     for (const tid of collectUngroupedCandidateIds(
       state.panelIds,
       state.panelIdsByWorktreeId,
       worktreeId
     )) {
+      const explicit = memberToGroup.get(tid);
+      if (explicit) {
+        if (!emittedGroupIds.has(explicit.id)) {
+          emittedGroupIds.add(explicit.id);
+          result.push(explicit);
+        }
+        continue;
+      }
+
       const t = state.panelsById[tid];
       if (!t) continue;
       if (t.location === "trash" || trashedTerminals.has(t.id)) continue;
@@ -346,27 +370,27 @@ export const createTabGroupActions = (
       if (effectiveLocation === null) continue;
       if (effectiveLocation !== location) continue;
       if (!panelMatchesWorktreeScope(t.worktreeId, worktreeId, location)) continue;
-      if (panelsInExplicitGroups.has(t.id)) continue;
-      ungroupedPanels.push(t);
+
+      result.push({
+        id: t.id,
+        location,
+        worktreeId,
+        activeTabId: t.id,
+        panelIds: [t.id],
+      });
     }
 
-    const virtualGroups: TabGroup[] = ungroupedPanels.map((panel) => ({
-      id: panel.id,
-      location,
-      worktreeId,
-      activeTabId: panel.id,
-      panelIds: [panel.id],
-    }));
+    // Defensive tail: emit any explicit group whose members never surfaced in
+    // the candidate iteration, preserving the prior guarantee that an explicit
+    // group is never silently dropped from the returned list.
+    for (const group of explicitGroups) {
+      if (!emittedGroupIds.has(group.id)) {
+        emittedGroupIds.add(group.id);
+        result.push(group);
+      }
+    }
 
-    // Sort explicit groups by their earliest terminal index in panelIds
-    const idIndexMap = new Map(state.panelIds.map((id, i) => [id, i]));
-    explicitGroups.sort((a, b) => {
-      const aFirstIndex = Math.min(...a.panelIds.map((id) => idIndexMap.get(id) ?? Infinity));
-      const bFirstIndex = Math.min(...b.panelIds.map((id) => idIndexMap.get(id) ?? Infinity));
-      return aFirstIndex - bFirstIndex;
-    });
-
-    return [...explicitGroups, ...virtualGroups];
+    return result;
   },
 
   moveTabGroupToLocation: (groupId, location) => {
