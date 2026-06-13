@@ -328,6 +328,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.sendCommand",
   "terminal.inject",
   "terminal.new",
+  "terminal.rename",
   "terminal.waitUntilIdle",
 
   "worktree.list",

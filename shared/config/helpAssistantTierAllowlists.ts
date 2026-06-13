@@ -77,6 +77,7 @@ export const ACTION_TIER_ADDONS = [
   "terminal.moveToDock",
   "terminal.moveToGrid",
   "terminal.toggleDock",
+  "terminal.rename",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
 
   "recipe.list",
