@@ -5,6 +5,7 @@ const clientMock = vi.hoisted(() => ({
   get: vi.fn(),
   invalidate: vi.fn(),
   set: vi.fn(),
+  setGlobal: vi.fn(),
   reset: vi.fn(),
   stampVersion: vi.fn(),
 }));
@@ -759,5 +760,38 @@ describe("agentSettingsStore adversarial", () => {
     const state = useAgentSettingsStore.getState();
     expect(state.isInitialized).toBe(true);
     expect(state.isLoading).toBe(false);
+  });
+
+  it("setGlobalSkipPermissions optimistically updates the root field without touching per-agent dangerousEnabled (#10432)", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: { claude: { dangerousEnabled: true } },
+        globalSkipPermissions: false,
+      },
+    });
+    clientMock.setGlobal.mockResolvedValueOnce({});
+
+    await useAgentSettingsStore.getState().setGlobalSkipPermissions(true);
+
+    expect(clientMock.setGlobal).toHaveBeenCalledWith(true);
+    const settings = useAgentSettingsStore.getState().settings;
+    expect(settings?.globalSkipPermissions).toBe(true);
+    // The per-agent toggle must be left untouched — the global is a live override.
+    expect(settings?.agents.claude.dangerousEnabled).toBe(true);
+  });
+
+  it("setGlobalSkipPermissions rolls back to the prior value when the IPC write rejects (#10432)", async () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { claude: {} }, globalSkipPermissions: false },
+    });
+    clientMock.setGlobal.mockRejectedValueOnce(new Error("ipc down"));
+
+    await expect(
+      useAgentSettingsStore.getState().setGlobalSkipPermissions(true)
+    ).rejects.toThrow("ipc down");
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.globalSkipPermissions).toBe(false);
+    expect(state.error).toBeTruthy();
   });
 });

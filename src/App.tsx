@@ -107,13 +107,13 @@ function reconcileResumeLaunchFlags(session: {
   agentId: string;
   agentLaunchFlags?: string[];
 }): string[] | undefined {
-  const flags = session.agentLaunchFlags;
-  if (!flags || flags.length === 0) return flags;
   const settings = useAgentSettingsStore.getState().settings;
   const entry = settings?.agents?.[session.agentId] ?? {};
   const effectiveBypass = resolveEffectiveBypass(entry, session.agentId, settings?.globalSkipPermissions);
+  // Pass [] when no flags were captured so global-on still injects the bypass
+  // token for a supported agent (reconcileBypassFlags no-ops for others).
   return reconcileBypassFlags(
-    flags,
+    session.agentLaunchFlags ?? [],
     session.agentId,
     effectiveBypass,
     entry.dangerousArgs as string | undefined

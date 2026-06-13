@@ -697,7 +697,8 @@ describe("resolveEffectiveBypass", () => {
 });
 
 describe("reconcileBypassFlags", () => {
-  const claudeFlag = DEFAULT_DANGEROUS_ARGS.claude;
+  // Non-null: "claude" is a known key of DEFAULT_DANGEROUS_ARGS (noUncheckedIndexedAccess).
+  const claudeFlag = DEFAULT_DANGEROUS_ARGS.claude as string;
 
   it("strips the canonical bypass flag when the effective bypass is off, preserving order of other flags", () => {
     const result = reconcileBypassFlags([claudeFlag, "--model", "opus"], "claude", false);

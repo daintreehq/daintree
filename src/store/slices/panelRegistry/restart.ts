@@ -400,22 +400,32 @@ export const createRestartActions = (
       // setting before any resume/from-flags command is built (#10432, the
       // "resume trap"): a snapshot captured while the global skip-permissions
       // switch was on must not survive once it's toggled off, and vice-versa.
-      if (runtimeForEnv && nextAgentLaunchFlags && nextAgentLaunchFlags.length > 0) {
+      // `nextAgentLaunchFlags` (stored + from-flags rebuild) reconciles only
+      // captured flags; `resumeFlags` additionally injects the bypass token into
+      // an empty snapshot so a session launched before bypass honours global-on.
+      let resumeFlags = nextAgentLaunchFlags;
+      if (runtimeForEnv) {
         const effectiveBypass = resolveEffectiveBypass(
           runtimeForEnv.settings.effectiveEntry,
           effectiveAgentId,
           runtimeForEnv.globalSkipPermissions
         );
-        nextAgentLaunchFlags = reconcileBypassFlags(
-          nextAgentLaunchFlags,
-          effectiveAgentId,
-          effectiveBypass,
-          runtimeForEnv.settings.effectiveEntry.dangerousArgs
-        );
+        const dangerousArgs = runtimeForEnv.settings.effectiveEntry.dangerousArgs;
+        if (nextAgentLaunchFlags && nextAgentLaunchFlags.length > 0) {
+          nextAgentLaunchFlags = reconcileBypassFlags(
+            nextAgentLaunchFlags,
+            effectiveAgentId,
+            effectiveBypass,
+            dangerousArgs
+          );
+          resumeFlags = nextAgentLaunchFlags;
+        } else if (effectiveBypass) {
+          resumeFlags = reconcileBypassFlags([], effectiveAgentId, effectiveBypass, dangerousArgs);
+        }
       }
       const sessionId = currentTerminal.agentSessionId;
       if (sessionId) {
-        const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, nextAgentLaunchFlags);
+        const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId, resumeFlags);
         if (resumeCmd) {
           commandToRun = resumeCmd;
         }
@@ -426,7 +436,7 @@ export const createRestartActions = (
         // through to a fresh launch so the user keeps their prior CWD-scoped
         // conversation. Suppressed by moveToNewWorktreeAndTransfer because the
         // new CWD would resume a stale or unrelated session.
-        const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, nextAgentLaunchFlags);
+        const resumeLatestCmd = buildResumeLatestCommand(effectiveAgentId, resumeFlags);
         if (resumeLatestCmd) {
           commandToRun = resumeLatestCmd;
           usedResumeLatest = true;

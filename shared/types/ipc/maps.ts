@@ -709,6 +709,10 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [payload: { agentType: AgentId; settings: Record<string, unknown> }];
     result: AgentSettings;
   };
+  "agent-settings:set-global": {
+    args: [value: boolean];
+    result: AgentSettings;
+  };
   "agent-settings:reset": {
     args: [agentType?: AgentId];
     result: AgentSettings;

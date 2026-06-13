@@ -891,6 +891,33 @@ describe("buildArgsForRespawn", () => {
     expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", ["--model", "flash"]);
   });
 
+  it("injects the bypass flag into an empty snapshot at resume when the global override is on (#10432)", () => {
+    buildResumeCommandMock.mockClear();
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        // Launched before bypass existed — no flags were captured.
+        agentLaunchFlags: [],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: { dangerousEnabled: false } }, globalSkipPermissions: true },
+      false,
+      undefined
+    );
+    // The resume command gets the injected bypass token...
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", [
+      "--dangerously-skip-permissions",
+    ]);
+    // ...but the stored snapshot is not synthesized from nothing.
+    expect(result.agentLaunchFlags).toEqual([]);
+  });
+
   it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {
     buildResumeLatestCommandMock.mockReturnValue("claude --continue");
     const result = buildArgsForRespawn(

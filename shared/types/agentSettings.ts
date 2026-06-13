@@ -124,7 +124,10 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
  */
 export function isAgentBypassSupported(agentId: string | undefined): boolean {
   if (!agentId) return false;
-  return getEffectiveAgentConfig(agentId)?.supports?.permissionBypass === true;
+  const supports = getEffectiveAgentConfig(agentId)?.supports;
+  // `supports` is `AssistantSupports | false | undefined`; only the structured
+  // form carries `permissionBypass`.
+  return supports !== false && supports?.permissionBypass === true;
 }
 
 /**

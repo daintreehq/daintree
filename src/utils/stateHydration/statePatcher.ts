@@ -429,18 +429,24 @@ export function buildArgsForRespawn(
     // current resolution so every restart/restore replays clean flags.
     const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
+    const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
-    const persistedFlags =
-      rawPersistedFlags && rawPersistedFlags.length > 0
-        ? reconcileBypassFlags(
-            rawPersistedFlags,
-            agentId,
-            effectiveBypass,
-            effectiveEntry.dangerousArgs as string | undefined
-          )
-        : rawPersistedFlags;
+    const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
+    // Reconcile only the flags actually captured: this drives the stored
+    // snapshot and the from-flags rebuild, so it must NOT synthesize a flag set
+    // out of nothing (that would mask the fresh-launch fallback).
+    const persistedFlags = hasPersistedFlags
+      ? reconcileBypassFlags(rawPersistedFlags as string[], agentId, effectiveBypass, dangerousArgs)
+      : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
-    const hasPersistedFlags = Boolean(persistedFlags && persistedFlags.length > 0);
+    // Resume commands prepend launch flags, so the bypass token must be injected
+    // even when no flags were captured — a session launched before bypass
+    // existed should honour global-on (#10432). Only diverges from persistedFlags
+    // in that inject-from-empty case.
+    const resumeFlags =
+      effectiveBypass && !hasPersistedFlags
+        ? reconcileBypassFlags([], agentId, effectiveBypass, dangerousArgs)
+        : persistedFlags;
 
     const buildFromPersistedFlags = () =>
       buildLaunchCommandFromFlags(baseCommand, agentId, persistedFlags as string[], {
@@ -449,7 +455,7 @@ export function buildArgsForRespawn(
       });
 
     if (saved.agentSessionId) {
-      const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId, persistedFlags);
+      const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
       if (resumeCmd) {
         command = resumeCmd;
       } else if (hasPersistedFlags) {
@@ -468,7 +474,7 @@ export function buildArgsForRespawn(
       // No session ID was captured (graceful-shutdown pattern match missed or
       // timed out). Try the agent's resume-latest fallback before falling
       // through to a fresh launch so the user keeps their prior conversation.
-      const resumeLatestCmd = buildResumeLatestCommand(agentId, persistedFlags);
+      const resumeLatestCmd = buildResumeLatestCommand(agentId, resumeFlags);
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {
