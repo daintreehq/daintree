@@ -536,7 +536,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   }
 
   return (
-    <div ref={ref} className="diff-viewer overflow-auto" data-wrap={wrapLines ? "true" : undefined}>
+    <div ref={ref} className="diff-viewer" data-wrap={wrapLines ? "true" : undefined}>
       {files.map((file, index) => (
         <FileDiff
           key={file.newRevision || file.oldRevision || index}
