@@ -104,8 +104,8 @@ type FullWakeTestService = {
   ensureDeferredAddons: (id: string, managed: ManagedTerminalMock) => void;
   wantsWebGLAtTier: (managed: ManagedTerminalMock, tier: number | undefined) => boolean;
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
-  repaintForReveal: (id: string) => void;
-  revealTerminal: (id: string) => Promise<void>;
+  repaintForReveal: (id: string) => boolean;
+  revealTerminal: (id: string) => Promise<boolean>;
   notifyAttachSettledWaiters: (id: string) => void;
 };
 
@@ -714,9 +714,9 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     service.instances.set(id, makeInstance({ isOpened: true, isHibernated: false }));
 
     const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
 
-    await service.revealTerminal(id);
+    await expect(service.revealTerminal(id)).resolves.toBe(true);
 
     expect(repaint).toHaveBeenCalledWith(id);
     expect(fullWake).not.toHaveBeenCalled();
@@ -724,10 +724,15 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
   it("takes the full rehydration path for a hibernated terminal", async () => {
     const id = "rev-2";
-    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: true }));
+    // Hibernated panes route through the full open+wake, but only once the host
+    // is measurable — give it a renderable box so the reveal gate proceeds.
+    service.instances.set(
+      id,
+      makeInstance({ isOpened: false, isHibernated: true, hostElement: renderableHost() })
+    );
 
     const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
 
     await service.revealTerminal(id);
 
@@ -737,10 +742,13 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
   it("takes the full rehydration path for an un-opened terminal", async () => {
     const id = "rev-3";
-    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: false }));
+    service.instances.set(
+      id,
+      makeInstance({ isOpened: false, isHibernated: false, hostElement: renderableHost() })
+    );
 
     const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
 
     await service.revealTerminal(id);
 
@@ -748,11 +756,48 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
     expect(repaint).not.toHaveBeenCalled();
   });
 
-  it("no-ops when the terminal does not exist", async () => {
-    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
-    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+  it("reports not-settled when the full wake only deferred behind an in-flight attach", async () => {
+    const id = "rev-attach";
+    const inst = makeInstance({
+      isOpened: false,
+      isHibernated: false,
+      hostElement: renderableHost(),
+    });
+    service.instances.set(id, inst);
 
-    await expect(service.revealTerminal("missing")).resolves.toBeUndefined();
+    // Simulate fullWakeForVisibilityRestore opening the pane but DEFERRING the
+    // actual wake/repaint because an attach is in flight — it sets
+    // pendingVisibilityWake and leaves isAttaching true. The reveal must report
+    // "retry" so the sweep doesn't spend its confirm paints before the deferred
+    // wake re-runs on attach-settle.
+    vi.spyOn(service, "fullWakeForVisibilityRestore").mockImplementation(async () => {
+      inst.isOpened = true;
+      inst.isAttaching = true;
+      inst.pendingVisibilityWake = true;
+    });
+
+    await expect(service.revealTerminal(id)).resolves.toBe(false);
+  });
+
+  it("defers the rehydration (reports not-paintable) when the host has no layout box", async () => {
+    const id = "rev-4";
+    // Bare, unconnected host → zero box → not paintable yet. The sweep should
+    // retry on a later frame instead of opening against an unmeasurable host.
+    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: false }));
+
+    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+
+    await expect(service.revealTerminal(id)).resolves.toBe(false);
+
+    expect(fullWake).not.toHaveBeenCalled();
+  });
+
+  it("reports settled (true) when the terminal does not exist", async () => {
+    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => true);
+
+    // Gone → nothing to repaint and nothing to retry.
+    await expect(service.revealTerminal("missing")).resolves.toBe(true);
 
     expect(fullWake).not.toHaveBeenCalled();
     expect(repaint).not.toHaveBeenCalled();

@@ -66,7 +66,8 @@ beforeEach(() => {
   fullWakeMock.mockResolvedValue(undefined);
   repaintForRevealMock.mockReset();
   revealTerminalMock.mockReset();
-  revealTerminalMock.mockResolvedValue(undefined);
+  // Default: terminals are paintable on the first attempt.
+  revealTerminalMock.mockResolvedValue(true);
   isFocusedMock.mockReset();
   isFocusedMock.mockReturnValue(false);
   logWarnMock.mockReset();
@@ -438,6 +439,18 @@ describe("wakeActiveWorktreeTerminals", () => {
 });
 
 describe("repaintActiveWorktreeTerminals (#10362)", () => {
+  // Unique ids passed to revealTerminal, preserving first-seen order — the sweep
+  // paints each paintable pane more than once (the confirm pass), so behavioural
+  // assertions key off the set/ordering, not raw call counts.
+  function revealedIds(): string[] {
+    const seen: string[] = [];
+    for (const call of revealTerminalMock.mock.calls) {
+      const id = String(call[0]);
+      if (!seen.includes(id)) seen.push(id);
+    }
+    return seen;
+  }
+
   it("reveals every visible terminal in the active worktree", async () => {
     mockActiveWorktreeId = "wt-1";
     const a = panel("a", { worktreeId: "wt-1" });
@@ -447,9 +460,7 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
 
     await repaintActiveWorktreeTerminals();
 
-    expect(revealTerminalMock).toHaveBeenCalledTimes(2);
-    expect(revealTerminalMock).toHaveBeenCalledWith("a");
-    expect(revealTerminalMock).toHaveBeenCalledWith("b");
+    expect(revealedIds().sort()).toEqual(["a", "b"]);
   });
 
   it("targets the same set as wake — folds in the assistant, excludes dock/other-worktree", async () => {
@@ -464,9 +475,7 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
 
     await repaintActiveWorktreeTerminals();
 
-    expect(revealTerminalMock).toHaveBeenCalledTimes(2);
-    expect(revealTerminalMock).toHaveBeenCalledWith("a");
-    expect(revealTerminalMock).toHaveBeenCalledWith("assistant");
+    expect(revealedIds().sort()).toEqual(["a", "assistant"]);
     expect(revealTerminalMock).not.toHaveBeenCalledWith("other-dock");
     expect(revealTerminalMock).not.toHaveBeenCalledWith("z");
   });
@@ -483,13 +492,33 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     const callOrder: string[] = [];
     revealTerminalMock.mockImplementation((id: string) => {
       callOrder.push(id);
-      return Promise.resolve();
+      return Promise.resolve(true);
     });
 
     await repaintActiveWorktreeTerminals();
 
     expect(callOrder[0]).toBe("c");
-    expect(callOrder).toHaveLength(3);
+    expect(revealedIds().sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("retries a terminal that isn't paintable yet, then settles once it is", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+
+    // Not paintable for the first two frames (layout still settling), then yes.
+    revealTerminalMock
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+
+    await repaintActiveWorktreeTerminals();
+
+    // Two not-paintable attempts + the confirm pass means it kept trying past
+    // the first paintable frame rather than giving up on the initial `false`.
+    expect(revealTerminalMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(revealedIds()).toEqual(["a"]);
   });
 
   it("isolates a per-terminal reveal rejection so the sweep continues", async () => {
@@ -501,12 +530,12 @@ describe("repaintActiveWorktreeTerminals (#10362)", () => {
     mockPanelsById = { a, b, c };
 
     revealTerminalMock.mockImplementation((id: string) =>
-      id === "b" ? Promise.reject(new Error("broken xterm")) : Promise.resolve()
+      id === "b" ? Promise.reject(new Error("broken xterm")) : Promise.resolve(true)
     );
 
     await expect(repaintActiveWorktreeTerminals()).resolves.toBeUndefined();
 
-    expect(revealTerminalMock).toHaveBeenCalledTimes(3);
+    expect(revealedIds().sort()).toEqual(["a", "b", "c"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       "[repaintActiveWorktreeTerminals] reveal failed",
       expect.objectContaining({ id: "b" })

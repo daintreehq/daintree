@@ -1052,18 +1052,21 @@ class TerminalInstanceService {
    * mirror sync already ran behind the bridge (IPC data is not culled like a
    * paint is), so only the repaint needs replaying.
    */
-  repaintForReveal(id: string): void {
+  repaintForReveal(id: string): boolean {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated) return;
-    if (!managed.isOpened || !managed.isVisible) return;
+    if (!managed || managed.isHibernated) return false;
+    if (!managed.isOpened || !managed.isVisible) return false;
 
     const element = managed.terminal.element;
-    if (!element || !element.isConnected) return;
+    if (!element || !element.isConnected) return false;
 
     // A not-yet-laid-out grid has no model worth repainting — its first real
-    // resize builds it fresh. Mirrors resetRenderer's size guard.
+    // resize builds it fresh. Mirrors resetRenderer's size guard. Report "not
+    // paintable yet" (false) so the reveal sweep retries on a later frame once
+    // the foreground view has settled its layout, rather than burning its one
+    // shot against a zero box.
     if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
-      return;
+      return false;
     }
 
     // Re-attach a WebGL context the freeze/thaw cycle may have dropped before
@@ -1083,12 +1086,33 @@ class TerminalInstanceService {
       logWarn(`repaintForReveal repair failed for ${id}`, { error });
     }
 
+    // Force a layout reflow so a renderer xterm paused while the view was
+    // occluded actually resumes drawing. This is the exact step a manual Redraw
+    // (resetRenderer) and a click both supply, and the one repaintForReveal was
+    // missing: handlePostWake unpauses standard agents via maybeReflowTerminal,
+    // but EARLY-RETURNS for settled-strategy agents (Codex, Gemini, Cursor,
+    // Copilot, …), so for those the atlas repair above landed in a still-paused
+    // renderer and the pane stayed garbled until the next write, the 3s
+    // heartbeat, or a click. Without this the reveal was not click-equivalent
+    // for most agent terminals.
+    try {
+      forceXtermReflow(element);
+    } catch (error) {
+      logWarn(`repaintForReveal reflow failed for ${id}`, { error });
+    }
+
     // Re-fit and unpause IO through the shared post-wake resize path. Going via
     // handlePostWake (not a bare fit()) honors the settled-strategy atomic-resize
     // contract: for settled agents a plain fit() would resize xterm ahead of the
     // deferred PTY resize and break atomicity — handlePostWake routes those
     // through sendPtyResize instead, and still fit()s + reflows standard agents.
     this.handlePostWake(id);
+
+    // Clear the reflow throttle so the next write or the 3s heartbeat reflows
+    // immediately rather than being debounced away (mirrors resetRenderer).
+    managed.lastReflowAt = 0;
+
+    return true;
   }
 
   /**
@@ -1109,15 +1133,41 @@ class TerminalInstanceService {
    *   case.
    * - **Already opened and woken** (the common warm path) — only the culled
    *   paint needs replaying, so take the cheap {@link repaintForReveal}.
+   *
+   * @returns `true` when the terminal was paintable and the repaint/open ran
+   * (or the terminal is gone — nothing to retry); `false` when it isn't paintable
+   * yet (host not laid out / not visible) and the caller should retry on a later
+   * frame. {@link repaintActiveWorktreeTerminals} drives that retry.
    */
-  async revealTerminal(id: string): Promise<void> {
+  async revealTerminal(id: string): Promise<boolean> {
     const managed = this.instances.get(id);
-    if (!managed) return;
+    // Gone — nothing to repaint and nothing to retry, so report "settled".
+    if (!managed) return true;
     if (managed.isHibernated || !managed.isOpened) {
+      // A hibernated/unopened pane needs the full open+wake, but
+      // fullWakeForVisibilityRestore only opens once the host has a real layout
+      // box. While the foreground view is still settling that box can read zero
+      // (or the host is visibility:hidden), so report "not paintable yet" and
+      // let the reveal sweep retry on a later frame rather than spending the
+      // open attempt against an unmeasurable host.
+      if (!this.hostHasRenderableDims(managed)) return false;
       await this.fullWakeForVisibilityRestore(id);
-      return;
+      const after = this.instances.get(id);
+      // Gone mid-wake → nothing left to retry. Otherwise it's settled only once
+      // the pane actually opened AND the wake wasn't merely DEFERRED:
+      // fullWakeForVisibilityRestore sets pendingVisibilityWake and returns early
+      // while an attach is in flight (notifyAttachSettledWaiters re-runs it on
+      // settle). Report "retry" until the open+wake has truly landed so the
+      // sweep's confirm paints aren't spent against a not-yet-revealed pane.
+      return (
+        !after ||
+        (after.isOpened === true &&
+          after.isHibernated !== true &&
+          after.isAttaching !== true &&
+          after.pendingVisibilityWake !== true)
+      );
     }
-    this.repaintForReveal(id);
+    return this.repaintForReveal(id);
   }
 
   /**

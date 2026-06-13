@@ -146,11 +146,51 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   await Promise.all(workers);
 }
 
-const REPAINT_CHUNK = 2;
+// Upper bound on frames a single terminal will keep retrying its reveal before
+// the sweep gives up on it. A warm project-view return that's settling its
+// layout needs only a couple of frames; the ceiling just stops a pane that's
+// genuinely offscreen/unmeasurable from spinning forever (~10 frames ≈ 160ms).
+const MAX_REVEAL_FRAMES = 10;
+// At most this many terminals repaint on any one frame so a large grid never
+// produces a single long task on the reveal frame.
+const REVEAL_CONCURRENCY = 2;
+// Paint each pane on two SEPARATE frames once it's paintable. The first paint
+// can land in the frame before the compositor swaps the now-foreground project
+// view in — or before xterm's own IntersectionObserver re-fires as the view
+// un-occludes and momentarily re-pauses the renderer — so it doesn't visually
+// stick. The second, a frame later once those observers have settled, is the
+// one the user actually sees. This double pass is what turns the previously
+// intermittent reveal into a reliable one.
+const REVEAL_CONFIRM_PAINTS = 2;
 
 function nextFrame(): Promise<void> {
   if (typeof requestAnimationFrame !== "function") return Promise.resolve();
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Drive a single terminal's reveal to a stable result: retry frame-by-frame
+ * until it reports paintable, then paint it {@link REVEAL_CONFIRM_PAINTS} times
+ * across separate frames to defeat the compositor/observer present-race that
+ * otherwise leaves the first paint un-stuck. Bounded by {@link MAX_REVEAL_FRAMES}.
+ */
+async function revealUntilStable(id: string): Promise<void> {
+  let painted = 0;
+  for (let frame = 0; frame < MAX_REVEAL_FRAMES && painted < REVEAL_CONFIRM_PAINTS; frame++) {
+    let paintable: boolean;
+    try {
+      paintable = await terminalInstanceService.revealTerminal(id);
+    } catch (error) {
+      // One broken terminal must not abort the sweep — the next visible
+      // terminal still needs its post-reveal reveal/repaint.
+      logWarn("[repaintActiveWorktreeTerminals] reveal failed", { id, error });
+      return;
+    }
+    if (paintable) painted++;
+    // Yield a frame between attempts: lets layout/compositor settle before a
+    // retry, and spaces the confirm paint out from the first.
+    await nextFrame();
+  }
 }
 
 /**
@@ -168,9 +208,15 @@ function nextFrame(): Promise<void> {
  * picks the right path per terminal: full open+wake for hibernated/unopened
  * panes, cheap repaint for the rest.
  *
- * `revealTerminal` can fit + full-refresh (and, for the rehydration case, pull
- * from the headless mirror), so the sweep is spread across frames in small
- * chunks to keep a large grid from producing one long task on the reveal frame.
+ * A single double-rAF reveal proved unreliable: main fires `app:view-revealed`
+ * the moment it detaches the anti-flash bridge, without waiting for the
+ * compositor to actually present the foreground frame, so a one-shot repaint can
+ * land before the view is paintable (or get undone by xterm's own observers
+ * re-firing as the view un-occludes) and there was no retry — leaving panes
+ * garbled until clicked. Each terminal now runs through {@link revealUntilStable}
+ * (retry-until-paintable + a confirm paint), bounded-concurrency so a large grid
+ * stays off the long-task path. The HelpPanel already does the same per-frame
+ * retry for the assistant terminal.
  */
 export async function repaintActiveWorktreeTerminals(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();
@@ -179,22 +225,17 @@ export async function repaintActiveWorktreeTerminals(): Promise<void> {
   // Reveal the pane the user is reading first — the rest stagger in behind it.
   prioritizeFocusedFirst(targets);
 
-  for (let i = 0; i < targets.length; i += REPAINT_CHUNK) {
-    const chunk: Promise<void>[] = [];
-    for (let j = i; j < Math.min(i + REPAINT_CHUNK, targets.length); j++) {
-      const id = targets[j];
-      if (!id) continue;
-      chunk.push(
-        terminalInstanceService.revealTerminal(id).catch((error: unknown) => {
-          // One broken terminal must not abort the sweep — the next visible
-          // terminal still needs its post-reveal reveal/repaint.
-          logWarn("[repaintActiveWorktreeTerminals] reveal failed", { id, error });
-        })
-      );
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < targets.length) {
+      const id = targets[cursor++];
+      if (id) await revealUntilStable(id);
     }
-    await Promise.all(chunk);
-    if (i + REPAINT_CHUNK < targets.length) {
-      await nextFrame();
-    }
+  };
+  const workerCount = Math.min(REVEAL_CONCURRENCY, targets.length);
+  const workers: Promise<void>[] = [];
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(worker());
   }
+  await Promise.all(workers);
 }
