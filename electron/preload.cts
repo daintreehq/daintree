@@ -1647,8 +1647,7 @@ function buildElectronApi(): ElectronAPI {
       set: (agentId: string, settings: Partial<AgentSettingsEntry>) =>
         _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
 
-      setGlobal: (value: boolean) =>
-        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
+      setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
 
       reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
 

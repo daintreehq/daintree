@@ -731,7 +731,12 @@ describe("reconcileBypassFlags", () => {
   });
 
   it("honours a custom bypassArgs value for strip-and-re-add", () => {
-    const stripped = reconcileBypassFlags(["--custom-skip", "--model"], "claude", false, "--custom-skip");
+    const stripped = reconcileBypassFlags(
+      ["--custom-skip", "--model"],
+      "claude",
+      false,
+      "--custom-skip"
+    );
     expect(stripped).toEqual(["--model"]);
     const readded = reconcileBypassFlags(["--model"], "claude", true, "--custom-skip");
     expect(readded).toContain("--custom-skip");

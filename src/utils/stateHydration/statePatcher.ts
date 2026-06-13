@@ -529,7 +529,9 @@ export function buildArgsForRespawn(
     browserZoom: isDevPreview ? saved.browserZoom : undefined,
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
-    agentLaunchFlags: presetWasStale ? undefined : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
+    agentLaunchFlags: presetWasStale
+      ? undefined
+      : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,

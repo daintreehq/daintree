@@ -786,9 +786,9 @@ describe("agentSettingsStore adversarial", () => {
     });
     clientMock.setGlobal.mockRejectedValueOnce(new Error("ipc down"));
 
-    await expect(
-      useAgentSettingsStore.getState().setGlobalSkipPermissions(true)
-    ).rejects.toThrow("ipc down");
+    await expect(useAgentSettingsStore.getState().setGlobalSkipPermissions(true)).rejects.toThrow(
+      "ipc down"
+    );
 
     const state = useAgentSettingsStore.getState();
     expect(state.settings?.globalSkipPermissions).toBe(false);
