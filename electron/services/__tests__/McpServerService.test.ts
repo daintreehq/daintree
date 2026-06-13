@@ -2666,6 +2666,12 @@ describe("McpServerService", () => {
         description:
           "Toggle the focused terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed.",
       }),
+      createManifestEntry({
+        id: "terminal.rename" as ActionId,
+        title: "Rename Terminal",
+        description:
+          "Rename a terminal. Accepts an optional terminalId (defaults to the focused terminal) and a name; omitting the name opens the rename dialog.",
+      }),
       waitUntilIdleManifestEntry(),
       createManifestEntry({
         id: "recipe.list" as ActionId,
