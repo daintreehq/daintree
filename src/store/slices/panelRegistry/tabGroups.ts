@@ -301,7 +301,6 @@ export const createTabGroupActions = (
     const tabGroups = state.tabGroups;
 
     const explicitGroups: TabGroup[] = [];
-    const panelsInExplicitGroups = new Set<string>();
 
     for (const group of tabGroups.values()) {
       if (
@@ -325,7 +324,6 @@ export const createTabGroupActions = (
               ? group.activeTabId
               : (validPanelIds[0] ?? ""),
           });
-          validPanelIds.forEach((id) => panelsInExplicitGroups.add(id));
         }
       }
     }

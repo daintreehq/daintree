@@ -139,6 +139,61 @@ describe("panelIdsByWorktreeId invariant across mutations", () => {
       ).toEqual([["t1"], ["t2", "t3"], ["t4"]]);
     });
 
+    it("getTabGroups keeps group position when a panel gains a second tab via addPanelToGroup", () => {
+      // The real #10435 trigger path: an existing panel gains a second tab
+      // through addPanelToGroup. The group must stay at its earliest member's
+      // position rather than jumping to grid position 0.
+      seedTerminal("t1", "wt-A");
+      seedTerminal("t2", "wt-A");
+      seedTerminal("t3", "wt-A");
+
+      const groupId = usePanelStore.getState().createTabGroup("grid", "wt-A", ["t2"]);
+      usePanelStore.getState().addPanelToGroup(groupId, "t3");
+
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroups("grid", "wt-A")
+          .map((g) => g.panelIds)
+      ).toEqual([["t1"], ["t2", "t3"]]);
+    });
+
+    it("getTabGroups interleaves multiple explicit groups by panelIds order", () => {
+      seedTerminal("t1", "wt-A");
+      seedTerminal("t2", "wt-A");
+      seedTerminal("t3", "wt-A");
+      seedTerminal("t4", "wt-A");
+      seedTerminal("t5", "wt-A");
+
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t2", "t3"]);
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t4", "t5"]);
+
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroups("grid", "wt-A")
+          .map((g) => g.panelIds)
+      ).toEqual([["t1"], ["t2", "t3"], ["t4", "t5"]]);
+    });
+
+    it("getTabGroups places a non-contiguous group at its earliest member's position", () => {
+      // A group owning t2 and t4 lands at t2's position; t3 stays a virtual
+      // group emitted after the group it sits between in panelIds.
+      seedTerminal("t1", "wt-A");
+      seedTerminal("t2", "wt-A");
+      seedTerminal("t3", "wt-A");
+      seedTerminal("t4", "wt-A");
+
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t2", "t4"]);
+
+      expect(
+        usePanelStore
+          .getState()
+          .getTabGroups("grid", "wt-A")
+          .map((g) => g.panelIds)
+      ).toEqual([["t1"], ["t2", "t4"], ["t3"]]);
+    });
+
     it("moveTerminalToPosition reorders the affected bucket", () => {
       seedTerminal("t1", "wt-A");
       seedTerminal("t2", "wt-A");
