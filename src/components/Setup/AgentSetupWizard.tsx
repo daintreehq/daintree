@@ -277,12 +277,17 @@ export function buildInitialState(availability: CliAvailability, isFirstRun = fa
 }
 
 // The cli step is skipped when every selected agent is already launchable —
-// there is nothing left to install, so jump straight to the summary.
+// there is nothing left to install. First-run users must still pass through the
+// global permissions consent gate before the summary even when cli is skipped;
+// returning users go straight to complete.
 function resolvePostInstallStep(state: WizardState): WizardStep {
   const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
   const allSelectedInstalled =
     selectedIds.length > 0 && selectedIds.every((id) => isAgentLaunchable(state.availability[id]));
-  return allSelectedInstalled ? { type: "complete" } : { type: "cli" };
+  if (allSelectedInstalled) {
+    return state.isFirstRun ? { type: "permissions" } : { type: "complete" };
+  }
+  return { type: "cli" };
 }
 
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
@@ -585,17 +590,14 @@ export function AgentSetupWizard({
 
   const handlePermissionsContinue = useCallback(async () => {
     directionRef.current = 1;
-    // Default off — nothing to persist, just advance. The store already holds
-    // false (or whatever the user had); a no-op write is avoided.
-    if (!permissionsEnabled) {
-      dispatch({ type: "PERMISSIONS_CONTINUE" });
-      return;
-    }
     setIsSaving(true);
     try {
-      // Forward-fail: only advance once the write resolves. On failure the
-      // store rolls back and re-throws; stay on the step so the user can retry.
-      await setGlobalSkipPermissions(true);
+      // Always persist the explicit choice (on or off) so a pre-existing `true`
+      // from an interrupted prior run can't override the default-off decision —
+      // mirrors how telemetry commits even for the off state. Forward-fail: only
+      // advance once the write resolves; on failure the store rolls back and
+      // re-throws, so stay on the step for retry.
+      await setGlobalSkipPermissions(permissionsEnabled);
       dispatch({ type: "PERMISSIONS_CONTINUE" });
     } catch {
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
@@ -603,7 +605,10 @@ export function AgentSetupWizard({
         type: "error",
         title: "Couldn't save setting",
         message: "Skip-permissions wasn't saved. Try again.",
+        // Explicit high priority so the failure surfaces a toast (the
+        // permissions step itself is the retry surface, so no action button).
         priority: "high",
+        context: { eventKind: "settings" },
       });
     } finally {
       setIsSaving(false);

@@ -173,7 +173,9 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "cli" });
   });
 
-  it("privacy skips to complete when all selected agents are installed", () => {
+  it("privacy routes first-run to permissions (not complete) when all selected agents are installed", () => {
+    // cli is skipped (nothing to install) but the global permissions consent
+    // gate must still fire on first run before the summary.
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
     let state = buildInitialState(allInstalled, true);
     state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
@@ -183,10 +185,10 @@ describe("AgentSetupWizard reducer", () => {
     });
     state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
     state = wizardReducer(state, { type: "PRIVACY_CONTINUE" });
-    expect(state.step).toEqual({ type: "complete" });
+    expect(state.step).toEqual({ type: "permissions" });
   });
 
-  it("privacy skips to complete when only selected agents are installed (unselected missing)", () => {
+  it("privacy routes first-run to permissions when only selected agents are installed (unselected missing)", () => {
     const avail = { claude: "ready", gemini: "missing" } as CliAvailability;
     let state = buildInitialState(avail, true);
     state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
@@ -196,7 +198,27 @@ describe("AgentSetupWizard reducer", () => {
     });
     state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
     state = wizardReducer(state, { type: "PRIVACY_CONTINUE" });
+    expect(state.step).toEqual({ type: "permissions" });
+  });
+
+  it("permissions still fires on first run when all agents pre-installed, then advances to complete", () => {
+    const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
+    let state = buildInitialState(allInstalled, true);
+    state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: true },
+    });
+    state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
+    state = wizardReducer(state, { type: "PRIVACY_CONTINUE" });
+    expect(state.step).toEqual({ type: "permissions" });
+
+    state = wizardReducer(state, { type: "PERMISSIONS_CONTINUE" });
     expect(state.step).toEqual({ type: "complete" });
+
+    // BACK from complete returns to permissions, not cli (cli was skipped).
+    state = wizardReducer(state, { type: "BACK" });
+    expect(state.step).toEqual({ type: "permissions" });
   });
 
   it("BACK from complete returns to the prior step, preserving history", () => {
