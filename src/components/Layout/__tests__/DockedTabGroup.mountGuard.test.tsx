@@ -604,6 +604,55 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
     expect(calls.some((c) => c[1] === TerminalRefreshTier.BACKGROUND)).toBe(true);
   });
 
+  it("backgrounds the previous tab and promotes the new one on a tab switch (#10442)", () => {
+    // Group stays open (activeDockTerminalId keeps pointing at a panel in the
+    // group); only the stored active tab changes. The previously-active panel
+    // must drop to BACKGROUND so it stops painting at the visible tier behind
+    // the popover — the new panel goes VISIBLE via the usual RAF.
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-1"));
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    const { rerender } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+
+    act(() => {
+      flushRaf();
+    });
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.VISIBLE
+    );
+    vi.mocked(terminalInstanceService.applyRendererPolicy).mockClear();
+
+    // Switch to tab t-2 while the group remains open.
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    act(() => {
+      rerender(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+    });
+
+    // The previous panel is downgraded synchronously; the new panel's VISIBLE
+    // upgrade is still RAF-gated.
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.BACKGROUND
+    );
+    expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalledWith(
+      "t-2",
+      TerminalRefreshTier.VISIBLE
+    );
+
+    act(() => {
+      flushRaf();
+    });
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-2",
+      TerminalRefreshTier.VISIBLE
+    );
+  });
+
   it("double-clicking the chip moves the active panel to the grid and closes the dock", () => {
     mockActiveDockTerminalId = "t-1";
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
