@@ -32,6 +32,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { SEL } from "../helpers/selectors";
+import { T_LONG } from "../helpers/timeouts";
 
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
@@ -174,7 +175,7 @@ test("theme review — chrome, overlays, states", async () => {
     await dismissBlockingPalette(page);
     await page
       .locator(SEL.worktree.mainCard)
-      .waitFor({ state: "visible", timeout: 30_000 })
+      .waitFor({ state: "visible", timeout: T_LONG })
       .catch(() => {});
     await settle(page, 3000);
     await dismissBlockingPalette(page);
@@ -332,7 +333,7 @@ test("theme review — chrome, overlays, states", async () => {
       await page
         .locator(SEL.panel.gridPanel)
         .first()
-        .waitFor({ state: "visible", timeout: 30_000 });
+        .waitFor({ state: "visible", timeout: T_LONG });
       await settle(page, 2000);
       // Seed ANSI-colored output so the terminal palette is reviewable —
       // failures here must not sink the rest of the step.
@@ -378,6 +379,7 @@ test("theme review — chrome, overlays, states", async () => {
       await deleteItem.click();
       await page
         .locator('[role="alertdialog"], [role="dialog"]')
+        .filter({ hasText: /delete/i })
         .last()
         .waitFor({ state: "visible", timeout: 5000 });
       await settle(page, 500);

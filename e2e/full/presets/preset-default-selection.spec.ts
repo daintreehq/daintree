@@ -1,9 +1,12 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { chmodSync, mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo } from "../../helpers/fixtures";
+import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
   addCustomPreset,
@@ -30,15 +33,70 @@ async function selectPresetByIndex(
   await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
 }
 
+// The settings-side chevron uses `Set <agent> preset`; the shared
+// SEL.preset.toolbarChevron (`Choose…preset`) does not match the current
+// AgentButton aria-label, so anchor the toolbar split-button chevron locally.
+const TOOLBAR_CHEVRON = '[aria-label="Set Claude preset"]';
+
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
+let fakeBinDir: string;
+
+// A fake `claude` binary on PATH makes Claude `launchable`, the precondition
+// for the toolbar split-button chevron to render. Without it the chevron never
+// mounts and the chevron assertion in test 56 cannot run.
+function writeFakeClaude(): void {
+  const scriptPath =
+    process.platform === "win32"
+      ? path.join(fakeBinDir, "claude.js")
+      : path.join(fakeBinDir, "claude");
+  writeFileSync(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('claude fake v9.9.9');",
+      "  process.exit(0);",
+      "}",
+      "process.stdin.resume();",
+      "",
+    ].join("\n")
+  );
+  chmodSync(scriptPath, 0o755);
+  if (process.platform === "win32") {
+    writeFileSync(
+      path.join(fakeBinDir, "claude.cmd"),
+      ["@echo off", 'node "%~dp0\\claude.js" %*', ""].join("\r\n")
+    );
+  }
+}
+
+function launchEnv(): Record<string, string> {
+  return {
+    PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
+    ANTHROPIC_API_KEY: "e2e-fake-key",
+  };
+}
+
+// Pins Claude so its toolbar split-button (and preset chevron) renders.
+async function setClaudePinned(window: Page, pinned: boolean): Promise<void> {
+  await window.evaluate(async (value) => {
+    await window.electron.agentSettings.set("claude", { pinned: value } as never);
+  }, pinned);
+}
 
 test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
   test.beforeAll(async () => {
     removeCcrConfig();
-    ctx = await launchApp();
+    fakeBinDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-preset-default-bin-"));
+    writeFakeClaude();
+    ctx = await launchApp({ env: launchEnv() });
     const { dir: fixtureDir, cleanup } = createFixtureRepo({ name: "preset-default" });
-    fixtureCleanup = cleanup;
+    fixtureCleanup = () => {
+      cleanup();
+      removePathSync(fakeBinDir);
+    };
     ctx.window = await openAndOnboardProject(
       ctx.app,
       ctx.window,
@@ -78,106 +136,108 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
     expect(label).toContain("Default");
   });
 
-  test("55. Toolbar dropdown reflects the configured default preset", async () => {
+  test("55. Selector trigger reflects the configured default preset", async () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
 
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
     await expect(trigger).toBeVisible({ timeout: T_SHORT });
 
     const count = await countPresetOptions(ctx.window);
-    if (count > 1) {
-      await selectPresetByIndex(ctx.window, 1);
-      await ctx.window.waitForTimeout(T_SETTLE);
-    }
+    expect(count).toBeGreaterThan(1);
 
-    const chevron = ctx.window.locator(SEL.preset.toolbarChevron);
-    try {
-      await chevron.click({ timeout: 5000 });
-      await ctx.window.waitForTimeout(T_SETTLE);
-      const label = await getSelectedPresetLabel(ctx.window);
-      expect(label).toBeTruthy();
-    } catch {
-      // Chevron absent when Claude isn't pinned to the toolbar.
-    }
+    await selectPresetByIndex(ctx.window, 1);
+
+    const firstCustom = await ctx.window
+      .locator(SEL.preset.section)
+      .locator(SEL.preset.customBadge)
+      .first()
+      .isVisible();
+    expect(firstCustom).toBe(true);
+
+    // The selected non-Default preset is reflected on the trigger label.
+    const label = await getSelectedPresetLabel(ctx.window);
+    expect(label).not.toContain("Default");
+    expect(label.length).toBeGreaterThan(0);
   });
 
-  test("56. Tray launch submenu shows correct default preset", async () => {
+  test("56. Toolbar preset chevron lists the configured preset", async () => {
     await goToClaudeSettings();
-    const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    await expect(trigger).toBeVisible({ timeout: T_SHORT });
+    const settingsTrigger = ctx.window.locator(SEL.preset.selectorTrigger);
+    await expect(settingsTrigger).toBeVisible({ timeout: T_SHORT });
 
-    const defaultName = await getSelectedPresetLabel(ctx.window);
+    // Select a concrete custom preset so the chevron dropdown has a named,
+    // checked radio item to verify against.
+    expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
+    await selectPresetByIndex(ctx.window, 1);
+    const presetName = await getSelectedPresetLabel(ctx.window);
+    expect(presetName).not.toContain("Default");
+    expect(presetName.length).toBeGreaterThan(0);
 
-    // Close the settings dialog so the agent tray button is reachable.
-    const closeButton = ctx.window.locator(SEL.settings.closeButton);
-    if (await closeButton.isVisible().catch(() => false)) {
-      await closeButton.click();
-      await ctx.window.waitForTimeout(T_SETTLE);
-    }
+    // Pin Claude so the toolbar launch button and its preset chevron render,
+    // then close settings so the toolbar is reachable.
+    await setClaudePinned(ctx.window, true);
+    await ctx.window.locator(SEL.settings.closeButton).click();
 
-    const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
-    await trayButton.click({ timeout: 5000 }).catch(() => {});
-    await ctx.window.waitForTimeout(T_SETTLE);
+    const chevron = ctx.window.locator(TOOLBAR_CHEVRON).first();
+    await expect(chevron).toBeVisible({ timeout: T_LONG });
+    await chevron.click();
 
-    const submenuTrigger = ctx.window.locator('[data-testid="submenu-trigger"]', {
-      hasText: "Claude",
-    });
-    if (await submenuTrigger.isVisible().catch(() => false)) {
-      await submenuTrigger.hover();
-      await ctx.window.waitForTimeout(T_SETTLE);
-      const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
-      if (await submenuContent.isVisible().catch(() => false)) {
-        const items = submenuContent.locator('[role="menuitem"]');
-        const hasDefault = await items
-          .locator("span", { hasText: defaultName })
-          .first()
-          .count()
-          .catch(() => 0);
-        expect(hasDefault).toBeGreaterThanOrEqual(0);
-      }
-    }
+    // Radix renders DropdownMenuRadioItem as role="menuitemradio"; the
+    // configured preset must appear (and be checked) in the launch dropdown.
+    const configuredItem = ctx.window
+      .locator('[role="menuitemradio"]', { hasText: presetName })
+      .first();
+    await expect(configuredItem).toBeVisible({ timeout: T_MEDIUM });
+    await expect(configuredItem).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
+
+    await ctx.window.keyboard.press("Escape");
+
+    // Unpin Claude again so the toolbar launch split-button stops rendering.
+    // Left pinned, it re-renders on every CCR config-file poll cycle once
+    // test 59 writes a CCR config — that churn races the Add-preset flow and
+    // makes addCustomPreset's create-and-persist poll time out. Restoring the
+    // pre-pin state (Claude was never pinned before this test) keeps the serial
+    // state clean for the later CCR tests.
+    await setClaudePinned(ctx.window, false);
   });
 
   test("57. Selected default preset persists in settings select value", async () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
 
-    const count = await countPresetOptions(ctx.window);
-    if (count > 1) {
-      await selectPresetByIndex(ctx.window, 1);
-      await ctx.window.waitForTimeout(T_SETTLE);
-      const label = await getSelectedPresetLabel(ctx.window);
-      expect(label).toBeTruthy();
-    }
+    expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
+    await selectPresetByIndex(ctx.window, 1);
+    const label = await getSelectedPresetLabel(ctx.window);
+    expect(label).not.toContain("Default");
+    expect(label.length).toBeGreaterThan(0);
+
+    // Re-navigating to the agent settings re-reads persisted state; the same
+    // preset must still be the selected one on the trigger.
+    await navigateToAgentSettings(ctx.window, "gemini");
+    await goToClaudeSettings();
+    await expect.poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM }).toBe(label);
   });
 
   test("58. Default persists after closing and reopening settings", async () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
 
-    const count = await countPresetOptions(ctx.window);
-    let expectedLabel = "";
-    if (count > 1) {
-      await selectPresetByIndex(ctx.window, 1);
-      await ctx.window.waitForTimeout(T_SETTLE);
-      expectedLabel = await getSelectedPresetLabel(ctx.window);
-    }
+    expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
+    await selectPresetByIndex(ctx.window, 1);
+    const expectedLabel = await getSelectedPresetLabel(ctx.window);
+    expect(expectedLabel).not.toContain("Default");
+    expect(expectedLabel.length).toBeGreaterThan(0);
 
     await ctx.window.locator(SEL.settings.closeButton).click();
-    await ctx.window.waitForTimeout(T_SETTLE);
 
     await goToClaudeSettings();
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
     await expect(trigger).toBeVisible({ timeout: T_SHORT });
 
-    if (expectedLabel) {
-      const reopenedLabel = await getSelectedPresetLabel(ctx.window);
-      expect(reopenedLabel).toBe(expectedLabel);
-    }
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toBe(expectedLabel);
   });
 
   test("59. Dropdown includes both CCR and custom presets", async () => {
@@ -240,27 +300,23 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
   test("62. Setting default on Claude does not affect Gemini agent", async () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
     await goToClaudeSettings();
 
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
     await expect(trigger).toBeVisible({ timeout: T_SHORT });
-    const count = await countPresetOptions(ctx.window);
-    if (count > 1) {
-      await selectPresetByIndex(ctx.window, 1);
-      await ctx.window.waitForTimeout(T_SETTLE);
-    }
+    expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
+    await selectPresetByIndex(ctx.window, 1);
 
     await navigateToAgentSettings(ctx.window, "gemini");
-    // In the new UI every agent renders a preset section, but the Popover
-    // trigger is only present when there are ≥2 mergeable presets. If the
-    // trigger is missing, Gemini has no custom/CCR presets — that's the
-    // success case for this test.
+    // Every agent renders a preset section, so the section itself must be
+    // visible. The Popover trigger is only present when there are ≥2 mergeable
+    // presets; Gemini has none of Claude's custom presets, so it must show at
+    // most one option (its own default) — proving per-agent isolation.
+    await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_MEDIUM });
     const geminiTrigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    const triggerVisible = await geminiTrigger.isVisible({ timeout: 1500 }).catch(() => false);
+    const triggerVisible = await geminiTrigger.isVisible({ timeout: T_SHORT }).catch(() => false);
     if (triggerVisible) {
-      const geminiLabels = await countPresetOptions(ctx.window);
-      expect(geminiLabels).toBeLessThanOrEqual(1);
+      expect(await countPresetOptions(ctx.window)).toBeLessThanOrEqual(1);
     }
   });
 });

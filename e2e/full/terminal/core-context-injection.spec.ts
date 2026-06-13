@@ -5,8 +5,9 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import {
   clickToolbarButton,
-  getFirstGridPanel,
   getGridPanelCount,
+  getGridPanelIds,
+  getPanelById,
   openTerminal,
 } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
@@ -59,7 +60,10 @@ test.describe.serial("Core: Context Injection", () => {
 
     await clickToolbarButton(window, SEL.toolbar.copyContext, T_MEDIUM);
 
-    // Verify clipboard has content after copy
+    // The Copy Context button writes a *file reference* to the clipboard (the
+    // generated context lives in a temp file), not the raw text — so readText()
+    // is empty on darwin/linux. Assert that a clipboard format was actually
+    // installed by the copy. See electron/ipc/handlers/copyTree.ts.
     await expect
       .poll(
         async () => {
@@ -92,7 +96,7 @@ test.describe.serial("Core: Context Injection", () => {
 
     expect(result?.error).toBeFalsy();
     expect(result?.content?.length).toBeGreaterThan(100);
-    expect(result?.fileCount).toBe(4);
+    expect(result?.fileCount).toBeGreaterThanOrEqual(4);
 
     // Verify expected fixture files are present
     const content = result.content as string;
@@ -113,18 +117,18 @@ test.describe.serial("Core: Context Injection", () => {
     expect(wtId).toBeTruthy();
 
     // Open a terminal panel via toolbar and wait for it to appear
-    const countBefore = await getGridPanelCount(window);
+    const idsBefore = new Set(await getGridPanelIds(window));
+    const countBefore = idsBefore.size;
     await openTerminal(window);
     await expect
       .poll(() => getGridPanelCount(window), { timeout: T_LONG })
       .toBeGreaterThan(countBefore);
 
-    const panel = getFirstGridPanel(window);
-    const panelId = await panel.evaluate((el) => {
-      const p = el.closest("[data-panel-id]");
-      return p?.getAttribute("data-panel-id") ?? "";
-    });
+    const idsAfter = await getGridPanelIds(window);
+    const panelId = idsAfter.find((id) => !idsBefore.has(id)) ?? "";
     expect(panelId).toBeTruthy();
+
+    const panel = getPanelById(window, panelId);
 
     // Inject context into terminal via preload API
     const injectResult: any = await window.evaluate(

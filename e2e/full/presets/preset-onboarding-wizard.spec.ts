@@ -50,16 +50,20 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       .first();
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
-    // agent-card-* and preset-count-badge only render on the "Complete" step;
-    // navigating there requires real agent installation. Skip gracefully if
-    // the current step doesn't expose the cards (dev/CI environment without
-    // agent binaries).
+    // The agent cards (and their preset-count badges) only render on the
+    // wizard's "Complete" step, which is reachable only when an agent is
+    // launchable in this environment. Without a real/fake agent binary the
+    // step never appears — skip honestly rather than passing vacuously.
     const claudeCard = wizardDialog.locator('[data-testid="agent-card-claude"]');
     const visible = await claudeCard.isVisible({ timeout: T_SHORT }).catch(() => false);
-    if (visible) {
-      const presetBadge = claudeCard.locator("[data-testid='preset-count-badge']");
-      await expect(presetBadge).toBeVisible({ timeout: T_SHORT });
-    }
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Claude agent card not on Complete step (no launchable Claude binary)",
+    });
+    test.skip(!visible, "Claude agent card not on Complete step (no launchable Claude binary)");
+
+    const presetBadge = claudeCard.locator("[data-testid='preset-count-badge']");
+    await expect(presetBadge).toBeVisible({ timeout: T_SHORT });
   });
 
   test("84. In the wizard Complete step, verify preset badges appear next to agent names", async () => {
@@ -74,13 +78,16 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       await ctx.window.waitForTimeout(T_SETTLE);
     }
 
-    const completeStep = wizardDialog.locator("[data-testid='wizard-step-complete']");
-    if (await completeStep.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      const claudeEntry = completeStep.locator("li, [data-agent-id='claude']").first();
-      await expect(claudeEntry).toBeVisible({ timeout: T_SHORT });
-      const badge = claudeEntry.locator("[data-testid='preset-count-badge']");
-      await expect(badge).toBeVisible({ timeout: T_SHORT });
-    }
+    const claudeEntry = wizardDialog.locator('[data-testid="agent-card-claude"]');
+    const onComplete = await claudeEntry.isVisible({ timeout: T_SHORT }).catch(() => false);
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Claude agent card not on Complete step (no launchable Claude binary)",
+    });
+    test.skip(!onComplete, "Claude agent card not on Complete step (no launchable Claude binary)");
+
+    const badge = claudeEntry.locator("[data-testid='preset-count-badge']");
+    await expect(badge).toBeVisible({ timeout: T_SHORT });
 
     const closeButton = wizardDialog.locator('button:has-text("Close"), button:has-text("Done")');
     if (await closeButton.isVisible().catch(() => false)) {
@@ -101,15 +108,19 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     // agent-card-claude renders on the Complete step which requires a
-    // real Claude install. Skip the badge assertions gracefully when the
-    // test environment hasn't reached that step.
+    // launchable Claude binary. Skip honestly when that step is unreachable
+    // rather than asserting nothing.
     const claudeCard = wizardDialog.locator('[data-testid="agent-card-claude"]');
     const visible = await claudeCard.isVisible({ timeout: T_SHORT }).catch(() => false);
-    if (visible) {
-      const presetBadge = claudeCard.locator("[data-testid='preset-count-badge']");
-      await expect(presetBadge).toBeVisible({ timeout: T_SHORT });
-      await expect(presetBadge).toContainText("2 preset", { timeout: T_SHORT });
-    }
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Claude agent card not on Complete step (no launchable Claude binary)",
+    });
+    test.skip(!visible, "Claude agent card not on Complete step (no launchable Claude binary)");
+
+    const presetBadge = claudeCard.locator("[data-testid='preset-count-badge']");
+    await expect(presetBadge).toBeVisible({ timeout: T_SHORT });
+    await expect(presetBadge).toContainText("2 preset", { timeout: T_SHORT });
 
     const closeButton = wizardDialog.locator('button:has-text("Close"), button:has-text("Done")');
     if (await closeButton.isVisible().catch(() => false)) {
@@ -129,11 +140,20 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       .first();
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
+    // The negative (Gemini shows no badge) is only meaningful once the
+    // Complete step actually renders Gemini's card. Anchor on the card's
+    // presence and skip honestly otherwise — never assert absence in an env
+    // where the card was never going to render.
     const geminiCard = wizardDialog.locator('[data-testid="agent-card-gemini"]');
-    if (await geminiCard.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      const badge = geminiCard.locator("[data-testid='preset-count-badge']");
-      await expect(badge).not.toBeVisible({ timeout: T_SHORT });
-    }
+    const onComplete = await geminiCard.isVisible({ timeout: T_SHORT }).catch(() => false);
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Gemini agent card not on Complete step (no launchable Gemini binary)",
+    });
+    test.skip(!onComplete, "Gemini agent card not on Complete step (no launchable Gemini binary)");
+
+    const badge = geminiCard.locator("[data-testid='preset-count-badge']");
+    await expect(badge).not.toBeVisible({ timeout: T_SHORT });
 
     const closeButton = wizardDialog.locator('button:has-text("Close"), button:has-text("Done")');
     if (await closeButton.isVisible().catch(() => false)) {
@@ -215,14 +235,21 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     // agent-card-* only renders on the Complete step, which requires a
-    // real Claude install in this test env. Guard gracefully.
+    // launchable Claude binary. Skip honestly when unreachable.
     const claudeCard = wizardDialog.locator('[data-testid="agent-card-claude"]');
     const claudeCardVisible = await claudeCard.isVisible({ timeout: T_SHORT }).catch(() => false);
-    if (claudeCardVisible) {
-      const presetBadge = claudeCard.locator("[data-testid='preset-count-badge']");
-      await expect(presetBadge).toBeVisible({ timeout: T_SHORT });
-      await expect(presetBadge).toContainText("preset", { timeout: T_SHORT });
-    }
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "Claude agent card not on Complete step (no launchable Claude binary)",
+    });
+    test.skip(
+      !claudeCardVisible,
+      "Claude agent card not on Complete step (no launchable Claude binary)"
+    );
+
+    const presetBadge = claudeCard.locator("[data-testid='preset-count-badge']");
+    await expect(presetBadge).toBeVisible({ timeout: T_SHORT });
+    await expect(presetBadge).toContainText(/\d+ presets?/, { timeout: T_SHORT });
 
     const closeButton = wizardDialog.locator('button:has-text("Close"), button:has-text("Done")');
     if (await closeButton.isVisible().catch(() => false)) {

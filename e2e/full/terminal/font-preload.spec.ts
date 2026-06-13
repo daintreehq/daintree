@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
 // Regression: issue #10072. The cold-boot Latin-400 font preload was emitted
 // without `crossorigin="anonymous"`, so the no-cors preload never deduped with
@@ -68,7 +68,10 @@ test.describe.serial("Core: Font Preload Dedupe (#10072)", () => {
       return { preloadUrl, cssUrl };
     });
     expect(parity.preloadUrl, "preload href resolves to a URL").toBeTruthy();
-    expect(parity.cssUrl, "CSS @font-face url(...) resolves to a URL").toBeTruthy();
+    expect(
+      parity.cssUrl,
+      "No @font-face rule found for jetbrains-mono-latin-400 — sheet may be cross-origin or asset path changed"
+    ).toBeTruthy();
     expect(parity.preloadUrl).toBe(parity.cssUrl);
   });
 
@@ -97,16 +100,23 @@ test.describe.serial("Core: Font Preload Dedupe (#10072)", () => {
       // sequence we can assert against.
       await freshCtx.window.reload();
       await freshCtx.window.waitForLoadState("domcontentloaded");
-      // Give the CSS-driven @font-face fetch a moment to dispatch after parse
-      // and for the preload to either fire (no cache) or be deduped (cache hit).
-      await freshCtx.window.waitForTimeout(T_MEDIUM);
 
-      // Contract: ≤1 request. 0 means the asset is served from memory cache
-      // (still a valid dedupe); 1 means the preload fired and the @font-face
-      // reused it. 2+ means the bug regressed and we are double-fetching.
+      // Wait until the @font-face / preload request has actually been captured.
+      // Polling here prevents both a fast-machine vacuous-pass (assertion fires
+      // before the network request is recorded) and a slow-CI false-negative
+      // (sleep expires before the request arrives).
+      await expect.poll(() => requests.length, { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
+
+      // Brief settle to let any duplicate request arrive before the upper-bound
+      // check. T_SETTLE is short enough not to introduce meaningful latency but
+      // long enough to catch a regression where two fetches fire in quick succession.
+      await freshCtx.window.waitForTimeout(T_SETTLE);
+
+      // Contract: exactly 1 request. The preload should have deduped with the
+      // @font-face fetch. 2+ means the bug regressed and we are double-fetching.
       expect(
         requests.length,
-        `expected ≤1 request for the Latin 400 woff2; got ${requests.length} (${requests.join(", ")})`
+        `expected exactly 1 request for the Latin 400 woff2; got ${requests.length} (${requests.join(", ")})`
       ).toBeLessThanOrEqual(1);
     } finally {
       await closeApp(freshCtx.app);

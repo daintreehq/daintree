@@ -7,11 +7,11 @@ import {
   selectExistingProjectAndRefresh,
   spawnTerminalAndVerify,
 } from "../../helpers/workflows";
-import { getGridPanelCount, getDockPanelCount, openTerminal } from "../../helpers/panels";
+import { getGridPanelCount, getDockPanelCount } from "../../helpers/panels";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 import { getPtyPid, waitForProcessDeath } from "../../helpers/stress";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -121,13 +121,9 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
     const panel2 = await spawnTerminalAndVerify(ctx.window);
 
     if (process.platform !== "win32") {
-      try {
-        const pid1 = await getPtyPid(ctx.window, panel1);
-        const pid2 = await getPtyPid(ctx.window, panel2);
-        ptyPids = [pid1, pid2];
-      } catch {
-        // PTY PID extraction may fail in some environments
-      }
+      const pid1 = await getPtyPid(ctx.window, panel1);
+      const pid2 = await getPtyPid(ctx.window, panel2);
+      ptyPids = [pid1, pid2];
     }
   });
 
@@ -252,11 +248,7 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
     // Spawn a terminal in project B
     const panelB = await spawnTerminalAndVerify(ctx.window);
     if (process.platform !== "win32") {
-      try {
-        ptyPidB = await getPtyPid(ctx.window, panelB);
-      } catch {
-        // best-effort
-      }
+      ptyPidB = await getPtyPid(ctx.window, panelB);
     }
 
     // Switch back to project A
@@ -299,23 +291,15 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
     await dialog.getByRole("button", { name: "Remove project" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
-    await window.waitForTimeout(T_SETTLE * 2);
-
     // Active project A should still be active
     const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);
     await expect(trigger).toContainText(PROJECT_A, { timeout: T_MEDIUM });
 
-    // A's panels should still be present. If panels were lost during the
-    // removal transition, spawn a fresh one to verify the project works.
-    let panelCount = await getGridPanelCount(window);
-    if (panelCount === 0) {
-      await openTerminal(window);
-      await expect
-        .poll(() => getGridPanelCount(window), { timeout: T_LONG })
-        .toBeGreaterThanOrEqual(1);
-      panelCount = await getGridPanelCount(window);
-    }
-    expect(panelCount).toBeGreaterThanOrEqual(1);
+    // A's panel must survive the background removal — this is the regression
+    // the test exists to catch, so assert it directly rather than respawning.
+    await expect
+      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+      .toBeGreaterThanOrEqual(1);
 
     // A's worktree cards should still be visible
     await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({
@@ -404,7 +388,6 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
     // Verify B is gone
-    await ctx.window.waitForTimeout(T_SETTLE);
     await ctx.window.locator(SEL.toolbar.projectSwitcherTrigger).click();
     const palette1 = ctx.window.locator(SEL.projectSwitcher.palette);
     await expect(palette1).toBeVisible({ timeout: T_MEDIUM });

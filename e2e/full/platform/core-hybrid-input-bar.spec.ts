@@ -1,111 +1,143 @@
-import { test, expect, type Locator } from "@playwright/test";
-import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../../helpers/launch";
+import { test, expect, type Locator, type Page } from "@playwright/test";
+import { chmodSync, mkdirSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
+import path from "path";
+import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { expectInputBarFocused } from "../../helpers/focus";
+import { getGridPanelIds, openTerminal } from "../../helpers/panels";
+import { waitForTerminalText } from "../../helpers/terminal";
+import { dismissBlockingPalette } from "../../helpers/overlays";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
-import { openTerminal } from "../../helpers/panels";
 let ctx: AppContext;
 let fixtureDir: string;
+let fakeBinDir: string;
 let fixtureCleanup: (() => void) | undefined;
 let agentPanel: Locator;
 let cmEditor: Locator;
 
-async function ensureProjectViewOpen(): Promise<void> {
-  ctx.window = await refreshActiveWindow(ctx.app, ctx.window).catch(() => ctx.window);
+const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
-  const worktreeVisible = await ctx.window
-    .locator("[data-worktree-branch]")
-    .first()
-    .isVisible({ timeout: 500 })
-    .catch(() => false);
-  if (worktreeVisible) return;
+function prepareFixture(): void {
+  const { dir, cleanup } = createFixtureRepo({ name: "hybrid-input-bar" });
+  fixtureDir = dir;
+  fixtureCleanup = cleanup;
+  fakeBinDir = path.join(fixtureDir, ".e2e-bin");
+  mkdirSync(fakeBinDir, { recursive: true });
 
-  if (
-    await ctx.window
-      .getByRole("button", { name: "Open folder" })
-      .isVisible({ timeout: 500 })
-      .catch(() => false)
-  ) {
-    ctx.window = await openAndOnboardProject(
-      ctx.app,
-      ctx.window,
-      fixtureDir,
-      "HybridInputBar Test"
+  const fakeClaudeImplName = process.platform === "win32" ? "claude.js" : "claude";
+  const fakeClaude = path.join(fakeBinDir, fakeClaudeImplName);
+
+  writeFileSync(
+    fakeClaude,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('claude code v9.9.9');",
+      "  process.exit(0);",
+      "}",
+      "console.log('Accessing workspace:');",
+      "console.log(' Enter to confirm');",
+      "process.stdin.resume();",
+      "process.stdin.setEncoding('utf8');",
+      "let trusted = false;",
+      "const keepAlive = setInterval(() => {}, 1000);",
+      "const shutdown = () => {",
+      "  console.log('FAKE_CLAUDE_EXIT');",
+      "  clearInterval(keepAlive);",
+      "  process.exit(0);",
+      "};",
+      "process.stdin.on('data', (chunk) => {",
+      "  const input = String(chunk);",
+      "  if (!trusted && /[\\r\\n]/.test(input)) {",
+      "    trusted = true;",
+      "    console.log('FAKE_CLAUDE_READY');",
+      "    process.stdout.write('> ');",
+      "    return;",
+      "  }",
+      "});",
+      "process.on('SIGINT', shutdown);",
+      "process.on('SIGTERM', shutdown);",
+      "",
+    ].join("\n")
+  );
+  chmodSync(fakeClaude, 0o755);
+
+  if (process.platform === "win32") {
+    writeFileSync(
+      path.join(fakeBinDir, "claude.cmd"),
+      ["@echo off", 'node "%~dp0claude.js" %*', ""].join("\r\n")
     );
   }
-}
 
-async function bindVisibleAgentPanel(timeout = 1_000): Promise<boolean> {
-  const launchedAgentPanel = ctx.window.locator(SEL.agent.panel).first();
-  if (!(await launchedAgentPanel.isVisible({ timeout }).catch(() => false))) {
-    return false;
-  }
-
-  const panelId = await launchedAgentPanel.evaluate(
-    (element) => element.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? ""
+  writeFileSync(
+    path.join(fixtureDir, "package.json"),
+    JSON.stringify({ name: "hybrid-input-bar", version: "1.0.0", private: true }, null, 2) + "\n"
   );
-  if (!panelId) return false;
-
-  agentPanel = ctx.window.locator(`[data-panel-id="${panelId}"]`);
-  cmEditor = agentPanel.locator(SEL.terminal.cmEditor);
-  await expect(cmEditor).toBeAttached({ timeout: T_LONG });
-  return true;
+  execSync("git add -A && git commit -m hybrid-input-bar-fixture", {
+    cwd: fixtureDir,
+    stdio: "ignore",
+  });
 }
 
-async function ensureAgentPanelReady(): Promise<boolean> {
-  await ensureProjectViewOpen();
+async function newestPanelId(page: Page, previousIds: Set<string>): Promise<string> {
+  await expect
+    .poll(async () => (await getGridPanelIds(page)).filter((id) => !previousIds.has(id)).length, {
+      timeout: T_LONG,
+      intervals: [250],
+    })
+    .toBeGreaterThan(0);
+  const id = (await getGridPanelIds(page)).find((candidate) => !previousIds.has(candidate));
+  expect(id).toBeTruthy();
+  return id!;
+}
 
-  if (agentPanel) {
-    const existingEditor = agentPanel.locator(SEL.terminal.cmEditor).first();
-    if (await existingEditor.isVisible({ timeout: 500 }).catch(() => false)) {
-      cmEditor = existingEditor;
-      return true;
-    }
-  }
+async function launchClaudePanel(page: Page): Promise<void> {
+  const beforeIds = new Set(await getGridPanelIds(page));
+  await dismissBlockingPalette(page);
+  await page.locator(SEL.agent.trayButton).click();
+  await page.getByRole("menuitem", { name: "Claude" }).click();
 
-  if (await bindVisibleAgentPanel()) return true;
+  const panelId = await newestPanelId(page, beforeIds);
+  agentPanel = page.locator(`[data-panel-id="${panelId}"]`);
+  await expect(agentPanel).toHaveAttribute("data-launch-agent-id", "claude", { timeout: T_LONG });
 
-  const startBtn = ctx.window.locator(SEL.agent.startButton);
-  if (!(await startBtn.isVisible({ timeout: 1_000 }).catch(() => false))) {
-    return false;
-  }
-  await startBtn.click({ force: true });
-  ctx.window = await refreshActiveWindow(ctx.app, ctx.window).catch(() => ctx.window);
-  return bindVisibleAgentPanel(T_LONG);
+  cmEditor = agentPanel.locator(SEL.terminal.cmEditor).first();
+  await expect(cmEditor).toBeAttached({ timeout: T_LONG });
 }
 
 async function focusCmEditor(): Promise<Locator> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (!(await ensureAgentPanelReady())) {
-      throw new Error("Claude agent panel is not available");
-    }
-    const editor = agentPanel.locator(SEL.terminal.cmEditor).first();
-    try {
-      await expect(editor).toBeAttached({ timeout: T_MEDIUM });
-      await editor.scrollIntoViewIfNeeded().catch(() => undefined);
-      await editor.click({ force: true, noWaitAfter: true, timeout: 5_000 });
-      await expectInputBarFocused(agentPanel);
-      cmEditor = editor;
-      return editor;
-    } catch (error) {
-      lastError = error;
-      await ctx.window.waitForTimeout(250);
-    }
-  }
+  const editor = agentPanel.locator(SEL.terminal.cmEditor).first();
+  await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+  await editor.scrollIntoViewIfNeeded().catch(() => undefined);
+  await editor.click({ force: true, noWaitAfter: true, timeout: T_MEDIUM });
+  await expectInputBarFocused(agentPanel);
+  cmEditor = editor;
+  return editor;
+}
 
-  throw lastError instanceof Error ? lastError : new Error("Failed to focus CodeMirror editor");
+async function clearEditor(window: Page, editor: Locator): Promise<void> {
+  await window.keyboard.press(`${MODIFIER}+A`);
+  await window.keyboard.press("Backspace");
+  // CM6 renders the placeholder widget ("Ask Claude") inside .cm-content when the
+  // document is empty, so .cm-content text is never literally "". The placeholder
+  // is shown if and only if the editor is empty — use it as the cleared signal.
+  await expect(editor.locator(".cm-placeholder")).toBeVisible({ timeout: T_SHORT });
 }
 
 test.describe.serial("Core: HybridInputBar", () => {
   test.beforeAll(async () => {
-    const { dir, cleanup } = createFixtureRepo({ name: "hybrid-input-bar" });
-    fixtureDir = dir;
-    fixtureCleanup = cleanup;
-    ctx = await launchApp();
+    prepareFixture();
+    ctx = await launchApp({
+      env: {
+        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
+        ANTHROPIC_API_KEY: "e2e-fake-key",
+      },
+    });
     ctx.window = await openAndOnboardProject(
       ctx.app,
       ctx.window,
@@ -113,16 +145,8 @@ test.describe.serial("Core: HybridInputBar", () => {
       "HybridInputBar Test"
     );
 
-    // Agent panel requires CLI availability — skip all tests if not present
-    if (!(await ensureAgentPanelReady())) {
-      test.info().annotations.push({
-        type: "conditional-skip",
-        description: "Required element or state not available in this launch",
-      });
-
-      test.skip();
-      return;
-    }
+    await launchClaudePanel(ctx.window);
+    await waitForTerminalText(agentPanel, "FAKE_CLAUDE_READY", T_LONG).catch(() => undefined);
   });
 
   test.afterAll(async () => {
@@ -138,9 +162,7 @@ test.describe.serial("Core: HybridInputBar", () => {
 
     await expect(editor).toHaveText(/hello world/);
 
-    // Clear for next test
-    await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+A`);
-    await window.keyboard.press("Backspace");
+    await clearEditor(window, editor);
   });
 
   test("Enter submits the input and clears the editor", async () => {
@@ -171,9 +193,7 @@ test.describe.serial("Core: HybridInputBar", () => {
     await expect(lines.nth(0)).toHaveText("line1");
     await expect(lines.nth(1)).toHaveText("line2");
 
-    // Clear for next test
-    await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+A`);
-    await window.keyboard.press("Backspace");
+    await clearEditor(window, editor);
   });
 
   test("slash autocomplete appears when typing /", async () => {
@@ -183,9 +203,9 @@ test.describe.serial("Core: HybridInputBar", () => {
     const listbox = agentPanel.getByRole("listbox", { name: "Command autocomplete" });
     await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
 
-    // Should have at least one option
+    // At least two options so arrow navigation in the next test is meaningful
     const options = listbox.getByRole("option");
-    await expect(options.first()).toBeVisible({ timeout: T_SHORT });
+    await expect(options.nth(1)).toBeVisible({ timeout: T_SHORT });
   });
 
   test("arrow keys navigate autocomplete options", async () => {
@@ -194,23 +214,16 @@ test.describe.serial("Core: HybridInputBar", () => {
     const listbox = agentPanel.getByRole("listbox", { name: "Command autocomplete" });
     const options = listbox.getByRole("option");
 
-    const optionCount = await options.count();
-    if (optionCount < 2) {
-      test.info().annotations.push({
-        type: "conditional-skip",
-        description: "Required state not available in this launch",
-      });
-
-      test.skip();
-      return;
-    }
+    // The previous test left the menu open with multiple options rendered.
+    await expect(listbox).toBeVisible({ timeout: T_SHORT });
+    await expect(options.nth(1)).toBeVisible({ timeout: T_SHORT });
 
     // First option should be selected by default
-    await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+    await expect(options.nth(0)).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
 
     // ArrowDown should move selection to second option
     await window.keyboard.press("ArrowDown");
-    await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
+    await expect(options.nth(1)).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
     await expect(options.nth(0)).toHaveAttribute("aria-selected", "false");
   });
 
@@ -218,6 +231,9 @@ test.describe.serial("Core: HybridInputBar", () => {
     const { window } = ctx;
 
     const listbox = agentPanel.getByRole("listbox", { name: "Command autocomplete" });
+
+    // Inherit the open menu from the prior serial test — fail loudly if absent.
+    await expect(listbox).toBeVisible({ timeout: T_SHORT });
 
     await window.keyboard.press("Enter");
 
@@ -238,27 +254,19 @@ test.describe.serial("Core: HybridInputBar", () => {
     await openTerminal(window);
     await window.waitForTimeout(T_SETTLE);
 
-    // Verify the new terminal appeared
+    // Verify the new terminal appeared as a second grid panel
     const panels = window.locator(SEL.panel.gridPanel);
     await expect(panels).toHaveCount(2, { timeout: T_MEDIUM });
 
-    // Switch back to the agent panel tab
-    const tabList = window.locator(SEL.panel.tabList);
-    // The agent tab should contain "Claude" in its label
-    const agentTab = tabList
-      .getByRole("tab")
-      .filter({ hasText: /claude/i })
-      .first();
-    if (!(await agentTab.isVisible().catch(() => false))) {
-      // If not in tab group, click directly on agent panel
-      await agentPanel.click();
-    } else {
-      await agentTab.click();
-    }
-
-    // Wait for the editor to reappear and verify draft is preserved
-    const restoredEditor = agentPanel.locator(SEL.terminal.cmEditor);
+    // The two panels sit side-by-side in the grid (single-tab panels don't
+    // render a tab strip), so refocus the agent panel by clicking back into
+    // its editor rather than a non-existent shared tab.
+    const restoredEditor = agentPanel.locator(SEL.terminal.cmEditor).first();
     await expect(restoredEditor).toBeAttached({ timeout: T_MEDIUM });
+    await restoredEditor.click({ force: true, noWaitAfter: true, timeout: T_MEDIUM });
+    await expectInputBarFocused(agentPanel);
+
+    // The draft survived focus moving to the new panel and back
     await expect(restoredEditor).toHaveText(new RegExp(draftText), { timeout: T_MEDIUM });
   });
 });

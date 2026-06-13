@@ -175,9 +175,9 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
         await expect(caseToggle).toHaveAttribute("aria-pressed", "true");
 
         // Case-sensitive: lowercase "casemark_upper" should not match "CaseMark_Upper"
-        await window.waitForTimeout(T_SETTLE);
+        // Toggle-triggered re-searches can debounce slower than typed input.
         await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("No matches", {
-          timeout: T_SHORT,
+          timeout: T_MEDIUM,
         });
       });
 
@@ -232,9 +232,8 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await test.step("Disable regex and verify literal pattern no longer matches", async () => {
         await regexToggle.click();
         await expect(regexToggle).toHaveAttribute("aria-pressed", "false");
-        await window.waitForTimeout(T_SETTLE);
         await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("No matches", {
-          timeout: T_SHORT,
+          timeout: T_MEDIUM,
         });
       });
 
@@ -258,9 +257,19 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
       const input = panel.locator(SEL.terminal.searchInput);
+      const status = panel.locator(SEL.terminal.searchStatus);
       const nextBtn = panel.locator(SEL.terminal.searchNext);
       const prevBtn = panel.locator(SEL.terminal.searchPrevious);
-      const foundRegex = /^(?:\d+ of \d+\+?|\d+\+? matches|Found)$/;
+      // The "N of M" ordinal is what cycling actually moves; assert the index
+      // changes rather than only that some match exists.
+      const ordinalRegex = /^(\d+) of \d+\+?$/;
+
+      const ordinal = async (): Promise<number> => {
+        const text = (await status.textContent()) ?? "";
+        const m = ordinalRegex.exec(text.trim());
+        if (!m) throw new Error(`Search status is not an ordinal counter: "${text}"`);
+        return Number(m[1]);
+      };
 
       await test.step("Open search bar and seed query with multiple matches", async () => {
         await panel.locator(SEL.terminal.xtermRows).click();
@@ -271,34 +280,23 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
         await expect(input).toBeVisible({ timeout: T_MEDIUM });
 
         await input.fill("item");
-        await window.waitForTimeout(T_SETTLE);
-        await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(foundRegex, {
-          timeout: T_SHORT,
-        });
+        await expect(status).toHaveText(ordinalRegex, { timeout: T_MEDIUM });
       });
 
-      await test.step("Click Next twice and verify status remains Found", async () => {
+      await test.step("Click Next and verify the match ordinal advances", async () => {
+        const startIndex = await ordinal();
         await nextBtn.click();
-        await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(foundRegex, {
-          timeout: T_SHORT,
-        });
+        await expect.poll(async () => ordinal(), { timeout: T_MEDIUM }).not.toBe(startIndex);
 
+        const afterFirst = await ordinal();
         await nextBtn.click();
-        await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(foundRegex, {
-          timeout: T_SHORT,
-        });
+        await expect.poll(async () => ordinal(), { timeout: T_MEDIUM }).not.toBe(afterFirst);
       });
 
-      await test.step("Click Previous twice and verify status remains Found", async () => {
+      await test.step("Click Previous and verify the match ordinal moves back", async () => {
+        const startIndex = await ordinal();
         await prevBtn.click();
-        await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(foundRegex, {
-          timeout: T_SHORT,
-        });
-
-        await prevBtn.click();
-        await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText(foundRegex, {
-          timeout: T_SHORT,
-        });
+        await expect.poll(async () => ordinal(), { timeout: T_MEDIUM }).not.toBe(startIndex);
       });
 
       await test.step("Close search via Escape", async () => {

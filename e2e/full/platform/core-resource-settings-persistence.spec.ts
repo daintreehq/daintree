@@ -87,15 +87,12 @@ async function navigateToResourcesTab(
 ): Promise<void> {
   await window.locator('[aria-label="Settings scope"]').click();
   await window.locator('[role="option"]', { hasText: "Project" }).click();
-  // Wait for project settings to load via IPC (async fetch)
-  await window.waitForTimeout(1000);
 
   await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
   const panel = window.locator("#settings-panel-project\\:automation");
   await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
     timeout: T_MEDIUM,
   });
-  // Wait for Add environment button to confirm panel is interactive
   await expect(panel.locator('[aria-label="Add environment"]')).toBeVisible({
     timeout: T_SHORT,
   });
@@ -166,21 +163,11 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     const optionBefore = selectElBefore.locator('option[value="e2e-docker"]');
     await expect(optionBefore).toBeAttached({ timeout: T_SHORT });
 
-    // Wait for auto-save: debounce (500ms) + React effect + I/O
-    await window.waitForTimeout(3000);
-
-    // Close settings via the close button — this calls flush() which
-    // persists immediately before the dialog closes.
+    // Close settings via the close button — this calls flush() which persists immediately.
     const closeBtn = window.locator(SEL.settings.closeButton);
-    if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await closeBtn.click();
-    } else {
-      await window.keyboard.press("Escape");
-    }
+    await expect(closeBtn).toBeVisible({ timeout: T_SHORT });
+    await closeBtn.click();
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
-
-    // Wait for save flush to complete
-    await window.waitForTimeout(1000);
 
     // Reopen settings and verify persistence
     await openSettings(window);
@@ -240,15 +227,12 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
 
     const BRANCH = "e2e/gui-lifecycle";
     const newCard = window.locator(SEL.worktree.card(BRANCH));
-    await expect(newCard).toBeVisible({ timeout: 30_000 });
-
-    // Wait for provision to settle
-    await window.waitForTimeout(3000);
+    await expect(newCard).toBeVisible({ timeout: T_LONG });
 
     // Trigger status check via action palette
     await ensureWindowFocused(ctx.app);
     await newCard.click({ position: { x: 10, y: 10 } });
-    await window.waitForTimeout(500);
+    await window.waitForTimeout(T_SETTLE);
 
     await window.keyboard.press(`${mod}+Shift+P`);
     const palette = window.locator(SEL.actionPalette.dialog);
@@ -262,13 +246,13 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     await expect(statusOption.first()).toBeVisible({ timeout: T_MEDIUM });
     await statusOption.first().click();
 
-    // Badge should show ready or unknown
+    // Poll until provision completes and badge shows ready
     await expect
       .poll(async () => newCard.getAttribute("data-resource-status"), {
         timeout: T_LONG,
-        message: "Resource status badge should appear",
+        message: "Resource status badge should reach ready after provision",
       })
-      .toMatch(/ready|unknown/);
+      .toBe("ready");
 
     // Clean up: delete the worktree
     const actionsBtn = newCard.locator(SEL.worktree.actionsMenu);
@@ -320,16 +304,16 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     // Remove the second environment to clean up
     await selectEl.selectOption("e2e-fly");
     await window.waitForTimeout(T_SETTLE);
-    const removeBtn = panel.locator('[aria-label="Remove environment"]');
-    if (await removeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await removeBtn.click();
-      // Confirm removal if prompted
-      const confirmBtn = window.locator('button:has-text("Confirm")');
-      if (await confirmBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await confirmBtn.click();
-      }
-      await window.waitForTimeout(T_SETTLE);
-    }
+    const removeBtn = panel.locator('[aria-label="Remove e2e-fly environment"]');
+    await expect(removeBtn).toBeVisible({ timeout: T_SHORT });
+    await removeBtn.click();
+    // Confirm removal in the destructive ConfirmDialog
+    const confirmBtn = window.locator('button:has-text("Remove environment")');
+    await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
+    await confirmBtn.click();
+    await expect(selectEl.locator('option[value="e2e-fly"]')).not.toBeAttached({
+      timeout: T_SHORT,
+    });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -354,10 +338,9 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     await dockerRadio.click();
     await expect(dockerRadio).toBeChecked({ timeout: T_SHORT });
 
-    // Close settings and wait for save
+    // Close settings; Escape does not flush so wait for the dialog to disappear first
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
-    await window.waitForTimeout(1000);
 
     // Open create worktree dialog — "e2e-docker" should be pre-selected
     const newBtn = window.locator('button[aria-label="Create new worktree"]');
@@ -374,12 +357,10 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     // Close dialog without creating
     await window.keyboard.press("Escape");
     const discardBtn = window.locator('button:has-text("Discard")');
-    if (await discardBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (await discardBtn.isVisible({ timeout: T_SETTLE }).catch(() => false)) {
       await discardBtn.click();
     }
-
-    // Wait for dialog close animation to settle
-    await window.waitForTimeout(500);
+    await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
 
     // Reopen settings and verify default mode is still "e2e-docker"
     await openSettings(window);

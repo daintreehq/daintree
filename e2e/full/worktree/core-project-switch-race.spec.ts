@@ -144,26 +144,28 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // Immediately switch to Project B — the spawn is still in-flight
     await switchToProject(ctx.window, PROJECT_B_NAME);
 
-    // Wait for the delayed spawn to complete (3s delay + margin)
-    await ctx.window.waitForTimeout(4500);
-
-    // Clear the fault before querying
+    // Clear the fault before polling
     await clearAllFaults(ctx.app);
 
-    // Query backend for all terminals
-    const terminals = await getAllTerminals(ctx.window);
+    // Poll until both terminals have resolved their projectId — this confirms
+    // the delayed spawn fully completed and stamped its project assignment.
+    await expect
+      .poll(
+        () =>
+          getAllTerminals(ctx.window).then(
+            (ts) => ts.filter((t) => !t.isTrashed && t.projectId !== undefined).length
+          ),
+        { timeout: T_LONG }
+      )
+      .toBeGreaterThanOrEqual(2);
 
-    // Filter to non-trashed terminals
-    const activeTerminals = terminals.filter((t: TerminalInfo) => !t.isTrashed);
+    // Re-query for assertions after the poll gate has passed.
+    const settled = await getAllTerminals(ctx.window);
+    const activeTerminals = settled.filter((t: TerminalInfo) => !t.isTrashed);
 
-    // Verify we have at least 2 terminals (the original + the delayed one)
-    expect(activeTerminals.length).toBeGreaterThanOrEqual(2);
-
-    // Terminals with a defined projectId should belong to Project A.
-    // Some terminals may still be mid-spawn (projectId not yet set);
-    // the key invariant is that none should have leaked to Project B.
+    // Every resolved terminal must belong to Project A — none must have leaked.
     const withProject = activeTerminals.filter((t: TerminalInfo) => t.projectId !== undefined);
-    expect(withProject.length).toBeGreaterThanOrEqual(1);
+    expect(withProject.length).toBeGreaterThanOrEqual(2);
     for (const t of withProject) {
       expect(t.projectId).toBe(projectA!.id);
     }
@@ -180,14 +182,15 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // PTY-attach IPCs against the cached view before reactivating it
     // — without this, the cached view's IPC handlers race with
     // unregister-on-deactivate and the renderer can crash uncaughtly.
-    await ctx.window.waitForTimeout(2_000);
+    const drainMs = 2_000 * (process.env.CI ? (process.platform === "win32" ? 5 : 3) : 1);
+    await ctx.window.waitForTimeout(drainMs);
 
     // Ensure we're on Project A with a fresh terminal fully spawned
     await switchToProject(ctx.window, PROJECT_A_NAME);
     await openTerminal(ctx.window);
     const panel = ctx.window.locator(SEL.panel.gridPanel).first();
-    // CI VMs are slow after fault-injection tests; use generous timeout
-    await expect(panel).toBeVisible({ timeout: 60_000 });
+    // CI VMs are slow after fault-injection tests; double T_LONG for headroom
+    await expect(panel).toBeVisible({ timeout: T_LONG * 2 });
     // Wait for shell prompt so the terminal is fully initialized
     await ctx.window.waitForTimeout(3000);
 
@@ -203,7 +206,7 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // short period — switching back too soon races handler unregistration
     // against the activation flow and the renderer crashes uncaughtly. Wait
     // long enough for those messages to drain before reactivating A.
-    await ctx.window.waitForTimeout(2_000);
+    await ctx.window.waitForTimeout(drainMs);
 
     // Switch back to Project A — its panels should reappear
     await switchToProject(ctx.window, PROJECT_A_NAME);
@@ -233,20 +236,33 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
     await switchToProject(ctx.window, PROJECT_A_NAME);
 
-    // Wait for the delayed spawn to complete
-    await ctx.window.waitForTimeout(3500);
     await clearAllFaults(ctx.app);
 
-    // Query all terminals again
+    // Poll until the delayed spawn has landed and its projectId is resolved.
+    // Gate on count first, then on at least one resolved projectId.
+    await expect
+      .poll(() => getAllTerminals(ctx.window).then((ts) => ts.filter((t) => !t.isTrashed).length), {
+        timeout: T_LONG,
+      })
+      .toBeGreaterThanOrEqual(baselineCount + 1);
+    await expect
+      .poll(
+        () =>
+          getAllTerminals(ctx.window).then(
+            (ts) => ts.filter((t) => !t.isTrashed && t.projectId !== undefined).length
+          ),
+        { timeout: T_LONG }
+      )
+      .toBeGreaterThanOrEqual(1);
+
+    // Re-query for assertions after the poll gates have passed.
     const finalTerminals = await getAllTerminals(ctx.window);
     const activeTerminals = finalTerminals.filter((t: TerminalInfo) => !t.isTrashed);
 
     // Should have exactly baseline + 1 (the one we spawned), not more
     expect(activeTerminals.length).toBe(baselineCount + 1);
 
-    // Terminals with a defined projectId should belong to Project A.
-    // Some terminals may still be mid-spawn (projectId not yet set);
-    // the key invariant is that none should have leaked to Project B.
+    // Every resolved terminal must belong to Project A — none must have leaked.
     const withProject = activeTerminals.filter((t: TerminalInfo) => t.projectId !== undefined);
     expect(withProject.length).toBeGreaterThanOrEqual(1);
     for (const t of withProject) {

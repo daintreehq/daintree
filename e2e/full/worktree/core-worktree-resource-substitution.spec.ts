@@ -55,7 +55,6 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
         message: "Worktree card should become selected",
       })
       .toContain("selected");
-    await ctx.window.waitForTimeout(3000);
   });
 
   test.afterAll(async () => {
@@ -89,10 +88,7 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
     await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
 
-    await expect(newPanel.locator("text=Connect:")).toBeVisible({ timeout: T_MEDIUM });
-    await expect(newPanel.locator(`text=Connect: ${BRANCH}`)).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    await waitForTerminalText(newPanel, `CONNECTED_TO_${BRANCH}`, T_LONG);
   });
 
   test("DAINTREE_* env vars are available in lifecycle commands", async () => {
@@ -207,10 +203,15 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     await expect(option.first()).toBeVisible({ timeout: T_SHORT });
     await option.first().click();
     const confirmBtn = window.locator('button:has-text("Confirm")');
-    if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await confirmBtn.isVisible({ timeout: T_SHORT }).catch(() => false)) {
       await confirmBtn.click();
     }
-    await window.waitForTimeout(2000);
+
+    // Provision is idempotent — a no-op when the resource is already ready — so the
+    // helper script may not re-run. Wait for the action to dispatch (palette closes),
+    // then assert the real behavior below: the rewritten connect command's templated
+    // {{branch}}/{{worktree_path}} are substituted in the spawned terminal.
+    await expect(palette).toBeHidden({ timeout: T_MEDIUM });
 
     const countBefore = await getGridPanelCount(window);
     await window.keyboard.press(`${mod}+Shift+P`);
@@ -227,8 +228,8 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
     const xtermScreen = newPanel.locator(SEL.terminal.xtermRows);
     await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
 
-    await waitForTerminalText(newPanel, `BRANCH=${BRANCH}`);
-    await waitForTerminalText(newPanel, process.platform === "win32" ? "PATH=" : "PATH=/");
+    await waitForTerminalText(newPanel, `BRANCH=${BRANCH}`, T_LONG);
+    await waitForTerminalText(newPanel, process.platform === "win32" ? "PATH=" : "PATH=/", T_LONG);
 
     if (fs.existsSync(wtConfigPath)) fs.unlinkSync(wtConfigPath);
   });

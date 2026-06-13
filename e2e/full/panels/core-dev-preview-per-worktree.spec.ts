@@ -24,7 +24,7 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount, getGridPanelIds } from "../../helpers/panels";
+import { getGridPanelCount, getGridPanelIds, clickToolbarButton } from "../../helpers/panels";
 import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { switchWorktree } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
@@ -111,12 +111,23 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     await saveCurrentProjectSettings(ctx.window, { devServerCommand: "node dev-server.cjs" });
 
     // Resolve the stable worktree IDs we'll use for IPC assertions later.
-    const worktrees = await ctx.window.evaluate(() => window.electron.worktree.getAll());
-    const mainWt = worktrees.find((w: { isMainWorktree?: boolean }) => w.isMainWorktree);
-    const featureWt = worktrees.find((w: { branch?: string }) => w.branch === FEATURE_BRANCH);
-
-    mainWorktreeId = mainWt?.id ?? "";
-    featureWorktreeId = featureWt?.id ?? "";
+    // The workspace scanner discovers the feature worktree asynchronously, so
+    // poll until both the main and feature worktrees are present before
+    // capturing their IDs.
+    const page = ctx.window;
+    await expect
+      .poll(
+        async () => {
+          const worktrees = await page.evaluate(() => window.electron.worktree.getAll());
+          const mainWt = worktrees.find((w: { isMainWorktree?: boolean }) => w.isMainWorktree);
+          const featureWt = worktrees.find((w: { branch?: string }) => w.branch === FEATURE_BRANCH);
+          mainWorktreeId = mainWt?.id ?? "";
+          featureWorktreeId = featureWt?.id ?? "";
+          return Boolean(mainWorktreeId && featureWorktreeId);
+        },
+        { timeout: T_LONG }
+      )
+      .toBe(true);
   });
 
   test.afterAll(async () => {
@@ -133,19 +144,8 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const mainCard = window.locator(SEL.worktree.mainCard);
     await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_LONG });
 
-    const devBtn = window.locator(SEL.toolbar.openDevPreview);
-    if (!(await devBtn.isVisible().catch(() => false))) {
-      test.info().annotations.push({
-        type: "conditional-skip",
-        description: "Dev preview toolbar button not visible in this launch state",
-      });
-
-      test.skip();
-      return;
-    }
-
     const countBefore = await getGridPanelCount(window);
-    await devBtn.click();
+    await clickToolbarButton(window, SEL.toolbar.openDevPreview, T_MEDIUM);
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
 
     // Wait for the console bar's Running badge.
@@ -171,33 +171,30 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     // Switch to the feature worktree — panels opened here inherit its ID.
     await switchWorktree(window, FEATURE_BRANCH);
 
-    const devBtn = window.locator(SEL.toolbar.openDevPreview);
-    if (!(await devBtn.isVisible().catch(() => false))) {
-      test.info().annotations.push({
-        type: "conditional-skip",
-        description: "Dev preview toolbar button not visible in this launch state",
-      });
+    const idsBefore = await getGridPanelIds(window);
+    await clickToolbarButton(window, SEL.toolbar.openDevPreview, T_MEDIUM);
+    await expect
+      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+      .toBe(idsBefore.length + 1);
 
-      test.skip();
-      return;
-    }
+    // Identify the newly-created panel by diffing IDs rather than relying on
+    // DOM order, then scope all assertions to that panel.
+    const idsAfter = await getGridPanelIds(window);
+    const featurePanelId = idsAfter.find((id) => !idsBefore.includes(id));
+    expect(featurePanelId).toBeTruthy();
+    const featurePanel = window.locator(`[data-panel-id="${featurePanelId}"]`);
 
-    const countBefore = await getGridPanelCount(window);
-    await devBtn.click();
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
-
-    // Wait for the SECOND (newest) console bar to reach Running.
-    const consoleBars = window.locator('[aria-controls^="console-drawer-"]').locator("..");
-    const newestBar = consoleBars.last();
-    const statusBadge = newestBar.locator('[role="status"]');
+    // Wait for this panel's console bar to reach Running.
+    const consoleBar = featurePanel.locator('[aria-controls^="console-drawer-"]').locator("..");
+    const statusBadge = consoleBar.locator('[role="status"]');
     await expect(statusBadge).toContainText("Running", { timeout: T_LONG });
 
     // Read the feature panel's URL.
-    const addressBars = window.locator(SEL.browser.addressBar);
-    await expect(addressBars.last()).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
+    const addressBar = featurePanel.locator(SEL.browser.addressBar);
+    await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
       timeout: T_MEDIUM,
     });
-    const displayUrlFeature = (await addressBars.last().inputValue()).trim();
+    const displayUrlFeature = (await addressBar.inputValue()).trim();
     urlFeature = parseDisplayOrigin(displayUrlFeature);
 
     // The two panels MUST have different stable origins. They may share the
@@ -280,16 +277,18 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
       .poll(() => getGridPanelCount(window), { timeout: T_MEDIUM })
       .toBe(panelsBefore.length - 1);
 
-    // Allow the service a moment to process the stopByPanel.
-    await window.waitForTimeout(500);
-
-    // Feature worktree: session gone (null) or explicitly stopped.
-    const featureAfter = await window.evaluate(
-      (id: string) => window.electron.devPreview.getByWorktree({ worktreeId: id }),
-      featureWorktreeId
-    );
-    // stopByPanel deletes the session, so getByWorktree must return null.
-    expect(featureAfter).toBeNull();
+    // Feature worktree: stopByPanel deletes the session, so getByWorktree must
+    // return null once the service finishes processing the panel-close event.
+    await expect
+      .poll(
+        () =>
+          window.evaluate(
+            (id: string) => window.electron.devPreview.getByWorktree({ worktreeId: id }),
+            featureWorktreeId
+          ),
+        { timeout: T_MEDIUM }
+      )
+      .toBeNull();
 
     // Main worktree: session untouched — still running with the same URL.
     const mainAfter = await window.evaluate(

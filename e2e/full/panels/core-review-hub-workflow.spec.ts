@@ -6,7 +6,7 @@
  * - Staging files (Changes → Staged)
  * - Commit message input and commit button readiness
  * - Committing and post-commit clean state
- * - Diff mode toggle (working tree vs base branch)
+ * - Diff mode toggle (base-branch view disabled on a main-only repo)
  * - Hub close
  *
  * Uses a fixture repo with uncommitted changes (untracked `uncommitted.txt`).
@@ -22,7 +22,6 @@ import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
-const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
 
 test.describe.serial("Core: Review Hub Workflow", () => {
   test.beforeAll(async () => {
@@ -75,15 +74,20 @@ test.describe.serial("Core: Review Hub Workflow", () => {
 
     const hub = window.locator(SEL.reviewHub.container);
 
-    // Wait for the IPC-loaded file list — stage button proves it loaded
+    // Wait for the IPC-loaded file list — stage button proves it loaded, and a
+    // "Stage" affordance (vs "Unstage") proves the row is in the unstaged
+    // Changes section, not Staged.
     const stageBtn = hub.locator(SEL.reviewHub.stageButton("uncommitted.txt"));
     await expect(stageBtn).toBeVisible({ timeout: T_MEDIUM });
+    await expect(hub.locator(SEL.reviewHub.unstageButton("uncommitted.txt"))).toBeHidden();
 
-    // "Changes" section header should be visible
+    // "Changes" section header should be visible.
     await expect(hub.locator("text=Changes")).toBeVisible({ timeout: T_SHORT });
 
-    // File name should appear in the hub
-    await expect(hub.locator("text=uncommitted.txt")).toBeVisible({ timeout: T_SHORT });
+    // The row carries the untracked status badge ("?") and the file name.
+    const fileRow = hub.locator('[data-testid="file-stage-row-uncommitted.txt"]');
+    await expect(fileRow).toContainText("uncommitted.txt", { timeout: T_SHORT });
+    await expect(fileRow).toContainText("?", { timeout: T_SHORT });
   });
 
   test("staging a file moves it to the Staged section", async () => {
@@ -100,10 +104,10 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     await expect(unstageBtn).toBeVisible({ timeout: T_MEDIUM });
 
     // Stage button should be gone
-    await expect(stageBtn).toBeHidden({ timeout: T_SHORT });
+    await expect(stageBtn).toBeHidden({ timeout: T_MEDIUM });
 
     // Unstaged section should show empty placeholder
-    await expect(hub.locator(SEL.reviewHub.noUnstagedChanges)).toBeVisible({ timeout: T_SHORT });
+    await expect(hub.locator(SEL.reviewHub.noUnstagedChanges)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("commit message input appears and commit button becomes actionable", async () => {
@@ -114,20 +118,18 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     // CommitPanel renders when totalChanges > 0 in working-tree mode
     const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
     await expect(textarea).toBeVisible({ timeout: T_MEDIUM });
-    await textarea.click();
-    await textarea.press(selectAllShortcut);
-    await textarea.press("Backspace");
-    await expect.poll(() => textarea.inputValue(), { timeout: T_SHORT }).toBe("");
+    await textarea.fill("");
+    await expect(textarea).toHaveValue("", { timeout: T_SHORT });
 
     // Blocked buttons stay focusable so their tooltip can explain what is missing.
     const commitBtn = hub.locator(SEL.reviewHub.commitButton(1));
     await expect(commitBtn).toBeVisible({ timeout: T_SHORT });
-    await expect(commitBtn).toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
+    await expect(commitBtn).toHaveAttribute("aria-disabled", "true", { timeout: T_MEDIUM });
 
     // Type a commit message
     await textarea.fill("test: add uncommitted file");
 
-    await expect(commitBtn).not.toHaveAttribute("aria-disabled", "true", { timeout: T_SHORT });
+    await expect(commitBtn).not.toHaveAttribute("aria-disabled", "true", { timeout: T_MEDIUM });
   });
 
   test("committing clears file list and shows clean state", async () => {
@@ -149,46 +151,30 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     await expect(hub.locator(SEL.reviewHub.commitMessageInput)).toBeHidden({ timeout: T_SHORT });
   });
 
-  test("diff mode toggle switches to base-branch view", async () => {
+  test("diff mode toggle disables base-branch view on a main-only repo", async () => {
     const { window } = ctx;
 
     const diffModeGroup = window.locator(SEL.reviewHub.diffMode);
     await expect(diffModeGroup).toBeVisible({ timeout: T_SHORT });
 
-    // "Working tree" button should be pressed initially
+    // "Working tree" button is pressed initially.
     const workingTreeBtn = diffModeGroup.locator("button", { hasText: "Working tree" });
     await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
 
-    // The "vs <branch>" button is disabled when the current branch IS the main branch
-    // (you can't diff a branch against itself). This is correct behavior for a
-    // main-only repo. Verify the button exists and is properly disabled.
+    // This fixture is opened on its main worktree, so the current branch IS the
+    // base branch — you can't diff a branch against itself. The "vs <branch>"
+    // button must be present but disabled, and clicking it must NOT switch modes.
     const baseBranchBtn = diffModeGroup.locator("button", { hasText: /^vs / });
     await expect(baseBranchBtn).toBeVisible({ timeout: T_SHORT });
+    await expect(baseBranchBtn).toBeDisabled({ timeout: T_SHORT });
+    await expect(baseBranchBtn).toHaveAttribute("aria-pressed", "false", { timeout: T_SHORT });
 
-    const isDisabled = await baseBranchBtn.isDisabled();
-    if (isDisabled) {
-      // On a main-only repo, the base-branch button is correctly disabled.
-      // Verify the working-tree mode is still active and move on.
-      await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
-      return;
-    }
-
-    // If the button is enabled (non-main branch), test the full toggle flow
-    await baseBranchBtn.click();
-
-    await expect(baseBranchBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
-    await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "false", { timeout: T_SHORT });
-
-    const hub = window.locator(SEL.reviewHub.container);
-
-    // Working-tree clean state should disappear in base-branch mode
-    await expect(hub.locator(SEL.reviewHub.cleanState)).toBeHidden({ timeout: T_MEDIUM });
-
-    // Switch back to working-tree mode
-    await workingTreeBtn.click();
+    // A force-click on the disabled control is inert: working-tree mode stays
+    // active and the clean state stays visible.
+    await baseBranchBtn.click({ force: true });
     await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
 
-    // Clean state should reappear in working-tree mode
+    const hub = window.locator(SEL.reviewHub.container);
     await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });
   });
 

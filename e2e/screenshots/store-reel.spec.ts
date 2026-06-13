@@ -36,6 +36,7 @@ import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
 import { writeTerminalInput, getTerminalText } from "../helpers/terminal";
+import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import {
   createSurgeCheckoutRepo,
   createBrushCmsRepo,
@@ -136,7 +137,7 @@ async function bootProject(
     );
     // Settle so the new name/emoji propagates to the title bar before any
     // screenshot is taken.
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(T_SETTLE);
   }
 
   page = await refreshActiveWindow(ctx.app, page);
@@ -189,7 +190,7 @@ async function launchOpenCode(page: Page): Promise<Locator> {
  */
 async function sendPrompt(page: Page, panel: Locator, prompt: string): Promise<void> {
   const cmEditor = panel.locator(SEL.terminal.cmEditor);
-  const isVisible = await cmEditor.isVisible({ timeout: 4_000 }).catch(() => false);
+  const isVisible = await cmEditor.isVisible({ timeout: T_SHORT }).catch(() => false);
   if (isVisible && process.platform !== "win32") {
     await cmEditor.click({ force: true });
     await page.keyboard.type(prompt, { delay: 15 });
@@ -243,8 +244,13 @@ async function waitForAgentReady(
  * Strategy: poll the terminal text and look for response markers (Claude's
  * `⏺` tool-use glyphs, numbered-list starts, code-block fences, common
  * response openings). Also accept a substantial line-count gain over the
- * baseline as a fallback signal. If neither fires, sit and wait the full
- * timeout — better to capture a quiet panel than to fail the run.
+ * baseline as a fallback signal.
+ *
+ * Returns true if a real response was observed. If the agent never responds
+ * within maxWaitMs, returns false rather than throwing — a screenshot run
+ * should still snap whatever is on screen — but the caller MUST surface the
+ * stall as a test annotation so a worthless blank-panel capture is flagged in
+ * CI artifacts rather than passing silently.
  */
 async function waitForAgentResponse(
   panel: Locator,
@@ -256,7 +262,7 @@ async function waitForAgentResponse(
     /** Hard upper bound on the wait. */
     maxWaitMs?: number;
   } = {}
-): Promise<void> {
+): Promise<boolean> {
   const minWait = options.minWaitMs ?? 25_000;
   const maxWait = options.maxWaitMs ?? 180_000;
   const start = Date.now();
@@ -276,15 +282,25 @@ async function waitForAgentResponse(
     const elapsed = Date.now() - start;
     if (markerSeenAt > 0 && elapsed >= minWait) {
       // We've seen a response start AND waited long enough for it to grow.
-      return;
+      return true;
     }
 
     // Fallback: substantial line gain even without a recognizable marker.
     const lineGain = text.split("\n").length - baselineLines;
-    if (lineGain >= 12 && elapsed >= minWait) return;
+    if (lineGain >= 12 && elapsed >= minWait) return true;
 
     await page.waitForTimeout(1500);
   }
+  return false;
+}
+
+/** Annotate (don't fail) when an agent stalled, so the blank capture is flagged. */
+function annotateAgentResponse(responded: boolean, label: string, maxWaitMs: number): void {
+  if (responded) return;
+  test.info().annotations.push({
+    type: "agent-stalled",
+    description: `${label} did not produce a response within ${maxWaitMs}ms — screenshot may be blank`,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -322,10 +338,11 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
       await sendPrompt(page, claudePanel, prompt);
       // Hero shot — wait long enough for actual streamed output (tool-use
       // blocks + numbered list), not just the "thinking" marker.
-      await waitForAgentResponse(claudePanel, page, baseline, {
+      const responded = await waitForAgentResponse(claudePanel, page, baseline, {
         minWaitMs: 120_000,
         maxWaitMs: 300_000,
       });
+      annotateAgentResponse(responded, "Claude (hero)", 300_000);
       await dismissBlockingPalette(page);
 
       await snap(page, "01-hero-surge-checkout");
@@ -351,18 +368,19 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
       // Make sure the sidebar is open + the worktree section is expanded
       // (it's the default state but let's be explicit).
       const sidebar = page.locator(SEL.sidebar.aside);
-      await expect(sidebar).toBeAttached({ timeout: 30_000 });
+      await expect(sidebar).toBeAttached({ timeout: T_LONG });
 
       // Wait for worktree items to appear.
-      await page
-        .locator(
-          '[data-worktree-branch], [data-worktree-is-main="true"], aside[aria-label="Sidebar"] a'
-        )
-        .first()
-        .waitFor({ state: "visible", timeout: 30_000 });
+      const worktreeItems = page.locator(
+        '[data-worktree-branch], [data-worktree-is-main="true"], aside[aria-label="Sidebar"] a'
+      );
+      await worktreeItems.first().waitFor({ state: "visible", timeout: T_LONG });
 
-      // Let the worktree poll settle.
-      await page.waitForTimeout(3000);
+      // Wait for the worktree list to stabilise (the poll paints status badges
+      // incrementally) so the capture shows a settled set rather than a
+      // mid-refresh count.
+      await expect.poll(() => worktreeItems.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
+      await page.waitForTimeout(T_SETTLE);
       await dismissBlockingPalette(page);
 
       await snap(page, "02-worktrees-brush-cms");
@@ -398,7 +416,7 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
         });
       });
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: 30_000 });
+      await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: T_LONG });
       await dismissTelemetryConsent(page);
       await page.addStyleTag({ content: POLISH_CSS });
 
@@ -412,29 +430,37 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
         claudePanel,
         "Update the hero copy in src/components/Hero.astro to lead with the worktree dashboard and multi-agent story. Show me the diff before saving."
       );
-      await waitForAgentResponse(claudePanel, page, claudeBaseline, {
+      const devResponded = await waitForAgentResponse(claudePanel, page, claudeBaseline, {
         minWaitMs: 90_000,
         maxWaitMs: 240_000,
       });
+      annotateAgentResponse(devResponded, "Claude (dev preview)", 240_000);
 
       // Open the dev preview panel.
       const devBtn = page.locator(SEL.toolbar.openDevPreview);
-      if (await devBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      if (await devBtn.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
         await devBtn.click();
       }
 
       // Wait for the panel to reach a "Running" state if possible — gracefully
-      // skip if the test runner can't bind a port.
+      // capture what we can if the runner can't bind a port, but annotate the
+      // stall so a screenshot of an idle preview is flagged rather than passing
+      // off as "dev preview live".
       const consoleBar = page.locator('[aria-controls^="console-drawer-"]').locator("..");
       const statusBadge = consoleBar.locator('[role="status"]').first();
-      await statusBadge
+      const devServerRunning = await statusBadge
         .filter({ hasText: /Running|Listening|Live/i })
-        .waitFor({ state: "visible", timeout: 60_000 })
-        .catch(() => {
-          /* dev server may not start in CI sandbox; capture what we can */
+        .waitFor({ state: "visible", timeout: T_LONG })
+        .then(() => true)
+        .catch(() => false);
+      if (!devServerRunning) {
+        test.info().annotations.push({
+          type: "dev-server-not-running",
+          description: "Dev server never reached Running state — preview may be idle in capture",
         });
+      }
 
-      await page.waitForTimeout(3500);
+      await settleFrame(page);
       await dismissBlockingPalette(page);
       await snap(page, "03-dev-preview-daintree-site");
     } finally {
@@ -460,17 +486,21 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
       await page.keyboard.press("Shift");
       await page.keyboard.press("Shift");
       const palette = page.locator(SEL.actionPalette.dialog);
-      const opened = await palette.isVisible({ timeout: 3_000 }).catch(() => false);
+      const opened = await palette.isVisible({ timeout: T_SHORT }).catch(() => false);
       if (!opened) {
         // Fallback to Cmd/Ctrl+K if double-Shift didn't fire (CI input quirks).
         await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");
       }
-      await expect(palette).toBeVisible({ timeout: 10_000 });
+      await expect(palette).toBeVisible({ timeout: T_LONG });
 
       // Filter to Daintree-specific actions rather than generic GitHub
       // commands — communicates what's unique about this app.
       await page.locator(SEL.actionPalette.searchInput).fill("claude");
-      await page.waitForTimeout(500);
+      // Wait for results to actually render so the capture isn't an empty list.
+      await expect(page.locator(SEL.actionPalette.options).first()).toBeVisible({
+        timeout: T_MEDIUM,
+      });
+      await page.waitForTimeout(T_SETTLE);
 
       await snap(page, "04-action-palette-launchpad");
     } finally {
@@ -529,14 +559,16 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
 
       // Both agents are running by now — wait for each to start streaming.
       // 180s upper bound per agent on Windows cold launches.
-      await waitForAgentResponse(claudePanel, page, claudeBaseline, {
+      const claudeResponded = await waitForAgentResponse(claudePanel, page, claudeBaseline, {
         minWaitMs: 90_000,
         maxWaitMs: 240_000,
       });
-      await waitForAgentResponse(opencodePanel, page, opencodeBaseline, {
+      annotateAgentResponse(claudeResponded, "Claude (multi-agent)", 240_000);
+      const opencodeResponded = await waitForAgentResponse(opencodePanel, page, opencodeBaseline, {
         minWaitMs: 90_000,
         maxWaitMs: 240_000,
       });
+      annotateAgentResponse(opencodeResponded, "OpenCode (multi-agent)", 240_000);
 
       await dismissBlockingPalette(page);
       await snap(page, "05-multi-agent-orbital-sync");
@@ -562,27 +594,34 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
       // Give the project view a moment to fully paint — paint-gate races
       // have been observed on cold Windows CI launches with no intervening
       // user action between project-open and the next interaction.
-      await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: 30_000 });
-      await page.waitForTimeout(2000);
+      await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: T_LONG });
+      await page.waitForTimeout(T_SETTLE);
 
       // Open settings via keyboard shortcut. The toolbar button can be
       // hidden by paint-gate races on a cold launch — Ctrl+, works
       // regardless of toolbar visibility.
       await page.keyboard.press("Control+,");
       const settingsHeading = page.locator(SEL.settings.heading);
-      // Fallback to click if the shortcut didn't fire.
-      if (!(await settingsHeading.isVisible({ timeout: 4_000 }).catch(() => false))) {
+      // Fallback to click if the shortcut didn't fire. The click itself is NOT
+      // swallowed — if the button exists but won't open settings the UI is
+      // broken and the run should surface it.
+      if (!(await settingsHeading.isVisible({ timeout: T_SHORT }).catch(() => false))) {
         const openSettings = page.locator(SEL.toolbar.openSettings);
-        await openSettings.waitFor({ state: "visible", timeout: 30_000 }).catch(() => {});
-        await openSettings.click({ timeout: 10_000 }).catch(() => {});
+        await openSettings.waitFor({ state: "visible", timeout: T_LONG });
+        await openSettings.click({ timeout: T_LONG });
       }
-      await expect(settingsHeading).toBeVisible({ timeout: 30_000 });
+      await expect(settingsHeading).toBeVisible({ timeout: T_LONG });
       const recipesTab = page.locator(SEL.projectSettings.recipesTab);
-      if (await recipesTab.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      if (await recipesTab.isVisible({ timeout: T_SHORT }).catch(() => false)) {
         await recipesTab.click();
+      } else {
+        test.info().annotations.push({
+          type: "recipes-tab-missing",
+          description: "Recipes tab not found — capturing default settings tab instead",
+        });
       }
 
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(T_SETTLE);
       await snap(page, "06-agent-overview-mise-en-place");
     } finally {
       if (captured) await teardown(captured.ctx);

@@ -1,9 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { chmodSync, mkdirSync, writeFileSync } from "fs";
+import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import {
   writeCcrConfig,
   removeCcrConfig,
@@ -15,14 +17,88 @@ import {
 } from "../../helpers/presets";
 
 let ctx: AppContext;
+let fixtureDir: string;
+let fakeBinDir: string;
 let fixtureCleanup: (() => void) | undefined;
+
+// The settings-side chevron uses `Set <agent> preset`; the shared
+// SEL.preset.toolbarChevron (`Choose…preset`) does not match the current
+// AgentButton aria-label, so anchor the toolbar split-button chevron locally.
+const TOOLBAR_CHEVRON = '[aria-label="Set Claude preset"]';
+
+// Write a fake `claude` binary onto the launch PATH so Claude resolves as a
+// launchable agent. Without it the toolbar split-button and tray submenu
+// trigger never render and the preset-sync assertions cannot run.
+function writeFakeClaude(): void {
+  fakeBinDir = path.join(fixtureDir, ".e2e-bin");
+  mkdirSync(fakeBinDir, { recursive: true });
+  const implName = process.platform === "win32" ? "claude.js" : "claude";
+  const impl = path.join(fakeBinDir, implName);
+  writeFileSync(
+    impl,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('claude fake v9.9.9');",
+      "  process.exit(0);",
+      "}",
+      "console.log('FAKE_CLAUDE_READY pid=' + process.pid);",
+      "process.stdin.resume();",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n")
+  );
+  chmodSync(impl, 0o755);
+  if (process.platform === "win32") {
+    writeFileSync(
+      path.join(fakeBinDir, "claude.cmd"),
+      [`@echo off`, `node "%~dp0\\claude.js" %*`, ""].join("\r\n")
+    );
+  }
+}
+
+function launchEnv(): Record<string, string> {
+  return {
+    PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
+    ANTHROPIC_API_KEY: "e2e-fake-key",
+  };
+}
+
+interface DispatchResult {
+  ok?: boolean;
+  error?: { message?: string };
+}
+
+async function pinClaude(page: Page): Promise<void> {
+  const result = await page.evaluate(async () => {
+    type Dispatch = (
+      actionId: string,
+      args?: unknown,
+      options?: { source?: string }
+    ) => Promise<DispatchResult>;
+    const dispatch = (window as unknown as { __daintreeDispatchAction?: Dispatch })
+      .__daintreeDispatchAction;
+    if (!dispatch) return { ok: false, error: { message: "dispatch bridge missing" } };
+    return dispatch(
+      "agentSettings.set",
+      { agentId: "claude", settings: { pinned: true } },
+      {
+        source: "test",
+      }
+    );
+  });
+  expect(result.ok, result.error?.message).toBe(true);
+}
 
 test.describe.serial("Presets: IPC Sync — Main ↔ Renderer (77–82)", () => {
   test.beforeAll(async () => {
     removeCcrConfig();
-    ctx = await launchApp();
-    const { dir: fixtureDir, cleanup } = createFixtureRepo({ name: "preset-ipc-sync" });
+    const { dir, cleanup } = createFixtureRepo({ name: "preset-ipc-sync" });
+    fixtureDir = dir;
     fixtureCleanup = cleanup;
+    writeFakeClaude();
+    ctx = await launchApp({ env: launchEnv() });
     ctx.window = await openAndOnboardProject(
       ctx.app,
       ctx.window,
@@ -48,10 +124,19 @@ test.describe.serial("Presets: IPC Sync — Main ↔ Renderer (77–82)", () => 
     await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_MEDIUM });
 
     // With the Popover-based PresetSelector, preset names only render inside
-    // the open listbox (or in the selected-preset detail view). Open the
-    // listbox and assert the new CCR preset shows up as an option.
-    const labels = await getPresetOptionLabels(ctx.window);
-    expect(labels.some((l) => l.includes("IPC Sync Model"))).toBe(true);
+    // the open listbox (or in the selected-preset detail view). Poll the
+    // listbox until the new CCR preset appears as an option — a single-shot
+    // read can race the renderer applying the IPC store update.
+    await expect
+      .poll(
+        async () =>
+          (await getPresetOptionLabels(ctx.window)).some((l) => l.includes("IPC Sync Model")),
+        {
+          timeout: T_MEDIUM,
+          intervals: [250, 500, 1000],
+        }
+      )
+      .toBe(true);
   });
 
   test("78. CCR presets store is populated — settings section shows auto badges", async () => {
@@ -68,37 +153,49 @@ test.describe.serial("Presets: IPC Sync — Main ↔ Renderer (77–82)", () => 
   });
 
   test("79. CCR model sync makes toolbar chevron visible", async () => {
-    // The split-button chevron renders only when Claude is pinned to the
-    // toolbar AND has ≥2 presets. Skip gracefully when the agent isn't
-    // pinned in the current test environment (E2E with/without CLI).
-    const chevron = ctx.window.locator(SEL.preset.toolbarChevron);
-    const visible = await chevron.isVisible({ timeout: T_MEDIUM }).catch(() => false);
-    if (visible) {
-      await expect(chevron).toBeVisible();
-    }
-  });
+    // Pin Claude so the split-button (with its chevron) mounts on the toolbar.
+    // The chevron renders whenever Claude is launchable and has ≥1 preset —
+    // the two CCR models from test 77 satisfy that. The fake `claude` on PATH
+    // makes Claude launchable, so this assertion is unconditional.
+    await pinClaude(ctx.window);
 
-  test("80. CCR model sync populates agent tray with Claude sub-menu trigger", async () => {
     const closeButton = ctx.window.locator(SEL.settings.closeButton);
     if (await closeButton.isVisible().catch(() => false)) {
       await closeButton.click();
-      await ctx.window.waitForTimeout(T_SETTLE);
     }
 
-    const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
-    await trayButton.click();
-    await ctx.window.waitForTimeout(T_SETTLE);
+    const chevron = ctx.window.locator(TOOLBAR_CHEVRON);
+    await expect(chevron).toBeVisible({ timeout: T_LONG });
+  });
 
-    // submenu-trigger only renders when Claude is UNPINNED (pinned agents
-    // live on the main toolbar) AND has ≥2 presets. Accept absence when the
-    // environment pins Claude automatically.
+  test("80. CCR model sync populates agent tray with Claude sub-menu trigger", async () => {
+    // Test 79 already dismissed settings; it may still be mid-exit when this
+    // test starts (serial tests run back-to-back). Drive settings to a fully
+    // closed state by polling the heading, clicking Close only while it is
+    // genuinely mounted — never clicking the dialog as it detaches.
+    const heading = ctx.window.locator(SEL.settings.heading);
+    const closeButton = ctx.window.locator(SEL.settings.closeButton);
+    await expect
+      .poll(
+        async () => {
+          if (!(await heading.isVisible().catch(() => false))) return false;
+          await closeButton.click({ timeout: T_SHORT }).catch(() => {});
+          return heading.isVisible().catch(() => false);
+        },
+        { timeout: T_MEDIUM, intervals: [100, 250, 500] }
+      )
+      .toBe(false);
+
+    const trayButton = ctx.window.locator(SEL.agent.trayButton);
+    await trayButton.click();
+
+    // The submenu-trigger renders for any launchable agent that has ≥1 preset.
+    // Claude is launchable (fake CLI on PATH) and has two CCR presets, so the
+    // Claude row mounts as a split launch item. Assert it unconditionally.
     const submenuTrigger = ctx.window.locator('[data-testid="submenu-trigger"]', {
       hasText: "Claude",
     });
-    const visible = await submenuTrigger.isVisible({ timeout: T_MEDIUM }).catch(() => false);
-    if (visible) {
-      await expect(submenuTrigger).toBeVisible();
-    }
+    await expect(submenuTrigger).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.keyboard.press("Escape");
   });
 

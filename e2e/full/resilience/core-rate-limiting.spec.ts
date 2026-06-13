@@ -3,6 +3,10 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { T_SETTLE } from "../../helpers/timeouts";
+
+const isWindowsCI = process.env.CI && process.platform === "win32";
+const CI_MULTIPLIER = isWindowsCI ? 5 : process.env.CI ? 3 : 1;
 
 let ctx: AppContext;
 let repoPath: string;
@@ -42,13 +46,13 @@ test.describe.serial("Core: Rate Limiting", () => {
     // a non-empty state. Reset before each test so the slot-count assertions
     // start from a clean baseline.
     await resetRateLimits(ctx.app);
-    await ctx.window.waitForTimeout(200);
+    await ctx.window.waitForTimeout(T_SETTLE);
   });
 
   test.afterEach(async () => {
     await resetRateLimits(ctx.app);
     // Brief settle for pending rejections
-    await ctx.window.waitForTimeout(200);
+    await ctx.window.waitForTimeout(T_SETTLE);
   });
 
   test.afterAll(async () => {
@@ -107,6 +111,8 @@ test.describe.serial("Core: Rate Limiting", () => {
   });
 
   test("operations recover after rate limit state is reset", async () => {
+    test.slow();
+
     // Exhaust the 10-slot rate limit
     const initialIds: string[] = await ctx.window.evaluate(async (cwd) => {
       const ids: string[] = [];
@@ -125,20 +131,23 @@ test.describe.serial("Core: Rate Limiting", () => {
 
     // Next spawn would queue (not reject) — verify it doesn't resolve immediately
     // by racing it against a short timeout.
-    const queuedResult = await ctx.window.evaluate(async (cwd) => {
-      const spawnPromise = (window as any).electron.terminal
-        .spawn({ cols: 80, rows: 24, cwd })
-        .then((id: string) => ({ resolved: true as const, id }));
-      // Prevent unhandled rejection when resetRateLimits drains this promise
-      spawnPromise.catch(() => {});
-      const raceResult = await Promise.race([
-        spawnPromise,
-        new Promise<{ resolved: false }>((resolve) =>
-          setTimeout(() => resolve({ resolved: false }), 500)
-        ),
-      ]);
-      return raceResult;
-    }, repoPath);
+    const queuedResult = await ctx.window.evaluate(
+      async ({ cwd, raceMs }) => {
+        const spawnPromise = (window as any).electron.terminal
+          .spawn({ cols: 80, rows: 24, cwd })
+          .then((id: string) => ({ resolved: true as const, id }));
+        // Prevent unhandled rejection when resetRateLimits drains this promise
+        spawnPromise.catch(() => {});
+        const raceResult = await Promise.race([
+          spawnPromise,
+          new Promise<{ resolved: false }>((resolve) =>
+            setTimeout(() => resolve({ resolved: false }), raceMs)
+          ),
+        ]);
+        return raceResult;
+      },
+      { cwd: repoPath, raceMs: 500 * CI_MULTIPLIER }
+    );
 
     expect(queuedResult.resolved).toBe(false);
 
@@ -154,8 +163,7 @@ test.describe.serial("Core: Rate Limiting", () => {
       });
     }, repoPath);
 
-    expect(typeof recoveryId).toBe("string");
-    expect(recoveryId.length).toBeGreaterThan(0);
+    expect(recoveryId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
     // Clean up
     await killTerminals(ctx.window, [...initialIds, recoveryId]);

@@ -121,7 +121,7 @@ export async function createWorktree(window: Page, branch: string) {
   await createBtn.click();
 
   const card = window.locator(SEL.worktree.card(branch));
-  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card).toBeVisible({ timeout: T_LONG });
   return card;
 }
 

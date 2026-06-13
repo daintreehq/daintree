@@ -27,6 +27,7 @@ import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { createBrushCmsRepo, type DemoRepo } from "../helpers/screenshotFixtures";
+import { T_LONG } from "../helpers/timeouts";
 
 const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "demo");
 mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -185,15 +186,15 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       const { page } = booted;
 
       // The demo bridge API must be exposed (proves --demo-mode took effect).
-      await page.waitForFunction(() => !!window.electron?.demo, undefined, { timeout: 30_000 });
+      await page.waitForFunction(() => !!window.electron?.demo, undefined, { timeout: T_LONG });
 
       // Wait for the worktree dashboard to actually populate before recording.
       const sidebar = page.locator(SEL.sidebar.aside);
-      await expect(sidebar).toBeAttached({ timeout: 30_000 });
+      await expect(sidebar).toBeAttached({ timeout: T_LONG });
       await page
         .locator('[data-worktree-branch], [data-worktree-is-main="true"]')
         .first()
-        .waitFor({ state: "visible", timeout: 30_000 });
+        .waitFor({ state: "visible", timeout: T_LONG });
 
       // Let the worktree git poll settle and React finish mounting the demo
       // overlay components (DemoCursor/DemoOverlay/DemoCaptureBridge).
@@ -228,6 +229,7 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
             width: cap.width,
             height: cap.height,
           });
+          let stop;
           try {
             // Recorder emits its first chunk at the 1s timeslice boundary.
             await d.sleep(1200);
@@ -281,9 +283,9 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
             await safe("dismiss c5", () => d.dismissAnnotation("c5"));
             await d.sleep(600);
           } finally {
-            // Always finalize the recording, even if a beat threw.
+            // Always finalize the recording, even if an unguarded sleep threw.
+            stop = await d.stopCapture();
           }
-          const stop = await d.stopCapture();
           return { stop, log };
         },
         {
