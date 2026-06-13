@@ -75,6 +75,12 @@ export interface ProjectSwitcherPaletteProps {
   onHoverProjectEnd?: (pointerType: string) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
+  /**
+   * Fired when the dropdown's Popover restores focus to its trigger on close.
+   * Lets the trigger (e.g. ProjectSwitcher) suppress a Radix Tooltip from
+   * reopening on the refocused trigger after a project switch. Dropdown-only.
+   */
+  onDropdownCloseAutoFocus?: () => void;
   children?: React.ReactNode;
   removeConfirmProject?: SearchableProject | null;
   onRemoveConfirmClose?: () => void;
@@ -1007,6 +1013,7 @@ function DropdownContent({
   dropdownAlign = "start",
   children,
   mode,
+  onDropdownCloseAutoFocus,
   ...innerProps
 }: ProjectSwitcherPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1052,6 +1059,7 @@ function DropdownContent({
           e.preventDefault();
           inputRef.current?.focus();
         }}
+        onCloseAutoFocus={() => onDropdownCloseAutoFocus?.()}
         onInteractOutside={(event) => {
           const target = event.target;
           if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
@@ -1117,6 +1125,7 @@ export function ProjectSwitcherPalette({
   onHoverProject,
   onHoverProjectEnd,
   onOpenProjectSettings,
+  onDropdownCloseAutoFocus,
   dropdownAlign,
   children,
   removeConfirmProject,
@@ -1164,6 +1173,7 @@ export function ProjectSwitcherPalette({
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
         onOpenProjectSettings={onOpenProjectSettings}
+        onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}

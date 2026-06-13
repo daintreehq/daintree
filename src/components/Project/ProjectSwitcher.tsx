@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronsUpDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -41,6 +41,30 @@ export function ProjectSwitcher() {
   const handleDropdownClose = useCallback(() => {
     if (projectSwitcher.mode !== "dropdown") return;
     projectSwitcher.close();
+  }, [projectSwitcher]);
+
+  // Radix Tooltip reopens when the palette closes and Popover restores focus to
+  // this trigger — leaving a stale tooltip floating in the backgrounded view
+  // after a project switch (most visible when switching back to it). Gate the
+  // tooltip on controlled state and hold it suppressed through the palette's
+  // focus restoration until the next genuine pointer hover. Same pattern as
+  // AgentButton.
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const isRestoringFocusRef = useRef(false);
+
+  const handleTooltipOpenChange = useCallback((open: boolean) => {
+    if (open && isRestoringFocusRef.current) return;
+    setTooltipOpen(open);
+  }, []);
+
+  const suppressTooltipDuringFocusRestore = useCallback(() => {
+    setTooltipOpen(false);
+    isRestoringFocusRef.current = true;
+  }, []);
+
+  const handleOpenDropdown = useCallback(() => {
+    setTooltipOpen(false);
+    projectSwitcher.open("dropdown");
   }, [projectSwitcher]);
 
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
@@ -226,8 +250,9 @@ export function ProjectSwitcher() {
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
+        onDropdownCloseAutoFocus={suppressTooltipDuringFocusRestore}
       >
-        <Tooltip>
+        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
@@ -240,7 +265,10 @@ export function ProjectSwitcher() {
                 "active:scale-100"
               )}
               disabled={showLoadingSpinner}
-              onClick={() => projectSwitcher.open("dropdown")}
+              onClick={handleOpenDropdown}
+              onPointerEnter={() => {
+                isRestoringFocusRef.current = false;
+              }}
             >
               <div className="flex items-center gap-3 text-left min-w-0">
                 {renderIcon(currentProject.emoji || "🌲", currentProject.color, "h-9 w-9 text-xl")}
