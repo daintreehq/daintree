@@ -95,7 +95,10 @@ type FullWakeTestService = {
   webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
   handlePostWake: (id: string) => void;
   unhibernate: (id: string) => void;
+  ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
+  repaintForReveal: (id: string) => void;
+  revealTerminal: (id: string) => Promise<void>;
   notifyAttachSettledWaiters: (id: string) => void;
 };
 
@@ -119,6 +122,16 @@ function makeInstance(overrides: Partial<ManagedTerminalMock> = {}): ManagedTerm
     hostElement: document.createElement("div"),
     ...overrides,
   };
+}
+
+// jsdom does no layout, so connect + stub a non-zero box to model a host that
+// hostHasRenderableDims() will accept (a foreground-presented project view).
+function renderableHost(): HTMLElement {
+  const el = document.createElement("div");
+  Object.defineProperty(el, "clientWidth", { value: 800, configurable: true });
+  Object.defineProperty(el, "clientHeight", { value: 600, configurable: true });
+  document.body.appendChild(el);
+  return el;
 }
 
 describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
@@ -570,5 +583,118 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(handlePostWake).not.toHaveBeenCalled();
     expect(resumeFlush).not.toHaveBeenCalled();
     expect(resetForTerminal).not.toHaveBeenCalled();
+  });
+
+  // Long-dwell rehydration: a terminal hibernated while its project view was
+  // backgrounded gets torn down, and unhibernate() can't re-open it behind the
+  // anti-flash bridge (zero host box). The foreground reveal pass re-runs this
+  // method once the view is presented; it must finish the open the occluded
+  // wake skipped, then proceed with the wake.
+  it("opens an unopened terminal when the host is foreground-measurable, then proceeds to wake", async () => {
+    const id = "fw-open-fg";
+    const host = renderableHost();
+    const instance = makeInstance({ isOpened: false, hostElement: host });
+    service.instances.set(id, instance);
+
+    const ensureOpened = vi.spyOn(service, "ensureOpened").mockImplementation(() => {
+      instance.isOpened = true;
+    });
+    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
+    vi.spyOn(service.dataBuffer, "resetForTerminal").mockImplementation(() => {});
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(ensureOpened).toHaveBeenCalledWith(id, instance);
+    expect(wakeAndRestore).toHaveBeenCalledWith(id);
+
+    document.body.removeChild(host);
+  });
+
+  it("does not open an unopened terminal whose host has no renderable box (still occluded)", async () => {
+    const id = "fw-open-occluded";
+    // Detached host → not connected → not renderable (mirrors a cached view
+    // still behind the bridge during the visibilitychange/resume wake).
+    const instance = makeInstance({ isOpened: false });
+    service.instances.set(id, instance);
+
+    const ensureOpened = vi.spyOn(service, "ensureOpened").mockImplementation(() => {});
+    const wakeAndRestore = vi
+      .spyOn(service.wakeManager, "wakeAndRestore")
+      .mockResolvedValue({ ok: true, replayedMainBuffer: true });
+
+    await service.fullWakeForVisibilityRestore(id);
+
+    expect(ensureOpened).not.toHaveBeenCalled();
+    expect(wakeAndRestore).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", () => {
+  let service: FullWakeTestService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const imported = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    if (service) service.instances.clear();
+  });
+
+  it("takes the cheap repaint path for an opened, live terminal", async () => {
+    const id = "rev-1";
+    service.instances.set(id, makeInstance({ isOpened: true, isHibernated: false }));
+
+    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+
+    await service.revealTerminal(id);
+
+    expect(repaint).toHaveBeenCalledWith(id);
+    expect(fullWake).not.toHaveBeenCalled();
+  });
+
+  it("takes the full rehydration path for a hibernated terminal", async () => {
+    const id = "rev-2";
+    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: true }));
+
+    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+
+    await service.revealTerminal(id);
+
+    expect(fullWake).toHaveBeenCalledWith(id);
+    expect(repaint).not.toHaveBeenCalled();
+  });
+
+  it("takes the full rehydration path for an un-opened terminal", async () => {
+    const id = "rev-3";
+    service.instances.set(id, makeInstance({ isOpened: false, isHibernated: false }));
+
+    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+
+    await service.revealTerminal(id);
+
+    expect(fullWake).toHaveBeenCalledWith(id);
+    expect(repaint).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the terminal does not exist", async () => {
+    const fullWake = vi.spyOn(service, "fullWakeForVisibilityRestore").mockResolvedValue(undefined);
+    const repaint = vi.spyOn(service, "repaintForReveal").mockImplementation(() => {});
+
+    await expect(service.revealTerminal("missing")).resolves.toBeUndefined();
+
+    expect(fullWake).not.toHaveBeenCalled();
+    expect(repaint).not.toHaveBeenCalled();
   });
 });

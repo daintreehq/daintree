@@ -154,40 +154,45 @@ function nextFrame(): Promise<void> {
 }
 
 /**
- * Re-run the terminal redraw across every visible agent terminal AFTER the
- * project view has been revealed and focused as the foreground surface (#10362).
+ * Re-run the terminal reveal across every grid agent terminal AFTER the project
+ * view has been revealed and focused as the foreground surface (#10362).
  *
  * The wake fan-out in {@link wakeActiveWorktreeTerminals} fires on
  * visibilitychange/resume — while the cached view is still occluded behind the
- * warm anti-flash bridge (#9679), where Chromium culls the paint. The byte sync
- * it does still lands (IPC data isn't culled like a paint), so this pass only
- * needs to repaint: {@link TerminalInstanceService.repaintForReveal} re-attaches
- * a dropped WebGL context, repairs the stale glyph model, re-fits, and unpauses
- * IO — without stealing focus.
+ * warm anti-flash bridge (#9679), where Chromium culls the paint AND the host
+ * can report a zero layout box. For terminals that stayed live across the dwell
+ * the byte sync still lands (IPC data isn't culled like a paint), so they only
+ * need a repaint. But a terminal hibernated during a long dwell was torn down
+ * and could not re-open behind the bridge — it needs a full foreground
+ * rehydration, not just a repaint. {@link TerminalInstanceService.revealTerminal}
+ * picks the right path per terminal: full open+wake for hibernated/unopened
+ * panes, cheap repaint for the rest.
  *
- * `repaintForReveal` is synchronous and heavier than a bare reflow (it can fit +
- * full-refresh), so the sweep is spread across frames in small chunks to keep a
- * large grid from producing one long task on the reveal frame.
+ * `revealTerminal` can fit + full-refresh (and, for the rehydration case, pull
+ * from the headless mirror), so the sweep is spread across frames in small
+ * chunks to keep a large grid from producing one long task on the reveal frame.
  */
 export async function repaintActiveWorktreeTerminals(): Promise<void> {
   const targets = collectActiveWorktreeTerminalTargets();
   if (targets.length === 0) return;
 
-  // Repaint the pane the user is reading first — the rest stagger in behind it.
+  // Reveal the pane the user is reading first — the rest stagger in behind it.
   prioritizeFocusedFirst(targets);
 
   for (let i = 0; i < targets.length; i += REPAINT_CHUNK) {
+    const chunk: Promise<void>[] = [];
     for (let j = i; j < Math.min(i + REPAINT_CHUNK, targets.length); j++) {
       const id = targets[j];
       if (!id) continue;
-      try {
-        terminalInstanceService.repaintForReveal(id);
-      } catch (error) {
-        // One broken terminal must not abort the sweep — the next visible
-        // terminal still needs its post-reveal repaint.
-        logWarn("[repaintActiveWorktreeTerminals] repaint failed", { id, error });
-      }
+      chunk.push(
+        terminalInstanceService.revealTerminal(id).catch((error: unknown) => {
+          // One broken terminal must not abort the sweep — the next visible
+          // terminal still needs its post-reveal reveal/repaint.
+          logWarn("[repaintActiveWorktreeTerminals] reveal failed", { id, error });
+        })
+      );
     }
+    await Promise.all(chunk);
     if (i + REPAINT_CHUNK < targets.length) {
       await nextFrame();
     }
