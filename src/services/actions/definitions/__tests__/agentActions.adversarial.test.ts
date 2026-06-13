@@ -116,6 +116,44 @@ describe("agentActions adversarial", () => {
     expect(result).toEqual({ terminalId: "term-1", location: "grid" });
   });
 
+  it("agent.launch forwards 'name' to the launch callback", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      prompt: "do the thing",
+      name: "Claude: auth refactor",
+    });
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ name: "Claude: auth refactor" })
+    );
+  });
+
+  it("agent.launch omits 'name' from the callback when not provided", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    const [, options] = callbacks.onLaunchAgent.mock.calls[0] ?? [];
+    expect(options?.name).toBeUndefined();
+  });
+
+  it("agent.launch forwards a whitespace-only 'name' verbatim (downstream decides fallback)", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", name: "   " });
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ name: "   " })
+    );
+  });
+
   it("one agent.<id> action is registered per AGENT_REGISTRY entry", () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);
@@ -178,6 +216,47 @@ describe("agentActions adversarial", () => {
       location: undefined,
       spawnedBy: undefined,
     });
+  });
+
+  it("agent.launch accepts 'name' through ActionService schema validation", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) service.register(factory());
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", name: "Claude: auth refactor" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ name: "Claude: auth refactor" })
+    );
+  });
+
+  it("agent.launch rejects a 'name' longer than the 200-char cap", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) service.register(factory());
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", name: "x".repeat(201) },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
   it("agent.palette only opens the quick switcher and does not launch", async () => {

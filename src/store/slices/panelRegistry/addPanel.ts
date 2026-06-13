@@ -336,6 +336,11 @@ export const createAddPanelActions = (
       kind,
       launchAgentId,
       title,
+      // Pin the title when the caller owns it (e.g. an assistant-named agent
+      // launch). `titleMode: "custom"` makes the identity reducer skip its
+      // agent-detected/exited title rewrites. Conditional spread avoids
+      // stamping `undefined`, which would read as an explicit "default".
+      ...(options.titleMode && { titleMode: options.titleMode }),
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
       cols: 80,

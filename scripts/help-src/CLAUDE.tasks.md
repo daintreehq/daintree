@@ -30,7 +30,7 @@ These cover ~90% of what the assistant is asked to do. They all live in the defa
 
 ### Spawn an agent on a task
 
-1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id> })` — single round-trip per agent. The `prompt` field becomes the agent's first message; you don't need to send it separately. Each call returns a `terminalId` you can map back to the prompt you sent.
+1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })` — single round-trip per agent. The `prompt` field becomes the agent's first message; you don't need to send it separately. **Always pass `name`** — a short task-descriptive label (e.g. `"Claude: auth refactor"`) that becomes the terminal tab title so the user can tell parallel agents apart at a glance. The name is pinned, so agent detection won't overwrite it. Each call returns a `terminalId` you can map back to the prompt you sent.
 2. **Fan out in parallel batches of up to 4.** For N agents, fire up to 4 `agent.launch` calls in parallel within a single message. The Claude Code harness executes multi-tool turns concurrently, so the calls land at the backend together. For N > 4, chunk into multiple messages of ≤ 4 so the user sees natural progress between batches. Do **not** insert `terminal.getStatus` round-trips between launches — that's the slow loop we're avoiding.
 3. Once every batch is dispatched, do **one** `terminal.getStatus({ terminalIds: [<all ids>], includeOutput: { lines: 20 } })` to confirm each terminal picked up its prompt, then report a state summary grouped by `working` / `waiting` / `completed` / `exited`. Sequential one-at-a-time pacing is only appropriate when the user explicitly asks for it.
 
@@ -45,7 +45,7 @@ These cover ~90% of what the assistant is asked to do. They all live in the defa
 
 Action tier exposes several spawn/send tools that look similar. Pick by what you need:
 
-- **Spawn an AI agent with a task** → `agent.launch` (single round-trip, takes `prompt`). Use for "run /research on X", "have Claude work on issue #123", etc.
+- **Spawn an AI agent with a task** → `agent.launch` (single round-trip, takes `prompt` and a `name` for the tab title). Use for "run /research on X", "have Claude work on issue #123", etc. Always set `name` to a short task label so parallel agents are distinguishable.
 - **Spawn a plain shell** → `terminal.new` or `agent.terminal` (aliases — both spawn a non-agent shell). Use only when the user wants a raw terminal, not an agent.
 - **Send a prompt to a running agent** → `terminal.sendCommand` (raw text + Enter). Use for follow-ups.
 - **Inject project context into the focused terminal** → `terminal.inject` (no args; dumps the project's prepared CopyTree context). Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.

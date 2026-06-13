@@ -42,6 +42,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       focusPolicy: AddPanelFocusPolicySchema.optional(),
       requestedId: z.string().optional(),
       force: z.boolean().optional(),
+      name: z
+        .string()
+        .max(200)
+        .optional()
+        .describe(
+          'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor") so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
+        ),
     }),
     resultSchema: z
       .object({
@@ -69,6 +76,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         focusPolicy,
         requestedId,
         force,
+        name,
       } = args as {
         agentId: string;
         location?: "grid" | "dock" | "overlay";
@@ -87,6 +95,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         focusPolicy?: "auto" | "preserve" | "take";
         requestedId?: string;
         force?: boolean;
+        name?: string;
       };
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
@@ -105,6 +114,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         focusPolicy,
         requestedId,
         force,
+        name,
       });
       if (!result) return null;
       return { terminalId: result.terminalId, location: result.location };
