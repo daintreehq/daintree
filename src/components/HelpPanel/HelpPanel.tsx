@@ -240,6 +240,10 @@ export function HelpPanel({
         p != null &&
         isPtyPanel(p) &&
         isGridPanelLocation(p.location) &&
+        // `missing-cli`/`failed` gate panels are UI placeholders with no backing
+        // PTY — they can't receive a dispatched command.
+        p.spawnStatus !== "missing-cli" &&
+        p.spawnStatus !== "failed" &&
         p.hasPty !== false &&
         p.exitCode === undefined &&
         p.runtimeStatus !== "exited" &&

@@ -2220,7 +2220,7 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     expect(container.querySelector(".text-status-danger")).not.toBeNull();
   });
 
-  it("does not flag danger when a grid terminal exists but has exited", async () => {
+  it("does not flag danger when a dead and a live grid terminal both exist", async () => {
     setupPinnedSession({
       "assistant-term": dockAssistantTerminal(),
       // A grid terminal that has exited is not a live dispatch target...
@@ -2266,6 +2266,41 @@ describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#1
     const { container } = await renderResolved();
 
     expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+  });
+
+  it("flags danger when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
+    setupPinnedSession({
+      "assistant-term": dockAssistantTerminal(),
+      // A `missing-cli` gate panel looks otherwise live (no exitCode/runtimeStatus)
+      // but has no PTY behind it, so it can't receive a dispatched command.
+      "gate-grid": {
+        id: "gate-grid",
+        kind: "terminal",
+        spawnStatus: "missing-cli",
+        cwd: "/repo",
+        location: "grid",
+      },
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+  });
+
+  it("does not flag danger when pinnedContext has no terminal id", async () => {
+    // No terminal was pinned at provision time — the danger guard must stay off
+    // regardless of grid reachability.
+    setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
+    window.electron.help.getPinnedActionContext = vi.fn().mockResolvedValue({
+      terminalId: null,
+      worktreeId: "wt-1",
+      worktreeName: "main",
+      worktreeBranch: "main",
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
   });
 });
 
