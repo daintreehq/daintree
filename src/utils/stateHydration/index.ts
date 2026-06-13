@@ -516,11 +516,20 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             // the original array untouched.
             const remappedTabGroups =
               savedIdToRestoredId.size > 0
-                ? tabGroups.map((group) => ({
-                    ...group,
-                    activeTabId: savedIdToRestoredId.get(group.activeTabId) ?? group.activeTabId,
-                    panelIds: group.panelIds.map((id) => savedIdToRestoredId.get(id) ?? id),
-                  }))
+                ? tabGroups.map((group) =>
+                    // Leave malformed groups untouched so hydrateTabGroups' own
+                    // sanitizer handles them exactly as before — mapping over a
+                    // non-array panelIds here would throw and the catch below
+                    // would wipe every group for the session.
+                    Array.isArray(group.panelIds)
+                      ? {
+                          ...group,
+                          activeTabId:
+                            savedIdToRestoredId.get(group.activeTabId) ?? group.activeTabId,
+                          panelIds: group.panelIds.map((id) => savedIdToRestoredId.get(id) ?? id),
+                        }
+                      : group
+                  )
                 : tabGroups;
             options.hydrateTabGroups(remappedTabGroups);
             markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {

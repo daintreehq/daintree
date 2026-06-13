@@ -1226,6 +1226,82 @@ describe("hydrateAppState", () => {
     ]);
   });
 
+  it("does not throw on a malformed group during remap, preserving valid groups (#10440)", async () => {
+    // A malformed persisted group (panelIds not an array) must pass through the
+    // remap untouched rather than throwing — otherwise the catch path would wipe
+    // every group for the session. Requires the remap to be active (size > 0).
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "old-panel-id",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "stable-panel-id",
+            kind: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    const persistedTabGroups = [
+      // Malformed — panelIds is not an array. Must survive the remap untouched.
+      { id: "bad", location: "grid", worktreeId: undefined, activeTabId: "x", panelIds: null },
+      {
+        id: "group-1",
+        location: "grid",
+        worktreeId: undefined,
+        activeTabId: "old-panel-id",
+        panelIds: ["old-panel-id", "stable-panel-id"],
+      },
+    ];
+    projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
+
+    terminalClientMock.reconnect.mockImplementation(async (id: string) => {
+      if (id === "old-panel-id") throw new Error("Reconnection timeout");
+      return { exists: false };
+    });
+    const addPanel = vi.fn(async (args: { requestedId?: string; existingId?: string }) =>
+      args.requestedId === undefined ? "new-panel-id" : args.requestedId
+    );
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+    const hydrateTabGroups = vi.fn();
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      hydrateTabGroups,
+    });
+
+    // The remap ran (no throw), the malformed group passed through unchanged,
+    // and the valid group was remapped. The catch path (which would call with
+    // [] + skipPersist) never fired.
+    expect(hydrateTabGroups).toHaveBeenCalledTimes(1);
+    expect(hydrateTabGroups).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "bad", panelIds: null }),
+      expect.objectContaining({
+        id: "group-1",
+        activeTabId: "new-panel-id",
+        panelIds: ["new-panel-id", "stable-panel-id"],
+      }),
+    ]);
+  });
+
   it("clears tab groups when no persisted groups exist", async () => {
     // When there are no persisted tab groups, hydrateTabGroups should be
     // called with an empty array to clear any stale state.

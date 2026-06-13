@@ -579,4 +579,37 @@ describe("restorePanelsPhase — savedIdToRestoredId remap (issue #10440)", () =
     const { savedIdToRestoredId } = await restorePanelsPhase(undefined, ctx);
     expect(savedIdToRestoredId.size).toBe(0);
   });
+
+  it("maps every timed-out panel independently with no cross-contamination", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "timeout" });
+    const ctx = makeContext();
+    // Each respawn (requestedId undefined) gets a distinct generated id.
+    let next = 0;
+    ctx.addPanel.mockImplementation(
+      async (args: { requestedId?: string; existingId?: string }) =>
+        args.requestedId ?? args.existingId ?? `gen-${++next}`
+    );
+    const { savedIdToRestoredId } = await restorePanelsPhase(
+      [
+        panel("p1", { kind: "agent", launchAgentId: "claude" }),
+        panel("p2", { kind: "agent", launchAgentId: "claude" }),
+      ],
+      ctx
+    );
+    expect(savedIdToRestoredId.size).toBe(2);
+    expect(savedIdToRestoredId.get("p1")).toBe("gen-1");
+    expect(savedIdToRestoredId.get("p2")).toBe("gen-2");
+  });
+
+  it("returns an error-status panel under its saved id with no remap entry", async () => {
+    // status "error" (IPC failure, not timeout) keeps requestedId: saved.id, so
+    // the panel restores under its saved id — an identity mapping, excluded.
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "error", error: new Error("ipc") });
+    const ctx = makeContext();
+    const { savedIdToRestoredId } = await restorePanelsPhase(
+      [panel("p1", { kind: "agent", launchAgentId: "claude" })],
+      ctx
+    );
+    expect(savedIdToRestoredId.size).toBe(0);
+  });
 });
