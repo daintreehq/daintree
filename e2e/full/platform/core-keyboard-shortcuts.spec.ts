@@ -106,26 +106,17 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
     const chordIndicator = () =>
       ctx.window.locator('[role="status"]').filter({ hasText: "Esc to cancel" });
 
-    test("Cmd+K shows chord indicator", async () => {
+    test("Cmd+K shows chord indicator and Escape cancels it", async () => {
       const { window } = ctx;
       await window.keyboard.press(`${mod}+k`);
       await expect(chordIndicator()).toBeVisible({ timeout: T_MEDIUM });
-      await window.keyboard.press("Escape");
-      await expect(chordIndicator()).not.toBeVisible({ timeout: T_SHORT });
-    });
-
-    test("Escape cancels pending chord", async () => {
-      const { window } = ctx;
-      await window.keyboard.press(`${mod}+k`);
-      await expect(chordIndicator()).toBeVisible({ timeout: T_MEDIUM });
-
       await window.keyboard.press("Escape");
       await expect(chordIndicator()).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("Cmd+K Cmd+S opens keyboard shortcuts reference", async () => {
       const { window } = ctx;
-      await window.waitForTimeout(200);
+      await expect(chordIndicator()).not.toBeVisible({ timeout: T_SHORT });
       await pressChord(window, `${mod}+k`, `${mod}+s`);
 
       const title = window.locator('[role="dialog"] h1, [role="dialog"] h2').filter({
@@ -145,12 +136,11 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       const palette = window.locator('[role="dialog"][aria-label="Worktree palette"]');
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-      // Close by clicking outside the palette content area
+      // First Escape may be consumed by an inner input; second ensures dismissal.
       await window.keyboard.press("Escape");
       await window.waitForTimeout(T_SETTLE);
-      // Press Escape again to ensure palette is dismissed (first may be consumed by inner input)
       await window.keyboard.press("Escape");
-      await window.waitForTimeout(T_SETTLE);
+      await expect(palette).not.toBeVisible({ timeout: T_SHORT });
     });
   });
 

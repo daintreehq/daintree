@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { SEL } from "./selectors";
+import { T_LONG } from "./timeouts";
 
 export interface ThemeChromeMetrics {
   projectTitleContrast: number;
@@ -19,11 +20,11 @@ export async function setAppTheme(
   }, schemeId);
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: 10_000 });
+  await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: T_LONG });
   await page
     .locator(SEL.toolbar.projectSwitcherTrigger)
-    .waitFor({ state: "visible", timeout: 10_000 });
-  await page.getByLabel("Command input").waitFor({ state: "visible", timeout: 10_000 });
+    .waitFor({ state: "visible", timeout: T_LONG });
+  await page.getByLabel("Command input").waitFor({ state: "visible", timeout: T_LONG });
 
   await expect
     .poll(

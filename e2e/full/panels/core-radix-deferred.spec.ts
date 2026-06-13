@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../../helpers/launch";
 import { ensureWindowFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 // Smoke tests for the deferred Radix wrappers (see #7658). The 5 Radix
 // overlay primitives (tooltip, popover, dropdown-menu, select, context-menu)
@@ -40,10 +40,16 @@ test.describe.serial("Core: Radix deferred wrappers", () => {
       timeout: T_MEDIUM,
     });
 
-    // One hover after the deferred trigger is active should surface the
-    // tooltip after the standard tooltip delay.
-    await trigger.hover();
-    await expect(window.locator('[role="tooltip"]').first()).toBeVisible({ timeout: T_MEDIUM });
+    // A hover after the deferred trigger is active should surface the tooltip
+    // after the standard tooltip delay. Reset the pointer and retry the hover
+    // so headless pointer-intent jitter (a mouseenter that doesn't register the
+    // first time) can't flake the run — the assertion still requires a real
+    // tooltip element to open.
+    await expect(async () => {
+      await window.mouse.move(0, 0);
+      await trigger.hover();
+      await expect(window.locator('[role="tooltip"]').first()).toBeVisible({ timeout: T_SHORT });
+    }).toPass({ timeout: T_LONG });
   });
 
   test("dropdown opens on first click of a trigger", async () => {
@@ -74,15 +80,24 @@ test.describe.serial("Core: Radix deferred wrappers", () => {
     await expect(window.locator('[role="menu"]').first()).toBeVisible({ timeout: T_MEDIUM });
   });
 
-  test("focus traversal reaches a deferred trigger before chunk activates", async () => {
+  test("focused trigger stays focusable after the deferred chunk upgrades it", async () => {
     const { window, app } = ctx;
     await ensureWindowFocused(app);
 
-    // Keyboard-tab into a toolbar button. Focus alone should prime the chunk
-    // via the wrapper's onFocusCapture handler — the trigger remains a real
-    // focusable element pre- and post-load, so traversal must not be lost.
+    // Focus a toolbar button. Focus alone primes the chunk via the wrapper's
+    // onFocusCapture handler; the trigger must remain a real focusable element
+    // through the upgrade so keyboard traversal is never lost.
     const trigger = window.locator(SEL.toolbar.openSettings);
     await trigger.focus();
     await expect(trigger).toBeFocused({ timeout: T_SHORT });
+
+    // The deferred wrapper upgrades the trigger with `data-state` once its
+    // chunk loads. Asserting the upgrade landed (and focus survived it) is what
+    // distinguishes a working deferred wrapper from a plain button — a bare
+    // focus() check would pass even if the wrapper were deleted entirely.
+    await expect(trigger).toHaveAttribute("data-state", /closed|delayed-open|instant-open/, {
+      timeout: T_MEDIUM,
+    });
+    await expect(trigger).toBeFocused();
   });
 });

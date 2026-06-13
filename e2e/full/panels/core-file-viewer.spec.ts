@@ -76,13 +76,11 @@ test.describe.serial("Core: File Viewer Modal", () => {
     // On Windows CI the IPC file read can be very slow, so use a generous timeout.
     await expect(dialog).toContainText("console.log", { timeout: T_LONG });
 
-    // Once content is loaded, the metadata bar should also be visible
+    // Once content is loaded, the metadata bar is rendered from the same state
     const metadataBar = dialog.locator(SEL.fileViewer.metadataBar);
-    const metadataVisible = await metadataBar.isVisible().catch(() => false);
-    if (metadataVisible) {
-      await expect(metadataBar).toContainText("lines", { timeout: T_SHORT });
-      await expect(metadataBar).toContainText("UTF-8", { timeout: T_SHORT });
-    }
+    await expect(metadataBar).toBeVisible({ timeout: T_MEDIUM });
+    await expect(metadataBar).toContainText("lines", { timeout: T_SHORT });
+    await expect(metadataBar).toContainText("UTF-8", { timeout: T_SHORT });
 
     await closeDialog(ctx);
   });
@@ -97,9 +95,14 @@ test.describe.serial("Core: File Viewer Modal", () => {
     const img = dialog.locator(SEL.fileViewer.image);
     await expect(img).toBeVisible({ timeout: T_MEDIUM });
 
-    // Verify the image actually loaded (naturalWidth > 0)
-    const loaded = await img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
-    expect(loaded).toBe(true);
+    // Verify the image actually loaded (naturalWidth > 0). The src is a
+    // daintree-file:// custom protocol URL, so poll until the fetch resolves
+    // and the browser finishes decoding rather than reading complete once.
+    await expect
+      .poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0), {
+        timeout: T_MEDIUM,
+      })
+      .toBe(true);
 
     // Header should show the filename
     await expect(dialog.locator("text=logo.png")).toBeVisible({ timeout: T_SHORT });

@@ -134,16 +134,20 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
         ).toBeLessThanOrEqual(1);
       }
     } finally {
-      await selectExistingProjectAndRefresh(ctx.app, ctx.window, "ipc-cleanup")
-        .then((page) => {
-          ctx.window = page;
-        })
-        .catch(() => {});
+      // Restore the base project so downstream serial tests run against a known
+      // view. Capture the recovered page; keep the existing window on failure
+      // rather than silently corrupting ctx.window.
+      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "ipc-cleanup").catch(
+        (e) => {
+          console.warn("AC3 cleanup: failed to switch back to ipc-cleanup project", e);
+          return ctx.window;
+        }
+      );
       fixture.cleanup();
     }
   });
 
-  test("AC4: main-to-renderer event fires exactly once after mount/unmount cycles", async () => {
+  test("AC4: main-to-renderer event fires exactly once after raw bridge subscribe/unsubscribe cycles", async () => {
     test.setTimeout(60_000);
     const { app, window } = ctx;
 
@@ -184,13 +188,18 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
       }
     });
 
-    await window.waitForTimeout(T_SETTLE);
+    // Poll the counter so delivery latency (slow CI, scheduler jitter, GC) is
+    // tolerated; it must settle at exactly 1, never more.
+    await expect
+      .poll(() => window.evaluate(() => (window as any).__e2eIpcCleanupTest?.getCount() ?? -1), {
+        timeout: T_LONG,
+      })
+      .toBe(1);
 
-    // Read the counter — should be exactly 1
+    // Read the final counter and clean up the test global.
     const finalCount = await window.evaluate(() => {
       const w = window as any;
       const result = w.__e2eIpcCleanupTest?.getCount() ?? -1;
-      // Clean up
       w.__e2eIpcCleanupTest?.cleanup?.();
       delete w.__e2eIpcCleanupTest;
       return result;

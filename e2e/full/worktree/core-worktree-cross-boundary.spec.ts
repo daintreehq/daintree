@@ -298,7 +298,7 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
       await expect(featureCard).toBeVisible({ timeout: T_LONG });
       await expect
         .poll(() => featureCard.getAttribute("aria-label"), {
-          timeout: 30_000,
+          timeout: T_LONG,
           message: "Feature worktree should still be selected after project round-trip",
         })
         .toContain("selected");
@@ -367,7 +367,7 @@ test.describe.serial("Core: Worktree Creation Resilience", () => {
       await createBtn.click();
 
       const newCard = window.locator(SEL.worktree.card(RESILIENCE_BRANCH));
-      await expect(newCard).toBeVisible({ timeout: 30_000 });
+      await expect(newCard).toBeVisible({ timeout: T_LONG });
     });
 
     // Verify original terminal is still functional
@@ -406,43 +406,10 @@ test.describe.serial("Core: Worktree Creation Resilience", () => {
 
     await test.step("verify quick-create palette is visible", async () => {
       const quickCreate = window.locator(SEL.worktree.quickCreatePalette);
-      if (!(await quickCreate.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-        await window
-          .evaluate(async () => {
-            const dispatch = (
-              window as unknown as {
-                __daintreeDispatchAction?: (
-                  actionId: string,
-                  args?: unknown,
-                  options?: { source?: string }
-                ) => Promise<{ ok?: boolean }>;
-              }
-            ).__daintreeDispatchAction;
-            await dispatch?.("worktree.quickCreate", undefined, { source: "test" });
-          })
-          .catch(() => undefined);
-      }
       await expect(quickCreate).toBeVisible({ timeout: T_MEDIUM });
 
-      // Close via Escape
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        await window.keyboard.press("Escape");
-        await window.waitForTimeout(T_SETTLE);
-        const stillVisible = await quickCreate.isVisible({ timeout: 250 }).catch(() => false);
-        const className = (await quickCreate.getAttribute("class").catch(() => "")) ?? "";
-        if (!stillVisible || !className.includes("opacity-100")) break;
-      }
-
-      await expect
-        .poll(
-          async () => {
-            if (!(await quickCreate.isVisible({ timeout: 250 }).catch(() => false))) return true;
-            const className = (await quickCreate.getAttribute("class").catch(() => "")) ?? "";
-            return !className.includes("opacity-100");
-          },
-          { timeout: T_SHORT }
-        )
-        .toBe(true);
+      await window.keyboard.press("Escape");
+      await expect(quickCreate).not.toBeVisible({ timeout: T_MEDIUM });
     });
   });
 });

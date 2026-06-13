@@ -38,26 +38,52 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
     await navigateToAgentSettings(ctx.window, "claude");
   };
 
+  const getPersistedPresetId = async (): Promise<string | null> => {
+    return ctx.window.evaluate(async (): Promise<string | null> => {
+      const settings = await window.electron.agentSettings.get();
+      const agents = settings.agents as
+        | Record<string, { presetId?: string } | undefined>
+        | undefined;
+      return agents?.claude?.presetId ?? null;
+    });
+  };
+
   const selectCustomAsDefault = async () => {
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    if (await trigger.isVisible().catch(() => false)) {
-      const labels = await getPresetOptionLabels(ctx.window);
-      const customLabel = labels.find((o) => o.includes("New Preset"));
-      if (customLabel) {
-        await getPresetRowByName(ctx.window, customLabel);
-        await ctx.window.waitForTimeout(T_SETTLE);
-      }
-    }
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    const labels = await getPresetOptionLabels(ctx.window);
+    // The Add-preset dialog (blank choice) names new presets "New preset"; the
+    // helper's direct-persist fallback names them "Custom Preset N". Match either.
+    const customLabel = labels.find((o) => o.includes("New preset") || o.includes("Custom Preset"));
+    expect(customLabel, "addCustomPreset should produce a new custom-preset option").toBeTruthy();
+    await getPresetRowByName(ctx.window, customLabel as string);
+    await ctx.window.waitForTimeout(T_SETTLE);
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain(customLabel as string);
+    await expect.poll(() => getPersistedPresetId(), { timeout: T_MEDIUM }).not.toBeNull();
+  };
+
+  const getPersistedCustomCount = async (): Promise<number> => {
+    return ctx.window.evaluate(async (): Promise<number> => {
+      const settings = await window.electron.agentSettings.get();
+      const agents = settings.agents as
+        | Record<string, { customPresets?: unknown[] } | undefined>
+        | undefined;
+      const presets = agents?.claude?.customPresets;
+      return Array.isArray(presets) ? presets.length : 0;
+    });
   };
 
   const deleteFirstCustomPreset = async () => {
     // The delete button only renders for the currently-selected custom preset's
     // detail view. Wait for it to be visible before clicking so timing races
     // fail fast instead of stuck on a silent 30s timeout.
+    const countBefore = await getPersistedCustomCount();
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await expect(delBtn).toBeVisible({ timeout: T_SHORT });
     await delBtn.click();
-    await ctx.window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getPersistedCustomCount(), { timeout: T_MEDIUM }).toBe(countBefore - 1);
   };
 
   test("71. Delete default preset shows no error", async () => {
@@ -70,6 +96,11 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
 
     await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_SHORT });
     await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_SHORT });
+    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
+    await expect(ctx.window.locator(SEL.notifications.toastRegion).getByRole("alert")).toHaveCount(
+      0
+    );
+    expect(await getSelectedPresetLabel(ctx.window)).toContain("Default");
   });
 
   test("72. Deleting default preset resets defaultSelect to empty", async () => {
@@ -83,10 +114,11 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
     // The Popover trigger falls back to the Default label when the selected
     // preset is deleted — no inputValue to read on a <button>.
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    if (await trigger.isVisible().catch(() => false)) {
-      const label = await getSelectedPresetLabel(ctx.window);
-      expect(label).toContain("Default");
-    }
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Default");
+    await expect.poll(() => getPersistedPresetId(), { timeout: T_MEDIUM }).toBeNull();
   });
 
   test("73. Stale default preset does not prevent settings from loading", async () => {
@@ -117,10 +149,13 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
 
     await goToClaudeSettings();
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    if (await trigger.isVisible().catch(() => false)) {
-      const label = await getSelectedPresetLabel(ctx.window);
-      expect(label).toContain("Default");
-    }
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Default");
+    // Reopening settings re-reads persisted storage; the deleted default must
+    // have been durably cleared, not just reset in memory.
+    await expect.poll(() => getPersistedPresetId(), { timeout: T_MEDIUM }).toBeNull();
   });
 
   test("75. Removing CCR config with CCR default preset defaults to default", async () => {
@@ -129,23 +164,24 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
 
     await goToClaudeSettings();
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    if (await trigger.isVisible().catch(() => false)) {
-      const labels = await getPresetOptionLabels(ctx.window);
-      const ccrLabel = labels.find((o) => o.includes("CCR Stale"));
-      if (ccrLabel) {
-        await getPresetRowByName(ctx.window, ccrLabel);
-        await ctx.window.waitForTimeout(T_SETTLE);
-      }
-    }
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    const labels = await getPresetOptionLabels(ctx.window);
+    const ccrLabel = labels.find((o) => o.includes("CCR Stale"));
+    expect(ccrLabel, "CCR Stale preset should be selectable after waitForCcrPresets").toBeTruthy();
+    await getPresetRowByName(ctx.window, ccrLabel as string);
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("CCR Stale");
 
     removeCcrConfig();
     await waitForCcrPresetsRemoved(ctx.window, ["CCR Stale"]);
 
     await goToClaudeSettings();
-    if (await trigger.isVisible().catch(() => false)) {
-      const label = await getSelectedPresetLabel(ctx.window);
-      expect(label).toContain("Default");
-    }
+    // Re-query the trigger after re-navigation rather than reusing the pre-removal node.
+    await expect(ctx.window.locator(SEL.preset.selectorTrigger)).toBeVisible({ timeout: T_MEDIUM });
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Default");
   });
 
   test("76. Add custom preset, set default, delete it, verify default", async () => {
@@ -161,9 +197,10 @@ test.describe.serial("Presets: Stale Preset Handling (71–76)", () => {
     await deleteFirstCustomPreset();
 
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    if (await trigger.isVisible().catch(() => false)) {
-      const label = await getSelectedPresetLabel(ctx.window);
-      expect(label).toContain("Default");
-    }
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Default");
+    await expect.poll(() => getPersistedPresetId(), { timeout: T_MEDIUM }).toBeNull();
   });
 });

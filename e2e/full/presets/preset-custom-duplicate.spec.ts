@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_SETTLE, T_LONG } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
   addCustomPreset,
@@ -179,22 +179,31 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
       .first();
     await expect(dupBtn).toBeVisible({ timeout: T_SHORT });
     await dupBtn.click();
-    await ctx.window.waitForTimeout(T_SETTLE);
 
-    const optionsAfter = await countPresetOptions(ctx.window);
-    expect(optionsAfter).toBeGreaterThan(optionsBefore);
+    await expect
+      .poll(() => countPresetOptions(ctx.window), { timeout: T_LONG, intervals: [100, 250, 500] })
+      .toBeGreaterThan(optionsBefore);
   });
 
   test("36. Duplicated preset has '(copy)' in name", async () => {
     await goToClaudeSettings();
-    const labels = await getPresetOptionLabels(ctx.window);
-    expect(labels.some((t) => t.includes("(copy)"))).toBe(true);
+    const presets = await getClaudeCustomPresets(ctx.window);
+    const copies = presets.filter((preset) => (preset.name ?? "").includes("(copy)"));
+    expect(copies.length).toBeGreaterThanOrEqual(1);
+    for (const copy of copies) {
+      const sourceName = (copy.name ?? "").replace(/\s*\(copy\)\s*$/, "");
+      expect(presets.some((preset) => preset.id !== copy.id && preset.name === sourceName)).toBe(
+        true
+      );
+    }
   });
 
   test("37. Duplicated preset has unique user- ID", async () => {
     await goToClaudeSettings();
-    const count = await countPresetOptions(ctx.window);
-    expect(count).toBeGreaterThanOrEqual(2);
+    const presets = await getClaudeCustomPresets(ctx.window);
+    expect(presets.length).toBeGreaterThanOrEqual(2);
+    const ids = presets.map((preset) => preset.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   test("38. Duplicating CCR preset copies env overrides", async () => {
@@ -205,7 +214,7 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
     await goToClaudeSettings();
 
     const labels = await getPresetOptionLabels(ctx.window);
-    if (!labels.some((l) => l.includes("CCR Dup Test"))) return; // CCR not loaded yet — skip
+    expect(labels.some((l) => l.includes("CCR Dup Test"))).toBe(true);
 
     // Select the CCR preset to reveal its detail panel with a Duplicate button
     const detail = await getPresetRowByName(ctx.window, "CCR Dup Test");
@@ -226,9 +235,9 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
       .locator(SEL.preset.duplicateButton)
       .last();
     await dupBtn.click();
-    await ctx.window.waitForTimeout(T_SETTLE);
-    const countAfter = await countPresetOptions(ctx.window);
-    expect(countAfter).toBe(countBefore + 1);
+    await expect
+      .poll(() => countPresetOptions(ctx.window), { timeout: T_LONG, intervals: [100, 250, 500] })
+      .toBe(countBefore + 1);
   });
 
   test("40. Duplicate button appears on CCR presets", async () => {
@@ -238,11 +247,11 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
 
     const labels = await getPresetOptionLabels(ctx.window);
     const ccrLabel = labels.find((l) => l.includes("Dup Visible"));
-    if (ccrLabel) {
-      const detail = await getPresetRowByName(ctx.window, ccrLabel.replace("CCR", "").trim());
-      const dupBtn = detail.locator(SEL.preset.duplicateButton);
-      await expect(dupBtn.first()).toBeVisible({ timeout: T_SHORT });
-    }
+    expect(ccrLabel).toBeTruthy();
+
+    const detail = await getPresetRowByName(ctx.window, ccrLabel!.replace("CCR", "").trim());
+    const dupBtn = detail.locator(SEL.preset.duplicateButton);
+    await expect(dupBtn.first()).toBeVisible({ timeout: T_SHORT });
   });
 
   test("41. Duplicate button appears on custom presets", async () => {
@@ -297,8 +306,9 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
     await goToClaudeSettings();
 
-    const allTextsBefore = await getPresetOptionLabels(ctx.window);
-    const copiesBefore = allTextsBefore.filter((t) => t.includes("(copy)")).length;
+    const copiesBefore = (await getClaudeCustomPresets(ctx.window)).filter((preset) =>
+      (preset.name ?? "").includes("(copy)")
+    ).length;
 
     // Re-query the duplicate button between clicks — after the first click
     // the selected preset may change, so the detail view repaints and the
@@ -307,29 +317,47 @@ test.describe.serial("Presets: Custom Duplicate (35–44)", () => {
     for (let i = 0; i < 2; i++) {
       await goToClaudeSettings();
       const dupBtn = section.locator(SEL.preset.duplicateButton).first();
-      const visible = await dupBtn.isVisible({ timeout: T_SHORT }).catch(() => false);
-      if (!visible) break;
+      await expect(dupBtn).toBeVisible({ timeout: T_SHORT });
       await dupBtn.click();
       await ctx.window.waitForTimeout(T_SETTLE);
     }
 
-    const allTextsAfter = await getPresetOptionLabels(ctx.window);
-    const copiesAfter = allTextsAfter.filter((t) => t.includes("(copy)")).length;
     // Accept at least one successful duplicate. In the new UI, duplicate
     // doesn't auto-select the clone, so the second click just duplicates
     // the same source — still a valid multi-copy operation.
-    expect(copiesAfter).toBeGreaterThanOrEqual(copiesBefore + 1);
+    await expect
+      .poll(
+        () =>
+          getClaudeCustomPresets(ctx.window).then(
+            (presets) => presets.filter((preset) => (preset.name ?? "").includes("(copy)")).length
+          ),
+        { timeout: T_LONG, intervals: [100, 250, 500] }
+      )
+      .toBeGreaterThanOrEqual(copiesBefore + 1);
   });
 
   test("44. Duplicate immediately reflects in toolbar and tray", async () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
+    const copiesBefore = (await getClaudeCustomPresets(ctx.window)).filter((preset) =>
+      (preset.name ?? "").includes("(copy)")
+    ).length;
+
     const dupBtn = await getVisibleDuplicateButton();
     await dupBtn.scrollIntoViewIfNeeded().catch(() => undefined);
-    await dupBtn.click({ force: true, noWaitAfter: true });
-    await ctx.window.waitForTimeout(T_SETTLE);
+    await dupBtn.click({ force: true });
 
-    const section = ctx.window.locator(SEL.preset.section);
-    await expect(section).toBeVisible({ timeout: T_SHORT });
+    await expect
+      .poll(
+        () =>
+          getClaudeCustomPresets(ctx.window).then(
+            (presets) => presets.filter((preset) => (preset.name ?? "").includes("(copy)")).length
+          ),
+        { timeout: T_LONG, intervals: [100, 250, 500] }
+      )
+      .toBe(copiesBefore + 1);
+
+    const labels = await getPresetOptionLabels(ctx.window);
+    expect(labels.some((label) => label.includes("(copy)"))).toBe(true);
   });
 });

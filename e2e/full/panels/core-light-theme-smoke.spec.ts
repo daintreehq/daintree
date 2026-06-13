@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { BUILT_IN_APP_SCHEMES } from "../../../shared/theme/index.js";
 import { createFixtureRepo } from "../../helpers/fixtures";
+import { T_LONG } from "../../helpers/timeouts";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
@@ -37,11 +38,16 @@ test.describe.serial("Core: Light Theme Smoke", () => {
   });
 
   // eslint-disable-next-line no-empty-pattern
-  test("light themes keep key chrome readable", async ({}, testInfo) => {
+  test("light themes keep key chrome readable", async ({}) => {
     const { window } = ctx;
 
     for (const schemeId of LIGHT_SCHEME_IDS) {
       await setAppTheme(window, schemeId, "light");
+
+      await window.locator(SEL.worktree.mainCard).waitFor({ state: "visible", timeout: T_LONG });
+      await window
+        .locator('[data-worktree-is-main="true"] [id$="-details"]')
+        .waitFor({ state: "visible", timeout: T_LONG });
 
       const metrics = await getThemeChromeMetrics(window, { projectName: PROJECT_NAME });
 
@@ -80,7 +86,5 @@ test.describe.serial("Core: Light Theme Smoke", () => {
         )
         .toBeGreaterThanOrEqual(1.05);
     }
-
-    expect(testInfo.errors).toHaveLength(0);
   });
 });

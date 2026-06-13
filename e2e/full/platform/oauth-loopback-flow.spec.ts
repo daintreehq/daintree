@@ -623,7 +623,7 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
       await signInBtn.click();
 
       // Wait for the webview to navigate to /auth/callback
-      await expect(addressBar).toHaveValue(/\/auth\/callback/, { timeout: 30_000 });
+      await expect(addressBar).toHaveValue(/\/auth\/callback/, { timeout: T_LONG });
 
       const webview = w().locator("webview");
       await expect(webview).toBeAttached({ timeout: T_LONG });
@@ -655,7 +655,7 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
               return null;
             }
           },
-          { timeout: 30_000 }
+          { timeout: T_LONG }
         )
         .toMatchObject({
           status: "authenticated",

@@ -35,13 +35,17 @@ test.describe.serial("Core: IPC Fault Injection Smoke", () => {
 
   test("getHandlerCount reports registered handler", async () => {
     const hasHandler = await getHandlerCount(ctx.app, "app:get-version");
-    // Either true (handler found) or null (private API unavailable)
-    expect(hasHandler === true || hasHandler === null).toBe(true);
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "ipcMain._invokeHandlers private API unavailable",
+    });
+    test.skip(hasHandler === null, "ipcMain._invokeHandlers private API unavailable");
+    expect(hasHandler).toBe(true);
   });
 
   test("getListenerCount returns a number", async () => {
     const count = await getListenerCount(ctx.app, "app:get-version");
-    expect(typeof count).toBe("number");
+    expect(count).toBeGreaterThanOrEqual(0);
   });
 
   test("getMemoryUsage returns valid snapshot", async () => {
@@ -104,15 +108,11 @@ test.describe.serial("Core: IPC Fault Injection Smoke", () => {
     });
     expect(version).toMatch(/^\d+\.\d+\.\d+/);
 
-    // app:get-state should also work normally
+    // app:get-state should also work normally and return the real AppState shape
     const state = await ctx.window.evaluate(async () => {
-      try {
-        await (window as any).electron.app.getState();
-        return { ok: true };
-      } catch {
-        return { ok: false };
-      }
+      return await (window as any).electron.app.getState();
     });
-    expect(state.ok).toBe(true);
+    expect(Array.isArray(state.terminals)).toBe(true);
+    expect(typeof state.sidebarWidth).toBe("number");
   });
 });

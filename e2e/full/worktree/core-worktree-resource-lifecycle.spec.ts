@@ -32,6 +32,32 @@ let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 const BRANCH = "e2e/resource-lifecycle";
+const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+async function provisionViaPalette(window: AppContext["window"], app: AppContext["app"]) {
+  await ensureWindowFocused(app);
+  await window.keyboard.press(`${mod}+Shift+P`);
+
+  const palette = window.locator(SEL.actionPalette.dialog);
+  await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+
+  await palette.locator(SEL.actionPalette.searchInput).fill("Provision Resource");
+  const option = palette.locator('[role="option"]').filter({ hasText: /Provision Resource/i });
+  await expect(option.first()).toBeVisible({ timeout: T_SHORT });
+  await option.first().click();
+}
+
+function resourceStateFile(): string {
+  return path.join(fixtureDir, ".daintree", "resource-state.json");
+}
+
+function readResourceStatus(): string | null {
+  try {
+    return JSON.parse(fs.readFileSync(resourceStateFile(), "utf-8")).status ?? null;
+  } catch {
+    return null;
+  }
+}
 
 test.describe.serial("Full: Worktree Resource Lifecycle", () => {
   test.beforeAll(async () => {
@@ -92,10 +118,10 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     await createBtn.click();
 
     const newCard = window.locator(SEL.worktree.card(BRANCH));
-    await expect(newCard).toBeVisible({ timeout: 30_000 });
+    await expect(newCard).toBeVisible({ timeout: T_LONG });
   });
 
-  test("resource provision runs after worktree creation", async () => {
+  test("resource provision writes ready state for a created worktree", async () => {
     const { window } = ctx;
 
     const newCard = window.locator(SEL.worktree.card(BRANCH));
@@ -109,7 +135,14 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
       })
       .toContain("selected");
 
-    await window.waitForTimeout(3000);
+    await provisionViaPalette(window, ctx.app);
+
+    await expect
+      .poll(readResourceStatus, {
+        timeout: T_LONG,
+        message: "Provision should write resource state file with status ready",
+      })
+      .toBe("ready");
   });
 
   test("deleting worktree triggers resource teardown", async () => {
@@ -142,6 +175,13 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
 
     await waitForWorktreeCardRemoval(window, BRANCH);
 
+    await expect
+      .poll(() => fs.existsSync(resourceStateFile()), {
+        timeout: T_LONG,
+        message: "Teardown should remove the resource state file",
+      })
+      .toBe(false);
+
     const mainCard = window.locator(SEL.worktree.card(mainBranch));
     await expect
       .poll(() => mainCard.getAttribute("aria-label"), {
@@ -170,9 +210,19 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     const failBranch = "e2e/resource-teardown-fail";
     const card = await createWorktree(window, failBranch);
     await card.click({ position: { x: 10, y: 10 } });
-    await window.waitForTimeout(2000);
+
+    await provisionViaPalette(window, ctx.app);
+
+    await expect
+      .poll(readResourceStatus, {
+        timeout: T_LONG,
+        message: "Provision should run before delete in teardown-failure flow",
+      })
+      .toBe("ready");
 
     await deleteWorktree(window, ctx.app, failBranch);
+
+    expect(fs.existsSync(resourceStateFile())).toBe(true);
 
     fs.writeFileSync(configPath, originalConfig);
     execFileSync("git", ["add", "-A"], { cwd: fixtureDir, stdio: "ignore" });

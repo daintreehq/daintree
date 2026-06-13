@@ -81,9 +81,6 @@ async function scrollTerminalBack(panel: Locator): Promise<void> {
   if (!isScrolledBack(await getTerminalScrollState(page))) {
     await scrollTerminalLines(page, -80);
   }
-  if (!isScrolledBack(await getTerminalScrollState(page))) {
-    await scrollTerminalLines(page, 80);
-  }
 
   try {
     await expect
@@ -180,18 +177,19 @@ test.describe.serial("Core: Terminal Scroll Indicator", () => {
     await runTerminalCommand(window, panel, `node -e "console.log('SCRL_A_VERIFY')"`);
     await waitForTerminalText(panel, "SCRL_A_VERIFY", T_LONG);
     await window.waitForTimeout(T_SETTLE);
-    await expect(indicator).not.toBeVisible();
+    await expect(indicator).not.toBeVisible({ timeout: T_SHORT });
   });
 
   test("indicator does not appear when already at bottom", async () => {
     const { window } = ctx;
     const panel = await getTerminalPanel(window);
 
+    const delayMs = process.env.CI ? 6_000 : 2_000;
     // Run a command with delayed output WITHOUT scrolling up
     await runTerminalCommand(
       window,
       panel,
-      `node -e "for(let i=1;i<=50;i++) console.log('SCRL_B_FILL_'+i); setTimeout(()=>{for(let i=1;i<=10;i++) console.log('SCRL_B_NEW_'+i)}, 2000)"`
+      `node -e "for(let i=1;i<=50;i++) console.log('SCRL_B_FILL_'+i); setTimeout(()=>{for(let i=1;i<=10;i++) console.log('SCRL_B_NEW_'+i)}, ${delayMs})"`
     );
 
     // Wait for all output to arrive

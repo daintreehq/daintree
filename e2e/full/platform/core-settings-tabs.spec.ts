@@ -95,8 +95,12 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     const themeListbox = themeBrowser.locator(SEL.settings.themeListbox);
     await expect(themeListbox).toBeVisible({ timeout: T_SHORT });
 
-    // Capture the active theme id before switching.
+    // Capture the active theme id and accent token before switching, so we can
+    // prove the token value actually changes rather than merely being present.
     const initialTheme = await html.getAttribute("data-theme");
+    const initialAccentToken = await html.evaluate((el) =>
+      (el as HTMLElement).style.getPropertyValue("--theme-accent-primary").trim()
+    );
 
     // Pick a not-currently-selected option.
     const options = themeListbox.locator('[role="option"]');
@@ -121,7 +125,17 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       .not.toBe(initialTheme);
 
     // A representative theme token is written inline on <html> as a CSS custom
-    // property — proving the live token application, not just an attribute swap.
+    // property and changes to the newly applied scheme's value — proving the
+    // live token application, not just an attribute swap or a stale write.
+    await expect
+      .poll(
+        async () =>
+          html.evaluate((el) =>
+            (el as HTMLElement).style.getPropertyValue("--theme-accent-primary").trim()
+          ),
+        { timeout: T_MEDIUM }
+      )
+      .not.toBe(initialAccentToken);
     const accentToken = await html.evaluate((el) =>
       (el as HTMLElement).style.getPropertyValue("--theme-accent-primary").trim()
     );
@@ -239,10 +253,11 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     await fontSizeInput.fill(newValue);
     await fontSizeInput.blur();
-    await window.waitForTimeout(T_SETTLE);
 
+    // The "Current: Npx" readout updates after a debounced blur; the polled
+    // expect covers the settle window without a fixed sleep.
     await expect(window.locator(`text=Current: ${newValue}px`)).toBeVisible({
-      timeout: T_SHORT,
+      timeout: T_MEDIUM,
     });
 
     await window.keyboard.press("Escape");
@@ -325,9 +340,13 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(errorsButton).toBeVisible({ timeout: T_SHORT });
     await expect(fullButton).toBeVisible({ timeout: T_SHORT });
 
-    // Click "Errors Only" and verify it gets the selected border
+    // Click "Errors Only" and verify it becomes the selected option. The
+    // selected option renders a filled radio dot (the inner bg-daintree-text
+    // div only exists when checked) and that selection is mutually exclusive,
+    // so assert the observable selection moved to "Errors Only" and left "Off".
     await errorsButton.click();
-    await expect(errorsButton).toHaveClass(/border-border-strong/, { timeout: T_SHORT });
+    await expect(errorsButton.locator("div.bg-daintree-text")).toBeVisible({ timeout: T_SHORT });
+    await expect(offButton.locator("div.bg-daintree-text")).toHaveCount(0, { timeout: T_SHORT });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -581,7 +600,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Ensure at least one environment exists so we have a second radio option
     const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
-    const hasEnvs = await selectorBar.isVisible().catch(() => false);
+    const hasEnvs = await selectorBar.isVisible();
     if (!hasEnvs) {
       await panel.locator('[aria-label="Add environment"]').click();
       const nameInput = panel.locator("#new-environment-name");
@@ -591,9 +610,10 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
         .locator('[data-testid="add-environment-form"]')
         .locator("button", { hasText: "Add" })
         .click();
-      await window.waitForTimeout(T_SETTLE);
-      await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
     }
+    // Whichever path ran, a populated selector bar is the precondition for the
+    // rest of the test — gate on it rather than continuing against a broken state.
+    await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
 
     // Default Worktree Mode should be visible
     await expect(panel.locator("text=Default Worktree Mode")).toBeVisible({ timeout: T_SHORT });
@@ -648,7 +668,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Ensure at least one environment exists to test duplicate detection against
     const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
-    const hasEnvs = await selectorBar.isVisible().catch(() => false);
+    const hasEnvs = await selectorBar.isVisible();
     if (!hasEnvs) {
       await panel.locator('[aria-label="Add environment"]').click();
       const setupInput = panel.locator("#new-environment-name");
@@ -658,13 +678,15 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
         .locator('[data-testid="add-environment-form"]')
         .locator("button", { hasText: "Add" })
         .click();
-      await window.waitForTimeout(T_SETTLE);
-      await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
     }
+    // A populated selector bar is the precondition for duplicate detection —
+    // gate on it so we don't read a degenerate name from an empty <select>.
+    await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
 
     // Get the name of the first existing environment from the dropdown
     const selectEl = panel.locator('[data-testid="environment-selector-bar"] select');
     const existingName = await selectEl.inputValue();
+    expect(existingName).not.toBe("");
 
     // Click "+" to start adding a new environment
     await panel.locator('[aria-label="Add environment"]').click();
@@ -768,17 +790,16 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await keyInputs.nth(0).fill("DUPLICATE_KEY");
     await keyInputs.nth(1).fill("DUPLICATE_KEY");
 
-    // Click Save — should trigger validation
+    // Two filled rows make the form dirty, so the Save button must render.
+    // Clicking it runs validate(), which flags the duplicate key.
     const saveButton = window.locator("button", { hasText: "Save" }).first();
-    if (await saveButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await saveButton.click();
-      await window.waitForTimeout(T_SETTLE);
+    await expect(saveButton).toBeVisible({ timeout: T_SHORT });
+    await saveButton.click();
 
-      // Should show duplicate error
-      await expect(window.locator("text=Duplicate variable name")).toBeVisible({
-        timeout: T_SHORT,
-      });
-    }
+    // Should show duplicate error
+    await expect(window.locator("text=Duplicate variable name")).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     // Clean up — delete both rows one at a time with settle time
     const deleteButtons = window.locator('button[aria-label="Delete environment variable"]');

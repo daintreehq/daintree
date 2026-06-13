@@ -3,12 +3,13 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import {
   writeCcrConfig,
   removeCcrConfig,
   navigateToAgentSettings,
   waitForCcrPresets,
+  waitForCcrPresetsRemoved,
   getPresetOptionLabels,
   getPresetRowByName,
   type CcrModelEntry,
@@ -17,11 +18,11 @@ import {
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 
-const T_CCR = 60_000;
+const T_CCR = T_LONG;
 
 const closeSettings = async () => {
   await ctx.window.keyboard.press("Escape");
-  await ctx.window.waitForTimeout(T_SETTLE);
+  await expect(ctx.window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_MEDIUM });
 };
 
 const selectClaudePresetDirectly = async (presetId: string) => {
@@ -94,6 +95,9 @@ test.describe.serial("Presets: CCR Discovery & Auto-Config (1–12)", () => {
 
   test("2. No CCR config means no preset chevron on Claude button", async () => {
     removeCcrConfig();
+    // Wait for the running poll cycle to drop test 1's presets before asserting,
+    // so a passing assertion reflects the app reacting to the removed config.
+    await waitForCcrPresetsRemoved(ctx.window, ["DeepSeek V3", "GPT-5"]);
     await navigateToAgentSettings(ctx.window, "claude");
     await expect(ctx.window.locator(SEL.preset.section).locator(SEL.preset.autoBadge)).toHaveCount(
       0,
@@ -104,7 +108,11 @@ test.describe.serial("Presets: CCR Discovery & Auto-Config (1–12)", () => {
   });
 
   test("3. Empty CCR config {} produces no presets", async () => {
+    writeCcrConfig([{ id: "transient", name: "Transient", model: "transient-model" }]);
+    await waitForCcrPresets(ctx.window, ["Transient"]);
+    // Now empty the config; the running poll cycle must clear the preset.
     writeCcrConfig([]);
+    await waitForCcrPresetsRemoved(ctx.window, ["Transient"]);
     await navigateToAgentSettings(ctx.window, "claude");
     const autoPresets = ctx.window.locator(SEL.preset.section).locator(SEL.preset.autoBadge);
     await expect(autoPresets).toHaveCount(0, { timeout: T_CCR });
@@ -127,6 +135,8 @@ test.describe.serial("Presets: CCR Discovery & Auto-Config (1–12)", () => {
     const row = await getPresetRowByName(ctx.window, "Routed Model");
     await expect(row.getByText("ANTHROPIC_MODEL")).toBeVisible({ timeout: T_SHORT });
     await expect(row.getByText("ANTHROPIC_BASE_URL")).toBeVisible({ timeout: T_SHORT });
+    await expect(row.getByText("custom-model")).toBeVisible({ timeout: T_SHORT });
+    await expect(row.getByText("https://router.local/v1")).toBeVisible({ timeout: T_SHORT });
 
     await closeSettings();
   });
@@ -141,6 +151,8 @@ test.describe.serial("Presets: CCR Discovery & Auto-Config (1–12)", () => {
     const row = await getPresetRowByName(ctx.window, "Keyed Model");
     await expect(row.getByText("ANTHROPIC_MODEL")).toBeVisible({ timeout: T_SHORT });
     await expect(row.getByText("ANTHROPIC_API_KEY")).toBeVisible({ timeout: T_SHORT });
+    await expect(row.getByText("test-model")).toBeVisible({ timeout: T_SHORT });
+    await expect(row.getByText("${MY_API_KEY}")).toBeVisible({ timeout: T_SHORT });
 
     await closeSettings();
   });
@@ -205,27 +217,50 @@ test.describe.serial("Presets: CCR Discovery & Auto-Config (1–12)", () => {
   });
 
   test("10. Modifying CCR config while running updates presets within 30s", async () => {
-    // NOTE: This test is limited by test environment - CCR service doesn't auto-reload config files
-    // In production, file watching would detect changes and update presets automatically
     writeCcrConfig([{ id: "initial", name: "Initial", model: "init-model" }]);
     await waitForCcrPresets(ctx.window, ["Initial"]);
     await navigateToAgentSettings(ctx.window, "claude");
     await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_CCR });
-    const labels = await getPresetOptionLabels(ctx.window);
-    expect(labels.some((l) => l.includes("Initial"))).toBe(true);
+    const before = await getPresetOptionLabels(ctx.window);
+    expect(before.some((l) => l.includes("Initial"))).toBe(true);
+    expect(before.some((l) => l.includes("Added Live"))).toBe(false);
+
+    // Mutate the config while the app is running; the running CCR poll cycle
+    // must pick up the new model without a restart.
+    writeCcrConfig([
+      { id: "initial", name: "Initial", model: "init-model" },
+      { id: "added-live", name: "Added Live", model: "added-model" },
+    ]);
+    await waitForCcrPresets(ctx.window, ["Initial", "Added Live"]);
+    await navigateToAgentSettings(ctx.window, "claude");
+    await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_CCR });
+    const after = await getPresetOptionLabels(ctx.window);
+    expect(after.some((l) => l.includes("Initial"))).toBe(true);
+    expect(after.some((l) => l.includes("Added Live"))).toBe(true);
 
     await closeSettings();
   });
 
   test("11. Removing a CCR model from config removes the preset within 30s", async () => {
-    // NOTE: This test is limited by test environment - CCR service doesn't auto-reload config files
-    // In production, file watching would detect changes and update presets automatically
-    writeCcrConfig([{ id: "to-remove", name: "To Remove", model: "remove-model" }]);
-    await waitForCcrPresets(ctx.window, ["To Remove"]);
+    writeCcrConfig([
+      { id: "kept", name: "Kept", model: "kept-model" },
+      { id: "to-remove", name: "To Remove", model: "remove-model" },
+    ]);
+    await waitForCcrPresets(ctx.window, ["Kept", "To Remove"]);
     await navigateToAgentSettings(ctx.window, "claude");
     await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_CCR });
-    const labels = await getPresetOptionLabels(ctx.window);
-    expect(labels.some((l) => l.includes("To Remove"))).toBe(true);
+    const before = await getPresetOptionLabels(ctx.window);
+    expect(before.some((l) => l.includes("To Remove"))).toBe(true);
+
+    // Drop one model from the config while running; the poll cycle must drop
+    // the corresponding preset while keeping the surviving one.
+    writeCcrConfig([{ id: "kept", name: "Kept", model: "kept-model" }]);
+    await waitForCcrPresetsRemoved(ctx.window, ["To Remove"]);
+    await navigateToAgentSettings(ctx.window, "claude");
+    await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_CCR });
+    const after = await getPresetOptionLabels(ctx.window);
+    expect(after.some((l) => l.includes("To Remove"))).toBe(false);
+    expect(after.some((l) => l.includes("Kept"))).toBe(true);
 
     await closeSettings();
   });

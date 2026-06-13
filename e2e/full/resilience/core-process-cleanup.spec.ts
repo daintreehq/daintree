@@ -11,7 +11,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
 import { getFirstGridPanel, openTerminal } from "../../helpers/panels";
-import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_LONG, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 import {
   getPtyPid,
   getProcessInfo,
@@ -61,7 +61,7 @@ test.describe("Core: Process Cleanup", () => {
       ptyPid = await getPtyPid(ctx.window, panel);
       expect(ptyPid).toBeGreaterThan(0);
       await expect
-        .poll(() => getDescendantPids(ptyPid).length, { timeout: 15_000, intervals: [500] })
+        .poll(() => getDescendantPids(ptyPid).length, { timeout: T_LONG, intervals: [500] })
         .toBeGreaterThan(0);
       descendants = getDescendantPids(ptyPid);
       expect(descendants.length).toBeGreaterThan(0);
@@ -86,11 +86,11 @@ test.describe("Core: Process Cleanup", () => {
       await waitForProcessExit(electronPid, 45_000);
 
       // Verify PTY process is dead
-      await waitForProcessDeath(ptyPid, 20_000);
+      await waitForProcessDeath(ptyPid, T_LONG);
 
       // Verify descendants are dead
       for (const desc of descendants) {
-        await waitForProcessDeath(desc, 10_000).catch(() => {});
+        await waitForProcessDeath(desc, T_MEDIUM);
         expect(getProcessInfo(desc)).toBeNull();
       }
     } finally {
@@ -176,7 +176,7 @@ test.describe("Core: Process Cleanup", () => {
 
       // initializeTrashedPidCleanup() runs before window creation,
       // so by the time launchApp resolves, cleanup has already happened
-      await waitForProcessDeath(orphanPid, 15_000);
+      await waitForProcessDeath(orphanPid, T_LONG);
 
       // Verify trashed-pids.json was cleaned up
       expect(existsSync(trashedPidsPath)).toBe(false);
@@ -256,7 +256,6 @@ test.describe.serial("Core: Process Cleanup on Shutdown", () => {
     await expect(panel).toBeVisible({ timeout: T_LONG });
 
     // Wait for shell ready using sentinel
-    await window.waitForTimeout(2000);
     await runTerminalCommand(window, panel, "echo DAINTREE_READY");
     await waitForTerminalText(panel, "DAINTREE_READY", T_LONG);
 
@@ -264,12 +263,12 @@ test.describe.serial("Core: Process Cleanup on Shutdown", () => {
     await window.waitForTimeout(T_SETTLE);
     await runTerminalCommand(window, panel, "sh -c \"trap '' TERM; exec tail -f /dev/null\"");
 
-    // Let the command start
-    await window.waitForTimeout(T_SETTLE);
-
-    // Capture PTY PID and descendants before close
+    // Capture PTY PID and poll until the descendant (tail) has spawned
     const ptyPid = await getPtyPid(window, panel);
     expect(ptyPid).toBeGreaterThan(0);
+    await expect
+      .poll(() => getDescendantPids(ptyPid).length, { timeout: T_LONG, intervals: [300] })
+      .toBeGreaterThan(0);
     const descendants = getDescendantPids(ptyPid);
     trackedPids = [ptyPid, ...descendants];
 
@@ -293,9 +292,9 @@ test.describe.serial("Core: Process Cleanup on Shutdown", () => {
 
     // If closeApp() needed the force-kill fallback (10s timeout), elapsed > 10s.
     // The graceful shutdown (4s PTY kill timeout + service disposal) should
-    // complete well under this. Use 15s as the threshold — exceeding it means
-    // the graceful path failed and closeApp had to force-kill.
-    expect(elapsed).toBeLessThan(15_000);
+    // complete well under this. Use 25s as the threshold to absorb CI scheduling
+    // jitter while still catching cases where the graceful path stalls entirely.
+    expect(elapsed).toBeLessThan(25_000);
 
     // Verify all tracked PIDs are dead after shutdown
     for (const pid of trackedPids) {

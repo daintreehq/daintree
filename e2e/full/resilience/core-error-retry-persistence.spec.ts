@@ -99,7 +99,9 @@ async function clearErrorsAndCloseDock(window: Page) {
       await closeBtn.click();
     }
   }
-  await window.waitForTimeout(200);
+  // Confirm the dock has reached a stable closed state before the next serial
+  // test runs, so leftover error rows can't leak across tests.
+  await expect(dock).not.toBeVisible({ timeout: T_SHORT });
 }
 
 /* ---------- retry & cancellation tests ---------- */
@@ -140,22 +142,23 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
 
     // Send synthetic retry progress
     await emitRetryProgress(ctx.app, { id: storeId, attempt: 1, maxAttempts: 3 });
-    await ctx.window.waitForTimeout(200);
 
     const errorRow = panel.locator("tr").filter({ hasText: msg });
-    await expect(errorRow.getByText("Retrying 1/3...")).toBeVisible({ timeout: T_SHORT });
+    await expect(errorRow.getByText("Retrying 1/3...")).toBeVisible({ timeout: T_MEDIUM });
     await expect(errorRow.locator('button:text-is("Cancel")')).toBeVisible();
     await expect(errorRow.locator('button:text-is("Retry")')).not.toBeVisible();
   });
 
   test("successful retry clears error from problems panel", async () => {
     const msg = `Transient failure test ${Date.now()}`;
+    // "worktree" exercises a real main-process action (worktreeService.refresh),
+    // unlike "terminal" which guard-returns without retryArgs and never runs.
     await emitError(ctx.app, {
       type: "git",
       message: msg,
       source: "SuccessTest",
       retryability: "auto",
-      retryAction: "terminal",
+      retryAction: "worktree",
     });
 
     const dock = ctx.window.locator(SEL.diagnostics.dock);
@@ -192,10 +195,9 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
 
     // Send synthetic progress to show retrying state
     await emitRetryProgress(ctx.app, { id: storeId, attempt: 2, maxAttempts: 3 });
-    await ctx.window.waitForTimeout(200);
 
     const errorRow = panel.locator("tr").filter({ hasText: msg });
-    await expect(errorRow.getByText("Retrying 2/3...")).toBeVisible({ timeout: T_SHORT });
+    await expect(errorRow.getByText("Retrying 2/3...")).toBeVisible({ timeout: T_MEDIUM });
 
     // Click Cancel
     const cancelButton = errorRow.locator('button:text-is("Cancel")');

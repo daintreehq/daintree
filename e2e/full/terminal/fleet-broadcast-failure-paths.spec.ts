@@ -4,7 +4,7 @@ import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getFocusedPanelId, getPanelById } from "../../helpers/panels";
-import { waitForTerminalPty, waitForTerminalText } from "../../helpers/terminal";
+import { waitForTerminalPty, waitForTerminalText, getTerminalText } from "../../helpers/terminal";
 import { injectFault, injectDelay, clearAllFaults } from "../../helpers/ipcFaults";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
@@ -271,10 +271,9 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
       // later "marker present" assertion would pass on the original send, not
       // the retry, making the retry path falsely look exercised.
       for (const id of ids) {
-        await expect(getPanelById(window, id).locator(SEL.terminal.xtermRows)).not.toContainText(
-          marker,
-          { timeout: T_MEDIUM }
-        );
+        await expect
+          .poll(() => getTerminalText(getPanelById(window, id)), { timeout: T_MEDIUM })
+          .not.toContain(marker);
       }
     });
 
@@ -332,11 +331,17 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
 
     const ids = (await createFreshGridPanels(6)).slice(0, 6);
     await armPanels(window, ids);
-    await expect(window.locator(SEL.fleet.armedCountChip)).toHaveAttribute(
-      "aria-label",
-      /^[6-9]\d* in fleet/,
-      { timeout: T_MEDIUM }
-    );
+    await expect
+      .poll(
+        async () => {
+          const label =
+            (await window.locator(SEL.fleet.armedCountChip).getAttribute("aria-label")) ?? "";
+          const match = label.match(/^(\d+) in fleet/);
+          return match ? Number(match[1]) : 0;
+        },
+        { timeout: T_MEDIUM }
+      )
+      .toBeGreaterThanOrEqual(6);
 
     // Cooperative cancellation only has anything to interrupt on the batched
     // fan-out path, which `executeFleetBroadcast` enters when there are more
@@ -386,16 +391,18 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
 
     await test.step("First-batch target receives the payload; the sixth (later batch) is skipped", async () => {
       // ids[0] is in the first batch — already dispatched before Cancel — so it
-      // completes once its delayed submit resolves (~12s).
-      await waitForTerminalText(getPanelById(window, ids[0]!), firstBatchReceiptText, 60_000);
+      // completes once its delayed submit resolves. The 12s-per-submit injected
+      // delay applies to every batched submit, so the marker can land well past
+      // 12s; keep generous headroom (60s local / scaled on CI) so a slow batch
+      // drain never races the assertion.
+      await waitForTerminalText(getPanelById(window, ids[0]!), firstBatchReceiptText, T_LONG * 6);
       // ids[5] is the lone second-batch target; the abort skips it entirely.
-      // Give the resolved first batch time to drain before asserting absence.
-      await window.waitForTimeout(2000);
-      await expect(getPanelById(window, ids[5]!).locator(SEL.terminal.xtermRows)).not.toContainText(
-        firstBatchReceiptText,
-        { timeout: T_MEDIUM }
-      );
+      // Progress hidden is the structural signal that all in-flight work has
+      // drained, so the absence check can no longer race a late delivery.
       await expect(window.locator(SEL.fleet.broadcastProgress)).toBeHidden({ timeout: T_LONG });
+      await expect
+        .poll(() => getTerminalText(getPanelById(window, ids[5]!)), { timeout: T_MEDIUM })
+        .not.toContain(firstBatchReceiptText);
     });
   });
 });

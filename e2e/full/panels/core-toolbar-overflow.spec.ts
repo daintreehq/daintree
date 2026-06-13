@@ -2,14 +2,54 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { SEL } from "../../helpers/selectors";
-import { T_SHORT } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 
 function toolbarButton(page: AppContext["window"], name: string) {
   return page.getByRole("toolbar", { name: "Main toolbar" }).getByRole("button", {
     name,
     exact: true,
   });
+}
+
+// Right-side overflow trigger, only matched while it is actually surfacing
+// hidden items (`data-visible="true"`). The default right group owns all the
+// priority-5 buttons (settings, copy-tree, notification-center, problems), so
+// it is the group that overflows first at narrow widths.
+function rightOverflowTrigger(page: AppContext["window"]) {
+  return page
+    .getByRole("toolbar", { name: "Main toolbar" })
+    .locator(
+      '[data-toolbar-overflow-trigger][data-toolbar-overflow-side="right"][data-visible="true"]'
+    );
+}
+
+// Wrapper div around a toolbar button. Overflowed items get aria-hidden="true";
+// visible items omit the attribute.
+function toolbarItemWrapper(page: AppContext["window"], id: string) {
+  return page
+    .getByRole("toolbar", { name: "Main toolbar" })
+    .locator(`[data-toolbar-button-id="${id}"]`);
+}
+
+async function setWindowSize(app: AppContext["app"], width: number, height: number) {
+  await app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win) win.setSize(size.width, size.height);
+    },
+    { width, height }
+  );
+}
+
+// Number of hidden items encoded in the right overflow trigger's accessible
+// name ("More toolbar items — N hidden" / "… N problems hidden"). Returns null
+// when the trigger isn't surfacing overflow, so callers can poll for it.
+async function rightOverflowHiddenCount(page: AppContext["window"]): Promise<number | null> {
+  const trigger = rightOverflowTrigger(page);
+  if ((await trigger.count()) === 0) return null;
+  const label = await trigger.first().getAttribute("aria-label");
+  const match = label?.match(/—\s*(\d+)\s+(?:problems?\s+)?hidden/);
+  return match ? Number(match[1]) : null;
 }
 
 function escapeRegExp(value: string): string {
@@ -32,7 +72,7 @@ async function expectToolbarActionReachable(page: AppContext["window"], name: st
   });
 
   for (let attempt = 0; attempt < 8; attempt++) {
-    if (await directButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    if (await directButton.isVisible({ timeout: T_SETTLE }).catch(() => false)) {
       return;
     }
 
@@ -45,14 +85,14 @@ async function expectToolbarActionReachable(page: AppContext["window"], name: st
       // items (issue #8159) — it's a stable "More toolbar items — N
       // hidden". Don't pre-filter by item name; open each visible
       // overflow button and check whether the target menuitem appears.
-      if (!(await overflowButton.isVisible({ timeout: 500 }).catch(() => false))) {
+      if (!(await overflowButton.isVisible({ timeout: T_SETTLE }).catch(() => false))) {
         continue;
       }
 
       try {
-        await overflowButton.click({ timeout: 2_000 });
+        await overflowButton.click({ timeout: T_SHORT });
       } catch {
-        if (await menuItem.isVisible({ timeout: 500 }).catch(() => false)) {
+        if (await menuItem.isVisible({ timeout: T_SETTLE }).catch(() => false)) {
           await page.keyboard.press("Escape");
           return;
         }
@@ -67,7 +107,7 @@ async function expectToolbarActionReachable(page: AppContext["window"], name: st
       await page.keyboard.press("Escape").catch(() => undefined);
     }
 
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(T_SETTLE);
   }
 
   await expect(directButton).toBeVisible({ timeout: T_SHORT });
@@ -111,165 +151,70 @@ test.describe.serial("Core: Toolbar Overflow", () => {
       await expect(aside).toHaveAttribute("aria-hidden", "true", { timeout: T_SHORT });
     }
 
-    // Shrink the window as small as Electron allows
-    await app.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      if (win) win.setSize(400, 300);
+    // Shrink the window as small as Electron allows so the real ResizeObserver
+    // → useToolbarOverflow pipeline pushes low-priority items into overflow.
+    await setWindowSize(app, 400, 300);
+
+    // The right overflow trigger surfaces only when items are actually hidden,
+    // so polling it visible is the real end-to-end proof the resize drove the
+    // production hook — no in-test re-implementation of the algorithm.
+    const overflowTrigger = rightOverflowTrigger(window);
+    await expect(overflowTrigger).toBeVisible({ timeout: T_MEDIUM });
+
+    // Priority-5 buttons (copy-tree, settings) are first into overflow: their
+    // wrapper is aria-hidden once evicted. The sidebar toggle is a priority-1
+    // fixed control and must stay on the visible surface.
+    await expect(toolbarItemWrapper(window, "copy-tree")).toHaveAttribute("aria-hidden", "true", {
+      timeout: T_SHORT,
     });
-    await window.waitForTimeout(500);
+    await expect(toolbarButton(window, "Toggle Sidebar")).toBeVisible({ timeout: T_SHORT });
 
-    // Get actual window size (Electron may enforce a minimum)
-    const actualSize = await app.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      return win ? win.getSize() : [0, 0];
-    });
-    console.log(`[e2e] Actual window size after resize: ${actualSize[0]}x${actualSize[1]}`);
-
-    // Test the computeOverflow logic directly in the page context
-    // to verify the overflow system works regardless of actual window size
-    const overflowResult = await window.evaluate(() => {
-      // Import the test from the module exposed on the window
-      const PRIORITIES: Record<string, number> = {
-        "sidebar-toggle": 1,
-        "portal-toggle": 1,
-        claude: 2,
-        gemini: 2,
-        codex: 2,
-        terminal: 3,
-        browser: 3,
-        "dev-server": 3,
-        settings: 4,
-        "notification-center": 4,
-        "forge-stats": 5,
-        "copy-tree": 5,
-        problems: 5,
-      };
-
-      // Simulate the overflow computation with a narrow container
-      const ids = Object.keys(PRIORITIES);
-      const containerWidth = 200; // Very narrow
-      const totalWidth = ids.length * 36; // 504px total
-
-      if (totalWidth <= containerWidth) {
-        return { overflowTriggered: false };
-      }
-
-      // Remove lowest-priority items first
-      const sorted = ids
-        .map((id, index) => ({ id, index, priority: PRIORITIES[id] }))
-        .sort((a, b) => {
-          if (b.priority !== a.priority) return b.priority - a.priority;
-          return b.index - a.index;
-        });
-
-      const overflowSet = new Set<string>();
-      let currentWidth = totalWidth;
-      // Removal target no longer carries a hysteresis buffer — the asymmetric
-      // restore gate in computeGuardedOverflow holds the buffer instead.
-      const targetWidth = containerWidth;
-
-      for (const item of sorted) {
-        if (currentWidth <= targetWidth) break;
-        overflowSet.add(item.id);
-        currentWidth -= 36;
-      }
-
-      return {
-        overflowTriggered: true,
-        visible: ids.filter((id) => !overflowSet.has(id)),
-        overflowed: ids.filter((id) => overflowSet.has(id)),
-      };
-    });
-
-    // The overflow computation should hide low-priority items
-    expect(overflowResult.overflowTriggered).toBe(true);
-    if (overflowResult.overflowTriggered) {
-      // Priority 5 items (forge-stats, copy-tree, problems) should overflow first
-      expect(overflowResult.overflowed).toContain("problems");
-      expect(overflowResult.overflowed).toContain("copy-tree");
-      // Priority 1 items should remain visible
-      expect(overflowResult.visible).toContain("sidebar-toggle");
-    }
+    // Opening the trigger must reveal the evicted priority-5 Settings item,
+    // proving it routed into the real overflow dropdown.
+    await overflowTrigger.first().click();
+    const settingsItem = window.getByRole("menuitem", { name: /^Settings(?:\s|$)/i });
+    await expect(settingsItem).toBeVisible({ timeout: T_SHORT });
+    await window.keyboard.press("Escape");
   });
 
   test("overflow set is stable across 1px boundary jitter", async () => {
     // Regression for #8157. The guarded hook must not flip-flop when the
-    // container width oscillates by a pixel at a boundary — once an item is
-    // in overflow, the restore threshold sits above prevWidth + smallest
-    // overflowed item width + RESTORE_HYSTERESIS_BUFFER.
-    const stability = await ctx.window.evaluate(() => {
-      type GuardedFn = (
-        containerWidth: number,
-        itemWidths: Map<string, number>,
-        orderedIds: string[],
-        priorities: Record<string, number>,
-        previousWidth: number,
-        previousResult: { visibleIds: string[]; overflowIds: string[] } | null
-      ) => { visibleIds: string[]; overflowIds: string[] };
+    // window — and therefore the toolbar container — oscillates by a pixel.
+    // Driven through the real ResizeObserver → useToolbarOverflow → DOM path:
+    // we settle on a narrow width that produces overflow, then jitter the
+    // window ±1px and assert the hidden count (encoded in the trigger's
+    // accessible name) never changes.
+    const { window, app } = ctx;
 
-      const PRIORITIES: Record<string, number> = {
-        terminal: 3,
-        browser: 3,
-        "forge-stats": 1,
-        settings: 5,
-        "copy-tree": 5,
-      };
-      const ids = ["terminal", "browser", "forge-stats", "settings", "copy-tree"];
-      const widths = new Map(ids.map((id) => [id, 36] as const));
+    const overflowTrigger = rightOverflowTrigger(window);
+    await expect(overflowTrigger).toBeVisible({ timeout: T_MEDIUM });
 
-      const RESTORE_BUFFER = 16;
-      const guarded: GuardedFn = (cw, iw, ordered, prios, prevW, prev) => {
-        const total = ordered.reduce((s, id) => s + (iw.get(id) ?? 36), 0);
-        const sorted = ordered
-          .map((id, index) => ({ id, index, priority: prios[id] ?? 3 }))
-          .sort((a, b) =>
-            b.priority !== a.priority ? b.priority - a.priority : b.index - a.index
-          );
-        const overflowSet = new Set<string>();
-        let current = total;
-        for (const item of sorted) {
-          if (current <= cw) break;
-          overflowSet.add(item.id);
-          current -= iw.get(item.id) ?? 36;
-        }
-        const fresh = {
-          visibleIds: ordered.filter((id) => !overflowSet.has(id)),
-          overflowIds: ordered.filter((id) => overflowSet.has(id)),
-        };
-        if (!prev || prev.overflowIds.length === 0 || cw <= prevW) return fresh;
-        const smallest = prev.overflowIds.reduce(
-          (m, id) => Math.min(m, iw.get(id) ?? 36),
-          Number.POSITIVE_INFINITY
-        );
-        return cw >= prevW + smallest + RESTORE_BUFFER ? fresh : prev;
-      };
+    // Anchor the baseline hidden count once the resize from the previous test
+    // has settled.
+    await expect
+      .poll(() => rightOverflowHiddenCount(window), { timeout: T_MEDIUM })
+      .toBeGreaterThan(0);
+    const baseline = await rightOverflowHiddenCount(window);
+    expect(baseline).toBeGreaterThan(0);
 
-      // Drive 12 ticks of ±1px jitter around the 179/180 boundary.
-      const widthsSeq = [179, 180, 179, 180, 179, 180, 179, 180, 179, 180, 179, 180];
-      const observed: string[][] = [];
-      let prevW = 0;
-      let prev: { visibleIds: string[]; overflowIds: string[] } | null = null;
-
-      for (const w of widthsSeq) {
-        const result = guarded(w, widths, ids, PRIORITIES, prevW, prev);
-        observed.push([...result.overflowIds]);
-        if (
-          result.overflowIds.length !== (prev?.overflowIds.length ?? -1) ||
-          result.overflowIds.some((id, i) => prev?.overflowIds[i] !== id)
-        ) {
-          prevW = w;
-        }
-        prev = result;
-      }
-
-      // Every tick after the first must report the same overflow set.
-      const distinct = new Set(observed.map((arr) => arr.join("|")));
-      return { observedCount: observed.length, distinctSets: [...distinct] };
+    const [baseWidth, baseHeight] = await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      return win ? win.getSize() : [0, 0];
     });
 
-    expect(stability.observedCount).toBe(12);
-    expect(stability.distinctSets).toHaveLength(1);
-    expect(stability.distinctSets[0]).toBe("copy-tree");
+    // Oscillate around the settled width. Each tick lets the ResizeObserver
+    // run and re-measure; the hysteresis guard must hold the same set.
+    for (let i = 0; i < 8; i++) {
+      const width = baseWidth + (i % 2 === 0 ? 1 : 0);
+      await setWindowSize(app, width, baseHeight);
+      await window.waitForTimeout(T_SETTLE);
+      await expect
+        .poll(() => rightOverflowHiddenCount(window), { timeout: T_SHORT })
+        .toBe(baseline);
+    }
+
+    // Restore the anchor width so afterstate is deterministic.
+    await setWindowSize(app, baseWidth, baseHeight);
   });
 
   test("restore full size and verify toolbar is complete", async () => {
@@ -282,7 +227,10 @@ test.describe.serial("Core: Toolbar Overflow", () => {
         win.center();
       }
     });
-    await window.waitForTimeout(500);
+
+    // The Toggle Sidebar control is fixed and always present; poll it visible
+    // so the restore reflow has actually landed before touching the sidebar.
+    await expect(toolbarButton(window, "Toggle Sidebar")).toBeVisible({ timeout: T_MEDIUM });
 
     // Re-open sidebar
     const sidebar = window.locator('aside[aria-label="Sidebar"]');

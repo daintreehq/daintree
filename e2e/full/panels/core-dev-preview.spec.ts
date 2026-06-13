@@ -33,6 +33,11 @@ test.describe.serial("Core: Dev Preview", () => {
     fixtureCleanup = cleanup;
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureRepoPath, PROJECT_NAME);
+
+    // Fail fast if the dev preview entry point is missing — the button renders
+    // for any onboarded project, so its absence is a real regression, not a
+    // launch-state quirk to silently skip past.
+    await expect(ctx.window.locator(SEL.toolbar.openDevPreview)).toBeVisible({ timeout: T_LONG });
   });
 
   test.afterAll(async () => {
@@ -42,42 +47,20 @@ test.describe.serial("Core: Dev Preview", () => {
   });
 
   test.describe.serial("Panel Chrome", () => {
-    let devPreviewOpened = false;
-
     test("opening dev preview panel adds to grid", async () => {
       const { window } = ctx;
 
       const devBtn = window.locator(SEL.toolbar.openDevPreview);
-      if (!(await devBtn.isVisible().catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview toolbar button not visible in this launch state",
-        });
-        test.skip();
-        return;
-      }
-
       const before = await getGridPanelCount(window);
       await devBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
-      devPreviewOpened = true;
     });
 
     test("panel shows unconfigured state with visible address bar", async () => {
       const { window } = ctx;
 
-      // Skip if no dev preview panel is open (previous test may have skipped)
-      const addressBar = window.locator(SEL.browser.addressBar);
-      if (!(await addressBar.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview address bar not visible (panel not open)",
-        });
-        test.skip();
-        return;
-      }
-
+      await expect(window.locator(SEL.browser.addressBar)).toBeVisible({ timeout: T_MEDIUM });
       await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({
         timeout: T_MEDIUM,
       });
@@ -87,21 +70,13 @@ test.describe.serial("Core: Dev Preview", () => {
       const { window } = ctx;
 
       const addressBar = window.locator(SEL.browser.addressBar);
-      if (!(await addressBar.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview address bar not visible (panel not open)",
-        });
-        test.skip();
-        return;
-      }
       await addressBar.click();
       await addressBar.fill(`http://127.0.0.1:${port}`);
       await window.keyboard.press("Enter");
 
-      await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${port}`), {
-        timeout: T_MEDIUM,
-      });
+      await expect
+        .poll(() => addressBar.inputValue(), { timeout: T_MEDIUM })
+        .toMatch(new RegExp(`127\\.0\\.0\\.1:${port}`));
     });
 
     test("zoom in increases zoom level", async () => {
@@ -110,109 +85,57 @@ test.describe.serial("Core: Dev Preview", () => {
       const zoomIn = window.locator(SEL.browser.zoomIn);
       const zoomReset = window.locator(SEL.browser.zoomReset);
 
-      if (!(await zoomIn.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Zoom controls not visible (dev preview panel not open)",
-        });
-        test.skip();
-        return;
-      }
       await zoomIn.click();
-
-      await expect(zoomReset).toContainText("125%", { timeout: T_SHORT });
+      await expect(zoomReset).toContainText("125%", { timeout: T_MEDIUM });
     });
 
     test("zoom in again steps to 150%", async () => {
-      if (!devPreviewOpened) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview panel was not opened (earlier test skipped)",
-        });
-        test.skip();
-        return;
-      }
       const { window } = ctx;
 
       const zoomIn = window.locator(SEL.browser.zoomIn);
       const zoomReset = window.locator(SEL.browser.zoomReset);
 
       await zoomIn.click();
-      await expect(zoomReset).toContainText("150%", { timeout: T_SHORT });
+      await expect(zoomReset).toContainText("150%", { timeout: T_MEDIUM });
     });
 
     test("zoom out steps back toward 100%", async () => {
-      if (!devPreviewOpened) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview panel was not opened (earlier test skipped)",
-        });
-
-        test.skip();
-        return;
-      }
       const { window } = ctx;
 
       const zoomOut = window.locator(SEL.browser.zoomOut);
       const zoomReset = window.locator(SEL.browser.zoomReset);
 
       await zoomOut.click();
-      await expect(zoomReset).toContainText("125%", { timeout: T_SHORT });
+      await expect(zoomReset).toContainText("125%", { timeout: T_MEDIUM });
     });
 
     test("zoom reset returns to 100%", async () => {
-      if (!devPreviewOpened) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview panel was not opened (earlier test skipped)",
-        });
-
-        test.skip();
-        return;
-      }
       const { window } = ctx;
 
       const zoomReset = window.locator(SEL.browser.zoomReset);
       await zoomReset.click();
 
-      await expect(zoomReset).toContainText("100%", { timeout: T_SHORT });
+      await expect(zoomReset).toContainText("100%", { timeout: T_MEDIUM });
     });
 
-    test("console drawer toggle works when present", async () => {
+    test("console drawer toggle is absent until a dev server starts", async () => {
       const { window } = ctx;
 
+      // The ConsoleDrawer is gated on a live dev-server terminalId
+      // (DevPreviewPane: `{consoleTerminalId && <ConsoleDrawer ... />}`), so in
+      // this unconfigured panel — no dev command set, server never started — the
+      // toggle must not render. Its expand/collapse behavior is exercised in the
+      // Server Lifecycle block, where a server is actually running.
       const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
-      if (!(await consoleToggle.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Console drawer toggle not visible (panel not open)",
-        });
+      await expect(consoleToggle).toHaveCount(0);
 
-        test.skip();
-        return;
-      }
-
-      await consoleToggle.click();
-      await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
-        timeout: T_SHORT,
-      });
-
-      await consoleToggle.click();
-      await expect(consoleToggle).toHaveAttribute("aria-expanded", "false", {
-        timeout: T_SHORT,
+      // Sanity-check we're in the unconfigured state the assertion above assumes.
+      await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({
+        timeout: T_MEDIUM,
       });
     });
 
     test("closing dev preview panel removes it from grid", async () => {
-      if (!devPreviewOpened) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview panel was not opened (earlier test skipped)",
-        });
-
-        test.skip();
-        return;
-      }
       const { window } = ctx;
 
       const before = await getGridPanelCount(window);
@@ -238,20 +161,11 @@ server.listen(0, '127.0.0.1', () => {
       writeFileSync(path.join(fixtureRepoPath, "dev-server.cjs"), serverScript);
     });
 
-    test("configuring dev server starts it and reaches Running status", async () => {
+    test("dev server starts and reaches Running status when devServerCommand is preset", async () => {
       const { window } = ctx;
 
       // Open dev preview panel
       const devBtn = window.locator(SEL.toolbar.openDevPreview);
-      if (!(await devBtn.isVisible().catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Dev preview toolbar button not visible in this launch state",
-        });
-
-        test.skip();
-        return;
-      }
       const before = await getGridPanelCount(window);
       await devBtn.click();
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
@@ -300,15 +214,7 @@ server.listen(0, '127.0.0.1', () => {
 
       // Open console drawer
       const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
-      if (!(await consoleToggle.isVisible({ timeout: T_SHORT }).catch(() => false))) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Console drawer toggle not visible (panel not open)",
-        });
-
-        test.skip();
-        return;
-      }
+      await expect(consoleToggle).toBeVisible({ timeout: T_MEDIUM });
       await consoleToggle.click();
 
       await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
@@ -316,10 +222,14 @@ server.listen(0, '127.0.0.1', () => {
       });
 
       // Verify terminal buffer contains the localhost URL the server printed.
-      // Extract terminalId from the console drawer's DOM id attribute.
+      // Extract terminalId from the console drawer's DOM id attribute. Wait for
+      // the drawer to attach so the id is present before reading it — a null id
+      // would silently poll an empty buffer until timeout with a confusing error.
       const drawerEl = window.locator('[id^="console-drawer-"]');
+      await drawerEl.waitFor({ state: "attached", timeout: T_MEDIUM });
       const drawerId = await drawerEl.getAttribute("id");
       const terminalId = drawerId?.replace("console-drawer-", "") ?? "";
+      expect(terminalId).not.toBe("");
 
       await expect
         .poll(
@@ -346,15 +256,7 @@ server.listen(0, '127.0.0.1', () => {
       const { window } = ctx;
 
       const before = await getGridPanelCount(window);
-      if (before === 0) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "No panels to close in this launch state",
-        });
-
-        test.skip();
-        return;
-      }
+      expect(before).toBeGreaterThan(0);
       const panel = window.locator(SEL.panel.gridPanel).first();
       await panel.locator(SEL.panel.close).first().click({ force: true });
 

@@ -111,11 +111,12 @@ planning/
 .tmp
 *.tgz
 
-# Claude Code session markers
-.claude/nf-session-seen-*.flag
-.claude/scheduled_tasks.lock
-.claude/workflows/
-.claude/worktrees/
+# Claude Code: ignore the whole .claude/ folder (session markers, locks,
+# scratch workflows, worktrees, etc.). Shared slash commands and skills are
+# the exception — they're project assets we commit.
+.claude/*
+!.claude/commands/
+!.claude/skills/
 
 # Claude scratch / working notes (private, ephemeral)
 .claude-scratch/

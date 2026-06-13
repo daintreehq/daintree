@@ -4,7 +4,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_LONG } from "../../helpers/timeouts";
+import { T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { openSettings } from "../../helpers/panels";
 import path from "path";
 import crypto from "crypto";
@@ -62,6 +62,9 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
     const fulfilled = results.filter((r) => r.status === "fulfilled");
     const rejected = results.filter((r) => r.status === "rejected");
     expect(fulfilled.length + rejected.length).toBe(2);
+    // The real invariant is enforced below (matching.length === 1).
+    // Two fulfillments are theoretically possible if git races; the worktree count is the
+    // authoritative check, so we only assert that at least one call did not reject outright.
     expect(fulfilled.length).toBeGreaterThanOrEqual(1);
 
     // Verify exactly one worktree with this branch exists
@@ -149,19 +152,21 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
       return Promise.all(calls);
     }, terminalId);
 
-    // All promises settled (no hang)
-    expect(results.length).toBe(3);
-
-    // Main process alive
-    const alive = await ctx.app.evaluate(() => true);
-    expect(alive).toBe(true);
-
     // Must not have duplicate terminal records — at most one entry with this ID
+    // (Promise.all settling is structural; the real check is state coherence below)
     const terminals: any[] = await window.evaluate(async () => {
       return await (window as any).electron.terminal.getAllTerminals();
     });
     const matching = terminals.filter((t: any) => t.id === terminalId);
     expect(matching.length).toBeLessThanOrEqual(1);
+
+    // At least one of spawn/kill/trash must have succeeded — the IPC layer did not hang
+    const succeededCount = results.filter((r) => r.status === "fulfilled").length;
+    expect(succeededCount).toBeGreaterThanOrEqual(1);
+
+    // Main process still responsive
+    const alive = await ctx.app.evaluate(() => true);
+    expect(alive).toBe(true);
 
     // Cleanup
     const t = matching[0];
@@ -217,7 +222,7 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
 
     expect(results.length).toBe(2);
 
-    // Terminal must be in exactly one consistent state
+    // Terminal must be in exactly one consistent state — not duplicated, not silently deleted
     await expect
       .poll(
         async () => {
@@ -225,14 +230,13 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
             return await (window as any).electron.terminal.getAllTerminals();
           });
           const matching = terminals.filter((t: any) => t.id === terminalId);
-          // Must not be duplicated
           if (matching.length > 1) return "duplicated";
           if (matching.length === 0) return "absent";
           return matching[0].isTrashed ? "trashed" : "active";
         },
         { timeout: T_LONG }
       )
-      .toMatch(/trashed|active|absent/);
+      .toMatch(/^(trashed|active)$/);
 
     // Cleanup
     await window.evaluate(async (id: string) => {
@@ -291,8 +295,8 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
       // Process may be overwhelmed — best effort cleanup
     }
 
-    // Give the system time to clean up PTY processes
-    await window.waitForTimeout(5000);
+    // Let the PTY cleanup cycle run before the next test
+    await window.waitForTimeout(T_SETTLE);
   });
 
   test("main process alive after all concurrent operations", async () => {
