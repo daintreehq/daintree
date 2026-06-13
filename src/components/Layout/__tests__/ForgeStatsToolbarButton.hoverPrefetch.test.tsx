@@ -4,11 +4,13 @@
  *
  * The Issues and PRs toolbar buttons silently prime the list cache on
  * pointerenter (mouse only) so the dropdown opens with no spinner. The
- * 150ms trailing-edge debounce filters mouse traversal across the toolbar;
- * pointerleave cancels a pending prefetch. Cache freshness, token errors,
- * rate limits, and open dropdowns short-circuit the prefetch so it never
- * duplicates work. Hover never triggers the toolbar status indicator —
- * only an actual click drives visible loading/success state.
+ * prefetch fires immediately — no debounce — and is cache-first
+ * (`bypassCache: false`), so a warm slot costs zero GraphQL and a stray
+ * fly-by hover is cheap. Cache freshness (<10s), an in-flight guard, token
+ * errors, rate limits, and open dropdowns short-circuit the prefetch so it
+ * never duplicates work. The cache-first entry deliberately omits
+ * `freshBypassAt` (reserved for real bypass fetches). Hover never triggers
+ * the toolbar status indicator — only an actual click drives visible state.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup, act } from "@testing-library/react";
@@ -174,12 +176,15 @@ function pointerEnter(el: Element, pointerType: "mouse" | "touch" | "pen" = "mou
   fireEvent.pointerEnter(el, { pointerType });
 }
 
-function pointerLeave(el: Element, pointerType: "mouse" | "touch" | "pen" = "mouse"): void {
-  fireEvent.pointerLeave(el, { pointerType });
+// Flush the prefetch request's `.then/.catch/.finally` microtask chain.
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
   _resetForTests();
   mockListIssues.mockReset();
   mockListPRs.mockReset();
@@ -192,44 +197,39 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
 });
 
 describe("ForgeStatsToolbarButton hover prefetch", () => {
-  it("fires listIssues 150ms after pointerenter on the Issues button", async () => {
+  it("fires listIssues immediately on pointerenter (no debounce), cache-first", () => {
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+    // Synchronous act: the call must be registered within the event dispatch
+    // itself, proving there is no debounce/microtask deferral.
+    act(() => {
+      pointerEnter(getIssuesButton(container));
     });
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
     expect(mockListIssues.mock.calls[0]?.[0]).toBe("/test/proj");
     expect(mockListIssues.mock.calls[0]?.[1]).toMatchObject({
       state: "open",
-      bypassCache: true,
+      bypassCache: false,
       sort: "created",
     });
   });
 
-  it("fires listPRs 150ms after pointerenter on the PRs button", async () => {
+  it("fires listPRs immediately on pointerenter (no debounce), cache-first", () => {
     const { container } = renderToolbar();
 
-    pointerEnter(getPrsButton(container));
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+    act(() => {
+      pointerEnter(getPrsButton(container));
     });
 
     expect(mockListPRs).toHaveBeenCalledTimes(1);
     expect(mockListPRs.mock.calls[0]?.[0]).toBe("/test/proj");
     expect(mockListPRs.mock.calls[0]?.[1]).toMatchObject({
       state: "open",
-      bypassCache: true,
+      bypassCache: false,
       sort: "created",
     });
   });
@@ -237,14 +237,10 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
   it("does not call refreshStats from the hover path — prefetch must stay silent", async () => {
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+      pointerEnter(getIssuesButton(container));
     });
-    // Let the prefetch promise settle in case a stats refresh were chained.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
 
     expect(refreshStatsMock).not.toHaveBeenCalled();
     expect(mockListIssues).toHaveBeenCalledTimes(1);
@@ -258,14 +254,10 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     });
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+      pointerEnter(getIssuesButton(container));
     });
-    // Allow the request promise to settle.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
 
     const cached = getCache(buildCacheKey("/test/proj", "issue", "open", "created"));
     expect(cached).toBeDefined();
@@ -274,29 +266,13 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     expect(cached!.hasMore).toBe(true);
   });
 
-  it("does not fire when pointerleave happens before the debounce elapses", async () => {
-    const { container } = renderToolbar();
-    const button = getIssuesButton(container);
-
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(100);
-    });
-    pointerLeave(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(200);
-    });
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-  });
-
   it("ignores non-mouse pointer types (touch)", async () => {
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container), "touch");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(300);
+      pointerEnter(getIssuesButton(container), "touch");
     });
+    await settle();
 
     expect(mockListIssues).not.toHaveBeenCalled();
     expect(refreshStatsMock).not.toHaveBeenCalled();
@@ -311,9 +287,8 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     });
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+      pointerEnter(getIssuesButton(container));
     });
 
     expect(mockListIssues).not.toHaveBeenCalled();
@@ -329,162 +304,11 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     });
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+      pointerEnter(getIssuesButton(container));
     });
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not fire when isTokenError is true", async () => {
-    mockIsTokenError = true;
-    const { container } = renderToolbar();
-
-    pointerEnter(getIssuesButton(container));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-    expect(refreshStatsMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fire when rate limit is active", async () => {
-    mockRateLimitResetAt = Date.now() + 60_000;
-    const { container } = renderToolbar();
-
-    pointerEnter(getIssuesButton(container));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-  });
-
-  it("coalesces concurrent hovers — pointerenter while a prefetch is in flight does not re-fetch", async () => {
-    let resolveFirst: (v: Page<Issue>) => void = () => {};
-    mockListIssues.mockImplementationOnce(
-      () =>
-        new Promise<Page<Issue>>((resolve) => {
-          resolveFirst = resolve;
-        })
-    );
-    const { container } = renderToolbar();
-    const button = getIssuesButton(container);
-
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-    expect(mockListIssues).toHaveBeenCalledTimes(1);
-
-    // Hover again while the first request is still in flight.
-    pointerLeave(button);
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-    expect(mockListIssues).toHaveBeenCalledTimes(1);
-
-    // Settle the first request.
-    resolveFirst(makeIssuePage([makeIssue(1)]));
-  });
-
-  it("does not prefetch when the dropdown is already open (would duplicate the list's mount fetch)", async () => {
-    // Simulate the open state by clicking the button first — onClick toggles
-    // open and triggers a forced refresh. The dropdown slot view resolves to
-    // null in this suite, but the toolbar tracks issuesOpen=true.
-    const { container } = renderToolbar();
-    const button = getIssuesButton(container);
-
-    fireEvent.click(button);
-    refreshStatsMock.mockClear();
-    mockListIssues.mockClear();
-
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-    expect(refreshStatsMock).not.toHaveBeenCalled();
-  });
-
-  it("clears pending hover timer on unmount (no fetch after unmount)", async () => {
-    const { container, unmount } = renderToolbar();
-
-    pointerEnter(getIssuesButton(container));
-    unmount();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300);
-    });
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-  });
-
-  it("does NOT force-refresh on click when stats are within the freshness window", async () => {
-    // Default mock: lastUpdated is Date.now() so the polled stats are fresh.
-    // Click should rely on the hot cache populated by the 30s poll instead
-    // of triggering a full reload.
-    const { container } = renderToolbar();
-    const button = getIssuesButton(container);
-
-    fireEvent.click(button);
-
-    expect(refreshStatsMock).not.toHaveBeenCalled();
-  });
-
-  it("hover-then-click within the debounce window cancels the pending prefetch", async () => {
-    const { container } = renderToolbar();
-    const button = getIssuesButton(container);
-
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(50);
-    });
-    fireEvent.click(button);
-    refreshStatsMock.mockClear();
-    mockListIssues.mockClear();
-
-    // Even though the timer was scheduled before the click, the dropdown is
-    // now open and the timer must short-circuit when it fires.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-
-    expect(mockListIssues).not.toHaveBeenCalled();
-    expect(refreshStatsMock).not.toHaveBeenCalled();
-  });
-
-  it("clears the in-flight ref after a rejection so a subsequent hover refetches", async () => {
-    mockListIssues
-      .mockRejectedValueOnce(new Error("network blip"))
-      .mockResolvedValue(makeIssuePage([makeIssue(7)]));
-    const { container } = renderToolbar();
-    const button = getIssuesButton(container);
-
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-    // Let the rejection settle through the .catch/.finally chain.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(mockListIssues).toHaveBeenCalledTimes(1);
-
-    // Second hover after rejection should refetch — but the cached freshness
-    // skip would block it if a stale entry got written. Verify no entry
-    // exists, then re-hover.
-    expect(getCache(buildCacheKey("/test/proj", "issue", "open", "created"))).toBeUndefined();
-    pointerLeave(button);
-    pointerEnter(button);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
-    });
-
-    expect(mockListIssues).toHaveBeenCalledTimes(2);
   });
 
   it("treats a cache entry exactly at the freshness boundary (10s old) as stale", async () => {
@@ -496,15 +320,120 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     });
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+      pointerEnter(getIssuesButton(container));
     });
 
     expect(mockListIssues).toHaveBeenCalledTimes(1);
   });
 
-  it("stamps freshBypassAt and the open-count fingerprint on the prefetched entry", async () => {
+  it("does not fire when isTokenError is true", async () => {
+    mockIsTokenError = true;
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+
+    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(refreshStatsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fire when rate limit is active", async () => {
+    mockRateLimitResetAt = Date.now() + 60_000;
+    const { container } = renderToolbar();
+
+    await act(async () => {
+      pointerEnter(getIssuesButton(container));
+    });
+
+    expect(mockListIssues).not.toHaveBeenCalled();
+  });
+
+  it("coalesces concurrent hovers — a re-enter while a prefetch is in flight does not re-fetch", async () => {
+    let resolveFirst: (v: Page<Issue>) => void = () => {};
+    mockListIssues.mockImplementationOnce(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    const { container } = renderToolbar();
+    const button = getIssuesButton(container);
+
+    await act(async () => {
+      pointerEnter(button);
+    });
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+
+    // Re-enter while the first request is still in flight — the in-flight guard
+    // must suppress the duplicate.
+    await act(async () => {
+      pointerEnter(button);
+    });
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+
+    // Settle the first request and flush its chain so no .then/.finally work
+    // drifts past the end of the test.
+    await act(async () => {
+      resolveFirst(makeIssuePage([makeIssue(1)]));
+    });
+    await settle();
+  });
+
+  it("does not prefetch when the dropdown is already open (would duplicate the list's mount fetch)", async () => {
+    // Clicking toggles the open state; the dropdown slot view resolves to null
+    // in this suite, but the toolbar tracks issuesOpen=true.
+    const { container } = renderToolbar();
+    const button = getIssuesButton(container);
+
+    fireEvent.click(button);
+    refreshStatsMock.mockClear();
+    mockListIssues.mockClear();
+
+    await act(async () => {
+      pointerEnter(button);
+    });
+
+    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(refreshStatsMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT force-refresh on click when stats are within the freshness window", () => {
+    // Default mock: lastUpdated is Date.now() so the polled stats are fresh.
+    // Click should rely on the hot cache instead of triggering a full reload.
+    const { container } = renderToolbar();
+    const button = getIssuesButton(container);
+
+    fireEvent.click(button);
+
+    expect(refreshStatsMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the in-flight ref after a rejection so a subsequent hover refetches", async () => {
+    mockListIssues
+      .mockRejectedValueOnce(new Error("network blip"))
+      .mockResolvedValue(makeIssuePage([makeIssue(7)]));
+    const { container } = renderToolbar();
+    const button = getIssuesButton(container);
+
+    await act(async () => {
+      pointerEnter(button);
+    });
+    await settle();
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+
+    // A failed prefetch writes nothing, so the freshness skip can't block the
+    // retry.
+    expect(getCache(buildCacheKey("/test/proj", "issue", "open", "created"))).toBeUndefined();
+
+    await act(async () => {
+      pointerEnter(button);
+    });
+    expect(mockListIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps the open-count fingerprint but NOT freshBypassAt (cache-first prefetch)", async () => {
     mockListIssues.mockResolvedValue({
       items: [makeIssue(11)],
       nextCursor: "c1",
@@ -513,16 +442,13 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     });
     const { container } = renderToolbar();
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150);
+      pointerEnter(getIssuesButton(container));
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
 
     const cached = getCache(buildCacheKey("/test/proj", "issue", "open", "created"));
-    expect(typeof cached?.freshBypassAt).toBe("number");
+    expect(cached?.freshBypassAt).toBeUndefined();
     expect(cached?.countAtWrite).toBe(7);
   });
 
@@ -537,30 +463,26 @@ describe("ForgeStatsToolbarButton hover prefetch", () => {
     const { container } = renderToolbar();
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
 
-    pointerEnter(getIssuesButton(container));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(150); // prefetch request starts
+      pointerEnter(getIssuesButton(container));
     });
     expect(mockListIssues).toHaveBeenCalledTimes(1);
 
     // While the prefetch hangs, a competing path (the dropdown's own bypass
     // revalidate) commits a fresher page.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(20);
-    });
     setCache(cacheKey, {
       items: [makeIssue(99)],
       nextCursor: null,
       hasMore: false,
-      timestamp: Date.now(),
-      freshBypassAt: Date.now(),
+      timestamp: Date.now() + 1,
+      freshBypassAt: Date.now() + 1,
     });
 
     // The slow prefetch finally lands — it must not overwrite the newer entry.
     await act(async () => {
       resolvePrefetch(makeIssuePage([makeIssue(11)]));
-      await vi.advanceTimersByTimeAsync(0);
     });
+    await settle();
 
     const cached = getCache(cacheKey);
     expect(cached?.items.map((i) => i.number)).toEqual([99]);
