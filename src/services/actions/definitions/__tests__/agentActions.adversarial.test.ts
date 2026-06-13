@@ -116,6 +116,44 @@ describe("agentActions adversarial", () => {
     expect(result).toEqual({ terminalId: "term-1", location: "grid" });
   });
 
+  it("agent.launch forwards 'name' to the launch callback", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      prompt: "do the thing",
+      name: "Claude: auth refactor",
+    });
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ name: "Claude: auth refactor" })
+    );
+  });
+
+  it("agent.launch omits 'name' from the callback when not provided", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    const [, options] = callbacks.onLaunchAgent.mock.calls[0] ?? [];
+    expect(options?.name).toBeUndefined();
+  });
+
+  it("agent.launch forwards a whitespace-only 'name' verbatim (downstream decides fallback)", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", name: "   " });
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ name: "   " })
+    );
+  });
+
   it("one agent.<id> action is registered per AGENT_REGISTRY entry", () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);

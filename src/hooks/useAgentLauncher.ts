@@ -103,6 +103,13 @@ export interface LaunchAgentOptions {
    * (#6951, #7651).
    */
   requestedId?: string;
+  /**
+   * Caller-supplied terminal name (e.g. an assistant naming the agent at
+   * spawn time). When non-empty after trimming, it overrides the computed
+   * title and pins it with `titleMode: "custom"` so agent detection can't
+   * rewrite it. Empty/whitespace falls back to the default computed title.
+   */
+  name?: string;
 }
 
 export interface UseAgentLauncherReturn {
@@ -478,6 +485,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         const presetTitle = isAgent && preset ? preset.name : title;
+        // A caller-supplied name overrides the computed title and pins it so
+        // agent detection can't rewrite it. Empty/whitespace is treated as no
+        // name — fall back to the default title with no `titleMode`.
+        const trimmedName = launchOptions?.name?.trim();
+        const customTitle = trimmedName ? { titleMode: "custom" as const } : {};
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
@@ -487,7 +499,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               kind: "terminal",
               launchAgentId: agentId,
               command: command as string,
-              title: presetTitle,
+              title: trimmedName || presetTitle,
+              ...customTitle,
               cwd,
               worktreeId: targetWorktreeId || undefined,
               location: launchOptions?.location,
@@ -505,7 +518,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             }
           : {
               kind: "terminal",
-              title,
+              title: trimmedName || title,
+              ...customTitle,
               cwd,
               worktreeId: targetWorktreeId || undefined,
               command,
@@ -534,7 +548,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               id: gateId,
               kind: "terminal",
               launchAgentId: agentId,
-              title: presetTitle,
+              title: trimmedName || presetTitle,
+              ...customTitle,
               worktreeId: targetWorktreeId || undefined,
               cwd,
               cols: 80,

@@ -67,6 +67,7 @@ export interface ActionCallbacks {
       focusPolicy?: AddPanelFocusPolicy;
       requestedId?: string;
       force?: boolean;
+      name?: string;
     }
   ) => Promise<{ terminalId: string; location: "grid" | "dock" } | null>;
   onInject: (worktreeId: string) => void;
