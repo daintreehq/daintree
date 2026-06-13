@@ -189,10 +189,11 @@ export function AgentButton({
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // Radix Tooltip reopens on focus restoration. When the chevron's
-  // DropdownMenu closes, Radix returns focus to the chevron trigger and the
-  // tooltip would reopen on top of the freshly-launched action's surfaces.
-  // Gate both halves' tooltips on controlled state and hold suppression open
-  // until the next genuine pointer hover. Same pattern as AgentTrayButton.
+  // DropdownMenu or the right-click ContextMenu closes, Radix returns focus to
+  // the trigger and the tooltip would reopen on top of the freshly-launched
+  // action's surfaces. Gate both halves' tooltips on controlled state and hold
+  // suppression open until the next genuine pointer hover. Same pattern as
+  // AgentTrayButton.
   const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
   const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
@@ -395,7 +396,14 @@ export function AgentButton({
 
   if (!hasPresets) {
     return (
-      <ContextMenu>
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (open) {
+            setPrimaryTooltipOpen(false);
+            setChevronTooltipOpen(false);
+          }
+        }}
+      >
         <ContextMenuTrigger asChild>
           {/* Real DOM element as the trigger child: ContextMenuTrigger's
               asChild Slot binds onContextMenu + ref here. Wrapping <Tooltip>
@@ -437,7 +445,19 @@ export function AgentButton({
             </Tooltip>
           </span>
         </ContextMenuTrigger>
-        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        <ContextMenuContent
+          className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+          onPointerDownOutside={() => {
+            wasPointerCloseRef.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            suppressTooltipsDuringFocusRestore();
+            if (wasPointerCloseRef.current) {
+              e.preventDefault();
+              wasPointerCloseRef.current = false;
+            }
+          }}
+        >
           <ContextMenuActionItem
             actionId="agent.launch"
             args={{ agentId: type }}
@@ -483,7 +503,14 @@ export function AgentButton({
   }
 
   return (
-    <ContextMenu>
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) {
+          setPrimaryTooltipOpen(false);
+          setChevronTooltipOpen(false);
+        }
+      }}
+    >
       <ContextMenuTrigger asChild>
         <span className="inline-flex group/agent-split">
           <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
@@ -678,7 +705,19 @@ export function AgentButton({
           </DropdownMenu>
         </span>
       </ContextMenuTrigger>
-      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+      <ContextMenuContent
+        className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+        onPointerDownOutside={() => {
+          wasPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(e) => {
+          suppressTooltipsDuringFocusRestore();
+          if (wasPointerCloseRef.current) {
+            e.preventDefault();
+            wasPointerCloseRef.current = false;
+          }
+        }}
+      >
         <ContextMenuActionItem
           actionId="agent.launch"
           args={{ agentId: type }}
