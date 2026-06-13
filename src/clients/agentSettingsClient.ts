@@ -50,6 +50,11 @@ export const agentSettingsClient = {
     return window.electron.agentSettings.set(agentId, settings).finally(invalidate);
   },
 
+  setGlobal: (value: boolean): Promise<AgentSettings> => {
+    invalidate();
+    return window.electron.agentSettings.setGlobal(value).finally(invalidate);
+  },
+
   reset: (agentType?: string): Promise<AgentSettings> => {
     invalidate();
     return window.electron.agentSettings.reset(agentType).finally(invalidate);

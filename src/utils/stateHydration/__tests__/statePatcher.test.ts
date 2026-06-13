@@ -671,7 +671,9 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { claude: {} } },
+      // dangerousEnabled keeps the effective bypass on, so the persisted flag
+      // survives bypass reconciliation (#10432) and replays verbatim.
+      { agents: { claude: { dangerousEnabled: true } } },
       false,
       undefined
     );
@@ -695,11 +697,13 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { claude: { dangerousEnabled: false } } },
+      { agents: { claude: { dangerousEnabled: true } } },
       false,
       "/tmp/clip"
     );
     // `--...` flags pass through raw; the positional `claude-opus-4-7` is escaped.
+    // dangerousEnabled keeps the effective bypass on, so reconciliation (#10432)
+    // leaves the persisted flag in place.
     expect(result.command).toBe("claude --dangerously-skip-permissions --model 'claude-opus-4-7'");
     expect(generateAgentCommandMock).not.toHaveBeenCalled();
   });
@@ -739,7 +743,7 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { claude: {} } },
+      { agents: { claude: { dangerousEnabled: true } } },
       false,
       undefined
     );
@@ -786,7 +790,7 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { claude: {} } },
+      { agents: { claude: { dangerousEnabled: true } } },
       false,
       undefined
     );
@@ -808,13 +812,110 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { claude: {} } },
+      { agents: { claude: { dangerousEnabled: true } } },
       false,
       undefined
     );
     expect(result.command).toBe("claude --dangerously-skip-permissions");
     expect(buildResumeLatestCommandMock).toHaveBeenCalledOnce();
     expect(generateAgentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("strips a stale bypass flag from persisted flags when the effective setting is off (#10432)", () => {
+    buildResumeCommandMock.mockClear();
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--dangerously-skip-permissions", "--model", "opus"],
+      },
+      "agent",
+      "/p",
+      // Per-agent toggle off and global off → effective bypass false → strip the
+      // stale flag the snapshot carried from a prior dangerous launch.
+      { agents: { claude: { dangerousEnabled: false } } },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", ["--model", "opus"]);
+    expect(result.agentLaunchFlags).toEqual(["--model", "opus"]);
+  });
+
+  it("re-adds the bypass flag for a supported agent when the global override is on (#10432)", () => {
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--model", "opus"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: { dangerousEnabled: false } }, globalSkipPermissions: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", [
+      "--model",
+      "opus",
+      "--dangerously-skip-permissions",
+    ]);
+  });
+
+  it("does not inject a bypass flag for an unsupported agent even when the global override is on (#10432)", () => {
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "gemini",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--model", "flash"],
+      },
+      "agent",
+      "/p",
+      { agents: { gemini: { dangerousEnabled: false } }, globalSkipPermissions: true },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", ["--model", "flash"]);
+  });
+
+  it("injects the bypass flag into an empty snapshot at resume when the global override is on (#10432)", () => {
+    buildResumeCommandMock.mockClear();
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        // Launched before bypass existed — no flags were captured.
+        agentLaunchFlags: [],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: { dangerousEnabled: false } }, globalSkipPermissions: true },
+      false,
+      undefined
+    );
+    // The resume command gets the injected bypass token...
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", [
+      "--dangerously-skip-permissions",
+    ]);
+    // ...but the stored snapshot is not synthesized from nothing.
+    expect(result.agentLaunchFlags).toEqual([]);
   });
 
   it("prefers primary buildResumeCommand over resume-latest when session ID is present", () => {

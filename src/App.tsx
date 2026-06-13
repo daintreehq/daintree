@@ -77,7 +77,12 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
+import {
+  buildResumeCommand,
+  buildResumeLatestCommand,
+  reconcileBypassFlags,
+  resolveEffectiveBypass,
+} from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
@@ -93,6 +98,31 @@ const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor"
 const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
 const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
 const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
+
+// Reconciles a resumed session's persisted launch flags against the current
+// global skip-permissions setting (#10432, the "resume trap"): the snapshot may
+// have been captured while the global switch was in a different state, so strip
+// the agent's canonical bypass flag and re-add it only if it currently resolves.
+function reconcileResumeLaunchFlags(session: {
+  agentId: string;
+  agentLaunchFlags?: string[];
+}): string[] | undefined {
+  const settings = useAgentSettingsStore.getState().settings;
+  const entry = settings?.agents?.[session.agentId] ?? {};
+  const effectiveBypass = resolveEffectiveBypass(
+    entry,
+    session.agentId,
+    settings?.globalSkipPermissions
+  );
+  // Pass [] when no flags were captured so global-on still injects the bypass
+  // token for a supported agent (reconcileBypassFlags no-ops for others).
+  return reconcileBypassFlags(
+    session.agentLaunchFlags ?? [],
+    session.agentId,
+    effectiveBypass,
+    entry.dangerousArgs as string | undefined
+  );
+}
 
 // Direct file import (not the Project barrel) so the lazy chunk doesn't pull
 // in barrel siblings. Renders only when no project is open, so it stays off
@@ -349,6 +379,7 @@ import { useMcpConfirmStore } from "./store/mcpConfirmStore";
 import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
+import { useAgentSettingsStore } from "./store/agentSettingsStore";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
 // Must stay static — a deferred/idle import races the user, so getBuiltinView
@@ -1121,12 +1152,10 @@ function AppInner() {
                       if (result.resumeSession) {
                         const session = result.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
+                        const resumeFlags = reconcileResumeLaunchFlags(session);
                         const command =
-                          buildResumeCommand(
-                            session.agentId,
-                            session.sessionId,
-                            session.agentLaunchFlags
-                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
+                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
+                          buildResumeLatestCommand(session.agentId, resumeFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",
@@ -1159,12 +1188,10 @@ function AppInner() {
                       if (selected.resumeSession) {
                         const session = selected.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
+                        const resumeFlags = reconcileResumeLaunchFlags(session);
                         const command =
-                          buildResumeCommand(
-                            session.agentId,
-                            session.sessionId,
-                            session.agentLaunchFlags
-                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
+                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
+                          buildResumeLatestCommand(session.agentId, resumeFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",

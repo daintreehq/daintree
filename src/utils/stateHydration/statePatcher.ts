@@ -11,6 +11,8 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  reconcileBypassFlags,
+  resolveEffectiveBypass,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { isAbsolute } from "@shared/utils/path";
@@ -160,6 +162,7 @@ interface ReconnectedTerminalData {
 
 interface AgentSettingsData {
   agents?: Record<string, Record<string, unknown>>;
+  globalSkipPermissions?: boolean;
 }
 
 export function inferAgentIdFromTitle(
@@ -394,6 +397,9 @@ export function buildArgsForRespawn(
   let sessionLostOnRestore = false;
   let presetEnv: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
+  // Bypass-reconciled launch flags (#10432); falls back to the raw saved flags
+  // for non-agent panels that never enter the reconciliation branch below.
+  let reconciledLaunchFlags: string[] | undefined;
   const savedPresetIdForRespawn = readPresetId(saved);
   const savedPresetColorForRespawn = readPresetColor(saved);
   let presetWasStale = false;
@@ -413,10 +419,34 @@ export function buildArgsForRespawn(
     });
     preset = runtimeSettings.preset;
     presetWasStale = !!savedPresetIdForRespawn && runtimeSettings.presetWasStale;
-    const persistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
-    const hasPersistedFlags = Boolean(persistedFlags && persistedFlags.length > 0);
     const effectiveEntry = runtimeSettings.effectiveEntry;
     presetEnv = runtimeSettings.env;
+
+    // Reconcile the persisted bypass flag against the current effective setting
+    // (#10432, the "resume trap"): a snapshot captured while the global
+    // skip-permissions switch was on must not carry the bypass flag forward
+    // once it's toggled off, and vice-versa. Strip-and-re-add against the
+    // current resolution so every restart/restore replays clean flags.
+    const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
+    const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
+    const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
+    const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
+    const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
+    // Reconcile only the flags actually captured: this drives the stored
+    // snapshot and the from-flags rebuild, so it must NOT synthesize a flag set
+    // out of nothing (that would mask the fresh-launch fallback).
+    const persistedFlags = hasPersistedFlags
+      ? reconcileBypassFlags(rawPersistedFlags as string[], agentId, effectiveBypass, dangerousArgs)
+      : rawPersistedFlags;
+    reconciledLaunchFlags = persistedFlags;
+    // Resume commands prepend launch flags, so the bypass token must be injected
+    // even when no flags were captured — a session launched before bypass
+    // existed should honour global-on (#10432). Only diverges from persistedFlags
+    // in that inject-from-empty case.
+    const resumeFlags =
+      effectiveBypass && !hasPersistedFlags
+        ? reconcileBypassFlags([], agentId, effectiveBypass, dangerousArgs)
+        : persistedFlags;
 
     const buildFromPersistedFlags = () =>
       buildLaunchCommandFromFlags(baseCommand, agentId, persistedFlags as string[], {
@@ -425,7 +455,7 @@ export function buildArgsForRespawn(
       });
 
     if (saved.agentSessionId) {
-      const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId, persistedFlags);
+      const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
       if (resumeCmd) {
         command = resumeCmd;
       } else if (hasPersistedFlags) {
@@ -436,6 +466,7 @@ export function buildArgsForRespawn(
           clipboardDirectory,
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
+          globalSkipPermissions,
         });
         sessionLostOnRestore = true;
       }
@@ -443,7 +474,7 @@ export function buildArgsForRespawn(
       // No session ID was captured (graceful-shutdown pattern match missed or
       // timed out). Try the agent's resume-latest fallback before falling
       // through to a fresh launch so the user keeps their prior conversation.
-      const resumeLatestCmd = buildResumeLatestCommand(agentId, persistedFlags);
+      const resumeLatestCmd = buildResumeLatestCommand(agentId, resumeFlags);
       if (resumeLatestCmd) {
         command = resumeLatestCmd;
       } else if (hasPersistedFlags) {
@@ -454,6 +485,7 @@ export function buildArgsForRespawn(
           clipboardDirectory,
           modelId: saved.agentModelId,
           presetArgs: preset?.args?.join(" "),
+          globalSkipPermissions,
         });
         sessionLostOnRestore = true;
       }
@@ -497,7 +529,9 @@ export function buildArgsForRespawn(
     browserZoom: isDevPreview ? saved.browserZoom : undefined,
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
-    agentLaunchFlags: presetWasStale ? undefined : saved.agentLaunchFlags,
+    agentLaunchFlags: presetWasStale
+      ? undefined
+      : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,

@@ -82,10 +82,11 @@ export function buildAgentLaunchFlagsForRuntimeSettings(
   entry: AgentSettingsEntry,
   agentId: string,
   preset: AgentPreset | undefined,
-  options?: { modelId?: string }
+  options?: { modelId?: string; globalSkipPermissions?: boolean }
 ): string[] {
   return buildAgentLaunchFlags(entry, agentId, {
     modelId: options?.modelId,
     presetArgs: preset?.args,
+    globalSkipPermissions: options?.globalSkipPermissions,
   });
 }

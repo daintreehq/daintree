@@ -690,6 +690,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentSettings: {
     get(): Promise<AgentSettings>;
     set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
+    /**
+     * Set the global skip-permissions override (#10432). Persisted as a
+     * dot-path leaf so per-agent records aren't rewritten with defaults.
+     */
+    setGlobal(value: boolean): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
     /**
      * Mark the persisted store with the given schema version. Only called by

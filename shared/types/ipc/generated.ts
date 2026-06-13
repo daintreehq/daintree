@@ -40,6 +40,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
   };
+  "agent-settings:set-global": {
+    args: [value: boolean];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };

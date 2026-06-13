@@ -6,6 +6,7 @@ let agentSettingsClient: typeof import("../agentSettingsClient").agentSettingsCl
 
 let getMock: ReturnType<typeof vi.fn>;
 let setMock: ReturnType<typeof vi.fn>;
+let setGlobalMock: ReturnType<typeof vi.fn>;
 let resetMock: ReturnType<typeof vi.fn>;
 let stampVersionMock: ReturnType<typeof vi.fn>;
 
@@ -15,6 +16,7 @@ describe("agentSettingsClient", () => {
 
     getMock = vi.fn();
     setMock = vi.fn().mockResolvedValue({});
+    setGlobalMock = vi.fn().mockResolvedValue({});
     resetMock = vi.fn().mockResolvedValue({});
     stampVersionMock = vi.fn().mockResolvedValue({});
 
@@ -23,6 +25,7 @@ describe("agentSettingsClient", () => {
         agentSettings: {
           get: getMock,
           set: setMock,
+          setGlobal: setGlobalMock,
           reset: resetMock,
           stampVersion: stampVersionMock,
         },
@@ -125,6 +128,26 @@ describe("agentSettingsClient", () => {
 
     resolve({ claude: {} });
     await expect(fresh).resolves.toEqual({ claude: { pinned: true } });
+  });
+
+  it("setGlobal() forwards the value and clears the inflight get() so post-write reads start fresh (#10432)", async () => {
+    let resolve!: (v: unknown) => void;
+    const deferred = new Promise((r) => {
+      resolve = r;
+    });
+    getMock.mockReturnValueOnce(deferred);
+
+    const stale = agentSettingsClient.get();
+    void agentSettingsClient.setGlobal(true);
+    expect(setGlobalMock).toHaveBeenCalledWith(true);
+
+    getMock.mockResolvedValue({ globalSkipPermissions: true });
+    const fresh = agentSettingsClient.get();
+    expect(fresh).not.toBe(stale);
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    resolve({});
+    await expect(fresh).resolves.toEqual({ globalSkipPermissions: true });
   });
 
   it("reset() and stampVersion() also clear the inflight get()", async () => {
