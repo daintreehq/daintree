@@ -36,9 +36,18 @@ interface AgentCliStepProps {
   availability: CliAvailability;
   selections: Record<string, boolean>;
   onInstallComplete?: () => void;
+  // During first-run, the dedicated permissions step owns the global trust
+  // decision, so the per-agent dangerous toggles here are suppressed to avoid
+  // a competing control.
+  isFirstRun?: boolean;
 }
 
-export function AgentCliStep({ availability, selections, onInstallComplete }: AgentCliStepProps) {
+export function AgentCliStep({
+  availability,
+  selections,
+  onInstallComplete,
+  isFirstRun = false,
+}: AgentCliStepProps) {
   const [cardStatuses, setCardStatuses] = useState<Record<string, CardStatus>>({});
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
   const [expandedErrors, setExpandedErrors] = useState<Record<string, boolean>>({});
@@ -403,7 +412,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
         </button>
       )}
 
-      {agentsWithDangerousToggle.length > 0 && (
+      {!isFirstRun && agentsWithDangerousToggle.length > 0 && (
         <div className="border-t border-daintree-border pt-3 space-y-2">
           <div className="text-xs font-medium text-daintree-text/60">Skip permissions</div>
           <div className="space-y-1.5">

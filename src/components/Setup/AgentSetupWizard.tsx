@@ -228,6 +228,7 @@ export type WizardStep =
   | { type: "agents" }
   | { type: "privacy" }
   | { type: "cli" }
+  | { type: "permissions" }
   | { type: "complete" };
 
 export interface WizardState {
@@ -244,21 +245,23 @@ export type WizardAction =
   | { type: "AGENTS_CONTINUE" }
   | { type: "PRIVACY_CONTINUE" }
   | { type: "CLI_CONTINUE" }
+  | { type: "PERMISSIONS_CONTINUE" }
   | { type: "BACK" }
   | { type: "SET_AVAILABILITY"; payload: CliAvailability }
   | { type: "INIT_SELECTIONS"; payload: Record<string, boolean> }
   | { type: "TOGGLE_SELECTION"; agentId: string; checked: boolean }
   | { type: "RESET"; availability: CliAvailability; isFirstRun: boolean };
 
-// First-run walks every step (appearance → agents → privacy → cli → complete);
-// re-runs from Settings start at `agents` and skip the first-run-only consent
-// steps. The `cli` step is conditionally skipped when all selected agents are
-// already installed, but the dot count reflects the maximum flow length —
-// mirroring the pre-split behavior where the skippable `cli` step still
-// counted toward the total.
+// First-run walks every step (appearance → agents → privacy → cli →
+// permissions → complete); re-runs from Settings start at `agents` and skip the
+// first-run-only consent steps (privacy, permissions — returning users already
+// have those toggles in Settings). The `cli` step is conditionally skipped when
+// all selected agents are already installed, but the dot count reflects the
+// maximum flow length — mirroring the pre-split behavior where the skippable
+// `cli` step still counted toward the total.
 export function flowSteps(isFirstRun: boolean): WizardStep["type"][] {
   return isFirstRun
-    ? ["appearance", "agents", "privacy", "cli", "complete"]
+    ? ["appearance", "agents", "privacy", "cli", "permissions", "complete"]
     : ["agents", "cli", "complete"];
 }
 
@@ -274,12 +277,17 @@ export function buildInitialState(availability: CliAvailability, isFirstRun = fa
 }
 
 // The cli step is skipped when every selected agent is already launchable —
-// there is nothing left to install, so jump straight to the summary.
+// there is nothing left to install. First-run users must still pass through the
+// global permissions consent gate before the summary even when cli is skipped;
+// returning users go straight to complete.
 function resolvePostInstallStep(state: WizardState): WizardStep {
   const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
   const allSelectedInstalled =
     selectedIds.length > 0 && selectedIds.every((id) => isAgentLaunchable(state.availability[id]));
-  return allSelectedInstalled ? { type: "complete" } : { type: "cli" };
+  if (allSelectedInstalled) {
+    return state.isFirstRun ? { type: "permissions" } : { type: "complete" };
+  }
+  return { type: "cli" };
 }
 
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
@@ -308,6 +316,16 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       };
 
     case "CLI_CONTINUE":
+      // First-run users get the global skip-permissions consent step before the
+      // summary; re-runs branch straight to complete (the toggle lives in
+      // Settings for returning users).
+      return {
+        ...state,
+        step: state.isFirstRun ? { type: "permissions" } : { type: "complete" },
+        history: [...state.history, state.step],
+      };
+
+    case "PERMISSIONS_CONTINUE":
       return {
         ...state,
         step: { type: "complete" },
@@ -375,7 +393,7 @@ export function AgentSetupWizard({
   const [hasFatalHealthFailure, setHasFatalHealthFailure] = useState(false);
   const [isHealthChecking, setIsHealthChecking] = useState(true);
 
-  const { setAgentPinned } = useAgentSettingsStore();
+  const { setAgentPinned, setGlobalSkipPermissions } = useAgentSettingsStore();
   const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -384,6 +402,10 @@ export function AgentSetupWizard({
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const setSelectedSchemeIdSilent = useAppThemeStore((s) => s.setSelectedSchemeIdSilent);
   const hasAutoSelected = useRef(false);
+
+  // Global skip-permissions state (first-run only). Default off — silence is not
+  // consent. Committed via setGlobalSkipPermissions only on Continue.
+  const [permissionsEnabled, setPermissionsEnabled] = useState(false);
 
   // Telemetry state (first-run only)
   const [telemetryEnabled, setTelemetryEnabled] = useState(false);
@@ -417,6 +439,7 @@ export function AgentSetupWizard({
       telemetryCommittedRef.current = false;
       telemetryToggleTouchedRef.current = false;
       setTelemetryEnabled(false);
+      setPermissionsEnabled(false);
       void useAgentSettingsStore.getState().initialize();
       directionRef.current = 1;
     }
@@ -565,6 +588,33 @@ export function AgentSetupWizard({
     dispatch({ type: "CLI_CONTINUE" });
   }, []);
 
+  const handlePermissionsContinue = useCallback(async () => {
+    directionRef.current = 1;
+    setIsSaving(true);
+    try {
+      // Always persist the explicit choice (on or off) so a pre-existing `true`
+      // from an interrupted prior run can't override the default-off decision —
+      // mirrors how telemetry commits even for the off state. Forward-fail: only
+      // advance once the write resolves; on failure the store rolls back and
+      // re-throws, so stay on the step for retry.
+      await setGlobalSkipPermissions(permissionsEnabled);
+      dispatch({ type: "PERMISSIONS_CONTINUE" });
+    } catch {
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Skip-permissions wasn't saved. Try again.",
+        // Explicit high priority so the failure surfaces a toast (the
+        // permissions step itself is the retry surface, so no action button).
+        priority: "high",
+        context: { eventKind: "settings" },
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [permissionsEnabled, setGlobalSkipPermissions]);
+
   const handleBack = useCallback(() => {
     directionRef.current = -1;
     dispatch({ type: "BACK" });
@@ -674,6 +724,7 @@ export function AgentSetupWizard({
                 <AgentCliStep
                   availability={state.availability}
                   selections={state.selections}
+                  isFirstRun={isFirstRun}
                   onInstallComplete={() => {
                     void cliAvailabilityClient.refresh().then((result) => {
                       if (isOpenRef.current) {
@@ -681,6 +732,12 @@ export function AgentSetupWizard({
                       }
                     });
                   }}
+                />
+              )}
+              {state.step.type === "permissions" && (
+                <PermissionsStep
+                  permissionsEnabled={permissionsEnabled}
+                  onPermissionsChange={setPermissionsEnabled}
                 />
               )}
               {state.step.type === "complete" && (
@@ -767,6 +824,12 @@ export function AgentSetupWizard({
               <Button onClick={handleCliContinue}>
                 Continue
                 <ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            )}
+            {state.step.type === "permissions" && (
+              <Button onClick={handlePermissionsContinue} disabled={isSaving}>
+                Continue
+                <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             )}
             {state.step.type === "complete" && <Button onClick={handleFinish}>Finish setup</Button>}
@@ -1001,6 +1064,60 @@ function PrivacyStep({
         >
           Preview what would be sent
         </button>
+      </div>
+    </section>
+  );
+}
+
+// --- Permissions step (first-run global skip-permissions consent) ---
+
+function PermissionsStep({
+  permissionsEnabled,
+  onPermissionsChange,
+}: {
+  permissionsEnabled?: boolean;
+  onPermissionsChange: (enabled: boolean) => void;
+}) {
+  const labelId = useId();
+  const descriptionId = useId();
+
+  return (
+    <section>
+      <h3 className="text-base font-semibold text-daintree-text mb-2">Agent permissions</h3>
+      <p className="text-sm text-daintree-text/60 mb-4">
+        Keep prompts on unless you trust agents to run commands and edit files without asking
+      </p>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <p id={labelId} className="text-sm font-medium text-daintree-text">
+            Skip permission prompts for agents
+          </p>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={permissionsEnabled}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            onClick={() => onPermissionsChange(!permissionsEnabled)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+              permissionsEnabled ? "bg-daintree-accent" : "bg-daintree-border"
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
+                permissionsEnabled
+                  ? "translate-x-4 ml-0.5 bg-text-inverse"
+                  : "translate-x-0 ml-0.5 bg-daintree-text"
+              )}
+            />
+          </button>
+        </div>
+        <p id={descriptionId} className="text-xs text-daintree-text/50">
+          Agents act without confirmation — faster, but they run commands and edit files on their
+          own. You can change this anytime in Settings → Agents.
+        </p>
       </div>
     </section>
   );
