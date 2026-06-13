@@ -90,18 +90,22 @@ vi.mock("@/config/agents", () => ({
   sanitizeAgentEnv: (env: Record<string, string> | undefined) => env,
 }));
 
-vi.mock("@shared/types", () => ({
-  generateAgentCommand: vi.fn().mockReturnValue("claude"),
-  buildAgentLaunchFlags: (...args: unknown[]) => buildAgentLaunchFlagsMock(...args),
-  buildResumeCommand: vi.fn().mockReturnValue(null),
-  buildResumeLatestCommand: vi.fn().mockReturnValue(null),
-  buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude --flag"),
-  // Identity reconcile keeps persisted flags verbatim so these dispatch-path
-  // tests stay focused on restart wiring rather than bypass reconciliation
-  // (#10432, covered by agentSettings.test.ts and statePatcher.test.ts).
-  reconcileBypassFlags: (flags: readonly string[]) => [...flags],
-  resolveEffectiveBypass: () => false,
-}));
+vi.mock("@shared/types", async () => {
+  const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+  return {
+    ...actual,
+    generateAgentCommand: vi.fn().mockReturnValue("claude"),
+    buildAgentLaunchFlags: (...args: unknown[]) => buildAgentLaunchFlagsMock(...args),
+    buildResumeCommand: vi.fn().mockReturnValue(null),
+    buildResumeLatestCommand: vi.fn().mockReturnValue(null),
+    buildLaunchCommandFromFlags: vi.fn().mockReturnValue("claude --flag"),
+    // Identity reconcile keeps persisted flags verbatim so these dispatch-path
+    // tests stay focused on restart wiring rather than bypass reconciliation
+    // (#10432, covered by agentSettings.test.ts and statePatcher.test.ts).
+    reconcileBypassFlags: (flags: readonly string[]) => [...flags],
+    resolveEffectiveBypass: () => false,
+  };
+});
 
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: {

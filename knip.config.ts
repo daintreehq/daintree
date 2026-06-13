@@ -141,6 +141,11 @@ const config: KnipConfig = {
     // Invoked by scripts/postinstall.cjs through node_modules/patch-package/index.js
     // so Knip does not see a package import or binary invocation.
     "patch-package",
+    // scripts/ci/electron-builder-config.test.mjs reads the installed
+    // electron-builder schema from node_modules/app-builder-lib/scheme.json.
+    // electron-builder owns that transitive package; the test must validate
+    // against the exact bundled schema rather than a separately declared copy.
+    "app-builder-lib",
     "@octokit/request-error",
     "@octokit/types",
     // CJS-only runtime dependencies loaded through createRequire so the ESM

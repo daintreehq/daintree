@@ -14,6 +14,7 @@
  */
 
 import { test, expect, type Locator } from "@playwright/test";
+import { execSync } from "child_process";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -36,28 +37,35 @@ const MAX_LONG_TASKS = process.platform === "darwin" ? 25 : process.platform ===
 const clickReviewHubSetupButton = async (locator: Locator) => {
   await expect(locator).toBeVisible({ timeout: T_LONG });
   await expect(locator).toBeEnabled({ timeout: T_LONG });
-  await locator.click({ force: true, timeout: T_LONG });
-};
-
-const waitForReviewHubUnstagedSetup = async (hub: Locator) => {
-  const noStagedFiles = hub.locator(SEL.reviewHub.noStagedFiles);
-  await expect
-    .poll(
-      async () => {
-        return await noStagedFiles.isVisible().catch(() => false);
-      },
-      {
-        timeout: T_LONG,
-        intervals: [250, 500, 1_000],
-      }
-    )
-    .toBe(true);
-  await expect(noStagedFiles).toBeVisible({ timeout: T_SHORT });
+  await locator.evaluate(
+    (element) => {
+      (element as HTMLElement).click();
+    },
+    undefined,
+    { timeout: 120_000 }
+  );
 };
 
 let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
+
+const resetFixtureIndexToUnstaged = async () => {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      execSync("git reset --mixed HEAD -- .", { cwd: fixtureDir, stdio: "pipe" });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to reset fixture index to unstaged state");
+};
 
 test.describe.serial("Core: List Mount Perf Budget", () => {
   test.beforeAll(async () => {
@@ -85,10 +93,10 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
     // PR #7890 collapsed the file list by default and auto-stages all unstaged
     // files when the hub is launched from a worktree card. To preserve the
     // original "mount the unstaged list" measurement, we run a setup phase
-    // (open hub, expand list, unstage all, settle) BEFORE installing the
-    // observer or snapshotting the baseline DOM. The actual measurement then
-    // collapses the list and times the toggle-back-to-expanded path — this is
-    // the closest analogue to the pre-#7890 first-mount cost.
+    // (open hub, reset the git index, settle) BEFORE installing the observer or
+    // snapshotting the baseline DOM. The actual measurement then times the
+    // toggle-to-expanded path — this is the closest analogue to the pre-#7890
+    // first-mount cost.
     await test.step("Open ReviewHub, unstage, and let the list settle", async () => {
       const reviewBtn = window.locator(SEL.worktree.reviewHubButton);
       await reviewBtn.first().click();
@@ -99,23 +107,20 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
 
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
       await expect(fileListToggle).toBeVisible({ timeout: T_LONG });
-      if ((await fileListToggle.getAttribute("aria-expanded")) !== "true") {
+      await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", {
+        timeout: T_MEDIUM,
+      });
+
+      await window.waitForTimeout(T_SETTLE);
+      await resetFixtureIndexToUnstaged();
+
+      // Ensure the measurement starts from a collapsed list.
+      if ((await fileListToggle.getAttribute("aria-expanded")) === "true") {
         await clickReviewHubSetupButton(fileListToggle);
-        await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", {
+        await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", {
           timeout: T_MEDIUM,
         });
       }
-
-      await expect(hub.locator(SEL.reviewHub.unstageAllButton)).toBeVisible({ timeout: T_LONG });
-      await clickReviewHubSetupButton(hub.locator(SEL.reviewHub.unstageAllButton));
-      await waitForReviewHubUnstagedSetup(hub);
-      await expect(hub.locator(SEL.reviewHub.noUnstagedChanges)).not.toBeVisible({
-        timeout: T_SHORT,
-      });
-
-      // Collapse before the measurement so the next expand is a fresh mount.
-      await clickReviewHubSetupButton(fileListToggle);
-      await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", { timeout: T_MEDIUM });
       await window.waitForTimeout(T_SETTLE);
     });
 

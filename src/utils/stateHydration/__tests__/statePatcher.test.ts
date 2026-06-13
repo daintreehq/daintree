@@ -973,7 +973,7 @@ describe("buildArgsForRespawn", () => {
       },
       "agent",
       "/p",
-      { agents: { gemini: {} } },
+      { agents: { gemini: { dangerousMode: "on" } } },
       false,
       "/tmp/daintree-clipboard"
     );
