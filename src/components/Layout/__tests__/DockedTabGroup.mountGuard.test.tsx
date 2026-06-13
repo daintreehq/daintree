@@ -653,6 +653,37 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
     );
   });
 
+  it("cancels the previous tab's pending VISIBLE RAF when switching before it fires (#10442)", () => {
+    // Switching tabs faster than a frame: the old panel's VISIBLE upgrade is
+    // still queued. The effect cleanup must cancel it so the now-inactive panel
+    // never reaches VISIBLE, while it is still downgraded to BACKGROUND.
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-1"));
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    const { rerender } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+    // Do NOT flush — t-1's VISIBLE RAF is still pending.
+    expect(rafCallbacks.length).toBe(1);
+
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    act(() => {
+      rerender(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+    });
+
+    act(() => {
+      flushRaf();
+    });
+
+    const calls = vi.mocked(terminalInstanceService.applyRendererPolicy).mock.calls;
+    // t-1 was downgraded but never reached VISIBLE (its RAF was cancelled).
+    expect(calls).toContainEqual(["t-1", TerminalRefreshTier.BACKGROUND]);
+    expect(calls).not.toContainEqual(["t-1", TerminalRefreshTier.VISIBLE]);
+    expect(calls).toContainEqual(["t-2", TerminalRefreshTier.VISIBLE]);
+  });
+
   it("double-clicking the chip moves the active panel to the grid and closes the dock", () => {
     mockActiveDockTerminalId = "t-1";
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
