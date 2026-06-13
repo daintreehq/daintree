@@ -2,11 +2,16 @@
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
-import { DEFAULT_AGENT_SETTINGS, type UserAgentConfig } from "../../../shared/types/index.js";
+import {
+  DEFAULT_AGENT_SETTINGS,
+  type AgentSettings,
+  type UserAgentConfig,
+} from "../../../shared/types/index.js";
 import { AgentHelpService } from "../../services/AgentHelpService.js";
 import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
 import { broadcastToRenderer, typedHandle } from "../utils.js";
+import { defineIpcNamespace, op } from "../define.js";
 import { createApplicationMenu } from "../../menu.js";
 
 const RESERVED_AGENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -106,25 +111,34 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   };
   handlers.push(typedHandle(CHANNELS.AGENT_SETTINGS_SET, handleAgentSettingsSet));
 
-  // Sets the global skip-permissions override (#10432). Written via dot-path
+  // Sets the global skip-permissions override (#10432). Registered via
+  // defineIpcNamespace so its IpcInvokeMap entry is codegen-generated rather
+  // than hand-written (the hand-written map is ratcheted). Written via dot-path
   // leaf so the rest of the agentSettings slice (per-agent records, version)
-  // isn't rewritten with first-launch defaults (#6106). A bare boolean payload
-  // matches the stampVersion convention.
-  const handleAgentSettingsSetGlobal = async (value: unknown) => {
-    if (typeof value !== "boolean") {
-      throw new Error("Invalid globalSkipPermissions");
-    }
-    const currentSettings = normalizeAgentSettings(
-      store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
-    );
-    store.set("agentSettings.globalSkipPermissions", value);
-    return {
-      ...currentSettings.root,
-      globalSkipPermissions: value,
-      agents: currentSettings.agents,
-    };
-  };
-  handlers.push(typedHandle(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, handleAgentSettingsSetGlobal));
+  // isn't rewritten with first-launch defaults (#6106).
+  const agentSettingsGlobalNamespace = defineIpcNamespace({
+    name: "agentSettingsGlobal",
+    ops: {
+      setGlobal: op(
+        CHANNELS.AGENT_SETTINGS_SET_GLOBAL,
+        async (value: boolean): Promise<AgentSettings> => {
+          if (typeof value !== "boolean") {
+            throw new Error("Invalid globalSkipPermissions");
+          }
+          const currentSettings = normalizeAgentSettings(
+            store.get("agentSettings", DEFAULT_AGENT_SETTINGS)
+          );
+          store.set("agentSettings.globalSkipPermissions", value);
+          return {
+            ...currentSettings.root,
+            globalSkipPermissions: value,
+            agents: currentSettings.agents,
+          } as AgentSettings;
+        }
+      ),
+    },
+  });
+  handlers.push(agentSettingsGlobalNamespace.register());
 
   // Stamps `settingsVersion` on the persisted store. The renderer migration
   // (see migrateAgentSettings in agentSettingsStore.ts, #7673) calls this only
