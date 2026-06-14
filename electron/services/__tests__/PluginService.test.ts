@@ -5926,7 +5926,7 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("warns and skips a sidebar-location view entry until the sidebar host ships", async () => {
+  it("rejects the whole manifest when a view targets the unimplemented sidebar location (#10464)", async () => {
     await writePlugin("sidebar", {
       name: "acme.sidebar",
       version: "1.0.0",
@@ -5947,14 +5947,14 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Plugin "acme.sidebar": experimental_views entry "main" has location "sidebar" which is not yet implemented'
-      )
+    // `location: "sidebar"` fails ViewContributionSchema at parse time, so the
+    // manifest is invalid and the plugin never loads — no panel kind, no
+    // sibling registration, surfaced as a manifest error rather than a warning.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in sidebar"),
+      expect.anything()
     );
   });
 
@@ -5990,7 +5990,7 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("rejects an unsafe experimental_views componentPath", async () => {
+  it("rejects the whole manifest when a view declares a traversal componentPath (#10464)", async () => {
     await writePlugin("unsafe", {
       name: "acme.unsafe",
       version: "1.0.0",
@@ -6011,16 +6011,17 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    // An unsafe componentPath fails ViewContributionSchema's refine at parse
+    // time, so the manifest is invalid and the plugin never loads.
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in unsafe"),
+      expect.anything()
     );
   });
 
-  it("rejects an absolute https componentPath as unsafe", async () => {
+  it("rejects the whole manifest when a view declares an https componentPath (#10464)", async () => {
     await writePlugin("https", {
       name: "acme.https",
       version: "1.0.0",
@@ -6041,12 +6042,11 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      componentPath?: string;
-    };
-    expect(panelCall.componentPath).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views entry "main" has an unsafe componentPath')
+    expect(service.listPlugins()).toHaveLength(0);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid manifest in https"),
+      expect.anything()
     );
   });
 
@@ -6220,7 +6220,7 @@ describe("reserved contribution point warnings", () => {
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
         experimental_views: [
-          { id: "main", name: "Main", componentPath: "./v.js", location: "sidebar" },
+          { id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" },
         ],
         experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
@@ -6231,30 +6231,23 @@ describe("reserved contribution point warnings", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'experimental_views entry "main" has location "sidebar" which is not yet implemented'
-      )
-    );
     // experimental_mcpServers is registered (no warning) but, under lazy
     // discovery (#9235), is NOT spawned at activation.
     expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
     expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
   });
 
-  it("logs one warning per orphan or unsupported view entry", async () => {
+  it("logs one warning per orphan view entry", async () => {
     await writePlugin("many", {
       name: "acme.many",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        // `a` matches a panel and binds; `b` is a sidebar view; `c` is an
-        // orphan with no matching panel id. Each non-binding entry should log
-        // exactly one warning naming the entry id.
+        // `a` matches a panel and binds; `c` is an orphan with no matching
+        // panel id. The orphan should log exactly one warning naming its id.
         panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
         experimental_views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
-          { id: "b", name: "B", componentPath: "./b.js", location: "sidebar" },
           { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
         ],
       },
@@ -6263,13 +6256,9 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const sidebarWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes('"b" has location "sidebar"')
-    );
     const orphanWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
       String(call[0]).includes('"c" has no matching contributes.panels')
     );
-    expect(sidebarWarnings).toHaveLength(1);
     expect(orphanWarnings).toHaveLength(1);
   });
 
