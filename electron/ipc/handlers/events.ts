@@ -59,7 +59,6 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:actions-changed": "external",
   "plugin:panel-kinds-changed": "external",
   "plugin:toolbar-buttons-changed": "external",
-  "plugin:menu-items-changed": "external",
   "plugin:keybindings-changed": "external",
   "plugin:context-menu-items-changed": "external",
   "plugin:agents-changed": "external",

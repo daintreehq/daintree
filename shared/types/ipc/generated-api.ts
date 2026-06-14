@@ -413,9 +413,6 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;
-    menuItems(
-      ...args: IpcInvokeMap["plugin:menu-items"]["args"]
-    ): Promise<IpcInvokeMap["plugin:menu-items"]["result"]>;
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;

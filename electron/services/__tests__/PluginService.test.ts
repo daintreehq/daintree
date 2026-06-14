@@ -5296,50 +5296,6 @@ describe("Plugin panel kind registry broadcast", () => {
   });
 });
 
-describe("Plugin menu items broadcast", () => {
-  it("coalesces load + unload in the same tick into a single broadcast with complete=true", async () => {
-    // Schedule a non-complete (load) broadcast followed by a complete (unload)
-    // broadcast in the same synchronous tick. The OR-accumulation invariant
-    // means the single coalesced broadcast must carry complete=true so the
-    // renderer treats it as authoritative.
-    const service = new PluginService();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).broadcaster.scheduleMenuItemsBroadcast(false);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
-      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
-    );
-    expect(menuItemsBroadcasts).toHaveLength(1);
-    expect(
-      (menuItemsBroadcasts[0]?.[1] as { payload: { complete: boolean } }).payload.complete
-    ).toBe(true);
-
-    service.dispose();
-  });
-
-  it("dispose() drops a menu items broadcast scheduled before disposal", async () => {
-    const service = new PluginService();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (service as any).broadcaster.scheduleMenuItemsBroadcast(true);
-    service.dispose();
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const menuItemsBroadcasts = broadcastToRendererMock.mock.calls.filter(
-      (call) => (call[1] as { name?: unknown })?.name === "plugin:menu-items-changed"
-    );
-    expect(menuItemsBroadcasts).toHaveLength(0);
-  });
-});
-
 describe("Plugin context-menu items broadcast", () => {
   it("coalesces load + unload in the same tick into a single broadcast with complete=true", async () => {
     const service = new PluginService();
@@ -7578,7 +7534,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, context-menu items, and agents to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, and agents to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -7586,7 +7542,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(6);
     // Every replay goes through the EVENTS_PUSH channel — the same channel the
     // renderer hooks' persistent push listeners consume, so no renderer-side
     // changes are needed for the cold-restore path.
@@ -7597,10 +7553,12 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:actions-changed");
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
-    expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
+    // The renderer menu-items channel was removed (#10465) — guard against the
+    // cold-restore replay accidentally re-emitting it.
+    expect(names).not.toContain("plugin:menu-items-changed");
     // The keybindings replay is a full authoritative snapshot — the renderer
     // hook full-replaces its plugin bindings on every push, so `complete: true`
     // is consistent with that replace-all semantics.
@@ -7610,17 +7568,13 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect((keybindingsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
       true
     );
-    // Toolbar, menu-item, and context-menu-item replays must use `complete: false`
+    // Toolbar and context-menu-item replays must use `complete: false`
     // so the renderer does not run a stale-prune sweep — replay is a load-style
     // snapshot, not an unload-driven authoritative sweep.
     const toolbarCall = send.mock.calls.find(
       (c) => (c[1] as { name?: string })?.name === "plugin:toolbar-buttons-changed"
     );
     expect((toolbarCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
-    const menuItemsCall = send.mock.calls.find(
-      (c) => (c[1] as { name?: string })?.name === "plugin:menu-items-changed"
-    );
-    expect((menuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
     const contextMenuItemsCall = send.mock.calls.find(
       (c) => (c[1] as { name?: string })?.name === "plugin:context-menu-items-changed"
     );
@@ -7645,11 +7599,10 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.pushSnapshotTo(wc);
 
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(6);
     const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
     expect(names).toContain("plugin:panel-kinds-changed");
     expect(names).toContain("plugin:toolbar-buttons-changed");
-    expect(names).toContain("plugin:menu-items-changed");
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
@@ -7680,7 +7633,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
 
     await service.activateStartupFinishedPlugins();
     await inFlight;
-    expect(send).toHaveBeenCalledTimes(7);
+    expect(send).toHaveBeenCalledTimes(6);
   });
 
   it("pushSnapshotTo() does not send after dispose()", async () => {

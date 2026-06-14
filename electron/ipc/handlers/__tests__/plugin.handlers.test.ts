@@ -113,7 +113,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(32);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(31);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -130,7 +130,6 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:check-for-update", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
-    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:keybindings", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:context-menu-items",
@@ -191,6 +190,9 @@ describe("registerPluginHandlers", () => {
       "plugin:settings-reveal-secret",
       expect.any(Function)
     );
+    // The renderer-side menu-items IPC surface was removed (#10465) — the native
+    // app menu is the wired surface. Guard against accidental re-introduction.
+    expect(mockIpcMainHandle).not.toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
   });
 
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
@@ -208,7 +210,6 @@ describe("registerPluginHandlers", () => {
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:install-from-path");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:invoke");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
-    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:menu-items");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:validate-action-ids");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-get");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:actions-register");

@@ -14,11 +14,11 @@ const EMPTY_CONTEXT: WhenClauseContext = {};
 /**
  * Pull plugin-contributed context-menu items on mount and keep them in sync
  * with main's authoritative set via push. Same pull-on-mount + push-authoritative
- * shape as `usePluginMenuItems` — see that hook for the `pushReceived` race
+ * shape as `usePluginToolbarButtons` — see that hook for the `pushReceived` race
  * rationale.
  *
- * Unlike `usePluginMenuItems`, callers pass a `ctx` map captured at menu-open
- * time (e.g. `{ worktreeId }`, `{ panelId, panelKind }`) so `when` clauses that
+ * Unlike `usePluginToolbarButtons`, callers pass a `ctx` map captured at
+ * menu-open time (e.g. `{ worktreeId }`, `{ panelId, panelKind }`) so `when` clauses that
  * reference the surface's context keys evaluate correctly. An item that
  * references unset keys evaluates to `false` and is hidden — fail-closed. Parse
  * errors are also fail-closed.

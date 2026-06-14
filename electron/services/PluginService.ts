@@ -609,7 +609,7 @@ export class PluginService {
   private appVersion: string;
   /**
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
-   * toolbar buttons, menu items, keybindings, context-menu items) plus the
+   * toolbar buttons, keybindings, context-menu items) plus the
    * cold-start {@link pushSnapshotTo} replay. Constructed in the constructor
    * after {@link initPromise} is set, so it can await the init gate.
    */
@@ -1149,9 +1149,6 @@ export class PluginService {
     for (const menuItem of manifest.contributes.menuItems) {
       trackPluginExpression(manifest.name, menuItem.when);
       registerPluginMenuItem(manifest.name, menuItem);
-    }
-    if (manifest.contributes.menuItems.length > 0) {
-      this.broadcaster.scheduleMenuItemsBroadcast(false);
     }
 
     for (const keybinding of manifest.contributes.keybindings) {
@@ -2678,9 +2675,6 @@ export class PluginService {
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
-    runUnloadStep(pluginId, "scheduleMenuItemsBroadcast", () =>
-      this.broadcaster.scheduleMenuItemsBroadcast(true)
-    );
     runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
       unregisterPluginKeybindings(pluginId)
     );

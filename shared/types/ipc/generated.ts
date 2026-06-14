@@ -771,10 +771,6 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];
   };
-  "plugin:menu-items": {
-    args: [];
-    result: { pluginId: string; item: import("../plugin.js").MenuItemContribution }[];
-  };
   "plugin:panel-kinds-get": {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
