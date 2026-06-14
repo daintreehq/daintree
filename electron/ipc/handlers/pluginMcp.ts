@@ -291,11 +291,15 @@ function errorMessageOf(err: unknown): string {
 /**
  * Dispatch a plugin-MCP `tools/call` through the full guard pipeline:
  * rate limit → consent → supervised dispatch, writing an audit row for every
- * terminal outcome. Returns a discriminated result rather than throwing so the
- * assistant can distinguish a delivered result from a denial or a dispatch
- * error. The consent push is pinned to `ctx.webContentsId` (the calling
- * renderer) so prompts surface in the originating session, never the focused
- * window.
+ * *gated* outcome (rate-limit denial, consent denial, dispatch success/error).
+ * Returns a discriminated result rather than throwing so the assistant can
+ * distinguish a delivered result from a denial or a dispatch error. The consent
+ * push is pinned to `ctx.webContentsId` (the calling renderer) so prompts
+ * surface in the originating session, never the focused window.
+ *
+ * Preflight resolution failures (unknown tool, unloaded plugin) return early
+ * without an audit row: they never reached the gate and carry no danger tier or
+ * tool surface to record.
  */
 export async function handleCallTool(
   ctx: IpcContext,

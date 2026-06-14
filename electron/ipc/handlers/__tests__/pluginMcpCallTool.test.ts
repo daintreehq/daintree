@@ -268,6 +268,37 @@ describe("handleCallTool pipeline", () => {
     expect(audit.append.mock.calls[0][0]).toMatchObject({ result: "rejected" });
   });
 
+  it("pins on approve-and-pin so the next call skips the prompt", async () => {
+    const tool = {
+      found: true,
+      tool: {
+        name: "do_thing",
+        description: "Maybe mutate.",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: false },
+      },
+    };
+    setSchema(tool);
+
+    // First call prompts and is approved-with-pin.
+    const first = handleCallTool(ctx, input);
+    await vi.waitFor(() => expect(h.fakeWc.send).toHaveBeenCalledTimes(1));
+    const [, envelope] = h.fakeWc.send.mock.calls[0] as [string, { payload: { requestId: string } }];
+    await handleResolveConsent(ctx, {
+      requestId: envelope.payload.requestId,
+      decision: "approved-and-pin",
+    });
+    expect(await first).toMatchObject({ kind: "success" });
+    expect(h.supervisor.callTool).toHaveBeenCalledTimes(1);
+
+    // Second call with the same tool surface auto-approves — no new prompt.
+    h.fakeWc.send.mockClear();
+    const second = await handleCallTool(ctx, input);
+    expect(second).toMatchObject({ kind: "success" });
+    expect(h.fakeWc.send).not.toHaveBeenCalled();
+    expect(h.supervisor.callTool).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed when the initiating renderer is gone", async () => {
     setSchema({
       found: true,
