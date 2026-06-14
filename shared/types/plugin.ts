@@ -279,11 +279,11 @@ export interface PluginManifest {
      */
     agents: PluginAgentContribution[];
     /**
-     * Declared plugin settings. When absent or empty, `host.settings.set()` and
-     * `delete()` accept any key (permissive for plugins that declare none). When
-     * non-empty, those calls reject keys not declared here and enforce each
-     * setting's declared scope — see `assertSettingDeclared` in
-     * `electron/services/plugin/PluginSettingsManager.ts`.
+     * Declared plugin settings. When absent or empty, `host.settings.set()`
+     * accepts any key (permissive for plugins that declare none). When non-empty,
+     * `set()` (and the settings-UI write/reset paths) reject keys not declared
+     * here and enforce each setting's declared scope — see `assertSettingDeclared`
+     * in `electron/services/plugin/PluginSettingsManager.ts`.
      */
     settings?: SettingDefinition[];
   };
