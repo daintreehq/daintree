@@ -120,6 +120,7 @@ import type {
   PluginDiagnosticsSnapshot,
 } from "../../shared/types/ipc/pluginDiagnostics.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../shared/config/pluginCapabilities.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
 const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
@@ -146,30 +147,6 @@ const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ACT
  * happens until dispatch time.
  */
 const COMMAND_HANDLER_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
-
-/**
- * Capabilities whose presence in a plugin's manifest forces every action that
- * plugin contributes up to `effectiveDanger: "confirm"`, regardless of the
- * `danger` the plugin self-declared. These are the capabilities that grant
- * irreversible or hard-to-undo side effects: arbitrary process execution,
- * git history mutation, project/user-config filesystem writes, and agent
- * invocation. Read-only or trivially-reversible capabilities (`*-read`,
- * `network:fetch`, `clipboard:*`) are intentionally excluded — promoting on
- * those would over-confirm and train users to dismiss the dialog. The host
- * may only raise danger; a plugin declaring `"confirm"` always stays
- * `"confirm"` even with none of these.
- */
-const CONFIRM_TRIGGERING_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = new Set([
-  "shell:exec",
-  "git:write",
-  "fs:project-write",
-  "fs:user-data-write",
-  "agent:invoke",
-  // Registering a launchable agent CLI (with its own command/args, and a
-  // detection config in the full tier) is a runtime side effect on par with
-  // `agent:invoke` — a plugin holding it elevates its actions to "confirm".
-  "agent:register",
-]);
 
 /**
  * Compound-capability lattice (#9247). The flat

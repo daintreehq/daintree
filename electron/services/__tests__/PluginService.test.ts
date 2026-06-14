@@ -4588,7 +4588,14 @@ describe("Plugin action registry", () => {
     expect(action?.effectiveDanger).toBe("confirm"); // host raised it
   });
 
-  it.each(["shell:exec", "git:write", "fs:project-write", "fs:user-data-write", "agent:invoke"])(
+  it.each([
+    "shell:exec",
+    "git:write",
+    "fs:project-write",
+    "fs:user-data-write",
+    "agent:invoke",
+    "agent:register",
+  ])(
     "raises a self-declared 'safe' action to confirm when the manifest grants %s",
     async (capability) => {
       const name = `acme.perm-${capability.replace(/[^a-z]/g, "-")}`;
