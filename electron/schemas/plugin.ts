@@ -617,7 +617,12 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
       continue;
     }
     next ??= { ...obj };
-    if (next[canonical] === undefined) {
+    // Canonical wins when present — an explicit `views: []` is canonical and is
+    // NOT overwritten by a deprecated value. Only fall back to the deprecated
+    // value when the canonical key is missing (`undefined`/`null`), so a manifest
+    // mixing `views: null` with `experimental_views: [...]` recovers gracefully
+    // instead of failing on the null.
+    if (next[canonical] == null) {
       next[canonical] = next[deprecated];
     }
     delete next[deprecated];

@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
+import {
+  DEPRECATED_CONTRIBUTION_ALIASES,
+  getPluginManifestSchema,
+} from "../../../../electron/schemas/plugin.js";
 
 export interface ValidateOptions {
   /** Plugin project directory (default: cwd). */
@@ -74,6 +77,20 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
   }
 
   const manifest = result.data;
+
+  // Surface deprecated `contributes.experimental_*` aliases here too — the Zod
+  // schema migrates them silently, so without this the author gets no feedback
+  // until the host logs a deprecation warning at load time.
+  const rawContributes = (json as { contributes?: Record<string, unknown> } | null)?.contributes;
+  if (rawContributes && typeof rawContributes === "object") {
+    for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
+      if (deprecated in rawContributes) {
+        warnings.push(
+          `contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
+        );
+      }
+    }
+  }
 
   if (!manifest.engines?.daintree) {
     warnings.push("engines.daintree omitted — consider pinning a range, e.g. ^0.11.0");

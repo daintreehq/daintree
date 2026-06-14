@@ -899,6 +899,47 @@ describe("PluginManifestSchema contributes strict validation", () => {
     }
   });
 
+  it("prefers the canonical key over a deprecated alias when both are present (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        views: [{ id: "canonical", name: "Canonical", componentPath: "./c.js", location: "panel" }],
+        experimental_views: [
+          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(1);
+      expect(result.data.contributes.views[0]?.id).toBe("canonical");
+      expect("experimental_views" in result.data.contributes).toBe(false);
+    }
+  });
+
+  it("treats an explicit empty canonical array as canonical and does not adopt the alias (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        views: [],
+        experimental_views: [
+          { id: "legacy", name: "Legacy", componentPath: "./l.js", location: "panel" },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(0);
+    }
+  });
+
+  it("produces a clean error rather than throwing when contributes is not an object (#10466)", () => {
+    for (const bad of [null, [], 42, "x"]) {
+      const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: bad });
+      expect(result.success).toBe(false);
+    }
+  });
+
   it("rejects an arbitrary unknown key inside contributes", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
@@ -6310,21 +6351,23 @@ describe("reserved contribution point warnings", () => {
     expect(service.findMcpServerContribution("acme.legacy", "svc")).toBeDefined();
 
     // Each deprecated alias logs exactly one deprecation warning naming the
-    // stable replacement.
+    // stable replacement — not zero (silently migrated) or more than one
+    // (double-emission from a future refactor).
     const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(
-      warnMessages.some(
+      warnMessages.filter(
         (m: string) =>
-          m.includes("contributes.experimental_views is deprecated") && m.includes("contributes.views")
+          m.includes("contributes.experimental_views is deprecated") &&
+          m.includes("contributes.views")
       )
-    ).toBe(true);
+    ).toHaveLength(1);
     expect(
-      warnMessages.some(
+      warnMessages.filter(
         (m: string) =>
           m.includes("contributes.experimental_mcpServers is deprecated") &&
           m.includes("contributes.mcpServers")
       )
-    ).toBe(true);
+    ).toHaveLength(1);
   });
 
   it("still processes other contributions when reserved points are present", async () => {
