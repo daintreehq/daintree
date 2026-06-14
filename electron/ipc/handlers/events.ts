@@ -42,6 +42,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "system:wake": "external",
   "app-agent:dispatch-action-request": "external",
   "app-agent:confirmation-request": "external",
+  "plugin-mcp:consent-request": "external",
   "terminal:backend-crashed": "external",
   "terminal:backend-recovering": "external",
   "terminal:backend-ready": "external",

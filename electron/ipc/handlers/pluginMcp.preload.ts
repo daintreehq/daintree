@@ -8,6 +8,8 @@ export const PLUGIN_MCP_METHOD_CHANNELS = {
   getFullSchema: "plugin-mcp:get-full-schema",
   getConfig: "plugin-mcp:get-config",
   setConfig: "plugin-mcp:set-config",
+  callTool: "plugin-mcp:call-tool",
+  resolveConsent: "plugin-mcp:resolve-consent",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_MCP_METHOD_CHANNELS;

@@ -1,9 +1,7 @@
 import { create } from "zustand";
-import type { PluginCapability } from "@shared/types/plugin";
 import type {
   PluginMcpConsentDecision,
-  PluginMcpConsentReason,
-  PluginMcpDangerTier,
+  PluginMcpConsentRequestEvent,
 } from "@shared/types/pluginMcpConsent";
 
 /**
@@ -11,25 +9,13 @@ import type {
  * FIFO queue; only the first item drives the visible modal so concurrent
  * plugin tool calls never stack overlapping dialogs.
  *
- * `descriptionDisplay` is the host-sanitised tool description — ANSI/OSC
- * stripped in main. The renderer must render it as a plain React text node;
- * no HTML, no Markdown, no `dangerouslySetInnerHTML`.
- *
- * `argsSummary` is pre-redacted via `summarizeMcpArgs`; raw args never cross
- * the IPC boundary. Empty string when the call carried no args or when the
- * tier is D0.
+ * The display fields come straight off the main-pushed
+ * {@link PluginMcpConsentRequestEvent}: `descriptionDisplay` is ANSI/OSC
+ * stripped in main (render as a plain text node — no HTML/Markdown) and
+ * `argsSummary` is pre-redacted (raw args never cross the IPC boundary). Only
+ * `enqueuedAt` is renderer-local.
  */
-export interface PendingPluginMcpConsent {
-  requestId: string;
-  pluginId: string;
-  serverId: string;
-  toolName: string;
-  pluginDisplayName: string;
-  descriptionDisplay: string;
-  argsSummary: string;
-  dangerTier: PluginMcpDangerTier;
-  declaredCapabilities: readonly PluginCapability[];
-  reason: PluginMcpConsentReason;
+export interface PendingPluginMcpConsent extends PluginMcpConsentRequestEvent {
   enqueuedAt: number;
 }
 

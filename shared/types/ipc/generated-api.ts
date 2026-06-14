@@ -448,6 +448,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
   pluginMcp: {
+    callTool(
+      ...args: IpcInvokeMap["plugin-mcp:call-tool"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:call-tool"]["result"]>;
     getConfig(
       ...args: IpcInvokeMap["plugin-mcp:get-config"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:get-config"]["result"]>;
@@ -463,6 +466,9 @@ export interface GeneratedElectronAPI {
     listTools(
       ...args: IpcInvokeMap["plugin-mcp:list-tools"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:list-tools"]["result"]>;
+    resolveConsent(
+      ...args: IpcInvokeMap["plugin-mcp:resolve-consent"]["args"]
+    ): Promise<IpcInvokeMap["plugin-mcp:resolve-consent"]["result"]>;
     restart(
       ...args: IpcInvokeMap["plugin-mcp:restart"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:restart"]["result"]>;

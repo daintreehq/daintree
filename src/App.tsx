@@ -25,6 +25,7 @@ import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
+import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
@@ -884,6 +885,7 @@ function AppInner() {
   usePluginPanelKinds();
   usePluginAgents();
   usePluginKeybindings();
+  usePluginMcpConsentBridge();
 
   useMenuActions();
 
