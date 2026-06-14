@@ -224,7 +224,8 @@ describe("PluginDevWorkerMainBridge", () => {
       params: { descriptor: { id: "acme.demo.deco", scopes: ["pr"] } },
     });
     expect(host.registerFileDecorationProvider).toHaveBeenCalledTimes(1);
-    const [descriptor, proxyImpl] = host.registerFileDecorationProvider.mock.calls[0] as [
+    const [descriptor, proxyImpl] = host.registerFileDecorationProvider.mock
+      .calls[0] as unknown as [
       { id: string },
       { provideDecorations: (s: string, p: string[]) => Promise<unknown> },
     ];
