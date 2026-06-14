@@ -60,7 +60,7 @@ export async function linkDevPlugin(args: {
 
   await fs.mkdir(pluginsRoot, { recursive: true });
 
-  let createdSymlink = false;
+  let createdSymlink: boolean;
   try {
     await fs.symlink(pluginDir, linkPath, symlinkType);
     createdSymlink = true;
@@ -69,7 +69,8 @@ export async function linkDevPlugin(args: {
     const stat = await fs.lstat(linkPath);
     if (!stat.isSymbolicLink()) {
       throw new Error(
-        `Can't dev-link "${pluginId}": ${linkPath} already exists and isn't a symlink. Remove it (or uninstall the plugin) and try again.`
+        `Can't dev-link "${pluginId}": ${linkPath} already exists and isn't a symlink. Remove it (or uninstall the plugin) and try again.`,
+        { cause: err }
       );
     }
     const existingTarget = await fs.readlink(linkPath);
