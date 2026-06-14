@@ -26,7 +26,7 @@ export type PluginMcpDangerTier = "D0" | "D1" | "D2" | "D3";
 export interface PluginMcpToolIdentity {
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
-  /** Server id from `contributes.experimental_mcpServers[].id`. */
+  /** Server id from `contributes.mcpServers[].id`. */
   serverId: string;
   /** Tool name as advertised by the server's `tools/list`. */
   toolName: string;

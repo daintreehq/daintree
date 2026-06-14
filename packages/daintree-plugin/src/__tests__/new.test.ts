@@ -115,17 +115,17 @@ describe("scaffoldPlugin", () => {
     });
     const manifest = await readJson(path.join(result.dir, "plugin.json"));
     const contributes = manifest.contributes as {
-      experimental_views: Array<{ id: string; componentPath: string }>;
+      views: Array<{ id: string; componentPath: string }>;
       panels: Array<{ id: string; hasPty?: boolean }>;
     };
-    expect(contributes.experimental_views[0].componentPath).toBe("dist/panel.js");
+    expect(contributes.views[0].componentPath).toBe("dist/panel.js");
     await expect(fs.access(path.join(result.dir, "src", "panel.tsx"))).resolves.toBeUndefined();
 
     // The runtime (`PluginService.loadPlugin`) registers a panel kind only while
     // iterating declared `panels`, attaching a view's componentPath when ids
     // match. A view with no matching non-PTY panel is ignored, so the scaffold
     // must pair every view with a panel of the same id for it to render.
-    const panel = contributes.panels.find((p) => p.id === contributes.experimental_views[0].id);
+    const panel = contributes.panels.find((p) => p.id === contributes.views[0].id);
     expect(panel).toBeDefined();
     expect(panel?.hasPty ?? false).toBe(false);
   });
@@ -140,10 +140,10 @@ describe("scaffoldPlugin", () => {
     });
     const manifest = await readJson(path.join(result.dir, "plugin.json"));
     const contributes = manifest.contributes as {
-      experimental_views: Array<{ id: string }>;
+      views: Array<{ id: string }>;
       panels: Array<{ id: string; hasPty?: boolean }>;
     };
-    const panel = contributes.panels.find((p) => p.id === contributes.experimental_views[0].id);
+    const panel = contributes.panels.find((p) => p.id === contributes.views[0].id);
     expect(panel).toBeDefined();
     expect(panel?.hasPty ?? false).toBe(false);
   });

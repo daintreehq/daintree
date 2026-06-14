@@ -29,6 +29,8 @@ interface MinimalManifest {
   version: string;
   main?: string;
   contributes?: {
+    views?: Array<{ componentPath?: string }>;
+    /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
     experimental_views?: Array<{ componentPath?: string }>;
   };
 }
@@ -47,7 +49,9 @@ function protectedDirs(manifest: MinimalManifest): string[] {
     if (top && top !== "." && top !== "..") dirs.add(top);
   };
   add(manifest.main);
-  for (const view of manifest.contributes?.experimental_views ?? []) {
+  for (const view of manifest.contributes?.views ??
+    manifest.contributes?.experimental_views ??
+    []) {
     add(view.componentPath);
   }
   return [...dirs];

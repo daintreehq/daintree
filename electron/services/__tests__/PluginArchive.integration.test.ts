@@ -339,7 +339,7 @@ describe("verifyPluginArchive", () => {
         validManifest({
           main: "dist/index.js",
           contributes: {
-            experimental_views: [
+            views: [
               {
                 id: "panel-view",
                 name: "Panel View",
@@ -372,7 +372,7 @@ describe("verifyPluginArchive", () => {
         validManifest({
           main: "dist/index.js",
           contributes: {
-            experimental_views: [
+            views: [
               {
                 id: "panel-view",
                 name: "Panel View",

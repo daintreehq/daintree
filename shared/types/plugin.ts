@@ -267,8 +267,8 @@ export interface PluginManifest {
      * `{pluginId}.{id}` to match the {@link PluginActionDescriptor.id} convention.
      */
     commands: PluginActionContribution[];
-    experimental_views: ViewContribution[];
-    experimental_mcpServers: McpServerContribution[];
+    views: ViewContribution[];
+    mcpServers: McpServerContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
     /**

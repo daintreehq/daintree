@@ -13,12 +13,12 @@ Daintree supervises any MCP server a plugin ships. It spawns the process lazily,
 
 ### Manifest
 
-The manifest key is `experimental_mcpServers` — the `experimental_` prefix signals that the shape may change before the feature ships.
+The manifest key is `mcpServers`. It was `experimental_mcpServers` before the 1.0 freeze; the old key is still accepted as a deprecated alias (it parses and runs identically but logs a one-time deprecation warning).
 
 ```json
 {
   "contributes": {
-    "experimental_mcpServers": [
+    "mcpServers": [
       {
         "id": "linear",
         "name": "Linear MCP",

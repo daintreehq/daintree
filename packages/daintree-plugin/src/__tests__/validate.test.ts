@@ -50,6 +50,36 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).toMatch(/engines\.daintree omitted/);
   });
 
+  it("accepts a deprecated experimental_* alias but warns to rename it (#10466)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: "^0.11.0" },
+      contributes: {
+        experimental_mcpServers: [{ id: "main", name: "Server", command: "node" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(
+      /contributes\.experimental_mcpServers is deprecated.*contributes\.mcpServers/
+    );
+  });
+
+  it("does not warn about deprecated aliases when the stable key is used (#10466)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: "^0.11.0" },
+      contributes: {
+        mcpServers: [{ id: "main", name: "Server", command: "node" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/deprecated/);
+  });
+
   it("warns when a command has no keywords", async () => {
     await writeManifest({
       name: "acme.demo",
@@ -79,7 +109,7 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "main",
             name: "Server",
@@ -101,7 +131,7 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "main",
             name: "Server",

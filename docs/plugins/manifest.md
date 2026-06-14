@@ -78,10 +78,10 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "settings": [
       /* ... */
     ],
-    "experimental_views": [
+    "views": [
       /* ... */
     ],
-    "experimental_mcpServers": [
+    "mcpServers": [
       /* ... */
     ],
     "forgeProviders": [
@@ -193,12 +193,12 @@ In v1, startup activation is the only behavior: any plugin with a `main` entry a
 
 Object containing arrays for each contribution type. All fields are optional; unlisted contribution types default to empty arrays.
 
-Fields prefixed with `experimental_` **do** have runtime behavior — the prefix signals only that their shape may still change before it's locked, not that they're inert:
+- `views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
+- `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
 
-- `experimental_views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
-- `experimental_mcpServers` — wired: the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
+> These two points were named `experimental_views` and `experimental_mcpServers` before the 1.0 freeze. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.
 
-The non-experimental `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. `agents` registers a launchable agent CLI as a selectable agent and requires the `agent:register` capability — see the [Contribution points reference](./contribution-points.md) for its shape. That reference also lists the per-point status of every type.
+The `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. `agents` registers a launchable agent CLI as a selectable agent and requires the `agent:register` capability — see the [Contribution points reference](./contribution-points.md) for its shape. That reference also lists the per-point status of every type.
 
 ## Validation
 

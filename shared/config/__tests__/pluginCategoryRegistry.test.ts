@@ -18,8 +18,8 @@ function makeManifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
       keybindings: [],
       contextMenus: [],
       commands: [],
-      experimental_views: [],
-      experimental_mcpServers: [],
+      views: [],
+      mcpServers: [],
       forgeProviders: [],
       fileDecorationProviders: [],
       agents: [],
@@ -80,7 +80,7 @@ describe("pluginCategoryRegistry", () => {
       expect(resolvePluginCategory(withAgent)).toBe("ai");
 
       const withMcp = makeManifest();
-      withMcp.contributes.experimental_mcpServers = [{ id: "srv" } as never];
+      withMcp.contributes.mcpServers = [{ id: "srv" } as never];
       expect(resolvePluginCategory(withMcp)).toBe("ai");
     });
 
@@ -90,7 +90,7 @@ describe("pluginCategoryRegistry", () => {
       expect(resolvePluginCategory(withPanel)).toBe("workspace");
 
       const withView = makeManifest();
-      withView.contributes.experimental_views = [{ id: "v" } as never];
+      withView.contributes.views = [{ id: "v" } as never];
       expect(resolvePluginCategory(withView)).toBe("workspace");
     });
 

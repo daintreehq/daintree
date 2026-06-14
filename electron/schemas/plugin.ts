@@ -148,8 +148,8 @@ function isSafePluginViewComponentPath(componentPath: string): boolean {
  * sets `showInPalette: true` so the view is spawnable from the panel palette.
  * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
  * exist yet, so accepting it would validate a manifest the runtime cannot
- * honor. The `experimental_` prefix on the contribution point signals that the
- * shape may change before the renderer host ships. See
+ * honor. Contributed via the stable `contributes.views` key (the pre-1.0
+ * `experimental_views` name is still accepted as a deprecated alias). See
  * `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z
@@ -571,7 +571,9 @@ export const SettingDefinitionSchema = z
  * `PluginService.loadPlugin`. These caps are generous relative to any plausible
  * real plugin — they exist to reject pathological/adversarial manifests, not to
  * constrain legitimate authors. Exported so tests reference the values without
- * magic numbers.
+ * magic numbers. Keyed by the stable (canonical) contribution names — the
+ * deprecated `experimental_*` aliases are normalized to these before the cap
+ * check runs (see `normalizeDeprecatedContributionAliases`).
  */
 export const MANIFEST_CONTRIBUTION_CAPS = {
   panels: 50,
@@ -580,13 +582,53 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   keybindings: 200,
   contextMenus: 200,
   commands: 200,
-  experimental_views: 50,
-  experimental_mcpServers: 20,
+  views: 50,
+  mcpServers: 20,
   forgeProviders: 20,
   fileDecorationProviders: 50,
   agents: 50,
   settings: 200,
 } as const;
+
+/**
+ * Deprecated `contributes` keys promoted to stable names in the 1.0 freeze.
+ * Old manifests are still accepted (the value is migrated to the canonical key);
+ * `PluginService` surfaces a deprecation warning when an alias is encountered.
+ */
+export const DEPRECATED_CONTRIBUTION_ALIASES = {
+  experimental_views: "views",
+  experimental_mcpServers: "mcpServers",
+} as const;
+
+/**
+ * Normalizes deprecated `contributes` aliases to their canonical names before
+ * strict validation, so the frozen schema never carries an `experimental_*`
+ * field while old manifests keep parsing. The canonical key wins when both are
+ * present; the deprecated key is always stripped so `strictObject` accepts it.
+ */
+function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const obj = raw as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
+    if (!(deprecated in obj)) {
+      continue;
+    }
+    next ??= { ...obj };
+    // Canonical wins when present — an explicit `views: []` is canonical and is
+    // NOT overwritten by a deprecated value. Only fall back to the deprecated
+    // value when the canonical key is missing (`undefined`/`null`), so a manifest
+    // mixing `views: null` with `experimental_views: [...]` recovers gracefully
+    // instead of failing on the null.
+    if (next[canonical] == null) {
+      next[canonical] = next[deprecated];
+    }
+    delete next[deprecated];
+  }
+  return next ?? obj;
+}
 
 export function getPluginManifestSchema(isBuiltin: boolean) {
   return z
@@ -621,71 +663,74 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
-      contributes: z
-        .strictObject({
-          panels: z
-            .array(PanelContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.panels)
-            .default([]),
-          toolbarButtons: z
-            .array(ToolbarButtonContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.toolbarButtons)
-            .default([]),
-          menuItems: z
-            .array(MenuItemContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.menuItems)
-            .default([]),
-          keybindings: z
-            .array(KeybindingContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.keybindings)
-            .default([]),
-          contextMenus: z
-            .array(ContextMenuContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.contextMenus)
-            .default([]),
-          commands: z
-            .array(CommandContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.commands)
-            .default([]),
-          experimental_views: z
-            .array(ViewContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.experimental_views)
-            .default([]),
-          experimental_mcpServers: z
-            .array(McpServerContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.experimental_mcpServers)
-            .default([]),
-          forgeProviders: z
-            .array(ForgeProviderContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
-            .default([]),
-          fileDecorationProviders: z
-            .array(FileDecorationContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.fileDecorationProviders)
-            .default([]),
-          agents: z
-            .array(AgentContributionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.agents)
-            .default([]),
-          settings: z
-            .array(SettingDefinitionSchema)
-            .max(MANIFEST_CONTRIBUTION_CAPS.settings)
-            .default([]),
-        })
-        .default({
-          panels: [],
-          toolbarButtons: [],
-          menuItems: [],
-          keybindings: [],
-          contextMenus: [],
-          commands: [],
-          experimental_views: [],
-          experimental_mcpServers: [],
-          forgeProviders: [],
-          fileDecorationProviders: [],
-          agents: [],
-          settings: [],
-        }),
+      contributes: z.preprocess(
+        normalizeDeprecatedContributionAliases,
+        z
+          .strictObject({
+            panels: z
+              .array(PanelContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.panels)
+              .default([]),
+            toolbarButtons: z
+              .array(ToolbarButtonContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.toolbarButtons)
+              .default([]),
+            menuItems: z
+              .array(MenuItemContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.menuItems)
+              .default([]),
+            keybindings: z
+              .array(KeybindingContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.keybindings)
+              .default([]),
+            contextMenus: z
+              .array(ContextMenuContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.contextMenus)
+              .default([]),
+            commands: z
+              .array(CommandContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.commands)
+              .default([]),
+            views: z
+              .array(ViewContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.views)
+              .default([]),
+            mcpServers: z
+              .array(McpServerContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.mcpServers)
+              .default([]),
+            forgeProviders: z
+              .array(ForgeProviderContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
+              .default([]),
+            fileDecorationProviders: z
+              .array(FileDecorationContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.fileDecorationProviders)
+              .default([]),
+            agents: z
+              .array(AgentContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.agents)
+              .default([]),
+            settings: z
+              .array(SettingDefinitionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.settings)
+              .default([]),
+          })
+          .default({
+            panels: [],
+            toolbarButtons: [],
+            menuItems: [],
+            keybindings: [],
+            contextMenus: [],
+            commands: [],
+            views: [],
+            mcpServers: [],
+            forgeProviders: [],
+            fileDecorationProviders: [],
+            agents: [],
+            settings: [],
+          })
+      ),
     })
     .superRefine((manifest, ctx) => {
       if (!isBuiltin && manifest.name.startsWith("daintree.")) {
