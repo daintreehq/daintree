@@ -976,9 +976,30 @@ export class ProjectViewManager {
   private freezeAllCached(): void {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
+      // Never freeze a view whose project has a live agent. A frozen renderer
+      // cannot run JS, so the queued agent:state-changed IPC sits in Mojo and
+      // the background dashboard stays stuck on its pre-freeze state (e.g.
+      // "waiting") until the view is foregrounded. Idle/completed projects
+      // still freeze for the efficiency win.
+      if (this.hasActiveAgent(projectId)) continue;
       const wc = entry.view.webContents;
       if (wc.isDestroyed()) continue;
       void freezeWebContents(wc);
+    }
+  }
+
+  // Wake any cached background view whose project gained a live agent after it
+  // was already frozen (the seed/state-change races freezeAllCached). Unfreeze
+  // only — CPU throttle stays applied; throttling slows JS but does not suspend
+  // it, so the queued state event still applies. No-op outside efficiency.
+  private unfreezeActiveAgentViews(): void {
+    if (!this.efficiencyFreezeEnabled) return;
+    for (const [projectId, entry] of this.views) {
+      if (projectId === this.activeProjectId) continue;
+      if (!this.hasActiveAgent(projectId)) continue;
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed()) continue;
+      void unfreezeWebContents(wc);
     }
   }
 
@@ -1157,8 +1178,15 @@ export class ProjectViewManager {
 
       // Freeze AFTER GC scheduling — Page.setWebLifecycleState suspends the
       // renderer event loop, so the requestIdleCallback above would never run
-      // if we froze first (lesson #4684).
-      if (this.efficiencyFreezeEnabled && !webContents.isDestroyed()) {
+      // if we froze first (lesson #4684). Skip the freeze for a project with a
+      // live agent: a frozen renderer can't apply queued agent:state-changed
+      // events, stranding the background dashboard on a stale state (mirrors
+      // the freezeAllCached guard).
+      if (
+        this.efficiencyFreezeEnabled &&
+        !webContents.isDestroyed() &&
+        !this.hasActiveAgent(capturedProjectId)
+      ) {
         void freezeWebContents(webContents);
       }
     }
@@ -1835,6 +1863,11 @@ export class ProjectViewManager {
           if (t.projectId) this.projectByTerminal.set(t.id, t.projectId);
           if (t.agentState) this.agentStateByTerminal.set(t.id, t.agentState);
         }
+        // A background agent may have gone active (or been spawned) after the
+        // debounced freeze fired but before it was mapped here, so its view was
+        // frozen with hasActiveAgent() still false. Now that the maps are fresh,
+        // wake any such view so its queued state event applies.
+        this.unfreezeActiveAgentViews();
       } catch {
         // Host unavailable — leave maps as-is; hasActiveAgent stays conservative.
       }
@@ -1849,6 +1882,20 @@ export class ProjectViewManager {
       // spawn-result/host-crash reseed.
       if (!payload.terminalId) return;
       this.agentStateByTerminal.set(payload.terminalId, payload.state);
+      // Wake a view that was frozen before its agent became active: the freeze
+      // blocks the renderer from ever applying this very event, so unfreeze the
+      // owning project's cached view now. If the terminal isn't mapped to a
+      // project yet (pre-seed race), the spawn-result reseed's
+      // unfreezeActiveAgentViews() pass catches it.
+      if (this.efficiencyFreezeEnabled && ACTIVE_AGENT_STATES.has(payload.state)) {
+        const projectId = this.projectByTerminal.get(payload.terminalId);
+        if (projectId && projectId !== this.activeProjectId) {
+          const entry = this.views.get(projectId);
+          if (entry && !entry.view.webContents.isDestroyed()) {
+            void unfreezeWebContents(entry.view.webContents);
+          }
+        }
+      }
     };
     const offStateChanged = events.on("agent:state-changed", onStateChanged);
 
