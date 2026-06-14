@@ -215,6 +215,25 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(onActivationResult).toHaveBeenNthCalledWith(2, { ok: false, error: "broke on reload" });
   });
 
+  it("surfaces a dev-worker crash loop as a loadError via onActivationResult", async () => {
+    const onActivationResult = vi.fn();
+    const { workerHost, bridge } = makeBridge({ onActivationResult });
+    bridge.waitForActivation().catch(() => {});
+
+    // Activate first, so the crash loop trips after a successful activation —
+    // the regression this guards: the post-activation crash never reached
+    // provenance because onCrashLoop only rejected the (already-settled)
+    // activation promise.
+    workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+    workerHost.emit("crash-loop", 42);
+
+    expect(onActivationResult).toHaveBeenNthCalledWith(1, { ok: true });
+    expect(onActivationResult).toHaveBeenNthCalledWith(2, {
+      ok: false,
+      error: expect.stringContaining("crash loop (code 42)"),
+    });
+  });
+
   it("registerFileDecorationProvider wires a proxy impl that round-trips provideDecorations", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {

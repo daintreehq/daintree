@@ -113,3 +113,28 @@ describe("PluginSettingsManager declared-scope enforcement", () => {
     expect(() => mgr.assertSettingScope("acme.scope-test", "anything", "project")).not.toThrow();
   });
 });
+
+describe("PluginSettingsManager subscriber cleanup on unload (#10477)", () => {
+  it("drops a plugin's onDidChange subscribers when its settings state is cleared", () => {
+    const mgr = managerFor([{ id: "token", type: "string", scope: "user" }]);
+    const cb = vi.fn();
+    mgr.addSubscriber("acme.scope-test", { key: "token", scope: "user", cb });
+
+    // Before cleanup the subscriber fires. Signature is (pluginId, scope, key, value).
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "v1");
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    // clearPluginSettingsState is the belt-and-suspenders step unloadPlugin runs
+    // to guarantee no subscriber outlives the plugin.
+    mgr.clearPluginSettingsState("acme.scope-test");
+
+    // The plugin's subscriber set is gone, and a later notify is a no-op.
+    expect(
+      (mgr as unknown as { settingsSubscribers: Map<string, unknown> }).settingsSubscribers.has(
+        "acme.scope-test"
+      )
+    ).toBe(false);
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "v2");
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+});

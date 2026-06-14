@@ -107,6 +107,7 @@ import {
   unregisterPluginAgents,
 } from "../../shared/config/pluginAgentRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
@@ -232,7 +233,8 @@ function computePluginDanger(manifest: PluginManifest | undefined): "safe" | "co
 }
 
 interface LoadedPlugin {
-  manifest: PluginManifest;
+  /** Deep-frozen at load (see `deepFreeze` call in `loadPlugin`); `Readonly` is the compile-time half of that invariant. */
+  manifest: Readonly<PluginManifest>;
   dir: string;
   resolvedMain?: string;
   loadedAt: number;
@@ -305,6 +307,13 @@ const PLUGIN_LOG_BUFFER_MAX = 500;
 const PLUGIN_LOG_LINE_MAX_CHARS = 2048;
 /** Max audit records included per plugin in a diagnostics snapshot. */
 const PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN = 50;
+/**
+ * Max file paths a single `host.invalidateFileDecorations` call broadcasts.
+ * A misbehaving plugin could otherwise pass an unbounded array, forcing an
+ * arbitrarily large IPC payload to every renderer view. Beyond the cap the
+ * scope-wide invalidation (no `paths`) is the correct fallback anyway.
+ */
+const MAX_FILE_DECORATION_PATHS = 1000;
 
 /**
  * Serialize an arbitrary logger payload without ever throwing. Tries
@@ -896,6 +905,13 @@ export class PluginService {
     }
 
     const manifest = parseResult.data;
+    // Manifest-immutability invariant: the parsed manifest is stored on
+    // LoadedPlugin.manifest and read across the whole PluginService lifecycle
+    // (capability checks, contribution loops, host closures). Deep-freeze it so
+    // an accidental in-place mutation of a declared contribution can't poison the
+    // shared record. DEV-only (see deepFreeze) — the Readonly<PluginManifest>
+    // type below is the compile-time half of the same invariant.
+    deepFreeze(manifest);
 
     // Plugins disabled in Preferences are skipped entirely — neither
     // registered in the plugins map nor activated — for both built-in and
@@ -2062,10 +2078,16 @@ export class PluginService {
             `Plugin "${pluginId}" invalidateFileDecorations: scope "${scope}" is not covered by any declared contributes.fileDecorationProviders[].scopes`
           );
         }
-        const narrowed =
+        let narrowed =
           Array.isArray(paths) && paths.length > 0
             ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
             : undefined;
+        if (narrowed && narrowed.length > MAX_FILE_DECORATION_PATHS) {
+          console.warn(
+            `Plugin "${pluginId}" invalidateFileDecorations: ${narrowed.length} paths exceeds cap of ${MAX_FILE_DECORATION_PATHS} for scope "${scope}"; truncating`
+          );
+          narrowed = narrowed.slice(0, MAX_FILE_DECORATION_PATHS);
+        }
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "plugin:decorations-changed",
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },

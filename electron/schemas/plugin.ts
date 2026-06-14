@@ -565,6 +565,29 @@ export const SettingDefinitionSchema = z
     return val;
   });
 
+/**
+ * Per-array upper bounds for `contributes.*`. A crafted manifest with tens of
+ * thousands of entries would otherwise exhaust the registration loops in
+ * `PluginService.loadPlugin`. These caps are generous relative to any plausible
+ * real plugin — they exist to reject pathological/adversarial manifests, not to
+ * constrain legitimate authors. Exported so tests reference the values without
+ * magic numbers.
+ */
+export const MANIFEST_CONTRIBUTION_CAPS = {
+  panels: 50,
+  toolbarButtons: 100,
+  menuItems: 200,
+  keybindings: 200,
+  contextMenus: 200,
+  commands: 200,
+  experimental_views: 50,
+  experimental_mcpServers: 20,
+  forgeProviders: 20,
+  fileDecorationProviders: 50,
+  agents: 50,
+  settings: 200,
+} as const;
+
 export function getPluginManifestSchema(isBuiltin: boolean) {
   return z
     .strictObject({
@@ -600,18 +623,54 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
       contributes: z
         .strictObject({
-          panels: z.array(PanelContributionSchema).default([]),
-          toolbarButtons: z.array(ToolbarButtonContributionSchema).default([]),
-          menuItems: z.array(MenuItemContributionSchema).default([]),
-          keybindings: z.array(KeybindingContributionSchema).default([]),
-          contextMenus: z.array(ContextMenuContributionSchema).default([]),
-          commands: z.array(CommandContributionSchema).default([]),
-          experimental_views: z.array(ViewContributionSchema).default([]),
-          experimental_mcpServers: z.array(McpServerContributionSchema).default([]),
-          forgeProviders: z.array(ForgeProviderContributionSchema).default([]),
-          fileDecorationProviders: z.array(FileDecorationContributionSchema).default([]),
-          agents: z.array(AgentContributionSchema).default([]),
-          settings: z.array(SettingDefinitionSchema).default([]),
+          panels: z
+            .array(PanelContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.panels)
+            .default([]),
+          toolbarButtons: z
+            .array(ToolbarButtonContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.toolbarButtons)
+            .default([]),
+          menuItems: z
+            .array(MenuItemContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.menuItems)
+            .default([]),
+          keybindings: z
+            .array(KeybindingContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.keybindings)
+            .default([]),
+          contextMenus: z
+            .array(ContextMenuContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.contextMenus)
+            .default([]),
+          commands: z
+            .array(CommandContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.commands)
+            .default([]),
+          experimental_views: z
+            .array(ViewContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.experimental_views)
+            .default([]),
+          experimental_mcpServers: z
+            .array(McpServerContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.experimental_mcpServers)
+            .default([]),
+          forgeProviders: z
+            .array(ForgeProviderContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.forgeProviders)
+            .default([]),
+          fileDecorationProviders: z
+            .array(FileDecorationContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.fileDecorationProviders)
+            .default([]),
+          agents: z
+            .array(AgentContributionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.agents)
+            .default([]),
+          settings: z
+            .array(SettingDefinitionSchema)
+            .max(MANIFEST_CONTRIBUTION_CAPS.settings)
+            .default([]),
         })
         .default({
           panels: [],

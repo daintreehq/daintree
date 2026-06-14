@@ -636,6 +636,55 @@ describe("PluginService integration — file decoration provider contributions",
     expect(getFileDecorationImpls("my-scope:/x")).toEqual([]);
   });
 
+  it("caps the paths broadcast by invalidateFileDecorations (#10477)", async () => {
+    // A misbehaving plugin passing an unbounded paths array must not force an
+    // arbitrarily large IPC payload to every renderer — the broadcast is capped.
+    const oversized = 1500;
+    const cap = 1000;
+    const pluginDir = await writePlugin("acme.flood-decor", {
+      name: "acme.flood-decor",
+      version: "1.0.0",
+    });
+    const mainFile = `decor-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(pluginDir, mainFile),
+      `export function activate(host) {
+  const paths = Array.from({ length: ${oversized} }, (_, i) => "f" + i + ".ts");
+  host.invalidateFileDecorations("my-scope:/x", paths);
+}
+`
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.flood-decor",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          fileDecorationProviders: [{ id: "badges", scopes: ["my-scope:*"] }],
+        },
+      })
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const service = new PluginService(tmpDir, "0.0.0");
+    await initializeAndActivate(service);
+
+    const call = vi
+      .mocked(broadcastToRenderer)
+      .mock.calls.find(
+        ([channel, evt]) =>
+          channel === "events:push" &&
+          (evt as { name?: string }).name === "plugin:decorations-changed"
+      );
+    expect(call).toBeDefined();
+    const payload = (call![1] as { payload: { paths?: string[] } }).payload;
+    expect(payload.paths).toHaveLength(cap);
+    expect(payload.paths!.length).toBeLessThan(oversized);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("exceeds cap"));
+    warnSpy.mockRestore();
+  });
+
   it("rejects registering a provider id not declared in the manifest", async () => {
     const pluginDir = await writePlugin("acme.bad-decor", {
       name: "acme.bad-decor",
