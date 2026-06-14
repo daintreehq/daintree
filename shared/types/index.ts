@@ -363,6 +363,7 @@ export {
 } from "./ipc/mcpServer.js";
 export type {
   PluginActionAuditRecord,
+  PluginActionAuditRecordType,
   PluginActionAuditResult,
   PluginAuditConfig,
 } from "./ipc/pluginAudit.js";
