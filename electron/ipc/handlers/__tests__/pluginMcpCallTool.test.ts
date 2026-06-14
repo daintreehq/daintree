@@ -62,11 +62,7 @@ vi.mock("../../../services/PluginService.js", () => ({
   },
 }));
 
-import {
-  _resetConsentBridgeForTest,
-  handleCallTool,
-  handleResolveConsent,
-} from "../pluginMcp.js";
+import { _resetConsentBridgeForTest, handleCallTool, handleResolveConsent } from "../pluginMcp.js";
 import {
   fingerprintTool,
   PluginMcpConsentService,
@@ -158,7 +154,10 @@ describe("handleCallTool pipeline", () => {
 
     const result = await handleCallTool(ctx, input);
 
-    expect(result).toEqual({ kind: "success", result: { content: [{ type: "text", text: "ok" }] } });
+    expect(result).toEqual({
+      kind: "success",
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
     expect(h.supervisor.callTool).toHaveBeenCalledWith({
       pluginId: "acme",
       serverId: "main",
@@ -176,7 +175,9 @@ describe("handleCallTool pipeline", () => {
 
   it("returns an error result and audits when dispatch throws", async () => {
     pinApproval(READONLY_TOOL.tool);
-    h.supervisor.callTool.mockRejectedValue(Object.assign(new Error("boom"), { code: "NOT_READY" }));
+    h.supervisor.callTool.mockRejectedValue(
+      Object.assign(new Error("boom"), { code: "NOT_READY" })
+    );
 
     const result = await handleCallTool(ctx, input);
 
@@ -247,7 +248,13 @@ describe("handleCallTool pipeline", () => {
     const pending = handleCallTool(ctx, input);
     await vi.waitFor(() => expect(h.fakeWc.send).toHaveBeenCalledTimes(1));
 
-    const [, envelope] = h.fakeWc.send.mock.calls[0] as [string, { name: string; payload: { requestId: string; dangerTier: string; pluginDisplayName: string } }];
+    const [, envelope] = h.fakeWc.send.mock.calls[0] as [
+      string,
+      {
+        name: string;
+        payload: { requestId: string; dangerTier: string; pluginDisplayName: string };
+      },
+    ];
     expect(envelope.name).toBe("plugin-mcp:consent-request");
     expect(envelope.payload.dangerTier).toBe("D1");
     expect(envelope.payload.pluginDisplayName).toBe("Acme");
@@ -283,7 +290,10 @@ describe("handleCallTool pipeline", () => {
     // First call prompts and is approved-with-pin.
     const first = handleCallTool(ctx, input);
     await vi.waitFor(() => expect(h.fakeWc.send).toHaveBeenCalledTimes(1));
-    const [, envelope] = h.fakeWc.send.mock.calls[0] as [string, { payload: { requestId: string } }];
+    const [, envelope] = h.fakeWc.send.mock.calls[0] as [
+      string,
+      { payload: { requestId: string } },
+    ];
     await handleResolveConsent(ctx, {
       requestId: envelope.payload.requestId,
       decision: "approved-and-pin",

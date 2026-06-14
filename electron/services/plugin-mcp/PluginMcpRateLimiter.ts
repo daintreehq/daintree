@@ -24,9 +24,7 @@ interface TokenBucket {
   lastRefillMs: number;
 }
 
-export type PluginMcpRateLimitResult =
-  | { allowed: true }
-  | { allowed: false; retryAfterMs: number };
+export type PluginMcpRateLimitResult = { allowed: true } | { allowed: false; retryAfterMs: number };
 
 export class PluginMcpRateLimiter {
   private readonly buckets = new Map<string, Map<string, TokenBucket>>();

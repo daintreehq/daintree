@@ -21,6 +21,7 @@ import type {
   PluginMcpConsentBridge,
   PluginMcpConsentRequest,
 } from "../../services/plugin-mcp/PluginMcpConsentService.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PLUGIN_MCP_RATE_LIMITED_CODE } from "../../../shared/types/ipc/pluginMcpAudit.js";
 import type {
   PluginMcpConsentDecision,
@@ -284,10 +285,6 @@ function errorCodeOf(err: unknown): string {
   return typeof code === "string" && code.length > 0 ? code : "DISPATCH_FAILED";
 }
 
-function errorMessageOf(err: unknown): string {
-  return err instanceof Error ? err.message : "Plugin MCP tool call failed";
-}
-
 /**
  * Dispatch a plugin-MCP `tools/call` through the full guard pipeline:
  * rate limit → consent → supervised dispatch, writing an audit row for every
@@ -339,7 +336,11 @@ export async function handleCallTool(
     pluginDisplayName = meta.pluginDisplayName;
     manifestCapabilities = meta.manifestCapabilities;
   } catch (err) {
-    return { kind: "error", errorCode: errorCodeOf(err), message: errorMessageOf(err) };
+    return {
+      kind: "error",
+      errorCode: errorCodeOf(err),
+      message: formatErrorMessage(err, "Plugin MCP tool call failed"),
+    };
   }
 
   const audit = getPluginMcpAuditService();
@@ -432,7 +433,11 @@ export async function handleCallTool(
       consentDecision: outcome.consentDecision,
       errorCode,
     });
-    return { kind: "error", errorCode, message: errorMessageOf(err) };
+    return {
+      kind: "error",
+      errorCode,
+      message: formatErrorMessage(err, "Plugin MCP tool call failed"),
+    };
   }
 }
 

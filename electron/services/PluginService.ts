@@ -2741,7 +2741,9 @@ export class PluginService {
    * consent prompt and tier derivation. Returns `undefined` when the plugin is
    * not currently loaded (e.g. a renderer race with unload).
    */
-  getMcpConsentMeta(pluginId: string):
+  getMcpConsentMeta(
+    pluginId: string
+  ):
     | { pluginDisplayName: string; manifestCapabilities: readonly BuiltInPluginCapability[] }
     | undefined {
     const plugin = this.plugins.get(pluginId);
