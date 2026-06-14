@@ -610,9 +610,10 @@ export interface LoadedPluginInfo {
    * least one individually high-risk capability, or a compound pair the lattice
    * elevates (e.g. a sensitive read + an unconstrained network sink). The
    * renderer reads this for the manager's effective-danger summary instead of
-   * re-deriving the lattice — the security logic stays single-source on main
-   * (the flat set is already duplicated once with `HIGH_RISK_CAPABILITIES` and
-   * must not gain a third copy).
+   * re-deriving the lattice — the security logic stays single-source on main.
+   * The flat high-risk set lives in `shared/config/pluginCapabilities.ts`
+   * (`CONFIRM_TRIGGERING_CAPABILITIES`), shared with the MCP tier cap in
+   * `PluginMcpTierAuth`; do not re-declare it anywhere else.
    */
   pluginDanger: "safe" | "confirm";
 }

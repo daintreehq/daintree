@@ -80,6 +80,15 @@ describe("PluginMcpTierAuth.deriveDangerTier", () => {
       expect(result).toEqual({ kind: "tier", tier: "D2" });
     });
 
+    it("allows D2 when the plugin declares agent:register", () => {
+      // agent:register registers a launchable agent CLI — a runtime side effect
+      // on par with agent:invoke. It is in CONFIRM_TRIGGERING_CAPABILITIES, so a
+      // destructiveHint tool reaches D2. (Regression guard: the cap previously
+      // diverged from the action-danger set and omitted agent:register.)
+      const result = deriveDangerTier({ destructiveHint: true }, ["agent:register"]);
+      expect(result).toEqual({ kind: "tier", tier: "D2" });
+    });
+
     it("treats an empty capability set as the read-only cap (D1)", () => {
       // Mirrors a plugin manifest that omits `capabilities` entirely.
       const result = deriveDangerTier({ destructiveHint: true }, undefined);
