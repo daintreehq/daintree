@@ -176,12 +176,12 @@ Declare honestly. The plugin manager's detail pane lists what you've declared (a
 
 ### `scopes`
 
-Per-capability allowlists that _attenuate_ the capability lattice — they narrow what a declared capability can reach, they never widen it. Two buckets:
+Per-capability allowlists that declare what a capability intends to reach. Both buckets are schema-validated, but neither is a runtime sandbox — they do not block actual calls or writes. Two buckets, with different runtime weight today:
 
-- `scopes.network.allowedUrls` — outbound request targets permitted under `network:fetch`. Wildcards and private/loopback targets are rejected.
-- `scopes.fs.allowedPaths` — paths the filesystem capabilities may touch.
+- `scopes.network.allowedUrls` — outbound request targets the plugin intends to reach under `network:fetch`. Wildcards and private/loopback targets are rejected. **Live but advisory:** a non-empty allowlist suppresses the compound-capability elevation (the host won't force a confirm dialog when `network:fetch` is paired with a sensitive read), proving the fetch is tightly bound rather than a generic exfiltration channel. It does not actually block requests to other URLs.
+- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities intend to touch. Wildcards, relative paths, and `..` segments are rejected. **Advisory only:** the value is schema-validated but not consulted at runtime — it neither gates filesystem access nor attenuates the lattice (fs writes already elevate unconditionally).
 
-A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently failing to attenuate. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
+A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently dropped. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
 
 ### `activationEvents`
 

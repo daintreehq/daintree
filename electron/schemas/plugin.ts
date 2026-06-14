@@ -478,6 +478,13 @@ export const PluginNetworkScopeSchema = z
   })
   .strict();
 
+/**
+ * `scopes.fs.allowedPaths` is advisory: entries are schema-validated here but
+ * not consulted at runtime — they neither gate filesystem access nor attenuate
+ * the compound-capability lattice (unlike `scopes.network`, which suppresses
+ * compound elevation). Validation is retained so frozen manifests carry
+ * well-formed intent metadata.
+ */
 export const PluginFsScopeSchema = z
   .object({
     allowedPaths: z.array(PluginAllowedPathSchema).min(1),
