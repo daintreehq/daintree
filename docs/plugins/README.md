@@ -35,6 +35,7 @@ Plugins are **sandboxed by convention, not by runtime enforcement.** They run wi
 | [Development loop](./dev-loop.md) | The `daintree-plugin` CLI, hot reload, debugging |
 | [Trust model](./trust-model.md) | Capability disclosure, confirm-dialog policy, the security contract |
 | [Architecture](./architecture.md) | How the plugin system works under the hood |
+| [1.0 freeze plan](./freeze-plan.md) | Planning: the path to a frozen/stable 1.0 plugin API — root decisions, freeze roadmap, and rationale of record |
 
 ## Status
 

@@ -1179,13 +1179,13 @@ export class TerminalProcess {
   }
 
   getVisibleActivitySnapshot(n: number): VisibleContentSnapshot | undefined {
-    const cells = this.getVisibleActivityCells(n);
+    const cells = this.getVisibleActivityCells();
     return cells
       ? createVisibleCellContentSnapshot(cells)
       : createVisibleContentSnapshot(this.getVisibleActivityLines(n));
   }
 
-  private getVisibleActivityCells(n: number): VisibleContentCell[][] | undefined {
+  private getVisibleActivityCells(): VisibleContentCell[][] | undefined {
     const terminal = this.terminalInfo.headlessTerminal;
     if (!terminal) return undefined;
 
@@ -1201,14 +1201,16 @@ export class TerminalProcess {
     const viewportTop = buffer.baseY;
     const viewportBottom = buffer.baseY + terminal.rows;
     const end = viewportBottom;
-    // Bottom-n window, extended upward to include the cursor row: on a fresh
-    // or just-cleared screen the agent draws near the top of the viewport, and
-    // a purely bottom-anchored window would scan only blank rows there —
-    // blinding the sustained-change recovery path. Steady-state terminals
-    // (cursor at the bottom) keep the cheap n-row scan.
-    const cursorAbs =
-      viewportTop + (typeof buffer.cursorY === "number" ? buffer.cursorY : terminal.rows - 1);
-    const start = Math.max(viewportTop, Math.min(end - n, cursorAbs));
+    // Scan the FULL visible viewport. A cursor-anchored bottom-n window (the
+    // v0.19.0 regression) misses spinner/status activity that TUI agents
+    // (Claude/Gemini/Codex) stream ABOVE a pinned bottom input box: with the
+    // cursor parked low, the window collapsed to the bottom rows and the
+    // changing rows above produced changedChars=0, so the temperature decayed
+    // and a busy agent flipped to "waiting" during low-output thinking (and
+    // waiting→working recovery was starved). Blank cells are skipped below, so
+    // scanning the whole viewport costs reads but not allocations. The line
+    // budget only constrains the line-based fallback in getVisibleActivitySnapshot.
+    const start = viewportTop;
     const reusableCell = buffer.getNullCell();
 
     const rows: VisibleContentCell[][] = [];

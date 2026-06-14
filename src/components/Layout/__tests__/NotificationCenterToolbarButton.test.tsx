@@ -461,7 +461,15 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
         await vi.advanceTimersByTimeAsync(120_000);
       });
 
-      expect(setTimeoutSpy).not.toHaveBeenCalled();
+      // Assert on the component's own minute-scale scheduling, not the raw
+      // global spy. React 19's scheduler also calls setTimeout (sub-second
+      // yields), and on some CI runners those extra calls tripped a bare
+      // `not.toHaveBeenCalled()`. The minute poll arms a >=30s timeout and a
+      // 60s interval; neither may exist while the document is hidden.
+      const minuteScaleTimeouts = setTimeoutSpy.mock.calls.filter(
+        ([, delay]) => typeof delay === "number" && delay >= 10_000
+      );
+      expect(minuteScaleTimeouts).toEqual([]);
       expect(setIntervalSpy).not.toHaveBeenCalled();
     });
 

@@ -472,6 +472,62 @@ describe("TerminalProcess — observer-driven exit handlers", () => {
     }
   });
 
+  it("detects spinner activity above a pinned bottom input box (regression: cursor-anchored scan window)", async () => {
+    // Regression for the v0.19.0 detection break: getVisibleActivityCells was
+    // narrowed to a cursor-anchored bottom-15-row window. A TUI agent that
+    // animates its spinner/status line ABOVE a pinned bottom input box then
+    // produced changedChars=0, so a genuinely-working agent decayed to
+    // "waiting" during long low-output thinking. The cell scan must cover the
+    // full viewport.
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const pty = createControllablePty();
+    const mutablePtyDimensions = pty as unknown as { cols: number; rows: number };
+    mutablePtyDimensions.cols = 100;
+    mutablePtyDimensions.rows = 30;
+    const terminal = createTerminal(
+      pty,
+      { cols: 100, rows: 30, kind: "terminal", launchAgentId: "claude" },
+      undefined,
+      "t-spinner-above-input"
+    );
+
+    try {
+      terminal.stopActivityMonitor();
+      terminal.getInfo().agentState = "working";
+
+      // Spinner on the top row, body filling the middle, input box at the
+      // bottom. The cursor lands in the input box (row ~27 of 30) after this
+      // write, so a bottom-15 window would start at row 15 — above which the
+      // spinner is invisible.
+      await emitDataAndFlush(
+        pty,
+        [
+          "✻ Thinking (0s · esc to interrupt)",
+          ...Array.from({ length: 26 }, (_, i) => `body line ${i + 1}`),
+          "> ",
+        ].join("\r\n")
+      );
+
+      const before = terminal.getVisibleActivitySnapshot(AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
+
+      // Animate ONLY the top spinner line, restoring the cursor to the input
+      // box (DECSC/DECRC) — exactly how the agent re-renders during thinking.
+      await emitDataAndFlush(pty, "\x1b7\x1b[1;1H✻ Thinking (3s · esc to interrupt)\x1b8");
+
+      const after = terminal.getVisibleActivitySnapshot(AGENT_OUTPUT_ACTIVITY_LINE_COUNT);
+
+      expect(before).toBeDefined();
+      expect(after).toBeDefined();
+      const delta = measureVisibleContentDelta(before, after!);
+      expect(delta.changed).toBe(true);
+      expect(delta.changedChars).toBeGreaterThan(0);
+    } finally {
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("recovers a waiting live agent to working on sustained PTY content changes without a monitor", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);

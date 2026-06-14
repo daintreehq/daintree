@@ -95,9 +95,13 @@ type FullWakeTestService = {
   resizeController: {
     applyDeferredResize: (id: string) => void;
     lockResize: (id: string, locked: boolean, ms?: number) => void;
+    reconcileGeometryFresh: (id: string) => boolean;
   };
   dataBuffer: { resumeFlush: (id: string) => void; resetForTerminal: (id: string) => void };
-  webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
+  webGLManager: {
+    repairAtlasForReactivation: (id: string) => boolean;
+    isActive: (id: string) => boolean;
+  };
   handlePostWake: (id: string) => void;
   unhibernate: (id: string) => void;
   ensureOpened: (id: string, managed: ManagedTerminalMock) => void;
@@ -801,5 +805,69 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
     expect(fullWake).not.toHaveBeenCalled();
     expect(repaint).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalInstanceService.repaintForReveal grid reconcile", () => {
+  let service: FullWakeTestService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Sibling describes spy repaintForReveal with mockImplementation on the
+    // shared singleton; clearAllMocks keeps that impl, so restore the real
+    // method before exercising it here.
+    vi.restoreAllMocks();
+    forceXtermReflowMock.mockReset();
+    const imported = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (service) service.instances.clear();
+  });
+
+  function openedLiveInstance(): ManagedTerminalMock {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    return makeInstance({
+      isOpened: true,
+      isHibernated: false,
+      isVisible: true,
+      hostElement: renderableHost(),
+      terminal: { cols: 80, rows: 24, element, refresh: vi.fn() },
+    });
+  }
+
+  it("reconciles the grid through resizeController.reconcileGeometryFresh", () => {
+    const id = "repaint-1";
+    service.instances.set(id, openedLiveInstance());
+
+    vi.spyOn(service.webGLManager, "isActive").mockReturnValue(true);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    const reconcile = vi
+      .spyOn(service.resizeController, "reconcileGeometryFresh")
+      .mockReturnValue(true);
+
+    expect(service.repaintForReveal(id)).toBe(true);
+    // The reveal repaint must drive a fresh-measure grid reflow — the one step
+    // that fixes garbled wrapping and that the old handlePostWake path could not
+    // perform under the project-switch resize lock.
+    expect(reconcile).toHaveBeenCalledWith(id);
+  });
+
+  it("reports not-paintable (retry) when the fresh reconcile finds no measurable box", () => {
+    const id = "repaint-2";
+    service.instances.set(id, openedLiveInstance());
+
+    vi.spyOn(service.webGLManager, "isActive").mockReturnValue(true);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    vi.spyOn(service.resizeController, "reconcileGeometryFresh").mockReturnValue(false);
+
+    // A false reconcile must propagate so revealUntilStable retries on a later
+    // frame rather than spending a confirm paint against an unmeasurable pane.
+    expect(service.repaintForReveal(id)).toBe(false);
   });
 });

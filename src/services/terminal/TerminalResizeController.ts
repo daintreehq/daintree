@@ -337,6 +337,67 @@ export class TerminalResizeController {
     terminalClient.resize(id, targetCols, targetRows);
   }
 
+  /**
+   * One-shot, lock-exempt geometry reconciliation for the project-switch reveal
+   * path (the garbled-line-flow-on-return fix). Unlike {@link fit}:
+   *  - It does NOT consult the resize lock — the reveal is the one legitimate
+   *    resize moment during the project-switch suppression window — and it does
+   *    NOT clear the shared lock, so ResizeObserver-storm damping survives for
+   *    every other resize entry point.
+   *  - It resizes xterm AND the PTY atomically in one synchronous step (never
+   *    xterm-first-then-PTY), so it is safe for settled-strategy agents: no
+   *    500ms split that would jitter Ink TUIs like the Gemini CLI.
+   *
+   * Unlike {@link applyDeferredResize} it measures FRESH cols/rows from the live
+   * DOM box rather than trusting cached latestCols/latestRows — while the view
+   * was backgrounded the container can change size without xterm reflowing (the
+   * cached dims can equal the now-stale xterm grid), which applyDeferredResize's
+   * cache==current early-return would miss.
+   *
+   * @returns true once a fresh measurement landed (whether or not a resize was
+   * needed); false when the box is not measurable yet (zero/occluded/transitional
+   * layout) so the reveal sweep retries on a later frame.
+   */
+  reconcileGeometryFresh(id: string): boolean {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return false;
+    if (!managed.hostElement.checkVisibility()) return false;
+
+    const rect = managed.hostElement.getBoundingClientRect();
+    if (rect.width < 50 || rect.height < 50) return false;
+
+    // Prefer the fit addon's own DOM measurement so the grid matches exactly
+    // what a manual Redraw's fit() would compute; fall back to cell-metric math
+    // when the renderer hasn't published proposable dimensions yet.
+    let cols: number;
+    let rows: number;
+    const proposal = managed.fitAddon.proposeDimensions?.();
+    if (proposal && proposal.cols > 1 && proposal.rows > 1) {
+      cols = proposal.cols;
+      rows = proposal.rows;
+    } else {
+      const cellDims = getXtermCellDimensions(managed.terminal);
+      if (!cellDims) return false;
+      cols = Math.max(2, Math.floor(rect.width / cellDims.width));
+      rows = Math.max(1, Math.floor(rect.height / cellDims.height));
+    }
+
+    managed.lastWidth = rect.width;
+    managed.lastHeight = rect.height;
+    managed.latestCols = cols;
+    managed.latestRows = rows;
+
+    // Cancel any pending settled (500ms) resize so this one-shot is the final
+    // word, then apply atomically: resize xterm only when its grid actually
+    // drifted, and always (re)assert the PTY size so the two agree.
+    this.clearSettledTimer(id);
+    if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
+      this.resizeTerminal(managed, cols, rows);
+    }
+    terminalClient.resize(id, cols, rows);
+    return true;
+  }
+
   applyResize(id: string, cols: number, rows: number): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;

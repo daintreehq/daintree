@@ -1101,12 +1101,27 @@ class TerminalInstanceService {
       logWarn(`repaintForReveal reflow failed for ${id}`, { error });
     }
 
-    // Re-fit and unpause IO through the shared post-wake resize path. Going via
-    // handlePostWake (not a bare fit()) honors the settled-strategy atomic-resize
-    // contract: for settled agents a plain fit() would resize xterm ahead of the
-    // deferred PTY resize and break atomicity — handlePostWake routes those
-    // through sendPtyResize instead, and still fit()s + reflows standard agents.
-    this.handlePostWake(id);
+    // Reconcile geometry from a FRESH DOM measurement. handlePostWake could not
+    // do this on reveal: the project-switch resize lock is still active here
+    // (reveal fires ~0.5–1.5s after the switch, lock TTL 5s), so its fit()
+    // returns null under isResizeLocked and falls back to a PTY-only resize; and
+    // for settled-strategy agents (Codex, Gemini, …) it skips fit() entirely and
+    // only re-sends CACHED dims. Either way xterm's grid was never re-fit, so a
+    // container size change that happened while the view was backgrounded left
+    // the buffer wrapping at the wrong column until a manual Redraw fired after
+    // the lock expired (the long-standing garbled-line-flow-on-return bug).
+    // reconcileGeometryFresh measures the live box, ignores the lock for this one
+    // reveal correction WITHOUT clearing it (so the ResizeObserver-storm damping
+    // the lock provides survives), and resizes xterm + PTY atomically — safe for
+    // settled agents. It returns false on an unmeasurable transitional box
+    // (zero/occluded), so report "not paintable yet" and let the reveal sweep
+    // retry on a later frame.
+    // Clear any stale "directing" agent state the wake path would have cleared.
+    // Runs before the geometry guard so it still fires on a not-yet-measurable
+    // box, matching the old handlePostWake ordering.
+    this.agentStateController.checkStaleDirecting(id);
+
+    if (!this.resizeController.reconcileGeometryFresh(id)) return false;
 
     // Clear the reflow throttle so the next write or the 3s heartbeat reflows
     // immediately rather than being debounced away (mirrors resetRenderer).

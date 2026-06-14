@@ -53,7 +53,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | --- | --- |
 | [plugins/README.md](./plugins/README.md) | Sub-index for the plugin system — start here for everything plugin-author-facing. |
 
-The plugin sub-index links onward to getting-started, manifest reference, contribution points, host API, agent extensions, distribution, the dev loop, trust model, and architecture.
+The plugin sub-index links onward to getting-started, manifest reference, contribution points, host API, agent extensions, distribution, the dev loop, trust model, architecture, and the [1.0 freeze plan](./plugins/freeze-plan.md) (the roadmap to a stable, freezeable plugin API).
 
 ## Themes
 

@@ -1246,4 +1246,171 @@ describe("TerminalResizeController", () => {
       expect(managed.terminal.resize).not.toHaveBeenCalled();
     });
   });
+
+  describe("reconcileGeometryFresh (project-switch reveal)", () => {
+    function makeController(managed: ReturnType<typeof createManagedTerminal> | undefined) {
+      return new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+        } as any,
+      });
+    }
+
+    it("reflows xterm AND the PTY atomically from a fresh DOM measurement", () => {
+      const managed = createManagedTerminal();
+      // DOM box proposes 100x30; xterm grid is stale at 80x24.
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      expect(managed.latestCols).toBe(100);
+      expect(managed.latestRows).toBe(30);
+      // Must NOT route through fitAddon.fit() — that resizes xterm before the PTY
+      // and would break settled-strategy atomicity.
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    });
+
+    it("ignores an active resize lock without clearing it (the reveal exception)", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      controller.lockResize("term-1", true);
+      // Under the same lock a normal fit() no-ops.
+      expect(controller.fit("term-1")).toBeNull();
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      // The shared lock survives so ResizeObserver-storm damping keeps working.
+      expect(controller.isResizeLocked("term-1")).toBe(true);
+    });
+
+    it("applies atomically for a settled-strategy agent with no 500ms deferral", () => {
+      const managed = createManagedTerminal();
+      managed.runtimeAgentId = "codex";
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+
+      const controller = makeController(managed);
+      controller.lockResize("term-1", true);
+
+      // Arm a pending settled (500ms) PTY resize carrying STALE dims; the
+      // one-shot reveal reconcile must cancel it so that geometry never lands.
+      controller.sendPtyResize("term-1", 50, 10);
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      controller.reconcileGeometryFresh("term-1");
+
+      // xterm + PTY both move now to the FRESH dims — not deferred behind 500ms.
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+
+      vi.advanceTimersByTime(500);
+      // The stale settled timer was cancelled — no 50x10 resize fires afterward.
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).not.toHaveBeenCalledWith(50, 10);
+    });
+
+    it("uses fresh DOM dims even when cached latestCols equals the current grid", () => {
+      const managed = createManagedTerminal();
+      // Cache matches the stale xterm grid (80x24) — applyDeferredResize would
+      // early-return here — but the live box actually grew to 100x30.
+      managed.latestCols = 80;
+      managed.latestRows = 24;
+      managed.terminal.cols = 80;
+      managed.terminal.rows = 24;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      controller.reconcileGeometryFresh("term-1");
+
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+    });
+
+    it("re-asserts only the PTY when the grid is already correct", () => {
+      const managed = createManagedTerminal();
+      managed.terminal.cols = 100;
+      managed.terminal.rows = 30;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+    });
+
+    it("falls back to cell-metric math when no proposable dimensions exist", () => {
+      const managed = createManagedTerminal();
+      // host box is 1000x700; cell is 10x20 → 100 cols x 35 rows.
+      managed.fitAddon.proposeDimensions = vi.fn(() => undefined);
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 35);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 35);
+    });
+
+    it("returns false (retry next frame) when the box is not measurable yet", () => {
+      const managed = createManagedTerminal();
+      // No proposable dims and no cell metrics → unmeasurable transitional box.
+      managed.fitAddon.proposeDimensions = vi.fn(() => undefined);
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1");
+
+      expect(ok).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("returns false for a zero/too-small layout box", () => {
+      const managed = createManagedTerminal();
+      managed.hostElement.getBoundingClientRect = vi.fn(() => ({
+        left: 0,
+        width: 10,
+        height: 10,
+      })) as any;
+
+      const controller = makeController(managed);
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the host is not visible", () => {
+      const managed = createManagedTerminal();
+      managed.hostElement.checkVisibility = vi.fn(() => false);
+
+      const controller = makeController(managed);
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("returns false for a missing instance", () => {
+      const controller = makeController(undefined);
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+  });
 });
