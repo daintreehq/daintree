@@ -4,9 +4,20 @@ import { cn } from "@/lib/utils";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import type { PluginActionAuditRecord, PluginActionAuditResult } from "@shared/types";
+import type {
+  PluginActionAuditRecord,
+  PluginActionAuditRecordType,
+  PluginActionAuditResult,
+} from "@shared/types";
 
 type ResultFilter = "all" | PluginActionAuditResult;
+
+// Only the non-default record types get a tag — `action-dispatch` is the common
+// case and is left unlabeled to keep ordinary dispatch rows uncluttered.
+const RECORD_TYPE_LABEL: Partial<Record<PluginActionAuditRecordType, string>> = {
+  "ipc-invoke": "IPC",
+  "decoration-failure": "Decoration",
+};
 
 const RESULT_LABEL: Record<PluginActionAuditResult, string> = {
   success: "Success",
@@ -107,7 +118,12 @@ export function PluginActionAuditLogViewer({
       if (search.length > 0) {
         const args = record.argsPlaintext ?? "";
         const hash = record.argsHash ?? "";
-        if (!args.toLowerCase().includes(search) && !hash.toLowerCase().includes(search)) {
+        const error = record.errorMessage ?? "";
+        if (
+          !args.toLowerCase().includes(search) &&
+          !hash.toLowerCase().includes(search) &&
+          !error.toLowerCase().includes(search)
+        ) {
           return false;
         }
       }
@@ -138,8 +154,8 @@ export function PluginActionAuditLogViewer({
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search arguments"
-          aria-label="Search audit arguments"
+          placeholder="Search arguments or errors"
+          aria-label="Search audit arguments or error messages"
           className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         />
         <select
@@ -247,13 +263,27 @@ export function PluginActionAuditLogViewer({
                     <span className="font-mono text-daintree-text/90 truncate">
                       {record.actionId}
                     </span>
-                    <span className="text-[10px] uppercase tracking-wide text-daintree-text/50">
-                      {record.source}
-                    </span>
+                    {record.source ? (
+                      <span className="text-[10px] uppercase tracking-wide text-daintree-text/50">
+                        {record.source}
+                      </span>
+                    ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
+                      <span className="text-[10px] uppercase tracking-wide text-daintree-text/50">
+                        {RECORD_TYPE_LABEL[record.recordType]}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-0.5 font-mono text-daintree-text/50 truncate">
                     {record.pluginId}
                   </div>
+                  {record.errorMessage ? (
+                    <div
+                      className="mt-0.5 text-status-danger/80 truncate"
+                      title={record.errorMessage}
+                    >
+                      {record.errorMessage}
+                    </div>
+                  ) : null}
                   {record.argsPlaintext ? (
                     <div className="mt-0.5 font-mono text-daintree-text/40 truncate">
                       {record.argsPlaintext}

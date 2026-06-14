@@ -28,6 +28,12 @@ export interface ActionPaletteItem {
   redirectTo?: string;
   keybinding?: string;
   kind: string;
+  /**
+   * Set for plugin-contributed actions. Their synthetic definition surfaces its
+   * own failure toast in `usePluginActions`, so the palette suppresses its
+   * generic `{ ok: false }` toast for these rows to avoid double-notifying.
+   */
+  pluginId?: string;
   titleLower: string;
   categoryLower: string;
   descriptionLower: string;
@@ -104,6 +110,7 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
     redirectTo,
     keybinding: keybindingService.getDisplayCombo(entry.id),
     kind: entry.kind,
+    pluginId: entry.pluginId,
     titleLower: title.toLowerCase(),
     categoryLower: category.toLowerCase(),
     descriptionLower: description.toLowerCase(),
@@ -236,7 +243,9 @@ export function useActionPalette(): UseActionPaletteReturn {
           }
         )
         .then((result) => {
-          if (!result.ok && result.error.code !== "DISABLED") {
+          // Plugin actions self-notify on failure (see `usePluginActions`), so
+          // skip the generic palette toast for them to avoid double-notifying.
+          if (!result.ok && result.error.code !== "DISABLED" && !item.pluginId) {
             // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
             notify({
               type: "error",
