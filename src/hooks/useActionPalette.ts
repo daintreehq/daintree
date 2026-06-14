@@ -243,16 +243,23 @@ export function useActionPalette(): UseActionPaletteReturn {
           }
         )
         .then((result) => {
-          // Plugin actions self-notify on failure (see `usePluginActions`), so
-          // skip the generic palette toast for them to avoid double-notifying.
-          if (!result.ok && result.error.code !== "DISABLED" && !item.pluginId) {
-            // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-            notify({
-              type: "error",
-              title: `Couldn't run '${item.title}'`,
-              message: formatErrorMessage(result.error, "Action failed."),
-            });
-          }
+          if (result.ok) return;
+          // DISABLED is already visible on the originating surface (#8814).
+          if (result.error.code === "DISABLED") return;
+          // A plugin action's synthetic run() self-notifies *only* when its own
+          // handler throws — surfaced by ActionService as EXECUTION_ERROR.
+          // Suppress the generic palette toast for that exact case to avoid
+          // double-notifying. Any other plugin failure (e.g. NOT_FOUND when the
+          // action was unregistered while the palette was open) never
+          // self-notified, and built-in EXECUTION_ERRORs never self-notify, so
+          // the palette must still toast those.
+          if (item.pluginId !== undefined && result.error.code === "EXECUTION_ERROR") return;
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: `Couldn't run '${item.title}'`,
+            message: formatErrorMessage(result.error, "Action failed."),
+          });
         })
         .catch(() => {
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

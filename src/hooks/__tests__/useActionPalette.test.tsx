@@ -2,12 +2,15 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listMock, dispatchMock, getDisplayComboMock, getContextMock } = vi.hoisted(() => ({
-  listMock: vi.fn(),
-  dispatchMock: vi.fn(),
-  getDisplayComboMock: vi.fn(() => ""),
-  getContextMock: vi.fn(),
-}));
+const { listMock, dispatchMock, getDisplayComboMock, getContextMock, notifyMock } = vi.hoisted(
+  () => ({
+    listMock: vi.fn(),
+    dispatchMock: vi.fn(),
+    getDisplayComboMock: vi.fn(() => ""),
+    getContextMock: vi.fn(),
+    notifyMock: vi.fn(),
+  })
+);
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -15,6 +18,10 @@ vi.mock("@/services/ActionService", () => ({
     dispatch: dispatchMock,
     getContext: getContextMock,
   },
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
@@ -305,6 +312,58 @@ describe("useActionPalette", () => {
     expect(sorted.length).toBe(1);
     expect(sorted[0]!.id).toBe("a.action");
     expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+  });
+
+  // The palette owns a generic `{ ok: false }` failure toast, but plugin
+  // actions self-notify (via usePluginActions) only on EXECUTION_ERROR. These
+  // lock in the precise suppression so plugin EXECUTION_ERRORs don't
+  // double-toast while every other failure still surfaces.
+  async function runFailingPaletteAction(
+    entry: ReturnType<typeof makeEntry> & { pluginId?: string },
+    query: string,
+    error: { code: string; message: string }
+  ): Promise<void> {
+    dispatchMock.mockResolvedValue({ ok: false, error });
+    listMock.mockReturnValue([entry]);
+    const { result } = renderHook(() => useActionPalette());
+    act(() => result.current.open());
+    act(() => result.current.setQuery(query));
+    await waitFor(() => expect(result.current.results.length).toBe(1));
+    act(() => result.current.executeAction(result.current.results[0]!));
+    // Flush the void dispatch().then() microtask chain.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("suppresses the palette toast for a plugin action EXECUTION_ERROR (already self-notified)", async () => {
+    await runFailingPaletteAction(
+      { ...makeEntry("acme.thing", "Acmething"), pluginId: "acme.plugin" },
+      "acmething",
+      { code: "EXECUTION_ERROR", message: "handler exploded" }
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("still toasts a plugin action that failed without self-notifying (e.g. NOT_FOUND on a stale row)", async () => {
+    await runFailingPaletteAction(
+      { ...makeEntry("acme.thing", "Acmething"), pluginId: "acme.plugin" },
+      "acmething",
+      { code: "NOT_FOUND", message: "action was unregistered" }
+    );
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Couldn't run 'Acmething'" })
+    );
+  });
+
+  it("still toasts a built-in action EXECUTION_ERROR (no pluginId, never self-notifies)", async () => {
+    await runFailingPaletteAction(makeEntry("builtin.thing", "Builtinthing"), "builtinthing", {
+      code: "EXECUTION_ERROR",
+      message: "boom",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("excludes paletteHidden commands from the palette", async () => {

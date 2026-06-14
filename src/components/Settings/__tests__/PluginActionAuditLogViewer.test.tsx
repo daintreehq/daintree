@@ -84,4 +84,29 @@ describe("PluginActionAuditLogViewer", () => {
     expect(screen.getByText("needle-in-haystack")).toBeTruthy();
     expect(screen.queryByText("unrelated failure")).toBeNull();
   });
+
+  it("renders a record with neither recordType nor source without leaking 'undefined'", () => {
+    renderViewer([
+      record({ recordType: undefined, source: undefined, result: "error", actionId: "acme.bare" }),
+    ]);
+    // The row still renders its identifying fields...
+    expect(screen.getByText("acme.bare")).toBeTruthy();
+    // ...and never stringifies an absent source/recordType into the DOM.
+    expect(screen.queryByText("undefined")).toBeNull();
+  });
+
+  it("hides success rows by default but reveals them via the result filter", () => {
+    renderViewer([
+      record({ id: "ok", result: "success", actionId: "acme.plugin.win" }),
+      record({ id: "bad", result: "error", actionId: "acme.plugin.lose" }),
+    ]);
+    // Default failure-centric view: the success row is suppressed.
+    expect(screen.queryByText("acme.plugin.win")).toBeNull();
+    expect(screen.getByText("acme.plugin.lose")).toBeTruthy();
+    // Explicitly filtering to "success" overrides the suppression.
+    fireEvent.change(screen.getByLabelText("Filter audit by result"), {
+      target: { value: "success" },
+    });
+    expect(screen.getByText("acme.plugin.win")).toBeTruthy();
+  });
 });
