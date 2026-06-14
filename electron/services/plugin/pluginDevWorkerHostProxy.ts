@@ -65,6 +65,7 @@ export class PluginDevWorkerHostProxy {
   private readonly actionHandlers = new Map<string, ActionHandler>();
   private readonly ipcHandlers = new Map<string, RegisteredHandler>();
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
+  private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
 
   constructor(pluginId: string, post: Post) {
     this.pluginId = pluginId;
@@ -87,6 +88,7 @@ export class PluginDevWorkerHostProxy {
     this.actionHandlers.clear();
     this.ipcHandlers.clear();
     this.subscriptions.clear();
+    this.fileDecorationProviders.clear();
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -134,6 +136,19 @@ export class PluginDevWorkerHostProxy {
           throw new Error(`No action handler registered for "${msg.namespacedId}"`);
         }
         const result = await handler(msg.args);
+        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        return;
+      }
+      if (msg.kind === "file-decoration-method") {
+        const impl = this.fileDecorationProviders.get(msg.providerId);
+        if (!impl) {
+          throw new Error(`No file decoration provider registered for "${msg.providerId}"`);
+        }
+        if (msg.method !== "provideDecorations") {
+          throw new Error(`Unknown file decoration provider method "${msg.method}"`);
+        }
+        const [scope, paths] = msg.args as [string, string[]];
+        const result = await impl.provideDecorations(scope, paths);
         this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
         return;
       }
@@ -316,21 +331,56 @@ export class PluginDevWorkerHostProxy {
         );
       },
       registerForgeProvider: (descriptor: ForgeProviderDescriptor, _impl: ForgeProviderImpl) => {
-        // Forge providers require bidirectional impl proxying (callbacks the host
-        // invokes per PR/CI/rate-limit query) not yet supported in dev mode.
+        this.assertActivationOpen("registerForgeProvider");
+        // Forge providers can't run from the dev worker: `ForgeProviderImpl`'s
+        // required `parseRemote` (the routing gate), URL builders, and
+        // `classifyPushError` are SYNCHRONOUS — the host calls them and uses the
+        // return value immediately — but every dev-worker host call is async
+        // over this MessagePort. A partial async-only proxy would be worse than
+        // honest: the provider would never become routable because
+        // `parseRemote` resolves to a Promise. Package + install to test forge
+        // providers; a fix needs the forge API's sync surface to change.
         console.warn(
-          `[plugin-dev:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported in dev mode — package + install the plugin to test forge providers`
+          `[plugin-dev:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported in dev mode — forge providers require synchronous host methods (parseRemote, URL builders) that can't cross the dev worker's async boundary. Package + install the plugin to test forge providers.`
         );
         return () => {};
       },
       registerFileDecorationProvider: (
         descriptor: FileDecorationProviderDescriptor,
-        _impl: FileDecorationProviderImpl
+        impl: FileDecorationProviderImpl
       ) => {
-        console.warn(
-          `[plugin-dev:${this.pluginId}] registerFileDecorationProvider("${descriptor?.id}") is not supported in dev mode — package + install the plugin to test decoration providers`
+        this.assertActivationOpen("registerFileDecorationProvider");
+        if (!descriptor || typeof descriptor !== "object") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerFileDecorationProvider: descriptor must be an object`
+          );
+        }
+        if (typeof descriptor.id !== "string" || descriptor.id.length === 0) {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerFileDecorationProvider: descriptor.id must be a non-empty string`
+          );
+        }
+        if (!impl || typeof impl !== "object" || typeof impl.provideDecorations !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" registerFileDecorationProvider: impl must expose provideDecorations()`
+          );
+        }
+        const providerId = descriptor.id;
+        // Replace semantics mirror the real host: a second register on the same
+        // id overwrites the prior impl held here.
+        this.fileDecorationProviders.set(providerId, impl);
+        this.notify(
+          "registerFileDecorationProvider",
+          { descriptor: { id: providerId, scopes: descriptor.scopes } },
+          `fileDecorationProvider:${providerId}`
         );
-        return () => {};
+        let disposed = false;
+        return () => {
+          if (disposed) return;
+          disposed = true;
+          this.fileDecorationProviders.delete(providerId);
+          this.notify("unregisterFileDecorationProvider", { providerId });
+        };
       },
       invalidateFileDecorations: (scope, paths) => {
         if (typeof scope !== "string" || scope.length === 0) {

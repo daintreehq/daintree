@@ -215,6 +215,71 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(onActivationResult).toHaveBeenNthCalledWith(2, { ok: false, error: "broke on reload" });
   });
 
+  it("registerFileDecorationProvider wires a proxy impl that round-trips provideDecorations", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      registrationKey: "fileDecorationProvider:acme.demo.deco",
+      params: { descriptor: { id: "acme.demo.deco", scopes: ["pr"] } },
+    });
+    expect(host.registerFileDecorationProvider).toHaveBeenCalledTimes(1);
+    const [descriptor, proxyImpl] = host.registerFileDecorationProvider.mock.calls[0] as [
+      { id: string },
+      { provideDecorations: (s: string, p: string[]) => Promise<unknown> },
+    ];
+    expect(descriptor).toMatchObject({ id: "acme.demo.deco", scopes: ["pr"] });
+
+    const resultPromise = proxyImpl.provideDecorations("pr", ["a.ts", "b.ts"]);
+    const invoke = workerHost.sent.find(
+      (m) => m.type === "invoke" && m.kind === "file-decoration-method"
+    );
+    expect(invoke).toMatchObject({
+      providerId: "acme.demo.deco",
+      method: "provideDecorations",
+      args: ["pr", ["a.ts", "b.ts"]],
+    });
+
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: true,
+      result: { "a.ts": { badge: "M" } },
+    });
+    await expect(resultPromise).resolves.toEqual({ "a.ts": { badge: "M" } });
+  });
+
+  it("unregisterFileDecorationProvider disposes the host registration", async () => {
+    const { host, workerHost } = makeBridge();
+    const dispose = vi.fn();
+    host.registerFileDecorationProvider.mockReturnValueOnce(dispose);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      params: { descriptor: { id: "acme.demo.deco" } },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "unregisterFileDecorationProvider",
+      params: { providerId: "acme.demo.deco" },
+    });
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes registered providers on reload", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    const dispose = vi.fn();
+    host.registerFileDecorationProvider.mockReturnValueOnce(dispose);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      params: { descriptor: { id: "acme.demo.deco" } },
+    });
+    workerHost.emit("reloading");
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("clears prior registrations and fails pending invokes on reload", async () => {
     const { host, workerHost, bridge, clear } = makeBridge();
     bridge.waitForActivation().catch(() => {});

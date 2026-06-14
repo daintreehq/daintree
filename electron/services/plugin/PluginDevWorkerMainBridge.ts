@@ -16,6 +16,7 @@
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { PluginHostApi, PluginIpcContext } from "../../../shared/types/plugin.js";
+import type { FileDecoration, FileDecorationProviderImpl } from "../../../shared/types/forge.js";
 import type {
   BroadcastToRendererParams,
   DispatchParams,
@@ -23,10 +24,12 @@ import type {
   LoggerParams,
   PluginWorkerToHostMessage,
   RegisterActionParams,
+  RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
   SettingsGetParams,
   SettingsSetParams,
   ShowToastParams,
+  UnregisterFileDecorationProviderParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 
@@ -70,6 +73,10 @@ export class PluginDevWorkerMainBridge {
   private invokeSeq = 1;
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
   private readonly subscriptionDisposers = new Map<string, () => void>();
+  /** Disposers for providers (file decoration) the worker registered on the real
+   * host, keyed by provider id. Torn down on reload and dispose so a reloaded
+   * generation re-registers cleanly. */
+  private readonly providerDisposers = new Map<string, () => void>();
 
   /** First-activation gate. Resolved on `activated`, rejected on activate/crash
    * errors. Subsequent reload activations don't re-await this. */
@@ -115,11 +122,24 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.subscriptionDisposers.clear();
+    this.disposeProviders();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
     }
     this.pendingInvokes.clear();
     this.rejectActivation(new Error(`Plugin dev worker "${this.pluginId}" disposed`));
+  }
+
+  /** Tear down every provider the worker registered on the real host. */
+  private disposeProviders(): void {
+    for (const dispose of this.providerDisposers.values()) {
+      try {
+        dispose();
+      } catch {
+        // best-effort
+      }
+    }
+    this.providerDisposers.clear();
   }
 
   private onReloading = (): void => {
@@ -135,6 +155,7 @@ export class PluginDevWorkerMainBridge {
       }
     }
     this.subscriptionDisposers.clear();
+    this.disposeProviders();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin reloaded before invocation completed"));
     }
@@ -313,6 +334,44 @@ export class PluginDevWorkerMainBridge {
         this.host.invalidateFileDecorations(p.scope, p.paths);
         return;
       }
+      case "registerFileDecorationProvider": {
+        const { descriptor } = params as RegisterFileDecorationProviderParams;
+        const providerId = descriptor.id;
+        // A re-register on the same id replaces the prior binding — dispose it
+        // first so the host registry doesn't accumulate stale proxy impls.
+        const prior = this.providerDisposers.get(providerId);
+        if (prior) {
+          try {
+            prior();
+          } catch {
+            // best-effort
+          }
+        }
+        // The impl lives in the worker; register a thin proxy whose single
+        // method round-trips each call back over the port (mirrors the action
+        // wrapper). `provideDecorations` is async, so this composes cleanly.
+        const proxyImpl: FileDecorationProviderImpl = {
+          provideDecorations: (scope: string, paths: string[]) =>
+            this.invoke({
+              kind: "file-decoration-method",
+              providerId,
+              method: "provideDecorations",
+              args: [scope, paths],
+            }) as Promise<Record<string, FileDecoration>>,
+        };
+        const dispose = this.host.registerFileDecorationProvider(descriptor, proxyImpl);
+        this.providerDisposers.set(providerId, dispose);
+        return;
+      }
+      case "unregisterFileDecorationProvider": {
+        const { providerId } = params as UnregisterFileDecorationProviderParams;
+        const dispose = this.providerDisposers.get(providerId);
+        if (dispose) {
+          this.providerDisposers.delete(providerId);
+          dispose();
+        }
+        return;
+      }
       case "logger.info":
       case "logger.warn":
       case "logger.error": {
@@ -358,6 +417,7 @@ export class PluginDevWorkerMainBridge {
     target:
       | { kind: "action"; namespacedId: string; args: unknown }
       | { kind: "handler"; channel: string; ctx: PluginIpcContext; args: unknown[] }
+      | { kind: "file-decoration-method"; providerId: string; method: string; args: unknown[] }
   ): Promise<unknown> {
     if (this.disposed || !this.workerHost.isReady()) {
       return Promise.reject(new Error(`Plugin "${this.pluginId}" dev worker is not running`));
@@ -365,23 +425,34 @@ export class PluginDevWorkerMainBridge {
     const requestId = `i${this.invokeSeq++}`;
     return new Promise<unknown>((resolve, reject) => {
       this.pendingInvokes.set(requestId, { resolve, reject });
-      const sent =
-        target.kind === "action"
-          ? this.workerHost.send({
-              type: "invoke",
-              requestId,
-              kind: "action",
-              namespacedId: target.namespacedId,
-              args: target.args,
-            })
-          : this.workerHost.send({
-              type: "invoke",
-              requestId,
-              kind: "handler",
-              channel: target.channel,
-              ctx: target.ctx,
-              args: target.args,
-            });
+      let sent: boolean;
+      if (target.kind === "action") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "action",
+          namespacedId: target.namespacedId,
+          args: target.args,
+        });
+      } else if (target.kind === "handler") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "handler",
+          channel: target.channel,
+          ctx: target.ctx,
+          args: target.args,
+        });
+      } else {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "file-decoration-method",
+          providerId: target.providerId,
+          method: target.method,
+          args: target.args,
+        });
+      }
       if (!sent) {
         this.pendingInvokes.delete(requestId);
         reject(new Error(`Plugin "${this.pluginId}" dev worker is not running`));

@@ -34,6 +34,8 @@ export type PluginHostNotifyMethod =
   | "registerHandler"
   | "broadcastToRenderer"
   | "invalidateFileDecorations"
+  | "registerFileDecorationProvider"
+  | "unregisterFileDecorationProvider"
   | "logger.info"
   | "logger.warn"
   | "logger.error";
@@ -41,8 +43,15 @@ export type PluginHostNotifyMethod =
 /** Event subscriptions the worker proxy can open against the host. */
 export type PluginWorkerSubscriptionKind = "active-worktree" | "worktrees" | "settings";
 
-/** Callback kinds main invokes back in the worker. */
-export type PluginWorkerInvokeKind = "action" | "handler";
+/**
+ * Callback kinds main invokes back in the worker. `file-decoration-method`
+ * round-trips a registered `FileDecorationProviderImpl` method (just
+ * `provideDecorations`, which is async — see {@link RegisterFileDecorationProviderParams}).
+ * Forge providers are deliberately absent: `ForgeProviderImpl` has required
+ * SYNCHRONOUS methods (`parseRemote`, the URL builders, `classifyPushError`)
+ * the host calls and consumes synchronously, which can't cross this async port.
+ */
+export type PluginWorkerInvokeKind = "action" | "handler" | "file-decoration-method";
 
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
@@ -70,6 +79,14 @@ export type PluginHostToWorkerMessage =
       kind: "handler";
       channel: string;
       ctx: PluginIpcContext;
+      args: unknown[];
+    }
+  | {
+      type: "invoke";
+      requestId: string;
+      kind: "file-decoration-method";
+      providerId: string;
+      method: string;
       args: unknown[];
     }
   /** Deliver a subscription event to a worker-held callback (fire-and-forget). */
@@ -157,6 +174,24 @@ export interface BroadcastToRendererParams {
 export interface InvalidateFileDecorationsParams {
   scope: string;
   paths?: string[];
+}
+
+/**
+ * Params for `registerFileDecorationProvider` (`host-notify`). Only the
+ * structured-clone-safe descriptor fields travel; the `provideDecorations` impl
+ * stays in the worker and main invokes it back via a `file-decoration-method`
+ * `invoke` (mirrors the `registerAction` handler round-trip).
+ */
+export interface RegisterFileDecorationProviderParams {
+  descriptor: {
+    id: string;
+    scopes?: string[];
+  };
+}
+
+/** Params for `unregisterFileDecorationProvider` (`host-notify`). */
+export interface UnregisterFileDecorationProviderParams {
+  providerId: string;
 }
 
 /** Params for a `logger.*` call (`host-notify`). */
