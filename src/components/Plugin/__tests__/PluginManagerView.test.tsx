@@ -702,6 +702,24 @@ describe("PluginManagerView", () => {
     );
   });
 
+  it("surfaces the no-sandbox security disclosure in the URL dialog", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    // The disclosure must not be present before the dialog opens.
+    expect(screen.queryByText(/full Node\.js privileges/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
+    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
+
+    // Scope to the open dialog so hidden/other surfaces can't satisfy the
+    // assertion. The disclosure must state the trust model (no sandbox, no
+    // signing, no pre-install consent) before the user pastes a URL.
+    const dialog = within(screen.getByRole("dialog", { name: "Install from URL" }));
+    expect(dialog.getByText(/full Node\.js privileges/)).toBeTruthy();
+    expect(dialog.getByText(/no signature check/)).toBeTruthy();
+  });
+
   it("keeps the URL dialog open and shows an error on an invalid URL", async () => {
     (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
       status: "invalid-url",
