@@ -38,11 +38,25 @@ vi.mock("@/components/ui/popover", () => ({
 }));
 
 import { projectClient, systemClient } from "@/clients";
+import type { Project } from "@shared/types";
 import { ProjectResourceBadge } from "../ProjectResourceBadge";
 
 const mockGetAll = vi.mocked(projectClient.getAll);
 const mockGetAppMetrics = vi.mocked(systemClient.getAppMetrics);
 const mockGetHardwareInfo = vi.mocked(systemClient.getHardwareInfo);
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "proj-1",
+    name: "Test Project",
+    path: "/tmp/test",
+    emoji: "🚀",
+    color: "blue",
+    status: "active",
+    lastOpened: 0,
+    ...overrides,
+  };
+}
 
 describe("ProjectResourceBadge — visibility-aware polling", () => {
   let originalHidden: boolean;
@@ -199,7 +213,7 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
   });
 
   it("renders the running-project count and memory once a project is active", async () => {
-    mockGetAll.mockResolvedValue([{ id: "p1", name: "Proj One" }] as never);
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 290 });
 
@@ -215,7 +229,7 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
   });
 
   it("suppresses the value (stays hidden) when metrics are unavailable", async () => {
-    mockGetAll.mockResolvedValue([{ id: "p1", name: "Proj One" }] as never);
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 0, unavailable: true });
 
