@@ -51,6 +51,17 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     expect(isBuiltInAgent("acme-agent")).toBe(false);
   });
 
+  it("never carries a detection field onto the resolved config (cut in 1.0, #10460)", () => {
+    // contributionToAgentConfig maps fields explicitly rather than spreading,
+    // so even a stray `detection` on the input must not reach the registry.
+    registerPluginAgents("acme.plugin", [
+      { ...ACME_AGENT, detection: { primaryPatterns: ["thinking"] } } as PluginAgentContribution,
+    ]);
+    const config = getEffectiveAgentConfig("acme-agent");
+    expect(config).toBeDefined();
+    expect("detection" in (config as object)).toBe(false);
+  });
+
   it("removes the agent on unregister", () => {
     registerPluginAgents("acme.plugin", [ACME_AGENT]);
     unregisterPluginAgents("acme.plugin");

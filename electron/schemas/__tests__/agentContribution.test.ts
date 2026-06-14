@@ -35,12 +35,22 @@ describe("AgentContributionSchema (issue #9560)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects a detection block — output detection is cut from the 1.0 schema (#10460)", () => {
+  it("rejects a detection block as an unknown key — output detection is cut from the 1.0 schema (#10460)", () => {
     const result = AgentContributionSchema.safeParse({
       ...VALID_AGENT,
       detection: { primaryPatterns: ["thinking"] },
     });
     expect(result.success).toBe(false);
+    if (!result.success) {
+      // Assert the failure is strict unknown-key rejection of `detection`
+      // specifically, not some unrelated validation error — so a future
+      // re-introduction of the field can't silently flip this to a pass.
+      const unknownKeyIssue = result.error.issues.find(
+        (issue) => issue.code === "unrecognized_keys"
+      );
+      expect(unknownKeyIssue).toBeDefined();
+      expect((unknownKeyIssue as { keys?: string[] }).keys).toContain("detection");
+    }
   });
 
   it("rejects unknown top-level fields (strict)", () => {
