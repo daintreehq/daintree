@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.19.0] - 2026-06-14
+
+Finer-grained control over permission bypass and a round of panel/tab reliability work. Skip-permissions becomes a real setting — a global toggle, a first-run onboarding step, and a tri-state DangerousMode — while the in-app assistant gains the ability to name and rename its terminals. The bulk of the release hardens panel tabs, terminal rehydration, and tooltip/focus behavior.
+
+### Features
+
+- Global skip-permissions toggle, with a tri-state DangerousMode for permission-bypass control (#10432)
+- First-run onboarding step to set the global skip-permissions preference (#10433)
+- Assistant can name agent terminals at spawn time (#10439)
+- Assistant and MCP can rename terminals via terminal.rename (#10436)
+
+### Bug Fixes
+
+**Panels & tabs**
+
+- Prevent duplicate-as-tab crash with a two-pane split enabled (#10438)
+- Keep grid order when a panel gains a second tab (#10440)
+- Background the previous tab on a docked tab switch (#10442)
+- Stop a tab drag from arming the parent panel drag (#10443)
+- Clean up orphaned panels on add-tab failure and guard tab-group hydration against malformed groups (#10441)
+
+**Terminal**
+
+- Retry-until-stable reveal sweep recovers garbled panes
+- Rehydrate hibernated agent terminals on foreground project-view reveal
+- Repaint the assistant terminal after a project-view reveal
+
+**UI polish**
+
+- Suppress stuck tooltips on focus restore (ProjectSwitcher, AgentButton) and fix ContextMenu right-click
+- Diff viewer keeps a persistent, always-visible horizontal scrollbar and no longer nests a double scrollbar
+- Stop duplicate idle-terminal notification toasts
+- Quick-run input border stays visible (#10429)
+
+### Performance
+
+- Forge hover prefetch fires instantly and cache-first
+
 ## [0.18.2] - 2026-06-09
 
 A responsiveness and memory pass on top of 0.18.1. Structural UI changes now animate through View Transitions, several mutations apply optimistically instead of waiting on the round-trip, and a per-subsystem audit trims steady-state memory — rounded out with command-palette and console-scroll fixes.
