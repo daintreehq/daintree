@@ -132,6 +132,7 @@ export default defineConfig({
 const GITIGNORE = `node_modules/
 dist/
 *.dntr
+.dev-marker
 `;
 
 function commandEntry(ctx: ScaffoldContext): string {

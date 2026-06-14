@@ -58,6 +58,8 @@ function noopHandlers() {
   return {
     install: vi.fn(async () => ({ status: "installed" })),
     uninstall: vi.fn(async () => {}),
+    devStart: vi.fn(async () => {}),
+    devStop: vi.fn(async () => {}),
   };
 }
 
@@ -126,6 +128,59 @@ describe("createPluginCliServer", () => {
       pluginId: "acme.demo",
       deleteSettings: true,
     });
+  });
+
+  it("routes plugin.dev.start to the devStart handler", async () => {
+    const handlers = noopHandlers();
+    server = createPluginCliServer({
+      socketPath,
+      waitForReady: () => Promise.resolve(),
+      handlers,
+    });
+    await server.listen();
+
+    const res = await request({
+      id: "d1",
+      method: "plugin.dev.start",
+      params: { pluginId: "acme.demo" },
+    });
+    expect(res.id).toBe("d1");
+    expect(res.result).toEqual({ status: "ok" });
+    expect(handlers.devStart).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+  });
+
+  it("routes plugin.dev.stop to the devStop handler", async () => {
+    const handlers = noopHandlers();
+    server = createPluginCliServer({
+      socketPath,
+      waitForReady: () => Promise.resolve(),
+      handlers,
+    });
+    await server.listen();
+
+    const res = await request({
+      id: "d2",
+      method: "plugin.dev.stop",
+      params: { pluginId: "acme.demo" },
+    });
+    expect(res.id).toBe("d2");
+    expect(res.result).toEqual({ status: "ok" });
+    expect(handlers.devStop).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+  });
+
+  it("returns an error frame when a dev call is missing pluginId", async () => {
+    const handlers = noopHandlers();
+    server = createPluginCliServer({
+      socketPath,
+      waitForReady: () => Promise.resolve(),
+      handlers,
+    });
+    await server.listen();
+
+    const res = await request({ id: "d3", method: "plugin.dev.start", params: {} });
+    expect(res.id).toBe("d3");
+    expect(res.error).toBeTruthy();
+    expect(handlers.devStart).not.toHaveBeenCalled();
   });
 
   it("answers plugin.ping for liveness checks", async () => {
@@ -244,6 +299,8 @@ describe("createPluginCliServer", () => {
           throw new Error("disk on fire");
         }),
         uninstall: vi.fn(async () => {}),
+        devStart: vi.fn(async () => {}),
+        devStop: vi.fn(async () => {}),
       },
     });
     await server.listen();
@@ -263,6 +320,8 @@ describe("createPluginCliServer", () => {
       handlers: {
         install: vi.fn(async () => ({ status: "installed" })),
         uninstall: vi.fn(async () => {}),
+        devStart: vi.fn(async () => {}),
+        devStop: vi.fn(async () => {}),
       },
     });
     await server.listen();

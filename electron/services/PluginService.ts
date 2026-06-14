@@ -2630,6 +2630,35 @@ export class PluginService {
     return this.installer.checkForUpdate(pluginId);
   }
 
+  /**
+   * Load and activate a dev plugin the `daintree-plugin dev` CLI has already
+   * symlinked into {@link pluginsRoot} and stamped with a `.dev-marker`. Called
+   * over the CLI control socket (`plugin.dev.start`) once the first build is in
+   * place. Reuses the standard {@link loadPlugin} path — the `.dev-marker`
+   * detection there routes it through the hot-reload worker. The CLI owns the
+   * symlink; this method only reads from `pluginsRoot`, so it doesn't touch the
+   * installer's content-mutation invariant (#9292).
+   *
+   * Idempotent across dev sessions: if the plugin is already loaded (a prior
+   * session that didn't clean up, or a crashed CLI), it's unloaded first so the
+   * duplicate-name guard in {@link loadPlugin} doesn't reject the reload.
+   */
+  async loadDevPlugin(pluginId: string): Promise<void> {
+    if (this.plugins.has(pluginId)) {
+      this.unloadPlugin(pluginId);
+    }
+    const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+      isBuiltin: false,
+      disabled: new Set(),
+    });
+    if (!loaded) {
+      throw new Error(
+        `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — check the symlink and that plugin.json is valid`
+      );
+    }
+    await this.activatePlugin(pluginId);
+  }
+
   unloadPlugin(pluginId: string): void {
     if (!this.plugins.has(pluginId)) return;
     // Drop activation state so a runtime reload (e.g. dev-mode re-scan) can
