@@ -48,7 +48,20 @@ function resolveSlot<P>(
   disabledPluginIds: ReadonlySet<string>
 ): ComponentType<P> | null {
   const entry = REGISTRY.get(slotId);
-  if (!entry) return null;
+  if (!entry) {
+    // A non-empty ref that was never registered is most likely a plugin-author
+    // typo in a `forgeProviders.slots` value — the main process can't validate
+    // these against this renderer registry, so surface it here. Dev-only and
+    // warn-not-throw: an empty ref is the documented "no slot" sentinel, and a
+    // null resolution is defined contract, not an error.
+    if (import.meta.env.DEV && slotId.length > 0) {
+      console.warn(
+        `[builtinRendererRegistry] No view registered for slot "${slotId}" — ` +
+          `check the plugin's forgeProviders.slots ref and registerBuiltinView call`
+      );
+    }
+    return null;
+  }
   if (entry.pluginId !== null && disabledPluginIds.has(entry.pluginId)) return null;
   return entry.component as ComponentType<P>;
 }

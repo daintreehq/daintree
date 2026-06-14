@@ -9,12 +9,13 @@ import {
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
-import {
-  makeForgeProviderId,
-  normalizeProviderId,
-} from "../../../shared/utils/forgeProviderIds.js";
+import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import { auditForgeCall } from "../../services/forge/forgeAuditService.js";
-import type { AuthValidation, CredentialField } from "../../../shared/types/forge.js";
+import {
+  credentialFieldsFor,
+  pickPrimaryValue,
+} from "../../services/forge/forgeCredentialUtils.js";
+import type { AuthValidation } from "../../../shared/types/forge.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -45,32 +46,6 @@ let pluginServicePromise: Promise<PluginInitGate> | null = null;
 function awaitPluginInit(): Promise<void> {
   pluginServicePromise ??= import("../../services/PluginService.js").then((m) => m.pluginService);
   return pluginServicePromise.then((svc) => svc.waitForInit());
-}
-
-/**
- * Look up a registered provider's declared credential fields by canonical id.
- * Returns `[]` when the provider declares none (or is not registered) — the
- * caller treats that as a single-value credential.
- */
-function credentialFieldsFor(providerId: string): CredentialField[] {
-  const entry = getRegisteredForgeProviders().find(
-    (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === providerId
-  );
-  return entry?.contribution.credentialFields ?? [];
-}
-
-/**
- * Pick the value passed to `validateToken`, which takes a single string. The
- * primary field is the first `"password"`-typed declared field, else the
- * first declared field; with no declared fields, the first record value.
- */
-function pickPrimaryValue(fields: CredentialField[], credentials: Record<string, string>): string {
-  if (fields.length > 0) {
-    const primary = fields.find((f) => f.type === "password") ?? fields[0];
-    return credentials[primary.id] ?? "";
-  }
-  const first = Object.values(credentials)[0];
-  return typeof first === "string" ? first : "";
 }
 
 /** True when a stored record has at least one non-empty value. */
