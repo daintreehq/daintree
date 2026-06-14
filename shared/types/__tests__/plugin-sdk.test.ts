@@ -125,6 +125,14 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(activation.broadcastToRenderer).toBeFunction();
       expectTypeOf(activation.registerForgeProvider).toBeFunction();
       expectTypeOf(activation.registerFileDecorationProvider).toBeFunction();
+      // Worktree subscriptions are revoke-guarded too (subscribing is an
+      // activation-window op), so they belong on the slice.
+      expectTypeOf(activation.onDidChangeActiveWorktree).toBeFunction();
+      expectTypeOf(activation.onDidChangeWorktrees).toBeFunction();
+      // The provider registrars hand back a disposer — guard the return type so
+      // a signature regression to `void` is caught.
+      expectTypeOf(activation.registerForgeProvider).returns.toEqualTypeOf<() => void>();
+      expectTypeOf(activation.registerFileDecorationProvider).returns.toEqualTypeOf<() => void>();
     });
 
     it("PluginActivationApi excludes the post-activation-safe methods", () => {
@@ -137,6 +145,14 @@ describe("plugin-sdk boundary", () => {
       activation.logger;
       // @ts-expect-error — invalidateFileDecorations is not on the slice
       activation.invalidateFileDecorations;
+      // @ts-expect-error — pluginId is not on the slice
+      activation.pluginId;
+      // @ts-expect-error — getActiveWorktree (the accessor) is not on the slice
+      activation.getActiveWorktree;
+      // @ts-expect-error — getWorktrees (the accessor) is not on the slice
+      activation.getWorktrees;
+      // @ts-expect-error — settings accessor is not on the slice
+      activation.settings;
     });
 
     it("PanelViewProps exposes the host-provided view props", () => {

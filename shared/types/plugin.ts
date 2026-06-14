@@ -394,9 +394,12 @@ export interface SettingsApi {
    * Subscribe to in-process writes of `key` in `scope` (default `"user"`). The
    * callback fires with the new value after each `set` that changes it. Edits
    * made to the JSON file by other processes do NOT fire until the plugin
-   * reloads. Must be called during `activate()`. Returns a disposer; calling it
-   * more than once is a no-op. All subscriptions are automatically disposed when
-   * the plugin is unloaded.
+   * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
+   * Returns a disposer; calling it more than once is a no-op. All subscriptions
+   * are automatically disposed when the plugin is unloaded.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected.
    */
   onDidChange<T = unknown>(
     key: string,
@@ -775,9 +778,12 @@ export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
  * `PluginActivationApi` to make the narrower contract explicit at its call
  * sites. The post-activation-safe methods ({@link PluginHostApi.showToast},
  * {@link PluginHostApi.dispatch}, {@link PluginHostApi.invalidateFileDecorations},
- * {@link PluginHostApi.logger}, the worktree accessors) live on
- * {@link PluginHostApi} directly and remain callable for the plugin's whole
- * lifetime.
+ * {@link PluginHostApi.logger}, and the worktree accessors `getActiveWorktree`
+ * /`getWorktrees`) live on {@link PluginHostApi} directly and remain callable
+ * for the plugin's whole lifetime. Note the worktree *subscriptions*
+ * (`onDidChangeActiveWorktree`/`onDidChangeWorktrees`) and `settings.onDidChange`
+ * are revoke-guarded — subscribing is an activation-window operation even though
+ * the callbacks fire later.
  */
 export interface PluginActivationApi {
   /**
@@ -870,6 +876,36 @@ export interface PluginActivationApi {
     descriptor: FileDecorationProviderDescriptor,
     impl: FileDecorationProviderImpl
   ): () => void;
+  /**
+   * Subscribe to active-worktree changes. The callback fires with the new
+   * active snapshot (or `null` when none is active). Returns a disposer;
+   * calling it more than once is a no-op. All subscriptions are automatically
+   * disposed when the plugin is unloaded.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected.
+   */
+  onDidChangeActiveWorktree(
+    callback: (snapshot: PluginWorktreeSnapshot | null) => void
+  ): () => void;
+  /**
+   * Subscribe to the worktree set changing. The callback fires with the full
+   * current list on any worktree add/update/remove. Returns a disposer;
+   * calling it more than once is a no-op. All subscriptions are automatically
+   * disposed when the plugin is unloaded.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected.
+   */
+  onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
 }
 
 /**
@@ -890,22 +926,6 @@ export interface PluginHostApi extends PluginActivationApi {
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
   /** Returns all worktrees across all loaded projects as frozen snapshots. */
   getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
-  /**
-   * Subscribe to active-worktree changes. The callback fires with the new
-   * active snapshot (or `null` when none is active). Returns a disposer;
-   * calling it more than once is a no-op. All subscriptions are automatically
-   * disposed when the plugin is unloaded.
-   */
-  onDidChangeActiveWorktree(
-    callback: (snapshot: PluginWorktreeSnapshot | null) => void
-  ): () => void;
-  /**
-   * Subscribe to the worktree set changing. The callback fires with the full
-   * current list on any worktree add/update/remove. Returns a disposer;
-   * calling it more than once is a no-op. All subscriptions are automatically
-   * disposed when the plugin is unloaded.
-   */
-  onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
   /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the
