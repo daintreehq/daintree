@@ -47,6 +47,43 @@ describe("builtinRendererRegistry", () => {
     expect(getBuiltinView("github.issueSelector")).toBeNull();
   });
 
+  describe("dev-mode warn-on-miss", () => {
+    it("warns when a non-empty slot ref was never registered", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(getBuiltinView("github.bulkCreateWorktreeDialog")).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("github.bulkCreateWorktreeDialog")
+      );
+    });
+
+    it("warns only once per missing slot ref, not on every resolution", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      getBuiltinView("github.bulkCreateWorktreeDialog");
+      getBuiltinView("github.bulkCreateWorktreeDialog");
+      getBuiltinView("github.bulkCreateWorktreeDialog");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not warn for an empty slot ref (the documented 'no slot' sentinel)", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(getBuiltinView("")).toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not warn when the slot is registered but gated off by a disabled plugin", () => {
+      registerBuiltinView("github.issueSelector", StubComponent, {
+        pluginId: "daintree.github",
+      });
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set(["daintree.github"]) });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      expect(getBuiltinView("github.issueSelector")).toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });
+    });
+  });
+
   describe("plugin enable-state gating", () => {
     afterEach(() => {
       usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });

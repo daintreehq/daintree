@@ -154,15 +154,28 @@ export const McpServerContributionSchema = z
   .strict();
 
 /**
- * Reserved contribution point. Shape is validated but the runtime does not
- * yet act on these entries — `PluginService` logs a warning and skips them.
- * See `docs/architecture/forge-provider-abstraction.md`. `capabilities` is an
- * uninterpreted advisory list (informational only); the host gates behavior
- * on the runtime `ForgeProviderImpl` shape, not these strings.
+ * One credential input rendered into the provider's settings form. `type` is a
+ * free string (`"password"` masks the input; anything else renders plain
+ * text). A provider may declare several fields, but only the primary value
+ * reaches `validateToken` — see `ForgeProviderContribution.credentialFields`
+ * in `shared/types/forge.ts` for the single-primary contract.
  */
+const RESERVED_CREDENTIAL_FIELD_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
 const CredentialFieldSchema = z
   .object({
-    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    // A field id keys the entered value into a plain record at save time; a
+    // reserved key (`__proto__` etc.) would resolve to the object prototype
+    // rather than a stored string and crash the primary-value pick. Reject up
+    // front, mirroring AgentContributionSchema.
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SAFE_ID_PATTERN)
+      .refine((id) => !RESERVED_CREDENTIAL_FIELD_IDS.has(id), {
+        message: "Credential field id cannot be a reserved key (__proto__, constructor, prototype)",
+      }),
     label: z.string().min(1),
     type: z.string().min(1),
     placeholder: z.string().optional(),
@@ -170,6 +183,17 @@ const CredentialFieldSchema = z
   })
   .strict();
 
+/**
+ * `forgeProviders` manifest entry — wired: the registry populates Preferences
+ * and remote-routing before any plugin code runs. See
+ * `docs/architecture/forge-provider-abstraction.md`. Two fields are validated
+ * for SHAPE only and carry no runtime authority (frozen at 1.0):
+ *   - `capabilities` is informational; the host gates behavior on the runtime
+ *     `ForgeProviderImpl` field presence, never on these strings.
+ *   - `slots` values are opaque renderer view-ids checked for non-emptiness
+ *     only; the main process can't verify them against the renderer registry,
+ *     and an unresolved ref renders a neutral fallback (not a parse error).
+ */
 export const ForgeProviderContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),

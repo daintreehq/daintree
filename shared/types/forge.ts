@@ -844,6 +844,17 @@ export interface ForgeProviderImpl {
   createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
   assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
   unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
+  /**
+   * Validate a single freshly-entered credential value at save time. The host
+   * passes exactly one string — the primary of the provider's declared
+   * {@link ForgeProviderContribution.credentialFields} (see that field for the
+   * primary-selection rule), never the full multi-field record. This signature
+   * is frozen at 1.0: a provider needing more than one value to authenticate
+   * (e.g. self-hosted forge wanting base URL + token) reads its other fields
+   * from its own settings (`settingsScopeRef`) and validates the assembled
+   * credential through {@link validateCredentials} instead, which runs against
+   * the provider's stored state rather than a host-supplied argument.
+   */
   validateToken(token: string): Promise<AuthValidation>;
 
   // Host-visible rate-limit state, parsed from the provider's own transport.
@@ -901,10 +912,14 @@ export interface ForgeProviderImpl {
 
 /**
  * Suggested capability vocabulary surfaced in the manifest's `capabilities`
- * array. The host does not interpret these strings — they are informational,
- * driving the Preferences "supports: …" display only. Behavior gates on
- * whether the matching {@link ForgeProviderImpl} capability field is present
- * at runtime, which keeps the claim honest. The open union preserves
+ * array. Frozen at 1.0 as informational only: the host never interprets these
+ * strings and no behavior — feature gating, privilege, routing — is ever
+ * derived from them. They drive the Preferences "supports: …" display and
+ * nothing else. Every actual capability gates on whether the matching
+ * {@link ForgeProviderImpl} field is present at runtime (e.g. `impl.reviews`),
+ * so a declared-but-unimplemented hint can never enable a feature, and an
+ * implemented-but-undeclared one still works. Do not add runtime checks that
+ * cross-reference these strings against the impl. The open union preserves
  * autocomplete while allowing provider-defined strings.
  */
 export type ForgeCapabilityHint =
@@ -937,8 +952,14 @@ export type CredentialFieldType = "password" | "text" | (string & {});
 /**
  * One credential input a forge provider declares in its manifest so the host
  * can render a real settings form for it instead of a "no configuration"
- * stub. The host never inspects the entered value beyond passing the primary
- * field to {@link ForgeProviderImpl.validateToken}; storage stays opaque.
+ * stub. A provider may declare several fields for the form, but the contract
+ * (frozen at 1.0) passes only the PRIMARY field's value to
+ * {@link ForgeProviderImpl.validateToken} and `setCredentials` — the primary
+ * being the first `"password"`-typed field, or the first field when none is
+ * `"password"`. Every entered value is persisted in the credential record, but
+ * the host never inspects any of them beyond the primary; storage stays
+ * opaque. Providers needing more than the primary at auth time read the rest
+ * from their own settings and use {@link ForgeProviderImpl.validateCredentials}.
  */
 export interface CredentialField {
   /** Stable key the entered value is stored under in the credential record. */
@@ -981,14 +1002,19 @@ export interface ForgeProviderContribution {
    * hostname your forge serves as a separate entry.
    */
   matches: string[];
-  /** Informational capability hints; the host does not interpret these. */
+  /**
+   * Informational capability hints; the host never interprets these and no
+   * behavior is derived from them (display only). See {@link ForgeCapabilityHint}.
+   */
   capabilities?: ForgeCapabilityHint[];
   /**
    * Credential inputs the host renders a real settings form from. Absent or
    * empty means the provider needs no host-side credential entry (the host
    * shows "No configuration needed"). The first `"password"`-typed field —
-   * or the first field when none is `"password"` — is the primary credential
-   * passed to {@link ForgeProviderImpl.validateToken}.
+   * or the first field when none is `"password"` — is the primary credential,
+   * the single value passed to {@link ForgeProviderImpl.validateToken} and
+   * `setCredentials`. See {@link CredentialField} for the full single-primary
+   * contract and the multi-field auth path.
    */
   credentialFields?: CredentialField[];
   /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
@@ -999,9 +1025,15 @@ export interface ForgeProviderContribution {
    * Named renderer view-slot refs for provider-owned UI. Each value is a
    * builtin-view id the plugin's renderer registers via
    * `registerBuiltinView`; the host resolves the ACTIVE provider's ref for
-   * each seam instead of hardcoding any one plugin's view ids. All optional —
-   * the host renders a neutral fallback (or hides the seam) when a ref is
-   * absent or the view is unregistered (e.g. plugin disabled).
+   * each seam instead of hardcoding any one plugin's view ids. All optional.
+   *
+   * Slot refs are validated for FORMAT only (non-empty string) at manifest
+   * parse time — the host cannot check a ref against the renderer's view
+   * registry from the main process, and a ref legitimately resolves to nothing
+   * while its plugin is disabled. Resolving an unregistered or disabled ref to
+   * a neutral fallback (or a hidden seam) is the defined 1.0 behavior, not an
+   * error. In dev builds the renderer logs a one-line warning when a non-empty
+   * ref was never registered at all, to flag plugin-author typos.
    */
   slots?: ForgeProviderSlots;
 }
