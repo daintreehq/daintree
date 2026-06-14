@@ -122,6 +122,8 @@ This hash is persisted in the plugin's provenance record (`LoadedPluginInfo.arch
 
 The hash covers the raw ZIP bytes as received — same-OS determinism guarantees the hash is stable for a given source tree and tool version. Cross-platform byte identity is not yet guaranteed (the ZIP "made by" header varies per OS); the hash reflects the bytes as produced by the current platform.
 
+This hash establishes **integrity**, not **authenticity**. It proves the bytes match between two fetches of the same artifact; it does not prove who produced them. `.dntr` archives are unsigned and Daintree performs no publisher-identity verification at any install path (sideload, file, or URL) — see the [trust model](./trust-model.md) for the full non-guarantee contract.
+
 ### Cross-platform determinism
 
 Same-OS determinism is guaranteed and tested in CI. Cross-platform byte identity (bitwise identical `.dntr` from macOS, Linux, and Windows builds of the same source) is a known limitation. The ZIP "made by" field in local file headers reflects `process.platform` at build time, so macOS-built and Linux-built archives differ even with identical content, compression, and ordering.

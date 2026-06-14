@@ -858,7 +858,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         <AppDialog.Body className="space-y-3">
           <AppDialog.Description>
             Enter the URL of a Daintree plugin archive (.dntr). It's downloaded, validated, and
-            installed.
+            installed. Plugins run with full Node.js privileges — there's no sandbox, no signature
+            check, and no capability prompt before install. Only install from sources you trust.
           </AppDialog.Description>
           <input
             type="url"

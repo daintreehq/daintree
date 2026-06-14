@@ -32,7 +32,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "daintree": "^0.11.0",
   },
 
-  // Declared capabilities, shown to the user at install time.
+  // Declared capabilities, surfaced in the plugin manager after install.
   // Disclosure-first with host-side policy effects (no Node sandbox).
   // See "Capabilities" below and ./trust-model.md.
   "capabilities": ["fs:project-read", "network:fetch"],
@@ -172,7 +172,7 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `clipboard:write`    | Write to the system clipboard                            |
 | `shell:exec`         | Spawn subprocesses                                       |
 
-Declare honestly. The install UI lists what you've declared and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and nothing at runtime stops it, which is exactly why honest declaration matters.
+Declare honestly. The plugin manager's detail pane lists what you've declared (after install, not as a pre-install consent gate) and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and nothing at runtime stops it, which is exactly why honest declaration matters.
 
 ### `scopes`
 
