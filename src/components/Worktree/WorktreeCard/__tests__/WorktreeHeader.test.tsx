@@ -1182,11 +1182,14 @@ describe("WorktreeHeader token-missing badge behavior", () => {
       name: /Add a forge access token to see issue details/,
     });
     expect(issueButton).toBeDefined();
-    // Button stays full-opacity for focus-ring contrast; icon is dimmed.
+    // Button stays full-opacity for focus-ring contrast; the icon is muted with a
+    // solid token (not its active state color, and not opacity/grayscale dimming).
     expect(issueButton.className).not.toContain("opacity-60");
     const issueIcon = issueButton.querySelector("svg");
-    expect(issueIcon?.className.baseVal).toContain("grayscale");
-    expect(issueIcon?.className.baseVal).toContain("opacity-50");
+    expect(issueIcon?.className.baseVal).toContain("text-text-muted");
+    expect(issueIcon?.className.baseVal).not.toContain("text-pr-open");
+    expect(issueIcon?.className.baseVal).not.toContain("grayscale");
+    expect(issueIcon?.className.baseVal).not.toContain("opacity-50");
   });
 
   it("issue badge dispatches settings action on click when no token configured", () => {
@@ -1224,8 +1227,11 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     expect(prButton).toBeDefined();
     expect(prButton.className).not.toContain("opacity-60");
     const prIcon = prButton.querySelector("svg");
-    expect(prIcon?.className.baseVal).toContain("grayscale");
-    expect(prIcon?.className.baseVal).toContain("opacity-50");
+    // Muted with a solid token, not the active PR-state color or opacity/grayscale.
+    expect(prIcon?.className.baseVal).toContain("text-text-muted");
+    expect(prIcon?.className.baseVal).not.toContain("text-pr-open");
+    expect(prIcon?.className.baseVal).not.toContain("grayscale");
+    expect(prIcon?.className.baseVal).not.toContain("opacity-50");
   });
 
   it("PR badge dispatches settings action on click when no token configured", () => {
