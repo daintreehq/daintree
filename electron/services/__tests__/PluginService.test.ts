@@ -2467,6 +2467,25 @@ describe("Plugin IPC handler registration", () => {
       }
     });
 
+    it("rethrows the original error even when it is frozen (marker can't attach)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const frozen = Object.freeze(new Error("handler exploded"));
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(frozen));
+        // The marker can't be written onto a frozen error; the original error
+        // must still surface (not a TypeError from the failed assignment).
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [])
+        ).rejects.toBe(frozen);
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        expect(isAuditedHandlerFailure(frozen)).toBe(false);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
     it("never lets an audit append failure mask the handler error", async () => {
       const appendSpy = vi.spyOn(getPluginActionAuditService(), "append").mockImplementation(() => {
         throw new Error("audit store corrupt");

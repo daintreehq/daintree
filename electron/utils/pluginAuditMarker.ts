@@ -21,7 +21,14 @@ const PLUGIN_HANDLER_FAILURE_AUDITED = Symbol("plugin-handler-failure-audited");
  */
 export function markAuditedHandlerFailure(err: unknown): void {
   if (typeof err === "object" && err !== null) {
-    (err as Record<symbol, unknown>)[PLUGIN_HANDLER_FAILURE_AUDITED] = true;
+    try {
+      (err as Record<symbol, unknown>)[PLUGIN_HANDLER_FAILURE_AUDITED] = true;
+    } catch {
+      // A frozen/sealed error rejects the assignment in strict mode. The
+      // marker is best-effort — never let it replace the handler error we're
+      // about to rethrow. An unmarked error is simply re-audited by the outer
+      // IPC boundary (a duplicate record, not a lost one).
+    }
   }
 }
 
