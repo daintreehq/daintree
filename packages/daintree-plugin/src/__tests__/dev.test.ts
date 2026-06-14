@@ -6,7 +6,8 @@ import path from "node:path";
 
 vi.mock("../lib/viteBuild.js", () => ({
   runViteBuild: vi.fn(async () => {}),
-  spawnViteWatch: vi.fn(async () => ({ kill: vi.fn(), catch: vi.fn() })),
+  // Synchronous like the real helper: returns a live child handle, not a Promise.
+  spawnViteWatch: vi.fn(() => ({ kill: vi.fn(), catch: vi.fn() })),
 }));
 vi.mock("../ipc/client.js", () => ({
   sendCliRequest: vi.fn(async () => ({ status: "ok" })),
@@ -132,6 +133,32 @@ describe("runDev", () => {
     const watch = await vi.mocked(spawnViteWatch).mock.results[0].value;
     expect(watch.kill).toHaveBeenCalled();
     // The dev artifacts are gone after teardown.
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+  });
+
+  it("sends plugin.dev.start before plugin.dev.stop with the plugin id", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+    const calls = vi.mocked(sendCliRequest).mock.calls;
+    expect(calls[0]).toEqual(["plugin.dev.start", { pluginId: "acme.demo" }]);
+    expect(calls[calls.length - 1]).toEqual(["plugin.dev.stop", { pluginId: "acme.demo" }]);
+  });
+
+  it("unloads and cleans up when the build watcher fails to start", async () => {
+    vi.mocked(spawnViteWatch).mockImplementationOnce(() => {
+      throw new Error("Couldn't find Vite");
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal })
+    ).rejects.toThrow(/Vite/);
+
+    // The plugin was already started in Daintree, so it must be stopped, and the
+    // symlink/marker removed — no dangling dev state.
+    expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
     expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
   });
 

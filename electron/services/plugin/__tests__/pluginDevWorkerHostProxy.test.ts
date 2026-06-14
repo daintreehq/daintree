@@ -96,6 +96,28 @@ describe("PluginDevWorkerHostProxy file decoration providers", () => {
     expect(result).toMatchObject({ ok: false });
   });
 
+  it("a stale disposer does not drop a re-registered impl on the same id", async () => {
+    const { proxy, sent } = makeProxy();
+    const implA = { provideDecorations: vi.fn(async () => ({ a: { badge: "A" } })) };
+    const implB = { provideDecorations: vi.fn(async () => ({ b: { badge: "B" } })) };
+    const disposeA = proxy.host.registerFileDecorationProvider({ id: "deco" }, implA);
+    proxy.host.registerFileDecorationProvider({ id: "deco" }, implB); // overwrites A
+    disposeA(); // stale — must NOT remove B
+
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i9",
+      kind: "file-decoration-method",
+      providerId: "deco",
+      method: "provideDecorations",
+      args: ["pr", ["x"]],
+    } as any);
+    await flush();
+    expect(implB.provideDecorations).toHaveBeenCalled();
+    const result = sent.find((m) => m.type === "invoke-result" && m.requestId === "i9");
+    expect(result).toMatchObject({ ok: true, result: { b: { badge: "B" } } });
+  });
+
   it("rejects an impl missing provideDecorations", () => {
     const { proxy } = makeProxy();
     expect(() => proxy.host.registerFileDecorationProvider({ id: "deco" }, {} as any)).toThrow(

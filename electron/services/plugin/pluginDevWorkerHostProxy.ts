@@ -378,7 +378,12 @@ export class PluginDevWorkerHostProxy {
         return () => {
           if (disposed) return;
           disposed = true;
-          this.fileDecorationProviders.delete(providerId);
+          // Identity-guard the delete so a stale disposer (from a prior register
+          // on the same id that a later register overwrote) can't drop the
+          // currently-active impl — mirrors the real host's registry semantics.
+          if (this.fileDecorationProviders.get(providerId) === impl) {
+            this.fileDecorationProviders.delete(providerId);
+          }
           this.notify("unregisterFileDecorationProvider", { providerId });
         };
       },

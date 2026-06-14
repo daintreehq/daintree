@@ -111,6 +111,15 @@ export async function cleanupDevLink(link: DevLink): Promise<void> {
   }
 }
 
+/** Best-effort unload request — Daintree may have been closed first. */
+async function sendDevStop(pluginId: string): Promise<void> {
+  try {
+    await sendCliRequest("plugin.dev.stop", { pluginId });
+  } catch {
+    // Daintree gone or unreachable — local fs cleanup still proceeds.
+  }
+}
+
 /** Stop the build watcher, ask Daintree to unload, and remove the dev artifacts. */
 async function stopDev(pluginId: string, link: DevLink, watch: ResultPromise): Promise<void> {
   try {
@@ -118,11 +127,7 @@ async function stopDev(pluginId: string, link: DevLink, watch: ResultPromise): P
   } catch {
     // already exited
   }
-  try {
-    await sendCliRequest("plugin.dev.stop", { pluginId });
-  } catch {
-    // Daintree may have been closed first — the fs cleanup below still runs.
-  }
+  await sendDevStop(pluginId);
   await cleanupDevLink(link);
 }
 
@@ -166,7 +171,18 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
     throw err;
   }
 
-  const watch = await spawnViteWatch(dir);
+  // `spawnViteWatch` returns the live child handle synchronously (do NOT await
+  // it — awaiting the ResultPromise would block until the watcher exits). If it
+  // throws (Vite missing), the plugin is already loaded in Daintree, so unload
+  // it and remove the dev artifacts before surfacing the error.
+  let watch: ResultPromise;
+  try {
+    watch = spawnViteWatch(dir);
+  } catch (err) {
+    await sendDevStop(pluginId);
+    await cleanupDevLink(link);
+    throw err;
+  }
   // A watch crash is informational, not fatal to the session — surface it via
   // its inherited stdio; don't let the rejection bubble as unhandled.
   watch.catch(() => {});
