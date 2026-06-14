@@ -6067,6 +6067,7 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
     const panelCall = (registerPanelKind as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
       componentPath?: string;
     };

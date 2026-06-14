@@ -195,7 +195,7 @@ Object containing arrays for each contribution type. All fields are optional; un
 
 Fields prefixed with `experimental_` **do** have runtime behavior — the prefix signals only that their shape may still change before it's locked, not that they're inert:
 
-- `experimental_views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` logs a warning and is skipped until the sidebar host ships.
+- `experimental_views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
 - `experimental_mcpServers` — wired: the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (restart-on-crash, killed on exit). Treat a contributed MCP server as trust-gated, not inert.
 
 The non-experimental `forgeProviders` and `fileDecorationProviders` contributions are also live at runtime. `agents` registers a launchable agent CLI as a selectable agent and requires the `agent:register` capability — see the [Contribution points reference](./contribution-points.md) for its shape. That reference also lists the per-point status of every type.

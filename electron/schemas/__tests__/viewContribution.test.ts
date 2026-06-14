@@ -38,12 +38,16 @@ describe("ViewContributionSchema (issue #10464)", () => {
 
   it.each([
     ["a traversal escape", "../escape.js"],
+    ["a mid-path traversal", "dist/../escape.js"],
+    ["a leading-dot traversal", "./../escape.js"],
     ["an absolute path", "/abs/path.js"],
     ["an http URL scheme", "https://evil.example/view.js"],
     ["a backslash separator", "dist\\view.js"],
     ["a query string", "view.js?cache=1"],
     ["a fragment", "view.js#frag"],
     ["an embedded NUL", "view\0.js"],
+    ["a bare current-dir", "."],
+    ["a bare current-dir with slash", "./"],
   ])("rejects an unsafe componentPath: %s", (_label, componentPath) => {
     expect(ViewContributionSchema.safeParse({ ...base, componentPath }).success).toBe(false);
   });

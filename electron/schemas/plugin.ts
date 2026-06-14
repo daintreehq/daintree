@@ -133,6 +133,10 @@ function isSafePluginViewComponentPath(componentPath: string): boolean {
   if (componentPath.includes(":")) return false;
   if (componentPath.includes("?")) return false;
   if (componentPath.includes("#")) return false;
+  // A bare current-dir / root path (`.`, `./`) resolves to no module file — a
+  // 404 from the protocol handler — so reject it at the manifest gate.
+  const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
+  if (normalized === "" || normalized === ".") return false;
   return !componentPath.split("/").includes("..");
 }
 
