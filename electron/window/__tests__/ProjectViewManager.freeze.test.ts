@@ -377,7 +377,7 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
     const frozeProjA = vi
       .mocked(freezeWebContents)
-      .mock.calls.some((call) => call[0] === initialWc);
+      .mock.calls.some((call) => (call[0] as unknown) === initialWc);
     expect(frozeProjA).toBe(false);
   });
 
@@ -391,7 +391,7 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
     const frozeProjA = vi
       .mocked(freezeWebContents)
-      .mock.calls.some((call) => call[0] === initialWc);
+      .mock.calls.some((call) => (call[0] as unknown) === initialWc);
     expect(frozeProjA).toBe(false);
   });
 
