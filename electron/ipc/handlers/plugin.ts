@@ -42,6 +42,7 @@ import {
   getPluginPanelKinds,
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
+import { isPluginInvokeOwnershipError } from "../../services/plugin/PluginInvokeErrors.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
@@ -906,12 +907,20 @@ export function registerPluginHandlers(): () => void {
             // Hashing is best-effort — a serialization throw here must not
             // mask the original handler error.
           }
+          // An ownership rejection (#10462) is a denied invocation, not a
+          // handler failure — record it as "restricted" so it groups with the
+          // untrusted-sender rejection above rather than with genuine dispatch
+          // errors. The sender already passed `isTrustedRendererUrl`, so the
+          // args are from a trusted frame and the forensic `argsHash` is still
+          // useful. An ownership error is thrown before any handler runs, so it
+          // is never marked as an audited handler failure and always reaches
+          // this block.
           safeAppend({
             pluginId,
             actionId: channel,
             recordType: "ipc-invoke",
             channel: CHANNELS.PLUGIN_INVOKE,
-            result: "error",
+            result: isPluginInvokeOwnershipError(err) ? "restricted" : "error",
             errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
             argsHash,
             durationMs: Date.now() - start,

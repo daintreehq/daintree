@@ -91,6 +91,7 @@ vi.mock("electron", () => ({
 
 import { registerPluginHandlers } from "../plugin.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
+import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -973,6 +974,60 @@ describe("registerPluginHandlers", () => {
     };
     await expect(invokeHandler(trustedEvent, "p", "ch", "arg1")).rejects.toBe(marked);
     expect(mockAuditAppend).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE audits an ownership rejection as restricted with a forensic hash (#10462)", async () => {
+    // A trusted sender that targets an unloaded pluginId is a denied
+    // invocation, not a handler failure — it must be classified "restricted"
+    // (grouping with the untrusted-sender path) while still hashing the args,
+    // since the frame already passed the origin-trust check.
+    mockDispatchHandler.mockRejectedValue(
+      new PluginInvokeOwnershipError("acme.missing", "get-data")
+    );
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 5 },
+    };
+    await expect(invokeHandler(trustedEvent, "acme.missing", "get-data", "arg1")).rejects.toThrow(
+      'plugin:invoke rejected: plugin "acme.missing" is not loaded'
+    );
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0][0];
+    expect(record).toMatchObject({
+      pluginId: "acme.missing",
+      actionId: "get-data",
+      recordType: "ipc-invoke",
+      channel: "plugin:invoke",
+      result: "restricted",
+    });
+    // Sender was trusted, so unlike the untrusted-URL path the args ARE hashed.
+    expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("PLUGIN_INVOKE keeps a genuine dispatch error classified as error, not restricted (#10462)", async () => {
+    // Regression guard: only ownership rejections become "restricted" — an
+    // ordinary handler failure for a loaded plugin must stay "error".
+    mockDispatchHandler.mockRejectedValue(new Error("handler exploded"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 6 },
+    };
+    await expect(invokeHandler(trustedEvent, "acme.loaded", "get-data", "arg1")).rejects.toThrow(
+      "handler exploded"
+    );
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error" });
   });
 
   it("PLUGIN_INVOKE audit hash discriminates by arg content (#9240)", async () => {
