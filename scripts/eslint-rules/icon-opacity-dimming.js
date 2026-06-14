@@ -126,10 +126,13 @@ export default {
           for (const element of node.elements) checkExpression(element);
           break;
         case "ObjectExpression":
-          // clsx object form: { "opacity-50": condition }
+          // clsx object form: { "opacity-50": cond } and { grayscale: cond }
           for (const prop of node.properties) {
-            if (prop.type === "Property" && prop.key.type === "Literal") {
-              if (typeof prop.key.value === "string") checkClassString(prop.key.value, prop.key);
+            if (prop.type !== "Property" || prop.computed) continue;
+            if (prop.key.type === "Literal" && typeof prop.key.value === "string") {
+              checkClassString(prop.key.value, prop.key);
+            } else if (prop.key.type === "Identifier") {
+              checkClassString(prop.key.name, prop.key);
             }
           }
           break;

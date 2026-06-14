@@ -79,7 +79,7 @@ All thresholds are derived from CSS Color 4, APCA research, and Material 3 guide
 | `text-inverse` | Text on solid accent/color backgrounds | Required |
 | `text-link` | Hyperlink color | Derived: `accent-primary` |
 
-Dim or disabled icons must use a solid token (`text-text-muted` for disabled/needs-setup glyphs, `text-text-secondary` for de-emphasized ones). Never dim an icon with `opacity-*` utilities, slash-alpha color modifiers (`text-text-primary/50`), or the `grayscale` filter — they composite against the theme background and read differently on each palette instead of resolving to a validated token color. The `icon-opacity-dimming/no-icon-opacity-dimming` ESLint rule enforces this; genuine visibility toggles (an icon that fades from `opacity-0`) opt out with an inline `eslint-disable-next-line` carrying a reason.
+Dim or disabled icons must use a solid token (`text-text-muted` for disabled/needs-setup glyphs, `text-text-secondary` for de-emphasized ones), never a half-transparent one. The `icon-opacity-dimming/no-icon-opacity-dimming` ESLint rule blocks the two opacity-compositing patterns on `<svg>` and icon components — `opacity-*` utilities (other than the `opacity-0`/`opacity-100` visibility toggles) and the `grayscale` filter — because both blend the icon with whatever sits behind it and read differently on each palette. Prefer a solid token over slash-alpha color modifiers (`text-text-primary/50`) too; those aren't lint-enforced but carry the same compositing pitfall. Genuine visibility toggles (an icon that fades from `opacity-0`) opt out of the rule with an inline `eslint-disable-next-line` carrying a reason.
 
 ## Border Tokens
 

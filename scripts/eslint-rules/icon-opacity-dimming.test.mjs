@@ -114,9 +114,21 @@ ruleTester.run("no-icon-opacity-dimming", rule, {
       errors: [{ messageId: "opacity" }],
     },
     {
-      name: "opacity in clsx object form on an icon",
+      name: "opacity in clsx object form on an icon (quoted key)",
       code: `import { Search } from "lucide-react";
         const A = ({ dim }) => <Search className={cn({ "opacity-50": dim })} />;`,
+      errors: [{ messageId: "opacity" }],
+    },
+    {
+      name: "grayscale in clsx object form on an icon (unquoted identifier key)",
+      code: `import { CircleDot } from "lucide-react";
+        const A = ({ dim }) => <CircleDot className={cn({ grayscale: dim })} />;`,
+      errors: [{ messageId: "grayscale" }],
+    },
+    {
+      name: "aliased lucide import is still tracked as an icon",
+      code: `import { Settings2 as SettingsIcon } from "lucide-react";
+        const A = () => <SettingsIcon className="opacity-60" />;`,
       errors: [{ messageId: "opacity" }],
     },
   ],
