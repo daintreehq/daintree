@@ -127,7 +127,7 @@ export function UpstreamSyncBadge({
             data-fetch-auth-failed="true"
             aria-label="Forge authentication failed — click to reconnect"
           >
-            <span className="flex items-center gap-1.5 grayscale opacity-50 text-text-primary/50">
+            <span className="flex items-center gap-1.5 text-text-muted">
               {hasAhead && <span>↑{aheadCount}</span>}
               {hasBehind && <span>↓{behindCount}</span>}
               {!hasAhead && !hasBehind && <span>—</span>}

@@ -528,7 +528,7 @@ export function LocalCommitsDropdown({
         ) : null}
         {!loading && !data.length && error && (
           <div className="p-8 text-center text-muted-foreground">
-            <AlertCircle className="h-5 w-5 mx-auto mb-2 opacity-50" />
+            <AlertCircle className="h-5 w-5 mx-auto mb-2 text-text-muted" />
             <p className="text-sm">{error}</p>
             <Button
               variant="ghost"
