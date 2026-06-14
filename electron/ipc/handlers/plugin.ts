@@ -32,6 +32,7 @@ import {
 import { isPrivateOrLoopbackHostname, SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/plugin.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { stableArgsSha256 } from "../../utils/pluginMcpHash.js";
+import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getPluginToolbarButtonIds,
@@ -888,28 +889,34 @@ export function registerPluginHandlers(): () => void {
       try {
         return await (await getPluginService()).dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
-        // `stableArgsSha256` content-discriminates without persisting any
-        // arg bytes — two structurally identical failed invokes hash the
-        // same, but distinct args produce distinct hashes. (A summary-based
-        // hash via `summarizeMcpArgs` collapses arrays to a constant, which
-        // would defeat forensic grouping.)
-        let argsHash = "";
-        try {
-          argsHash = stableArgsSha256(args);
-        } catch {
-          // Hashing is best-effort — a serialization throw here must not
-          // mask the original handler error.
+        // A throwing plugin handler is already audited at the dispatch
+        // boundary (#10463); recording it again here would double-count the
+        // failure. Errors that never reach a handler — schema/permission/
+        // no-handler — aren't marked, so the IPC boundary still owns them.
+        if (!isAuditedHandlerFailure(err)) {
+          // `stableArgsSha256` content-discriminates without persisting any
+          // arg bytes — two structurally identical failed invokes hash the
+          // same, but distinct args produce distinct hashes. (A summary-based
+          // hash via `summarizeMcpArgs` collapses arrays to a constant, which
+          // would defeat forensic grouping.)
+          let argsHash = "";
+          try {
+            argsHash = stableArgsSha256(args);
+          } catch {
+            // Hashing is best-effort — a serialization throw here must not
+            // mask the original handler error.
+          }
+          safeAppend({
+            pluginId,
+            actionId: channel,
+            recordType: "ipc-invoke",
+            channel: CHANNELS.PLUGIN_INVOKE,
+            result: "error",
+            errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
+            argsHash,
+            durationMs: Date.now() - start,
+          });
         }
-        safeAppend({
-          pluginId,
-          actionId: channel,
-          recordType: "ipc-invoke",
-          channel: CHANNELS.PLUGIN_INVOKE,
-          result: "error",
-          errorMessage: formatErrorMessage(err, "plugin:invoke dispatch failed"),
-          argsHash,
-          durationMs: Date.now() - start,
-        });
         throw err;
       }
     }

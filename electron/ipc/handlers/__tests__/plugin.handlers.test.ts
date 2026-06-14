@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
 
 const mockDispatchHandler = vi.fn();
 const mockListPlugins = vi.fn();
@@ -951,6 +952,27 @@ describe("registerPluginHandlers", () => {
     expect(record.errorMessage).toContain("No plugin handler registered");
     expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
     expect(typeof record.durationMs).toBe("number");
+  });
+
+  it("PLUGIN_INVOKE does not re-audit a failure already recorded at the dispatch boundary (#10463)", async () => {
+    // dispatchHandler now audits handler throws itself and marks the error.
+    // The outer handler must skip its own append to avoid a double record,
+    // while still rethrowing so the renderer sees the failure.
+    const marked = new Error("handler exploded");
+    markAuditedHandlerFailure(marked);
+    mockDispatchHandler.mockRejectedValue(marked);
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    await expect(invokeHandler(trustedEvent, "p", "ch", "arg1")).rejects.toBe(marked);
+    expect(mockAuditAppend).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE audit hash discriminates by arg content (#9240)", async () => {
