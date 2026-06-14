@@ -58,6 +58,7 @@ import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRe
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
+import { PluginInvokeOwnershipError } from "./plugin/PluginInvokeErrors.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -2423,6 +2424,19 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Ownership guard (#10462): the renderer is a single shared WebContents in
+    // which every plugin runs in the same realm, so a caller can pass an
+    // arbitrary `pluginId`. Reject any id the host has not actually loaded
+    // before activation or routing — this is the boundary's only achievable
+    // ownership guarantee given that shared realm. It lives here, in the single
+    // chokepoint every plugin:invoke flows through, rather than in the IPC
+    // handler, so no current or future caller of `dispatchHandler` can reach a
+    // handler for an unloaded plugin (dev-worker channels are dispatched here
+    // too, via their `host.registerHandler` registrations).
+    if (!this.plugins.has(pluginId)) {
+      throw new PluginInvokeOwnershipError(pluginId, channel);
+    }
+
     // Start the clock before activation so a failure record carries the full
     // dispatch cost (cold activation included) the renderer actually waited on.
     const dispatchStart = Date.now();

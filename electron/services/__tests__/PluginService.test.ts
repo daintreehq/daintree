@@ -169,6 +169,7 @@ import { z } from "zod";
 import { PluginService } from "../PluginService.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
+import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
 import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -2345,6 +2346,31 @@ describe("Plugin IPC handler registration", () => {
     ).rejects.toThrow("No plugin handler registered for acme.test-plugin:unknown");
   });
 
+  it("dispatchHandler rejects an unknown pluginId with PluginInvokeOwnershipError (#10462)", async () => {
+    await expect(
+      service.dispatchHandler("acme.unknown-plugin", "get-data", makeCtx("acme.unknown-plugin"), [])
+    ).rejects.toThrow(PluginInvokeOwnershipError);
+  });
+
+  it("dispatchHandler does not activate when the pluginId is not loaded (#10462)", async () => {
+    // The ownership guard must fire before activation, so impersonating an
+    // unloaded plugin can never trigger any plugin code to run.
+    const activateSpy = vi.spyOn(service, "activatePlugin");
+    await expect(
+      service.dispatchHandler("acme.unknown-plugin", "get-data", makeCtx("acme.unknown-plugin"), [])
+    ).rejects.toBeInstanceOf(PluginInvokeOwnershipError);
+    expect(activateSpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatchHandler treats an unknown channel on a loaded plugin as a normal error, not an ownership rejection (#10462)", async () => {
+    // Regression guard: the ownership rejection keys on the pluginId being
+    // loaded, not on whether the channel resolves — a real plugin with a bad
+    // channel must still surface the generic handler error.
+    await expect(
+      service.dispatchHandler("acme.test-plugin", "unknown", makeCtx("acme.test-plugin"), [])
+    ).rejects.not.toBeInstanceOf(PluginInvokeOwnershipError);
+  });
+
   it("registering same (pluginId, channel) twice overwrites the handler", async () => {
     const handler1 = vi.fn().mockReturnValue("first");
     const handler2 = vi.fn().mockReturnValue("second");
@@ -3498,9 +3524,11 @@ describe("Plugin unload lifecycle", () => {
 
     service.unloadPlugin("acme.handler-host");
 
+    // After unload the plugin leaves `this.plugins`, so the ownership guard
+    // (#10462) now short-circuits dispatch before the handler lookup.
     await expect(
       service.dispatchHandler("acme.handler-host", "ping", makeCtx("acme.handler-host"), [])
-    ).rejects.toThrow("No plugin handler registered for acme.handler-host:ping");
+    ).rejects.toThrow('plugin:invoke rejected: plugin "acme.handler-host" is not loaded');
   });
 
   it("unloadPlugin is a no-op when the plugin is not loaded", async () => {
@@ -5212,6 +5240,8 @@ describe("createHost — registerAction", () => {
     service.unloadPlugin("acme.act-test");
 
     expect(service.listPluginActions()).toEqual([]);
+    // Once unloaded the plugin is no longer in `this.plugins`, so the ownership
+    // guard (#10462) rejects the dispatch before the action lookup runs.
     await expect(
       service.dispatchHandler(
         "acme.act-test",
@@ -5219,9 +5249,7 @@ describe("createHost — registerAction", () => {
         makeCtx("acme.act-test"),
         [{}]
       )
-    ).rejects.toThrow(
-      "No plugin handler registered for acme.act-test:acme.act-test.plan-from-issue"
-    );
+    ).rejects.toThrow('plugin:invoke rejected: plugin "acme.act-test" is not loaded');
   });
 });
 
