@@ -55,6 +55,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      # Build first: `--ignore-scripts` skipped each workspace's `prepare`, so
+      # dist/ is absent. create-daintree-plugin's typecheck resolves
+      # daintree-plugin via its dist `types` entry, so dist must exist before
+      # the typecheck step runs.
+      - name: Build packages
+        run: npm run packages:build
+
       - name: Typecheck packages
         run: |
           npm run typecheck --workspace=packages/plugin-sdk
@@ -62,9 +69,6 @@ jobs:
           npm run typecheck --workspace=packages/plugin-vite
           npm run typecheck --workspace=packages/daintree-plugin
           npm run typecheck --workspace=packages/create-daintree-plugin
-
-      - name: Build packages
-        run: npm run packages:build
 
       - name: Pack (dry run)
         if: ${{ inputs.dry_run }}
@@ -76,14 +80,28 @@ jobs:
             --workspace=packages/create-daintree-plugin
 
       # Publish in dependency order: plugin-sdk first (others peer/depend on it),
-      # then plugin-testing, the vite preset, and the CLIs.
+      # then plugin-testing, the vite preset, and the CLIs. Each publish is
+      # guarded by a version-existence check so re-running after a partial
+      # failure skips already-published versions instead of erroring on
+      # EPUBLISHCONFLICT and blocking the remaining packages.
       - name: Publish to npm
         if: ${{ inputs.dry_run != true }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish --workspace=packages/plugin-sdk
-          npm publish --workspace=packages/plugin-testing
-          npm publish --workspace=packages/plugin-vite
-          npm publish --workspace=packages/daintree-plugin
-          npm publish --workspace=packages/create-daintree-plugin
+          publish_if_new() {
+            local dir="$1"
+            local name version
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "Skipping $name@$version — already published"
+            else
+              npm publish --workspace="$dir"
+            fi
+          }
+          publish_if_new packages/plugin-sdk
+          publish_if_new packages/plugin-testing
+          publish_if_new packages/plugin-vite
+          publish_if_new packages/daintree-plugin
+          publish_if_new packages/create-daintree-plugin

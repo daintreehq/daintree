@@ -33,7 +33,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "tsup"
   },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
   "devDependencies": {
-    "tsup": "^8.5.0"
+    "tsup": "^8.5.0",
+    "zod": "^4.3.6"
   }
 }

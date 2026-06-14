@@ -23,4 +23,10 @@ export default defineConfig({
     compilerOptions: { ignoreDeprecations: "6.0" },
   },
   clean: true,
+  // `PluginChannelSchema` is public surface typed as `z.ZodType<T>`. Without
+  // keeping zod external, the dts bundler inlines zod's CJS runtime and mangles
+  // the qualified `z.ZodType` reference into invalid `undefined<T>` syntax.
+  // Externalizing it emits a clean `import type { z } from "zod"` — zod is a
+  // peer dependency plugin authors already have for authoring schemas.
+  external: ["zod"],
 });

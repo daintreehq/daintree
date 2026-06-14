@@ -18,4 +18,9 @@ export default defineConfig({
     compilerOptions: { ignoreDeprecations: "6.0" },
   },
   clean: true,
+  // The mock's `registerHandler` signature surfaces `PluginChannelSchema`
+  // (`z.ZodType<T>`). Keep zod external so the dts bundler emits a clean
+  // `import type { z } from "zod"` instead of inlining zod's CJS runtime and
+  // mangling the qualified reference. See plugin-sdk/tsup.config.ts.
+  external: ["zod"],
 });

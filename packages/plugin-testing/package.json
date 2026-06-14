@@ -29,9 +29,11 @@
     "prepare": "tsup"
   },
   "peerDependencies": {
-    "@daintreehq/plugin-sdk": "^0.1.0"
+    "@daintreehq/plugin-sdk": "^0.1.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
-    "tsup": "^8.5.0"
+    "tsup": "^8.5.0",
+    "zod": "^4.3.6"
   }
 }
