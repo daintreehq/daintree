@@ -19,7 +19,7 @@ import {
 } from "../../utils/pluginDownloadPolicy.js";
 import { resilientRename } from "../../utils/fs.js";
 import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
-import { getPluginMcpConsentService } from "../plugin-mcp/instances.js";
+import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -941,6 +941,17 @@ export class PluginInstaller {
       } catch (err) {
         console.error(
           `[PluginService] consent purge during uninstall of "${pluginId}" threw:`,
+          err
+        );
+      }
+
+      // Drop the plugin's rate-limit buckets so a same-name reinstall starts
+      // with a full burst budget instead of inheriting throttle debt.
+      try {
+        getPluginMcpRateLimiter().dropPlugin(pluginId);
+      } catch (err) {
+        console.error(
+          `[PluginService] rate-limiter drop during uninstall of "${pluginId}" threw:`,
           err
         );
       }

@@ -2736,6 +2736,25 @@ export class PluginService {
   }
 
   /**
+   * Resolve the consent-facing metadata for a loaded plugin — the display name
+   * and declared capabilities the plugin-MCP `tools/call` handler folds into the
+   * consent prompt and tier derivation. Returns `undefined` when the plugin is
+   * not currently loaded (e.g. a renderer race with unload).
+   */
+  getMcpConsentMeta(
+    pluginId: string
+  ):
+    | { pluginDisplayName: string; manifestCapabilities: readonly BuiltInPluginCapability[] }
+    | undefined {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return undefined;
+    return {
+      pluginDisplayName: plugin.manifest.displayName ?? plugin.manifest.name,
+      manifestCapabilities: plugin.manifest.capabilities ?? [],
+    };
+  }
+
+  /**
    * Resolve a `${settings:<id>}` template by reading the named user-scope
    * setting and stringifying the value. Booleans and numbers become their
    * JSON representation; objects/arrays become JSON-encoded strings. An

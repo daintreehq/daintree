@@ -114,6 +114,47 @@ export type PluginMcpGetFullSchemaResult =
   | { found: false };
 
 /**
+ * Input to `plugin-mcp:call-tool`. Identifies one supervised server plus the
+ * tool the assistant selected and the arguments the model produced. `args` is
+ * the raw argument object; it is hashed for the audit row and redacted for the
+ * consent preview in main — it is never persisted or echoed back to the
+ * renderer.
+ */
+export interface PluginMcpCallToolInput {
+  pluginId: string;
+  serverId: string;
+  toolName: string;
+  args?: Record<string, unknown>;
+}
+
+/**
+ * Result of `plugin-mcp:call-tool`. A discriminated union so the renderer
+ * (assistant) distinguishes a delivered MCP result from a consent/cap denial
+ * or a dispatch error without inspecting thrown-error shapes.
+ *
+ * - `success` — consent approved and the supervised server returned. `result`
+ *   is the raw MCP `CallToolResult`; the renderer formats it for the model.
+ * - `denied` — refused before dispatch (consent rejected/timed-out, capability
+ *   cap exceeded, or rate limited). `retryAfterMs` is set only when the denial
+ *   is a transient rate-limit throttle.
+ * - `error` — consent approved but the dispatched call failed (server not
+ *   ready, timeout, subprocess write failure). `message` is diagnostic.
+ */
+export type PluginMcpCallToolResult =
+  | { kind: "success"; result: unknown }
+  | { kind: "denied"; errorCode: string; retryAfterMs?: number }
+  | { kind: "error"; errorCode: string; message: string };
+
+/**
+ * Input to `plugin-mcp:resolve-consent` — the renderer's reply to a
+ * `plugin-mcp:consent-request` push, correlated by `requestId`.
+ */
+export interface PluginMcpResolveConsentInput {
+  requestId: string;
+  decision: import("../pluginMcpConsent.js").PluginMcpConsentDecision;
+}
+
+/**
  * Advanced plugin-MCP tuning surfaced via `plugin-mcp:get-config` /
  * `plugin-mcp:set-config` (#9235). Persisted in the `pluginMcpConfig` store
  * slice. Kept a distinct object (rather than loose IPC args) so future tuning

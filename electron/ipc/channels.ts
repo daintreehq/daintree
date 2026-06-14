@@ -903,6 +903,10 @@ export const CHANNELS = {
   // Advanced tuning: the global tool-count cap surfaced as a setting (#9235).
   PLUGIN_MCP_GET_CONFIG: "plugin-mcp:get-config",
   PLUGIN_MCP_SET_CONFIG: "plugin-mcp:set-config",
+  // Gated tool dispatch (#10461): callTool runs the rate-limit → consent →
+  // dispatch pipeline; resolveConsent is the renderer's reply to a consent push.
+  PLUGIN_MCP_CALL_TOOL: "plugin-mcp:call-tool",
+  PLUGIN_MCP_RESOLVE_CONSENT: "plugin-mcp:resolve-consent",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

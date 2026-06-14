@@ -1877,6 +1877,15 @@ export interface IpcEventMap {
     danger: "safe" | "confirm" | "restricted";
   };
 
+  /**
+   * Targeted push: a plugin-MCP `tools/call` requires user consent. Sent to the
+   * WebContents that initiated the call (pinned via `event.sender`, never the
+   * focused window) so the consent dialog renders in the originating session.
+   * The renderer replies via `plugin-mcp:resolve-consent`, correlated by
+   * `requestId`. Payload is display-safe — raw description/args never cross it.
+   */
+  "plugin-mcp:consent-request": import("../pluginMcpConsent.js").PluginMcpConsentRequestEvent;
+
   // Typed event bus envelope (multiplexed main → renderer for IpcEventBusMap)
   "events:push": EventBusEnvelope;
 }
@@ -1921,6 +1930,8 @@ export type IpcEventBusMap = Pick<
   // App-agent dispatch/confirmation (window-scoped)
   | "app-agent:dispatch-action-request"
   | "app-agent:confirmation-request"
+  // Plugin-MCP tool-call consent prompt (window-scoped — pinned to the caller)
+  | "plugin-mcp:consent-request"
   // Plugin action registry (global broadcast)
   | "plugin:actions-changed"
   // Plugin panel kind registry (global broadcast)

@@ -1,3 +1,5 @@
+import type { PluginCapability } from "./plugin.js";
+
 /**
  * Danger tier for a plugin-initiated MCP tool call. Mirrors the D0–D3 audit
  * vocabulary documented in CLAUDE.md ("Destructive Action Tiers") and
@@ -114,5 +116,32 @@ export type PluginMcpConsentReason =
   | "schema-changed"
   | "revoked"
   | "explicit-confirm";
+
+/**
+ * Display-safe consent prompt pushed from main to the renderer over the typed
+ * event bus (`plugin-mcp:consent-request`) when a `tools/call` requires user
+ * approval. Every field is renderer-safe: `descriptionDisplay` is ANSI/OSC
+ * stripped and `argsSummary` is pre-redacted in main — raw description bytes,
+ * raw args, and the input schema never cross this boundary. The renderer
+ * enqueues it into the consent dialog FIFO and replies via
+ * `plugin-mcp:resolve-consent`, correlated by `requestId`.
+ */
+export interface PluginMcpConsentRequestEvent {
+  /** Correlation id for the matching `plugin-mcp:resolve-consent` reply. */
+  requestId: string;
+  pluginId: string;
+  serverId: string;
+  toolName: string;
+  /** Human-readable plugin display name (manifest `displayName ?? name`). */
+  pluginDisplayName: string;
+  /** Tool description, ANSI/OSC stripped, ready to render verbatim. */
+  descriptionDisplay: string;
+  /** Sanitised, single-level args preview for D2+ tiers. Empty when no args. */
+  argsSummary: string;
+  dangerTier: PluginMcpDangerTier;
+  /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */
+  declaredCapabilities: readonly PluginCapability[];
+  reason: PluginMcpConsentReason;
+}
 
 export const PLUGIN_MCP_CONSENT_SCHEMA_VERSION = 1;

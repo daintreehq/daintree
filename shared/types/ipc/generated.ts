@@ -659,6 +659,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean | undefined;
   };
+  "plugin-mcp:call-tool": {
+    args: [input: import("./pluginMcp.js").PluginMcpCallToolInput];
+    result: import("./pluginMcp.js").PluginMcpCallToolResult;
+  };
   "plugin-mcp:get-config": {
     args: [];
     result: import("./pluginMcp.js").PluginMcpConfig;
@@ -678,6 +682,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin-mcp:list-tools": {
     args: [key: import("./pluginMcp.js").PluginMcpServerKey];
     result: import("./pluginMcp.js").PluginMcpListToolsResult;
+  };
+  "plugin-mcp:resolve-consent": {
+    args: [input: import("./pluginMcp.js").PluginMcpResolveConsentInput];
+    result: void;
   };
   "plugin-mcp:restart": {
     args: [key: import("./pluginMcp.js").PluginMcpServerKey];
