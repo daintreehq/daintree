@@ -291,6 +291,27 @@ describe("registerDiagnosticsHandlers", () => {
       expect(result.unavailable).toBe(true);
       expect(result.totalMemoryMB).toBe(0);
     });
+
+    it("uses workingSetSize even when privateBytes is populated (no ?? regression)", () => {
+      // Simulate a Windows-shaped reading where privateBytes is large and would
+      // win under the old `privateBytes ?? workingSetSize`. The handler must
+      // still report workingSetSize so the metric is consistent cross-platform.
+      appMock.getAppMetrics.mockImplementationOnce(() => [
+        {
+          pid: 1,
+          type: "Browser",
+          name: "Browser",
+          memory: { privateBytes: 1024 * 1024, workingSetSize: 102400 },
+          cpu: { percentCPUUsage: 1 },
+        },
+      ]);
+      registerDiagnosticsHandlers(deps);
+      const handler = getHandlerFn("system:get-app-metrics");
+      const result = handler() as { totalMemoryMB: number };
+
+      // workingSetSize 102400 / 1024 = 100 MB, not privateBytes 1048576 / 1024 = 1024 MB.
+      expect(result.totalMemoryMB).toBe(100);
+    });
   });
 
   describe("handleGetHeapStats", () => {

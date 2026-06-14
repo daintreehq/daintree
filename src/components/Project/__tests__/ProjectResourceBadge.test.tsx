@@ -24,9 +24,10 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const statsStoreState: { stats: Record<string, { processCount: number }> } = { stats: {} };
 vi.mock("@/store/projectStatsStore", () => ({
   useProjectStatsStore: {
-    getState: () => ({ stats: {} }),
+    getState: () => statsStoreState,
   },
 }));
 
@@ -87,6 +88,7 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
       totalMemoryBytes: 8 * 1024 * 1024 * 1024,
       logicalCpuCount: 8,
     });
+    statsStoreState.stats = {};
   });
 
   afterEach(() => {
@@ -194,6 +196,39 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
 
     // Badge still polls stats using the fallback thresholds.
     expect(mockGetAll.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders the running-project count and memory once a project is active", async () => {
+    mockGetAll.mockResolvedValue([{ id: "p1", name: "Proj One" }] as never);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 290 });
+
+    const { container } = render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("1 project active");
+    expect(container.textContent).toContain("290MB");
+  });
+
+  it("suppresses the value (stays hidden) when metrics are unavailable", async () => {
+    mockGetAll.mockResolvedValue([{ id: "p1", name: "Proj One" }] as never);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 0, unavailable: true });
+
+    const { container } = render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // No misleading "0MB"; the badge withholds the reading entirely.
+    expect(container.textContent ?? "").not.toContain("0MB");
+    expect(container.textContent ?? "").not.toContain("project active");
   });
 
   it("removes visibility listener on unmount", () => {
