@@ -2428,8 +2428,11 @@ export class PluginService {
     // which every plugin runs in the same realm, so a caller can pass an
     // arbitrary `pluginId`. Reject any id the host has not actually loaded
     // before activation or routing — this is the boundary's only achievable
-    // ownership guarantee and it also covers the dev-worker bridge, which calls
-    // `dispatchHandler` directly without passing through `ipcMain.handle`.
+    // ownership guarantee given that shared realm. It lives here, in the single
+    // chokepoint every plugin:invoke flows through, rather than in the IPC
+    // handler, so no current or future caller of `dispatchHandler` can reach a
+    // handler for an unloaded plugin (dev-worker channels are dispatched here
+    // too, via their `host.registerHandler` registrations).
     if (!this.plugins.has(pluginId)) {
       throw new PluginInvokeOwnershipError(pluginId, channel);
     }
