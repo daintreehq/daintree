@@ -122,9 +122,9 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 
-## Views — _Shipped (panel surface; sidebar surface pending)_
+## Views — _Shipped (panel surface)_
 
-Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is wired today; `location: "sidebar"` logs a warning and is skipped until the future sidebar host ships. The contribution key keeps the `experimental_` prefix until the props contract has lived through a release; the shape below is the contract today.
+Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key keeps the `experimental_` prefix until the props contract has lived through a release; the shape below is the contract today.
 
 ```json
 {
@@ -153,8 +153,8 @@ Views are the React components that render inside a panel. A view binds to a pan
 | --- | --- | --- |
 | `id` | yes | Matches the panel `id` it provides a component for. Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display label, also used in the loading skeleton's accessible label. |
-| `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths and `..` segments are rejected at load time. |
-| `location` | yes | `"panel"` (docked in the grid — wired today) or `"sidebar"` (reserved for a future sidebar host; currently logs a warning and is skipped). |
+| `componentPath` | yes | POSIX-relative path to an ESM module inside the plugin. The module's default export is a React component. Absolute paths, URL schemes, and `..` segments are rejected at manifest validation. |
+| `location` | yes | `"panel"` (docked in the grid). `"sidebar"` is rejected at manifest validation — the sidebar host does not exist yet. |
 | `iconId` | no | Override the panel's icon for this view. |
 | `description` | no | Surface text for palette/preferences. |
 

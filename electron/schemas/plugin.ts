@@ -113,22 +113,54 @@ export const CommandContributionSchema = z
   .strict();
 
 /**
+ * Validate a `componentPath` before it is resolved to a `plugin://` URL and
+ * handed to the renderer host's `import()` (#9229). The `plugin://` protocol
+ * handler at `electron/setup/protocols.ts` is the security boundary — it
+ * rejects traversal at request time via realpath containment. This check is
+ * the manifest gate: it rejects an absolute path, a Windows separator, an
+ * embedded URL scheme/query/fragment, a NUL, or a `..` segment at parse time
+ * so the failure is a loud manifest-validation error, not a silent 404 from
+ * `import('plugin://...')` later. Accepts relative POSIX paths only — a
+ * leading `./` is preserved (the URL builder normalizes it).
+ */
+function isSafePluginViewComponentPath(componentPath: string): boolean {
+  if (componentPath.startsWith("/")) return false;
+  if (componentPath.includes("\\")) return false;
+  if (componentPath.includes("\0")) return false;
+  // Reject embedded URL structure markers — `https://...` (`:`), `?query`, or
+  // `#fragment` — to catch typos early and avoid polluting the V8 module cache
+  // with duplicate query-string variants.
+  if (componentPath.includes(":")) return false;
+  if (componentPath.includes("?")) return false;
+  if (componentPath.includes("#")) return false;
+  // A bare current-dir / root path (`.`, `./`) resolves to no module file — a
+  // 404 from the protocol handler — so reject it at the manifest gate.
+  const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
+  if (normalized === "" || normalized === ".") return false;
+  return !componentPath.split("/").includes("..");
+}
+
+/**
  * View contribution. A view renders into a `contributes.panels` entry with a
  * matching `id`; at plugin load (`PluginService.loadPlugin`) the panels loop
  * attaches the view's `componentPath` to that panel kind. A view with no
- * matching panel entry is ignored. `location: "panel"` sets
- * `showInPalette: true` so the view is spawnable from the panel palette;
- * `location: "sidebar"` registers silently with `showInPalette: false`,
- * reserving the kind for the future sidebar host. The `experimental_` prefix
- * on the contribution point signals that the shape may change before the
- * renderer host ships. See `docs/plugins/architecture.md`.
+ * matching panel entry is ignored. Only `location: "panel"` is supported — it
+ * sets `showInPalette: true` so the view is spawnable from the panel palette.
+ * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
+ * exist yet, so accepting it would validate a manifest the runtime cannot
+ * honor. The `experimental_` prefix on the contribution point signals that the
+ * shape may change before the renderer host ships. See
+ * `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().min(1),
-    componentPath: z.string().min(1),
-    location: z.enum(["panel", "sidebar"]),
+    componentPath: z.string().min(1).refine(isSafePluginViewComponentPath, {
+      message:
+        "componentPath must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
+    }),
+    location: z.literal("panel"),
     iconId: z.string().min(1).optional(),
     description: z.string().optional(),
   })

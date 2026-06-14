@@ -118,7 +118,7 @@ Plugins declare a `react` peer dependency in their own `package.json`. The host 
 
 Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.experimental_views` entry to a panel by bare id, it stores the resolved URL — `plugin://{pluginId}/{componentPath}` — on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
 
-The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. A view that targets a panel id with no matching `contributes.panels` entry, or `location: "sidebar"` (reserved), or an unsafe `componentPath` (absolute paths, `..` segments) logs a `[PluginService]` warning at load time and is skipped.
+The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. `location: "sidebar"` and an unsafe `componentPath` (absolute paths, URL schemes, `..` segments) are rejected at manifest validation, so the whole plugin fails to load loudly rather than silently dropping the view. A view that targets a panel id with no matching `contributes.panels` entry still logs a `[PluginService]` warning at load time and is skipped.
 
 ### Hot reload — dev only
 
@@ -304,8 +304,8 @@ Types a plugin author uses to write `plugin.json`:
 | `ToolbarButtonContribution` | `plugin.ts` |  |
 | `MenuItemContribution` | `plugin.ts` |  |
 | `MenuItemLocation` | `plugin.ts` | `"terminal" \| "file" \| "view" \| "help"` |
-| `ViewContribution` | `plugin.ts` | Panel location wired; sidebar reserved |
-| `ViewLocation` | `plugin.ts` | `"panel" \| "sidebar"` |
+| `ViewContribution` | `plugin.ts` | Panel location only; sidebar rejected at validation |
+| `ViewLocation` | `plugin.ts` | `"panel"` |
 | `McpServerContribution` | `plugin.ts` | Wired via `PluginMcpSupervisor` (`experimental_` prefix retained) |
 | `PluginCapability` | `plugin.ts` |  |
 | `BuiltInPluginCapability` | `plugin.ts` |  |
