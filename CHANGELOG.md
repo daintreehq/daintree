@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.19.1] - 2026-06-14
+
+Same-day hotfix for two regressions introduced in 0.19.0: agent working/waiting state detection broke, and agent terminal grids came back with garbled line wrapping after switching away from a project and back.
+
+### Bug Fixes
+
+- Restore agent working/waiting state detection broken in 0.19.0, including background worktrees stuck on "waiting" under the Efficiency profile (#10487)
+- Reflow the agent terminal grid on project switch-back so line wrapping stays correct without a manual Redraw (#10488)
+
 ## [0.19.0] - 2026-06-14
 
 Finer-grained control over permission bypass and a round of panel/tab reliability work. Skip-permissions becomes a real setting — a global toggle, a first-run onboarding step, and a tri-state DangerousMode — while the in-app assistant gains the ability to name and rename its terminals. The bulk of the release hardens panel tabs, terminal rehydration, and tooltip/focus behavior.
