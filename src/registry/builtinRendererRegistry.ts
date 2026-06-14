@@ -28,6 +28,9 @@ interface SlotEntry {
 
 const REGISTRY = new Map<string, SlotEntry>();
 
+/** Slot ids already warned about (dev-mode), so a typo'd ref warns once, not per render. */
+const warnedMissingSlots = new Set<string>();
+
 export function registerBuiltinView(
   slotId: string,
   component: AnyComponent,
@@ -54,7 +57,8 @@ function resolveSlot<P>(
     // these against this renderer registry, so surface it here. Dev-only and
     // warn-not-throw: an empty ref is the documented "no slot" sentinel, and a
     // null resolution is defined contract, not an error.
-    if (import.meta.env.DEV && slotId.length > 0) {
+    if (import.meta.env.DEV && slotId.length > 0 && !warnedMissingSlots.has(slotId)) {
+      warnedMissingSlots.add(slotId);
       console.warn(
         `[builtinRendererRegistry] No view registered for slot "${slotId}" — ` +
           `check the plugin's forgeProviders.slots ref and registerBuiltinView call`
@@ -89,4 +93,5 @@ export function useBuiltinView<P>(slotId: string): ComponentType<P> | null {
 
 export function __resetBuiltinRendererRegistryForTests(): void {
   REGISTRY.clear();
+  warnedMissingSlots.clear();
 }

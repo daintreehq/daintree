@@ -56,6 +56,14 @@ describe("builtinRendererRegistry", () => {
       );
     });
 
+    it("warns only once per missing slot ref, not on every resolution", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      getBuiltinView("github.bulkCreateWorktreeDialog");
+      getBuiltinView("github.bulkCreateWorktreeDialog");
+      getBuiltinView("github.bulkCreateWorktreeDialog");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
     it("does not warn for an empty slot ref (the documented 'no slot' sentinel)", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       expect(getBuiltinView("")).toBeNull();

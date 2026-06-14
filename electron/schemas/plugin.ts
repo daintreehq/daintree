@@ -160,9 +160,22 @@ export const McpServerContributionSchema = z
  * reaches `validateToken` — see `ForgeProviderContribution.credentialFields`
  * in `shared/types/forge.ts` for the single-primary contract.
  */
+const RESERVED_CREDENTIAL_FIELD_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
 const CredentialFieldSchema = z
   .object({
-    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    // A field id keys the entered value into a plain record at save time; a
+    // reserved key (`__proto__` etc.) would resolve to the object prototype
+    // rather than a stored string and crash the primary-value pick. Reject up
+    // front, mirroring AgentContributionSchema.
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(SAFE_ID_PATTERN)
+      .refine((id) => !RESERVED_CREDENTIAL_FIELD_IDS.has(id), {
+        message: "Credential field id cannot be a reserved key (__proto__, constructor, prototype)",
+      }),
     label: z.string().min(1),
     type: z.string().min(1),
     placeholder: z.string().optional(),

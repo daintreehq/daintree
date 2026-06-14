@@ -43,6 +43,14 @@ describe("ForgeProviderContributionSchema (issue #10471)", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects a credentialField with a reserved id (__proto__)", () => {
+    const result = ForgeProviderContributionSchema.safeParse({
+      ...base,
+      credentialFields: [{ id: "__proto__", label: "Token", type: "password" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects a credentialField missing its id", () => {
     const result = ForgeProviderContributionSchema.safeParse({
       ...base,
