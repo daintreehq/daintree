@@ -120,6 +120,7 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { events } from "../../services/events.js";
 import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import {
   registerCachedViewWebContents,
@@ -354,6 +355,114 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
     const cachedCalls = vi.mocked(registerCachedViewWebContents).mock.calls;
     expect(cachedCalls.every((call) => (call[0] as unknown) !== initialWc)).toBe(true);
+  });
+
+  function seedActiveAgent(terminalId: string, projectId: string) {
+    const priv = manager as unknown as {
+      projectByTerminal: Map<string, string>;
+      agentStateByTerminal: Map<string, string>;
+    };
+    priv.projectByTerminal.set(terminalId, projectId);
+    priv.agentStateByTerminal.set(terminalId, "working");
+  }
+
+  it("does not batch-freeze a cached view whose project has a live agent", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    // proj-a is cached and running a working agent — freezing it would strand
+    // the queued agent:state-changed event at a renderer that can't run JS.
+    seedActiveAgent("t1", "proj-a");
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    const frozeProjA = vi
+      .mocked(freezeWebContents)
+      .mock.calls.some((call) => call[0] === initialWc);
+    expect(frozeProjA).toBe(false);
+  });
+
+  it("skips the inline deactivation freeze for a project with a live agent", async () => {
+    seedActiveAgent("t1", "proj-a");
+
+    // Enter efficiency but stay inside the debounce window so the inline
+    // deactivation path (not the batch sweep) is what would freeze proj-a.
+    manager.setEfficiencyFreeze(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    const frozeProjA = vi
+      .mocked(freezeWebContents)
+      .mock.calls.some((call) => call[0] === initialWc);
+    expect(frozeProjA).toBe(false);
+  });
+
+  it("unfreezeActiveAgentViews wakes a view that was frozen before its agent went active", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    // proj-a froze while it had no agent (the seed/state race).
+    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    vi.mocked(unfreezeWebContents).mockClear();
+
+    seedActiveAgent("t1", "proj-a");
+    (manager as unknown as { unfreezeActiveAgentViews: () => void }).unfreezeActiveAgentViews();
+
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
+  });
+
+  it("wakes a frozen mapped view when its agent transitions active (agent:state-changed bus)", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    const ptyClient = {
+      getAllTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-a", agentState: "idle" },
+      ]),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    await manager.initAgentStateCache(ptyClient as never);
+
+    // proj-a is cached with an idle agent → it freezes.
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    vi.mocked(unfreezeWebContents).mockClear();
+
+    // The agent goes to "working" — the queued event would be stranded at the
+    // frozen renderer, so the real onStateChanged handler must wake proj-a.
+    events.emit("agent:state-changed", { terminalId: "t1", state: "working" } as never);
+
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
+    manager.dispose(); // remove the bus listener so it doesn't leak into later tests
+  });
+
+  it("wakes a frozen view on spawn-result reseed when its agent is now active", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    const captured: Record<string, (...a: unknown[]) => void> = {};
+    let agentState = "idle";
+    const ptyClient = {
+      getAllTerminalsAsync: vi.fn(async () => [{ id: "t1", projectId: "proj-a", agentState }]),
+      on: vi.fn((evt: string, h: (...a: unknown[]) => void) => {
+        captured[evt] = h;
+      }),
+      off: vi.fn(),
+    };
+    await manager.initAgentStateCache(ptyClient as never);
+
+    // Freeze proj-a while its agent is still idle.
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    vi.mocked(unfreezeWebContents).mockClear();
+
+    // Agent became active after the freeze; a spawn-result triggers a reseed
+    // that now sees it, and the reseed's unfreezeActiveAgentViews() wakes it.
+    agentState = "working";
+    captured["spawn-result"]?.();
+    await vi.advanceTimersByTimeAsync(0); // flush the async seed()
+
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
+    manager.dispose();
   });
 });
 
