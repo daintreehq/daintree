@@ -234,11 +234,33 @@ export interface PluginAgentContribution {
   detection?: PluginAgentDetectionContribution;
 }
 
+/**
+ * Closed set of catalog categories a plugin can declare via
+ * `manifest.category`. The plugin manager groups its list by these (#9554
+ * successor) — a closed enum rather than free-form tags so the catalog can't
+ * fragment into orphan one-off groups. Display labels, ordering, and the
+ * contributes-based fallback derivation live in
+ * `shared/config/pluginCategoryRegistry.ts`.
+ */
+export const PLUGIN_CATEGORY_IDS = ["forge", "ai", "workspace", "other"] as const;
+
+export type PluginCategoryId = (typeof PLUGIN_CATEGORY_IDS)[number];
+
 export interface PluginManifest {
   name: string;
   version: string;
   displayName?: string;
   description?: string;
+  /**
+   * One-line value proposition shown in catalog rows and cards. `description`
+   * stays the long-form copy for the detail pane.
+   */
+  tagline?: string;
+  /**
+   * Declared catalog category. Optional — when absent the manager derives one
+   * from `contributes` (see `resolvePluginCategory`).
+   */
+  category?: PluginCategoryId;
   main?: string;
   engines?: {
     daintree?: string;

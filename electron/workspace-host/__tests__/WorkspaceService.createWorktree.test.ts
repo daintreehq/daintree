@@ -42,6 +42,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
   getGitCommonDir: vi.fn().mockReturnValue(null),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
 vi.mock("../../services/worktree/mood.js", () => ({
@@ -74,12 +75,6 @@ vi.mock("../../services/worktree/index.js", () => ({
       read: vi.fn().mockResolvedValue({}),
     };
   }),
-}));
-
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
 }));
 
 vi.mock("../../services/PullRequestService.js", () => ({

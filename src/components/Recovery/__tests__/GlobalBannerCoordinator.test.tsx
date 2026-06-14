@@ -19,8 +19,17 @@ import { GlobalBannerCoordinator } from "../GlobalBannerCoordinator";
 import { usePanelStore } from "@/store/panelStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
-import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+
+const PROVIDER_ID = "daintree.github.github";
+
+function setForgeTokenUnhealthy(value: boolean) {
+  const store = useForgeProviderHealthStore.getState();
+  store.setTokenUnhealthy(PROVIDER_ID, value);
+  store.setProviderMeta(PROVIDER_ID, { providerName: "GitHub", pluginId: "daintree.github" });
+}
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -53,8 +62,9 @@ function resetStores() {
     lastCrashAt: undefined,
   });
   useRestoreConfirmationStore.setState({ visible: false, suspectCount: 0, crashCount: 0 });
-  useGitHubTokenHealthStore.setState({ isUnhealthy: false });
+  useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
+  useRosettaBannerStore.setState({ visible: false });
 }
 
 beforeEach(() => {
@@ -277,9 +287,9 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText("Safe mode — panels weren't restored")).toBeNull();
   });
 
-  it("suppresses github-token and cloud-sync while the watchdog is disabled", () => {
+  it("suppresses forge-token and cloud-sync while the watchdog is disabled", () => {
     usePanelStore.setState({ watchdogStatus: "disabled" });
-    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
@@ -290,7 +300,7 @@ describe("GlobalBannerCoordinator", () => {
   });
 
   it("renders the GitHub token banner when only the token is unhealthy", () => {
-    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    setForgeTokenUnhealthy(true);
 
     render(<GlobalBannerCoordinator />);
 
@@ -306,7 +316,7 @@ describe("GlobalBannerCoordinator", () => {
   });
 
   it("prefers the GitHub token banner over cloud sync when both are active", () => {
-    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
@@ -315,9 +325,9 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText("Project in a synced folder")).toBeNull();
   });
 
-  it("suppresses github-token and cloud-sync while restore is active", () => {
+  it("suppresses forge-token and cloud-sync while restore is active", () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
-    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
@@ -329,7 +339,7 @@ describe("GlobalBannerCoordinator", () => {
 
   it("suppresses every lower-priority banner when the host has crashed", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
-    useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+    setForgeTokenUnhealthy(true);
     useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
 
     render(<GlobalBannerCoordinator />);
@@ -337,5 +347,33 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
     expect(screen.queryByText("Project in a synced folder")).toBeNull();
+  });
+
+  it("renders the Rosetta banner when only the translation warning is active", () => {
+    useRosettaBannerStore.setState({ visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Running under Rosetta")).toBeTruthy();
+  });
+
+  it("suppresses the Rosetta warning while the host has crashed", () => {
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useRosettaBannerStore.setState({ visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Terminal service crashed")).toBeTruthy();
+    expect(screen.queryByText("Running under Rosetta")).toBeNull();
+  });
+
+  it("prefers cloud sync over the Rosetta warning when both are active", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    useRosettaBannerStore.setState({ visible: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
+    expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 });

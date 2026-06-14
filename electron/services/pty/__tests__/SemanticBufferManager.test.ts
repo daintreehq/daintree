@@ -124,6 +124,33 @@ describe("SemanticBufferManager", () => {
     manager.dispose();
   });
 
+  it("caps pending data at accumulation time under a flood", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    for (let i = 0; i < 50; i++) {
+      manager.onData(`${"x".repeat(100)} chunk${i}\n`.repeat(100));
+    }
+    manager.onData("final line\n");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer.length).toBeLessThanOrEqual(50);
+    expect(info.semanticBuffer[info.semanticBuffer.length - 1]).toBe("final line");
+
+    manager.dispose();
+  });
+
+  it("survives a short-line flood without overflowing the push spread", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("y\n".repeat(500_000));
+    expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+    expect(info.semanticBuffer.length).toBeLessThanOrEqual(50);
+
+    manager.dispose();
+  });
+
   it("getLastCommand() returns undefined on empty buffer", () => {
     const info = createTerminalInfo();
     const manager = new SemanticBufferManager(info);

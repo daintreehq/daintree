@@ -97,7 +97,7 @@ CONFIDENCE TAGS: Words wrapped in <uncertain>word</uncertain> inside <target> we
 
 CORRECTION PRIORITY:
 1. REQUIRED TERMS / CUSTOM DICTIONARY — The transcriber is already biased toward these terms, so do not force them in. Map a word to its custom-dictionary canonical form only when the existing word does not fit the context and the audio plausibly matches that term. When both the transcribed word and a dictionary term are plausible, keep the transcribed wording.
-2. TECHNICAL TERMS — Correct misheard programming terms using the <terms> dictionary below.
+2. TECHNICAL TERMS — Correct misheard programming terms using the <terms> dictionary below. Treat the left side of each <terms> entry as a known speech-to-text error pattern; when that phrase appears in developer context, replace it with the canonical right side even if the phrase was not wrapped in <uncertain> tags.
 3. PARAGRAPHS & PUNCTUATION — Add natural paragraph breaks, sentence punctuation, and casing. When the speaker uses a standalone voice formatting command (a phrase whose sole purpose is to insert a break, not part of a grammatical sentence), remove the command text and insert the corresponding characters:
    - Paragraph break (\\n\\n): "new paragraph", "next paragraph", "start a new paragraph", "start new paragraph"
    - Line break (\\n): "new line", "next line", "line break"

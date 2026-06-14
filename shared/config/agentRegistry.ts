@@ -21,6 +21,18 @@ export interface AgentInstallHelp {
 }
 
 /**
+ * A curated external link surfaced in the agent button context menu.
+ * Labels are sentence case with no trailing period ("View usage",
+ * "View docs", "Billing settings"). Only declare links to genuinely
+ * useful destinations — omit the field rather than pointing at a
+ * product homepage.
+ */
+export interface AgentExternalLink {
+  label: string;
+  url: string;
+}
+
+/**
  * Configuration for pattern-based working state detection.
  * Patterns are matched against terminal output to detect when an agent is actively working.
  */
@@ -148,8 +160,15 @@ export interface AgentPreset {
   description?: string;
   env?: Record<string, string>;
   args?: string[];
-  /** Per-preset override: when set, overrides the agent-level dangerousEnabled setting */
+  /** Legacy per-preset bypass override; superseded by `dangerousMode`. */
   dangerousEnabled?: boolean;
+  /**
+   * Per-preset tri-state bypass override (`DangerousMode`), layered on top of
+   * the agent's resolved mode: `"off"` vetoes the agent/global value,
+   * `"inherit"`/absent defers to the agent's Default scope. Inlined union to
+   * avoid a config→types import cycle.
+   */
+  dangerousMode?: "inherit" | "on" | "off";
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
   /** Per-preset override: when set, overrides the agent-level inlineMode setting */
@@ -176,6 +195,7 @@ export interface AgentProviderTemplate {
   env?: Record<string, string>;
   args?: string[];
   dangerousEnabled?: boolean;
+  dangerousMode?: "inherit" | "on" | "off";
   customFlags?: string;
   inlineMode?: boolean;
 }
@@ -353,6 +373,8 @@ export interface AgentConfig {
   shortcut?: string | null;
   tooltip?: string;
   usageUrl?: string;
+  /** Curated links shown in the agent button context menu; omit when none apply */
+  externalLinks?: AgentExternalLink[];
   help?: AgentHelpConfig;
   install?: AgentInstallHelp;
   capabilities?: {
@@ -597,17 +619,34 @@ let userRegistry: Record<string, AgentConfig> = {};
 
 export function setUserRegistry(registry: Record<string, AgentConfig>): void {
   userRegistry = registry;
+  cachedEffectiveRegistry = null;
 }
 
 export function getUserRegistry(): Record<string, AgentConfig> {
   return userRegistry;
 }
 
+let cachedEffectiveRegistry: Record<string, AgentConfig> | null = null;
+let cachedPluginSnapshot: Record<string, AgentConfig> | null = null;
+
+/** Invalidate the memoized effective registry (tests that patch `AGENT_REGISTRY` entries). */
+export function invalidateEffectiveRegistryCache(): void {
+  cachedEffectiveRegistry = null;
+}
+
 export function getEffectiveRegistry(): Record<string, AgentConfig> {
-  // Merge order is priority order (later spreads win): plugin agents are the
-  // lowest tier (additive, never shadowing), user-registry overlays them, and
-  // built-ins always win last so a plugin or user can never patch a built-in.
-  return { ...getPluginAgentRegistry(), ...userRegistry, ...AGENT_REGISTRY };
+  // Memoized: invalidated by `setUserRegistry` and whenever the plugin snapshot
+  // reference changes (it is replaced wholesale on every plugin mutation).
+  // `AGENT_REGISTRY` entries are never reassigned in production code.
+  const pluginSnapshot = getPluginAgentRegistry();
+  if (cachedEffectiveRegistry === null || cachedPluginSnapshot !== pluginSnapshot) {
+    // Merge order is priority order (later spreads win): plugin agents are the
+    // lowest tier (additive, never shadowing), user-registry overlays them, and
+    // built-ins always win last so a plugin or user can never patch a built-in.
+    cachedEffectiveRegistry = { ...pluginSnapshot, ...userRegistry, ...AGENT_REGISTRY };
+    cachedPluginSnapshot = pluginSnapshot;
+  }
+  return cachedEffectiveRegistry;
 }
 
 export function getEffectiveAgentIds(): string[] {

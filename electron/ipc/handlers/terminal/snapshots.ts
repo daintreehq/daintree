@@ -157,9 +157,10 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       const terminalIds = await ptyClient.getTerminalsForProjectAsync(projectId);
 
+      const infos = await Promise.all(terminalIds.map((id) => ptyClient.getTerminalAsync(id)));
+
       const terminals: import("../../../../shared/types/ipc.js").BackendTerminalInfo[] = [];
-      for (const id of terminalIds) {
-        const terminal = await ptyClient.getTerminalAsync(id);
+      for (const terminal of infos) {
         // Dev preview and help PTYs should not be rehydrated as generic terminal
         // panels during project switching/hydration.
         if (
@@ -427,6 +428,46 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     }
   };
 
+  // Bulk variant for the cold-boot panel-restore prefetch (#10390): one IPC
+  // round-trip probes every saved panel id instead of N serialized probes
+  // inside the spawn queue. Mirrors getSerializedStates' batch contract —
+  // per-id failures degrade to { exists: false } rather than failing the batch.
+  const handleTerminalReconnectBulk = async (
+    terminalIds: string[]
+  ): Promise<Record<string, import("../../../../shared/types/ipc.js").TerminalReconnectResult>> => {
+    if (!Array.isArray(terminalIds)) {
+      throw new Error("Invalid terminal IDs: must be an array");
+    }
+
+    if (terminalIds.length > 256) {
+      throw new Error("Invalid terminal IDs: maximum 256 IDs allowed");
+    }
+
+    const normalizedIds = Array.from(
+      new Set(
+        terminalIds.map((id) => {
+          if (typeof id !== "string" || !id.trim()) {
+            throw new Error("Invalid terminal ID in batch payload");
+          }
+          return id;
+        })
+      )
+    );
+
+    const results = await Promise.all(
+      normalizedIds.map(async (terminalId) => {
+        try {
+          return [terminalId, await handleTerminalReconnect(terminalId)] as const;
+        } catch (error) {
+          logWarn(`terminal:reconnect-bulk(${terminalId}) failed`, { error });
+          return [terminalId, { exists: false as const }] as const;
+        }
+      })
+    );
+
+    return Object.fromEntries(results);
+  };
+
   const namespace = defineIpcNamespace({
     name: "terminalSnapshots",
     ops: {
@@ -456,6 +497,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         handleTerminalSearchSemanticBuffers
       ),
       reconnect: op(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect),
+      reconnectBulk: op(CHANNELS.TERMINAL_RECONNECT_BULK, handleTerminalReconnectBulk),
     },
   });
 

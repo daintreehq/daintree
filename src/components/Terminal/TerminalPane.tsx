@@ -28,6 +28,7 @@ import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { useGridScrollRoot } from "./GridScrollRootContext";
 import { isStaleHiddenReading } from "./visibilityReadingGuard";
+import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { COMFORTABLE_PANEL_HEIGHT_PX } from "@/lib/terminalLayout";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
@@ -668,6 +669,13 @@ function TerminalPaneComponent({
         )
           return;
 
+        // A callback queued from a previous mount site (warm-swap reattach)
+        // must not write at all. setVisible already drops it via its
+        // generation guard — dropping the store write under the same
+        // condition keeps store and service from diverging permanently
+        // (#10416).
+        if (terminalInstanceService.getAttachGeneration(id) !== gen) return;
+
         updateVisibility(id, entry.isIntersecting);
         terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
       },
@@ -694,11 +702,7 @@ function TerminalPaneComponent({
   // Calling it here too is redundant and breaks in React StrictMode (dev),
   // where the effect's cleanup captures the same generation as the active
   // mount, bypassing the stale-generation guard and hiding the terminal.
-  useEffect(() => {
-    return () => {
-      updateVisibility(id, false);
-    };
-  }, [id, updateVisibility]);
+  useUnmountVisibilityCleanup(id, restartKey, updateVisibility);
 
   const handleReady = useCallback(() => {}, []);
 
@@ -712,6 +716,9 @@ function TerminalPaneComponent({
           if (managed?.terminal) {
             try {
               managed.terminal.clear();
+              // The pane no longer mirrors the host scrollback — the next
+              // wake must replay rather than take the no-change skip.
+              managed.wakeSynced = false;
             } catch (error) {
               console.warn(`Failed to clear terminal ${id}:`, error);
             }
@@ -1088,19 +1095,23 @@ function TerminalPaneComponent({
 
   // The "Send to agent" palette has nothing to offer when this is the only
   // eligible PTY pane — hide it rather than render a button that no-ops.
-  const hasAgentTargets = usePanelStore((s) =>
-    s.panelIds.some((tid) => {
-      const t = s.panelsById[tid];
-      return (
-        !!t &&
-        t.id !== id &&
-        t.location !== "trash" &&
-        t.location !== "background" &&
-        t.location !== "overlay" &&
-        (t.kind ? panelKindHasPty(t.kind) : true) &&
-        (!isPtyPanel(t) || t.hasPty !== false)
-      );
-    })
+  // Short-circuit on agentState: the result only gates the completion
+  // banner's button, so idle/working panes skip the O(N) scan per store write.
+  const hasAgentTargets = usePanelStore(
+    (s) =>
+      agentState === "completed" &&
+      s.panelIds.some((tid) => {
+        const t = s.panelsById[tid];
+        return (
+          !!t &&
+          t.id !== id &&
+          t.location !== "trash" &&
+          t.location !== "background" &&
+          t.location !== "overlay" &&
+          (t.kind ? panelKindHasPty(t.kind) : true) &&
+          (!isPtyPanel(t) || t.hasPty !== false)
+        );
+      })
   );
 
   const handleSendToAssistant = useCallback(() => {

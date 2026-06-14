@@ -398,6 +398,7 @@ export function DevPreviewPane({
   } | null>(null);
   const crashTimestampsRef = useRef<number[]>([]);
   const crashReloadRef = useRef<() => void>(() => {});
+  const screenshotInFlightRef = useRef(false);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   const CLIPBOARD_FEEDBACK_MS = 2000;
   const [certCopied, setCertCopied] = useState(false);
@@ -436,7 +437,15 @@ export function DevPreviewPane({
   // Store the original guest UA so we can restore it when clearing a preset
   const originalUaRef = useRef<string | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  // The command whose auto-detect/save attempt failed; null = no failure shown.
+  // Empty string means the attempt never resolved a command (re-detection found
+  // nothing), so retry falls back to the currently displayed candidate.
+  const [autoDetectFailedCommand, setAutoDetectFailedCommand] = useState<string | null>(null);
   const autoDetectRef = useRef(false);
+
+  useEffect(() => {
+    if (devCommand) setAutoDetectFailedCommand(null);
+  }, [devCommand]);
   const { saveSettings } = useProjectSettings();
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
@@ -601,7 +610,6 @@ export function DevPreviewPane({
     setIsWebviewReady,
     isLoading,
     setIsLoading,
-    setIsSlowLoad,
     webviewLoadError,
     setWebviewLoadError,
     reconnectAttempt,
@@ -767,13 +775,11 @@ export function DevPreviewPane({
 
   const handleReload = useCallback(() => {
     setWebviewLoadError(null);
-    setIsSlowLoad(false);
     webviewRef.current?.reload();
-  }, [setWebviewLoadError, setIsSlowLoad]);
+  }, [setWebviewLoadError]);
 
   const handleCancelLoad = useCallback(() => {
     clearLoadTimers();
-    setIsSlowLoad(false);
     setIsLoading(false);
     try {
       webviewRef.current?.stop();
@@ -781,11 +787,10 @@ export function DevPreviewPane({
       // Webview detached
     }
     setWebviewLoadError({ code: "aborted", message: "Load cancelled." });
-  }, [clearLoadTimers, setIsSlowLoad, setIsLoading, setWebviewLoadError]);
+  }, [clearLoadTimers, setIsLoading, setWebviewLoadError]);
 
   const handleRetryWebviewLoad = useCallback(() => {
     setWebviewLoadError(null);
-    setIsSlowLoad(false);
     setIsLoading(true);
     if (currentUrl) {
       // Swallow ERR_ABORTED-class rejections — did-fail-load is the source
@@ -797,13 +802,12 @@ export function DevPreviewPane({
     } else {
       webviewRef.current?.reload();
     }
-  }, [currentUrl, setWebviewLoadError, setIsSlowLoad, setIsLoading]);
+  }, [currentUrl, setWebviewLoadError, setIsLoading]);
 
   const performReload = useCallback(() => {
     const webview = webviewRef.current;
     if (!webview || !isWebviewReady) return;
     setWebviewLoadError(null);
-    setIsSlowLoad(false);
     try {
       const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
       safeFireAndForget(window.electron.webview.reloadIgnoringCache(wcId, id), {
@@ -812,24 +816,36 @@ export function DevPreviewPane({
     } catch {
       webview.reload();
     }
-  }, [isWebviewReady, id, setWebviewLoadError, setIsSlowLoad]);
+  }, [isWebviewReady, id, setWebviewLoadError]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
+    if (!webview || !isWebviewReady) return false;
     let url: string;
     try {
       url = webview.getURL();
     } catch {
-      return;
+      return false;
     }
-    if (!url || url === "about:blank") return;
+    if (!url || url === "about:blank") return false;
+    if (screenshotInFlightRef.current) return false;
+    screenshotInFlightRef.current = true;
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
       await window.electron.clipboard.writeImage(pngData);
+      return true;
     } catch (err) {
       logError("[DevPreviewPane] Screenshot capture failed", err);
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Screenshot failed",
+        message: "Couldn't copy the screenshot to clipboard",
+      });
+      return false;
+    } finally {
+      screenshotInFlightRef.current = false;
     }
   }, [isWebviewReady]);
 
@@ -946,7 +962,6 @@ export function DevPreviewPane({
     setWebviewSeedUrl("");
     lastSetUrlRef.current = "";
     setIsLoading(false);
-    setIsSlowLoad(false);
     setIsWebviewReady(false);
     setWebviewLoadError(null);
     setCrashState("none");
@@ -958,7 +973,6 @@ export function DevPreviewPane({
     setDevPreviewScrollPosition,
     clearLoadTimers,
     setIsLoading,
-    setIsSlowLoad,
     setIsWebviewReady,
     setWebviewLoadError,
   ]);
@@ -1038,9 +1052,14 @@ export function DevPreviewPane({
 
       autoDetectRef.current = true;
       setIsAutoDetecting(true);
+      setAutoDetectFailedCommand(null);
+      let attemptedCommand = candidateCommand ?? "";
       try {
         const latestSettings = await projectClient.getSettings(currentProjectId);
-        if (!latestSettings) return false;
+        if (!latestSettings) {
+          if (isMountedRef.current) setAutoDetectFailedCommand(attemptedCommand);
+          return false;
+        }
 
         let command = candidateCommand;
         if (!command) {
@@ -1051,7 +1070,11 @@ export function DevPreviewPane({
           )?.command;
         }
 
-        if (!command) return false;
+        if (!command) {
+          if (isMountedRef.current) setAutoDetectFailedCommand("");
+          return false;
+        }
+        attemptedCommand = command;
 
         await saveSettings({
           ...latestSettings,
@@ -1063,6 +1086,7 @@ export function DevPreviewPane({
         return true;
       } catch (err) {
         logError("Failed to auto-detect dev server", err);
+        if (isMountedRef.current) setAutoDetectFailedCommand(attemptedCommand);
         return false;
       } finally {
         autoDetectRef.current = false;
@@ -1123,10 +1147,11 @@ export function DevPreviewPane({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="flex items-center gap-1 p-1.5 hover:bg-daintree-text/10 text-daintree-text/60 hover:text-daintree-text transition-colors max-w-[180px]"
+                onPointerDown={(e) => e.stopPropagation()}
+                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors max-w-[180px]"
                 aria-label="Switch dev script"
               >
-                <span className="text-xs truncate">{headerLabel}</span>
+                <span className="min-w-0 text-xs truncate">{headerLabel}</span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
               </button>
             </DropdownMenuTrigger>
@@ -1268,6 +1293,13 @@ export function DevPreviewPane({
 
   // Blank the webview and clear timers before React unmounts it for faster memory reclamation
   useEffect(() => {
+    if (isEvicted) {
+      // Clear crash state so a restored panel doesn't surface a stale banner.
+      // The eviction placeholder owns the visual signal in that window.
+      setCrashState("none");
+      setCrashDetails(null);
+      crashTimestampsRef.current = [];
+    }
     if (isEvicted && webviewRef.current) {
       try {
         // Save scroll position before eviction. Use the main-process CDP
@@ -1427,14 +1459,23 @@ export function DevPreviewPane({
     };
   }, [id]);
 
-  // Clear crash state on successful navigation
+  // Clear crash state when the user navigates to a fresh URL. Depending on
+  // crashState here would create an instant-reset loop: the effect would fire
+  // the moment crashState transitions from "none" and clear it back. Track the
+  // last URL we cleared at via a ref so this effect runs only on real URL
+  // transitions.
+  const lastClearedCrashUrlRef = useRef<string>(currentUrl);
   useEffect(() => {
-    if (crashState === "none") return;
+    if (currentUrl === lastClearedCrashUrlRef.current) return;
+    lastClearedCrashUrlRef.current = currentUrl;
     if (currentUrl && currentUrl !== "about:blank") {
       setCrashState("none");
       setCrashDetails(null);
+      // Don't carry the prior URL's crash history into the new URL's 60s
+      // window — that would mis-throttle the first auto-recovery there.
+      crashTimestampsRef.current = [];
     }
-  }, [currentUrl, crashState]);
+  }, [currentUrl]);
 
   // Listen for the reload shortcut (Cmd/Ctrl+R) forwarded from the focused
   // webview guest. When the guest has focus, the outer renderer's keybinding
@@ -1481,6 +1522,7 @@ export function DevPreviewPane({
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       headerContent={headerContent}
+      headerContentPlacement="leading"
       className={
         phaseLabel === "Compiling"
           ? "panel-state-compiling"
@@ -1629,7 +1671,7 @@ export function DevPreviewPane({
                       </div>
                       <div className="flex flex-col items-center gap-2">
                         <Button
-                          onClick={() => void handleAutoDetect()}
+                          onClick={() => void handleAutoDetect(primaryCandidate.command)}
                           disabled={isAutoDetecting || isSettingsLoading}
                           variant="ghost"
                           size="sm"
@@ -1642,6 +1684,25 @@ export function DevPreviewPane({
                               : `Run \`${primaryCandidate.command}\``}
                           </span>
                         </Button>
+                        {autoDetectFailedCommand !== null && (
+                          <InlineStatusBanner
+                            icon={XCircle}
+                            severity="error"
+                            title="Couldn't start preview"
+                            description="The detected command couldn't be saved to project settings."
+                            className="w-full rounded text-left"
+                            action={{
+                              id: "dev-preview-auto-detect-retry",
+                              label: "Retry",
+                              icon: RotateCw,
+                              variant: "dangerFilled",
+                              onClick: () =>
+                                void handleAutoDetect(
+                                  autoDetectFailedCommand || primaryCandidate.command
+                                ),
+                            }}
+                          />
+                        )}
                         {candidates.length > 1 && (
                           <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
                             <PopoverTrigger asChild>
@@ -1705,7 +1766,7 @@ export function DevPreviewPane({
                             }
                           }}
                           placeholder="npm run dev"
-                          className="w-full px-2.5 py-1.5 text-xs font-mono bg-overlay-subtle border border-overlay/30 rounded text-daintree-text/70 placeholder:text-daintree-text/30 focus:outline-hidden focus:border-overlay/50 transition-[border-color,box-shadow]"
+                          className="w-full px-2.5 py-1.5 text-xs font-mono bg-overlay-subtle border border-overlay/30 rounded text-daintree-text/70 placeholder:text-text-placeholder focus:outline-hidden focus:border-overlay/50 transition-[border-color,box-shadow]"
                         />
                         <Button
                           onClick={() => void handleSaveCommand()}

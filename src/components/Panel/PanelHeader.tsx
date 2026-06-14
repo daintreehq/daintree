@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -33,11 +34,18 @@ import {
   closestCenter,
   useSensor,
   useSensors,
+  KeyboardSensor,
   PointerSensor,
   TouchSensor,
   type DragEndEvent,
+  type UniqueIdentifier,
 } from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { PanelTabList } from "./PanelTabList";
 import type { PanelKind } from "@/types";
@@ -49,6 +57,7 @@ import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BellDot, FolderGit2 } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
+import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import {
   useAriaKeyshortcuts,
   useBackgroundPanelStats,
@@ -141,6 +150,11 @@ export interface PanelHeaderProps {
 
   // Slots for kind-specific content
   headerContent?: ReactNode;
+  // Where the kind-specific slot renders within the right-hand control cluster.
+  // "trailing" (default) keeps it all the way right — past the close button —
+  // which is where the terminal Activity Indicator belongs. "leading" tucks it
+  // ahead of the overflow menu, used by Dev Preview's command dropdown.
+  headerContentPlacement?: "leading" | "trailing";
   headerActions?: ReactNode;
 
   // Tab support
@@ -189,6 +203,7 @@ function PanelHeaderComponent({
   isFleetFollower = false,
   isFleetPreviewed = false,
   headerContent,
+  headerContentPlacement = "trailing",
   headerActions,
   tabs,
   groupId,
@@ -243,7 +258,7 @@ function PanelHeaderComponent({
       : undefined;
 
   // Get background activity stats for Zen Mode header
-  const { activeCount, workingCount } = useBackgroundPanelStats(id);
+  const { activeCount, workingCount } = useBackgroundPanelStats(id, isMaximized);
 
   // Check if panel has dangerous launch flags
   const hasDangerousFlags = (() => {
@@ -283,9 +298,10 @@ function PanelHeaderComponent({
     duplicateShortcut
   );
 
-  const terminal = usePanelStore((state) => state.panelsById[id]);
-  const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
-  const isInputLocked = terminalPty?.isInputLocked ?? false;
+  const isInputLocked = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
+  });
   const hasPty = panelKindHasPty(kind);
   const isHibernated = useIsHibernated(id);
 
@@ -350,16 +366,20 @@ function PanelHeaderComponent({
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
       unwatchPanel(id);
-    } else if (
-      terminalPty?.agentState === "completed" ||
-      terminalPty?.agentState === "waiting" ||
-      terminalPty?.agentState === "exited"
+      return;
+    }
+    const panel = usePanelStore.getState().panelsById[id];
+    const panelPty = panel && isPtyPanel(panel) ? panel : undefined;
+    if (
+      panelPty?.agentState === "completed" ||
+      panelPty?.agentState === "waiting" ||
+      panelPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, terminal?.title ?? id, terminalPty.agentState);
+      fireWatchNotification(id, panel?.title ?? id, panelPty.agentState);
     } else {
       watchPanel(id);
     }
-  }, [id, isWatched, unwatchPanel, watchPanel, terminal, terminalPty]);
+  }, [id, isWatched, unwatchPanel, watchPanel]);
 
   // Bump a generation counter on each false→true transition of
   // `isFleetPreviewed` so the enter-cue overlay (keyed by this counter)
@@ -443,12 +463,45 @@ function PanelHeaderComponent({
     }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 150, tolerance: 5 },
-    })
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  // Surface-specific ARIA announcements — without this dnd-kit reads the
+  // generic English defaults ("Picked up draggable item <id>").
+  const getTabLabel = useCallback(
+    (tabId: UniqueIdentifier) => {
+      const tab = tabs?.find((t) => t.id === tabId);
+      return tab ? getBaseTitle(tab.title) : null;
+    },
+    [tabs]
+  );
+  const tabAnnouncements = useMemo(
+    () => makeSortableAnnouncements(getTabLabel, "tab"),
+    [getTabLabel]
+  );
+
+  // Restrict dnd-kit's autoscroller to the horizontal tab strip itself so its
+  // scrollable-ancestor walk doesn't scroll the surrounding panel content.
+  const tabAutoScroll = useMemo(
+    () => ({ canScroll: (el: Element) => el === tabListEl }),
+    [tabListEl]
+  );
+
+  // While a tab drag is live (keyboard pickup), the tablist arrow handler must
+  // not also move focus/selection — dnd-kit's sensor owns the arrow keys.
+  const isTabDragActiveRef = useRef(false);
+  const handleTabDragStart = useCallback(() => {
+    isTabDragActiveRef.current = true;
+  }, []);
+  const handleTabDragCancel = useCallback(() => {
+    isTabDragActiveRef.current = false;
+  }, []);
 
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
+      isTabDragActiveRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id || !tabs || !onTabReorder) return;
 
@@ -470,6 +523,7 @@ function PanelHeaderComponent({
   // Arrow key navigation for tabs (standard tablist behavior)
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isTabDragActiveRef.current) return;
       if (!tabs || tabs.length < 2 || !onTabClick) return;
 
       const currentIndex = tabs.findIndex((t) => t.isActive);
@@ -615,8 +669,12 @@ function PanelHeaderComponent({
           <DndContext
             sensors={tabSensors}
             collisionDetection={closestCenter}
+            onDragStart={handleTabDragStart}
             onDragEnd={handleTabDragEnd}
+            onDragCancel={handleTabDragCancel}
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+            autoScroll={tabAutoScroll}
+            accessibility={{ announcements: tabAnnouncements }}
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <PanelTabList
@@ -861,6 +919,9 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1.5">
+        {/* Kind-specific header content slot (leading placement) */}
+        {headerContentPlacement === "leading" && headerContent}
+
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <DropdownMenu
@@ -897,7 +958,7 @@ function PanelHeaderComponent({
                   }
                   data-testid="panel-redraw"
                 >
-                  <RefreshCw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <RefreshCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Redraw
                 </DropdownMenuItem>
               )}
@@ -915,7 +976,7 @@ function PanelHeaderComponent({
                       : "Restart Session"
                   }
                 >
-                  <RotateCcw className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   {armedRestartId === id
                     ? `Confirm Restart (${countdown ?? 0}s)`
                     : "Restart Session"}
@@ -932,7 +993,7 @@ function PanelHeaderComponent({
                     )
                   }
                 >
-                  <FolderGit2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Move to New Worktree…
                 </DropdownMenuItem>
               )}
@@ -941,7 +1002,7 @@ function PanelHeaderComponent({
               {((canRestart && onRestart) || hasPty || agentId) && <DropdownMenuSeparator />}
               {location === "dock" && onRestore && (
                 <DropdownMenuItem onSelect={() => onRestore()}>
-                  <PanelTopClose className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <PanelTopClose className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Move to grid
                 </DropdownMenuItem>
               )}
@@ -954,7 +1015,7 @@ function PanelHeaderComponent({
                   )
                 }
               >
-                <Pencil className="w-3 h-3 mr-2" aria-hidden="true" />
+                <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Rename
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -966,7 +1027,7 @@ function PanelHeaderComponent({
                   )
                 }
               >
-                <CopyPlus className="w-3 h-3 mr-2" aria-hidden="true" />
+                <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Duplicate
               </DropdownMenuItem>
               {hasPty && (
@@ -980,9 +1041,9 @@ function PanelHeaderComponent({
                   }
                 >
                   {isInputLocked ? (
-                    <Unlock className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <Unlock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   ) : (
-                    <Lock className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   )}
                   {isInputLocked ? "Unlock Input" : "Lock Input"}
                 </DropdownMenuItem>
@@ -990,9 +1051,9 @@ function PanelHeaderComponent({
               {showWatchButton && (
                 <DropdownMenuItem onSelect={handleWatchToggle}>
                   {isWatched ? (
-                    <BellOff className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <BellOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   ) : (
-                    <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
+                    <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   )}
                   {isWatched ? "Cancel Watch" : "Watch"}
                 </DropdownMenuItem>
@@ -1014,7 +1075,7 @@ function PanelHeaderComponent({
                   )
                 }
               >
-                <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                 Trash
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -1154,8 +1215,9 @@ function PanelHeaderComponent({
           </TooltipContent>
         </Tooltip>
 
-        {/* Kind-specific header content slot */}
-        {headerContent}
+        {/* Kind-specific header content slot (trailing placement) — stays all
+            the way right, past the close button, for the Activity Indicator */}
+        {headerContentPlacement === "trailing" && headerContent}
       </div>
       {isFleetPreviewed ? (
         <span

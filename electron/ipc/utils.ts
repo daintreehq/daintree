@@ -4,6 +4,9 @@ import {
   getWindowForWebContents,
   getAppWebContents,
   getAllAppWebContents,
+  getWebContentsForProject,
+  hasRegisteredProjectViews,
+  isCachedViewWebContents,
 } from "../window/webContentsRegistry.js";
 import { getProjectViewManager } from "../window/windowRef.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
@@ -343,6 +346,58 @@ export function sendToRenderer(
 
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
+    if (!wc.isDestroyed()) {
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+  }
+}
+
+/**
+ * Project-scoped broadcast for per-terminal hot streams (flow-status pulses,
+ * activity headlines): one structured clone + renderer IPC task per VIEW OF
+ * THE OWNING PROJECT instead of per WebContents in the app. Cached views of
+ * the project are included — these are state events with no replay path on
+ * warm reactivation (#9490). Falls back to a full broadcast when the
+ * terminal's project is unknown or no project views are registered (startup /
+ * windows that don't route through ProjectViewManager); when project views
+ * exist but none host this project, no renderer has panels for the terminal
+ * and the event is dropped. NOT for TERMINAL_DATA — its all-windows fallback
+ * delivery is a deliberate project-switch correctness crutch (see
+ * src/clients/terminalClient.ts onData).
+ */
+export function broadcastToProjectRenderers(
+  projectId: string | null,
+  channel: string,
+  ...args: unknown[]
+): void {
+  if (projectId !== null && hasRegisteredProjectViews()) {
+    for (const wc of getWebContentsForProject(projectId)) {
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    return;
+  }
+  broadcastToRenderer(channel, ...args);
+}
+
+/**
+ * Broadcast that skips cached (deactivated) project views. Only for
+ * high-frequency streams the renderer can re-fetch on activation (e.g. log
+ * batches via LOGS_GET_ALL) — cached renderers are CPU-throttled or frozen, so
+ * pushed messages would queue unbounded in their task queues. State broadcasts
+ * must keep using broadcastToRenderer: cached views have no replay path on
+ * warm reactivation (#9490).
+ */
+export function broadcastToVisibleRenderers(channel: string, ...args: unknown[]): void {
+  for (const wc of getAllAppWebContents()) {
+    if (isCachedViewWebContents(wc.id)) continue;
     if (!wc.isDestroyed()) {
       try {
         wc.send(channel, ...args);

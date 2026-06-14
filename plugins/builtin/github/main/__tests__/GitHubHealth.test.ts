@@ -51,7 +51,7 @@ const mockStatsCache = {
     ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
   >(() => null),
 };
-vi.mock("../../../../../electron/services/GitHubStatsCache.js", () => ({
+vi.mock("../GitHubStatsCache.js", () => ({
   GitHubStatsCache: { getInstance: () => mockStatsCache },
 }));
 

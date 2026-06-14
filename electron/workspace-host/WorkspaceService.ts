@@ -43,13 +43,15 @@ import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { waitForPathExists } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
-  probeGitLfsAvailable,
-  isGitHubRemoteUrl,
   parseCheckedOutBranches,
   nextAvailableBranchName,
   ensureNoteFile,
   assertWorktreePathContained,
 } from "./worktreeUtils.js";
+import {
+  matchProviderForRemoteUrl,
+  type ForgeProviderMatcher,
+} from "../../shared/utils/forgeHostnames.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import parcelWatcher from "@parcel/watcher";
@@ -136,6 +138,11 @@ const TOPOLOGY_RECONCILE_TIMEOUT_MS = 60_000;
 // a silent no-op, even when the underlying pipelines are degraded.
 const HOST_REFRESH_TIMEOUT_MS = 45_000;
 
+// FIFO cap on the acknowledged-mutation dedup set. Mutation ids are arbitrary
+// UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
+// a session sees well under 100 deletes, so 500 never evicts a live id.
+export const MAX_ACKNOWLEDGED_MUTATIONS = 500;
+
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private pollQueue = new PQueue({
@@ -171,6 +178,10 @@ export class WorkspaceService {
   // worktree is never present here. Mutated via lruTouch/lruRemove; budget
   // enforced by applyWatcherBudget().
   private readonly backgroundGitWatcherLru = new Map<string, true>();
+  // Provider hostname-matcher table relayed from main's forge registry.
+  // Empty until the first relay lands (after plugin load), so monitors start
+  // unmatched and re-resolve when the table arrives or changes.
+  private forgeProviderMatchers: ForgeProviderMatcher[] = [];
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
@@ -273,6 +284,15 @@ export class WorkspaceService {
    * and the renderer's outbox replay flow takes over.
    */
   private readonly acknowledgedMutations = new Set<string>();
+
+  /** Record an acked mutation id, evicting the oldest past the FIFO cap. */
+  private recordAcknowledgedMutation(mutationId: string): void {
+    this.acknowledgedMutations.add(mutationId);
+    if (this.acknowledgedMutations.size > MAX_ACKNOWLEDGED_MUTATIONS) {
+      const oldest = this.acknowledgedMutations.values().next().value;
+      if (oldest !== undefined) this.acknowledgedMutations.delete(oldest);
+    }
+  }
 
   /** Advance and return the next monotonic seq for an outgoing event. */
   private nextSeq(): number {
@@ -556,7 +576,7 @@ export class WorkspaceService {
       // Merge: global (lowest priority) < project-level < DAINTREE_* (set in buildEnv)
       const projectEnvVars = await this.loadProjectEnvVars(projectRootPath);
       this.projectEnvVars = { ...(globalEnvVars ?? {}), ...projectEnvVars };
-      this.git = createHardenedGit(projectRootPath, this._shutdownController.signal);
+      this.git = await createHardenedGit(projectRootPath, this._shutdownController.signal);
       this.listService.setGit(this.git, projectRootPath);
 
       // #6669: prune at startup so externally-deleted worktrees (kept in
@@ -574,14 +594,7 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
-      // Run the LFS probe concurrently with monitor sync so we don't add its
-      // 3s worst case on top of sync latency. The probe is a read-only CLI
-      // check (no PATH side-effects); its result travels on the load-project
-      // event so the renderer can warn proactively when a repo uses LFS.
-      const [, lfsAvailable] = await Promise.all([
-        this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true),
-        probeGitLfsAvailable(),
-      ]);
+      await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
       this.startTopologyWatcher();
       // Started independently of startTopologyWatcher() — that method no-ops
@@ -605,7 +618,7 @@ export class WorkspaceService {
       // owning project picks them up.
       this.pruneStaleWslGitEntries(worktrees);
 
-      this.sendEvent({ type: "load-project-result", requestId, success: true, lfsAvailable });
+      this.sendEvent({ type: "load-project-result", requestId, success: true });
 
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
         const [prResult, refreshResult] = results;
@@ -968,6 +981,7 @@ export class WorkspaceService {
     this.recoverWatcherIfNoMonitorsRemain();
 
     clearGitDirCache(monitor.path);
+    clearGitCommonDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
 
     // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
@@ -1226,10 +1240,10 @@ export class WorkspaceService {
       }
     })();
 
-    // Resolve origin → github.com? once at monitor start. Setter re-emits the
-    // snapshot only if the value differs from the initial `false`, so this is
-    // a no-op for the (small) set of non-GitHub repos.
-    void this.probeGitHubRemoteAsync(monitor);
+    // Resolve origin → registered forge provider at monitor start. Setter
+    // re-emits the snapshot only if the value differs from the initial `null`,
+    // so this is a no-op for repos no registered provider matches.
+    void this.probeForgeRemoteAsync(monitor);
   }
 
   private async initResourceConfigAsync(
@@ -1312,8 +1326,7 @@ export class WorkspaceService {
     }
   }
 
-  private handleMonitorUpdate(monitor: WorktreeMonitor, _snapshot: WorktreeSnapshot): void {
-    const snapshot = monitor.getSnapshot();
+  private handleMonitorUpdate(_monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
@@ -1419,19 +1432,41 @@ export class WorkspaceService {
   }
 
   /**
-   * Probe origin's fetch URL once and tell the monitor whether it points at
-   * github.com. Runs off the critical path — failures are silent (the
-   * affordance simply stays hidden, which matches the non-GitHub behavior).
+   * Probe origin's fetch URL once at monitor start, remember it on the
+   * monitor, and resolve it against the relayed provider-matcher table. Runs
+   * off the critical path — failures are silent (the affordance simply stays
+   * hidden, which matches the unmatched-remote behavior). The remembered URL
+   * lets `setForgeProviderMatchers` re-match without re-probing git.
    */
-  private async probeGitHubRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
+  private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
     try {
-      const git = createHardenedGit(monitor.path);
+      const git = await createHardenedGit(monitor.path);
       const remotes = await git.getRemotes(true);
       const origin = remotes.find((r) => r.name === "origin") ?? remotes[0];
       const fetchUrl = origin?.refs?.fetch;
-      monitor.setIsGitHubRemote(isGitHubRemoteUrl(fetchUrl));
+      monitor.setRemoteFetchUrl(fetchUrl);
+      monitor.setMatchedForgeProviderId(
+        fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
+      );
     } catch {
       // Remote probe is best-effort; keep the affordance hidden on failure.
+    }
+  }
+
+  /**
+   * Store the relayed provider-matcher table and re-resolve every running
+   * monitor's matched provider id. The table arrives async after plugin load
+   * (and again on registry changes), so monitors that started unmatched gain
+   * their provider id here once the owning plugin registers.
+   */
+  setForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeProviderMatchers = Array.isArray(matchers) ? matchers : [];
+    for (const monitor of this.monitors.values()) {
+      if (!monitor.isRunning) continue;
+      const fetchUrl = monitor.remoteFetchUrl;
+      monitor.setMatchedForgeProviderId(
+        fetchUrl ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers) : null
+      );
     }
   }
 
@@ -2065,23 +2100,28 @@ export class WorkspaceService {
       return;
     }
 
-    // #6669: prune before listing so externally-deleted worktrees (which Git
-    // 2.31+ keeps in `worktree list --porcelain` with a `prunable` marker)
-    // are dropped from the list. Without this, `syncMonitors` re-creates a
-    // monitor for the phantom path and the sidebar entry never clears.
-    // `prune` skips locked worktrees, so this is safe to run on every refresh.
-    // Best-effort: if prune fails (e.g. EPERM on .git/worktrees/), don't block
-    // the rest of the refresh — that would recreate the original "refresh is a
-    // no-op" symptom under a different trigger.
-    try {
-      await this.git.raw(["worktree", "prune"]);
-    } catch (pruneError) {
-      console.warn(
-        `[WorkspaceHost] worktree prune during refresh failed: ${(pruneError as Error).message}`
-      );
+    // #6669: list first, then prune only when a prunable entry is present. Git
+    // 2.31+ surfaces externally-deleted worktrees with a `prunable` marker in
+    // `worktree list --porcelain`; without a prune pass `syncMonitors` would
+    // re-create a monitor for the phantom path and the sidebar entry would
+    // never clear. Listing first lets us skip the write-lock-taking prune
+    // command on every steady-state cycle (where nothing is prunable), cutting
+    // the per-90s topology reconcile from 2 spawns to 1. When prunable entries
+    // are found we prune then re-list so the sync sees the cleaned topology.
+    // Best-effort: if prune fails (e.g. EPERM on .git/worktrees/), fall through
+    // with the original list — same recovery behaviour as before.
+    let rawWorktrees = await this.listService.list({ forceRefresh: true });
+    if (rawWorktrees.some((wt) => wt.isPrunable)) {
+      try {
+        await this.git.raw(["worktree", "prune"]);
+        rawWorktrees = await this.listService.list({ forceRefresh: true });
+      } catch (pruneError) {
+        console.warn(
+          `[WorkspaceHost] worktree prune during refresh failed: ${(pruneError as Error).message}`
+        );
+      }
     }
 
-    const rawWorktrees = await this.listService.list({ forceRefresh: true });
     const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
@@ -2183,7 +2223,7 @@ export class WorkspaceService {
     // absoluteCreatePath is block-scoped to the try.
     let pendingCreateKey: string | null = null;
     try {
-      const git = createHardenedGit(rootPath);
+      const git = await createHardenedGit(rootPath);
       const { baseBranch, path } = options;
       let { newBranch } = options;
       let { fromRemote = false, useExistingBranch = false } = options;
@@ -2687,6 +2727,7 @@ export class WorkspaceService {
         }
 
         clearGitDirCache(monitor.path);
+        clearGitCommonDirCache(monitor.path);
 
         const cacheKey = this.listService.getCacheKey();
         if (cacheKey) {
@@ -2747,7 +2788,7 @@ export class WorkspaceService {
       // sees the id in `lastAcknowledgedMutationIds` and prunes without firing
       // a second delete — the operation completed once, the renderer just
       // missed the live ack.
-      if (mutationId) this.acknowledgedMutations.add(mutationId);
+      if (mutationId) this.recordAcknowledgedMutation(mutationId);
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       // Delete failed — drop any pending entry so a real external change to
@@ -2803,7 +2844,7 @@ export class WorkspaceService {
 
   async listBranches(requestId: string, rootPath: string): Promise<void> {
     try {
-      const git = createHardenedGit(rootPath);
+      const git = await createHardenedGit(rootPath);
       const summary: BranchSummary = await git.branch(["-a"]);
       const branches: BranchInfo[] = [];
 
@@ -2845,7 +2886,7 @@ export class WorkspaceService {
     headRefName: string
   ): Promise<void> {
     try {
-      const git = createAuthenticatedGit(rootPath);
+      const git = await createAuthenticatedGit(rootPath);
       await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
@@ -2863,7 +2904,7 @@ export class WorkspaceService {
 
   async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
     try {
-      const git = createHardenedGit(rootPath);
+      const git = await createHardenedGit(rootPath);
       const rawReflog = await git.raw(["reflog", "--format=%gs"]);
 
       if (!rawReflog?.trim()) {
@@ -2896,7 +2937,8 @@ export class WorkspaceService {
     requestId: string,
     cwd: string,
     filePath: string,
-    status: string
+    status: string,
+    ignoreWhitespace?: boolean
   ): Promise<void> {
     try {
       const { resolve, normalize, sep, isAbsolute } = await import("path");
@@ -2914,11 +2956,23 @@ export class WorkspaceService {
       // Git always uses forward slashes in diff output, even on Windows
       const gitPath = normalizedPath.replaceAll("\\", "/");
 
-      const git = createHardenedGit(cwd);
+      const absolutePath = resolve(cwd, normalizedPath);
+
+      try {
+        const { stat } = await import("fs/promises");
+        const stats = await stat(absolutePath);
+        if (stats.size > 1024 * 1024) {
+          this.sendEvent({ type: "get-file-diff-result", requestId, diff: "FILE_TOO_LARGE" });
+          return;
+        }
+      } catch {
+        // ignore
+      }
+
+      const git = await createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
         const { readFile } = await import("fs/promises");
-        const absolutePath = resolve(cwd, normalizedPath);
         const buffer = await readFile(absolutePath);
 
         let isBinary = false;
@@ -2956,6 +3010,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
+        ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
         "--",
         normalizedPath,
       ]);
@@ -2967,6 +3022,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
       if (!diff.trim()) {
         this.sendEvent({ type: "get-file-diff-result", requestId, diff: "NO_CHANGES" });
+        return;
+      }
+
+      if (diff.length > 1024 * 1024) {
+        this.sendEvent({ type: "get-file-diff-result", requestId, diff: "FILE_TOO_LARGE" });
         return;
       }
 

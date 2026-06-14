@@ -1,5 +1,5 @@
-// eager-import-allow: reads plugin settings via store.get synchronously during service init
 import fs from "fs/promises";
+import { existsSync } from "node:fs";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
@@ -56,6 +56,8 @@ import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
+import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
+import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -256,7 +258,21 @@ interface LoadedPlugin {
   isBuiltin: boolean;
   /** SHA-256 hex digest of the `.dntr` archive, set by the installer at install time. */
   archiveHash?: string;
+  /**
+   * True when the plugin dir carries a {@link DEV_MARKER_FILENAME} (written by
+   * `daintree-plugin dev`). Dev plugins activate inside a `utilityProcess.fork`
+   * worker that hot-reloads on `dist/index.js` rebuilds (#9304), instead of the
+   * in-process `import()` loader.
+   */
+  devMode?: boolean;
 }
+
+/**
+ * Marker file `daintree-plugin dev` writes at the symlinked plugin dir root to
+ * flag it for the hot-reload worker path (#9304). Presence alone is the signal;
+ * the file's contents are not read.
+ */
+const DEV_MARKER_FILENAME = ".dev-marker";
 
 const ACTIVATE_TIMEOUT_MS = 5000;
 /**
@@ -520,7 +536,26 @@ export class PluginService {
     string,
     { manifest: PluginManifest; dir: string; isBuiltin: boolean }
   >();
+  /**
+   * Per-plugin transition chain for live built-in enable/disable (#9304). A
+   * rapid disable→enable→disable on the same id must not interleave the
+   * unload/load mutations to `plugins`/`disabledPlugins`/`reservedNames`, so
+   * each `setEnabled` for a built-in chains onto the prior transition for that
+   * id. Keyed by `manifest.name`; the entry is dropped once its chain settles.
+   */
+  private readonly enableTransitions = new Map<string, Promise<void>>();
   private records = new PluginInstalledRecordsStore();
+  /**
+   * Live dev-mode hot-reload workers, keyed by pluginId (#9304). Each holds the
+   * forked `utilityProcess` lifecycle, the message bridge to the real host, and
+   * the host `revoke` to call on unload. Disposed via the {@link cleanupMap}
+   * disposer registered at activation, so `unloadPlugin` tears the worker down
+   * through its normal cascade.
+   */
+  private devWorkers = new Map<
+    string,
+    { workerHost: PluginDevWorkerHost; bridge: PluginDevWorkerMainBridge; revoke: () => void }
+  >();
   private pluginsRoot: string;
   /**
    * Optional override for the built-in plugins directory. When unset, the
@@ -965,6 +1000,35 @@ export class PluginService {
       }
     }
 
+    // Dev-mode detection (#9304): a `.dev-marker` at the plugin dir root (written
+    // by `daintree-plugin dev`) routes this plugin through the hot-reload worker
+    // instead of the in-process loader. Built-ins are never dev plugins. Persist
+    // `devMode` to the provenance record so `listPlugins()` surfaces the "DEV"
+    // badge (#9290). A dev plugin needs a `main` entry to run in the worker.
+    //
+    // Synchronous `existsSync` on purpose: an `await` here would split the
+    // synchronous critical section between the duplicate-name check above and
+    // the `this.plugins.set` below, letting two concurrent loads of the same
+    // name both slip past dedup.
+    if (!opts.isBuiltin) {
+      const isDev = existsSync(path.join(pluginDir, DEV_MARKER_FILENAME));
+      if (isDev && plugin.resolvedMain) {
+        plugin.devMode = true;
+        this.records.upsertInstalledRecord(manifest.name, { devMode: true });
+      } else {
+        // Clear a stale dev flag if the marker was removed since last launch.
+        const record = this.records.getInstalledRecord(manifest.name);
+        if (record?.devMode) {
+          this.records.upsertInstalledRecord(manifest.name, { devMode: false });
+        }
+        if (isDev && !plugin.resolvedMain) {
+          console.warn(
+            `[PluginService] Plugin "${manifest.name}" has a ${DEV_MARKER_FILENAME} but no resolvable main entry — loading without hot-reload`
+          );
+        }
+      }
+    }
+
     // Index views by bare id so the panels loop can attach `componentPath` in
     // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
     // runtime panel id is `${manifest.name}.${panel.id}`.
@@ -1291,6 +1355,11 @@ export class PluginService {
   private async _doActivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin || !plugin.resolvedMain) return;
+    // Dev-mode plugins run inside a hot-reload worker instead of the in-process
+    // import() loader (#9304).
+    if (plugin.devMode) {
+      return this.activateViaDevWorker(pluginId, plugin);
+    }
     try {
       // Bound the dynamic import — a plugin with a hanging top-level await
       // would otherwise pin this promise forever and stall `Promise.allSettled`
@@ -1331,6 +1400,130 @@ export class PluginService {
       }
       console.error(`[PluginService] Failed to load main entry for ${pluginId}:`, err);
       throw err;
+    }
+  }
+
+  /**
+   * Activate a dev-mode plugin inside a hot-reload worker (#9304). The plugin's
+   * code runs in a `utilityProcess.fork` child; the real host (from
+   * {@link createHost}) is bridged to the worker over MessagePort. The worker
+   * watches `dist/index.js` and respawns on every rebuild, so module-scope state
+   * never leaks across reloads (the robust fix for the Vite ESM cache leak).
+   *
+   * The host is left un-revoked for the worker's lifetime — unlike the
+   * in-process path, the worker legitimately re-registers on every reload, and
+   * the activation-window contract is enforced worker-side by its own proxy.
+   *
+   * A failed `activate()` is recorded but does NOT tear the worker down: the
+   * worker keeps watching so the author can fix the error and save to reload.
+   * Only a fork failure (no worker at all) rejects.
+   */
+  private async activateViaDevWorker(pluginId: string, plugin: LoadedPlugin): Promise<void> {
+    if (!plugin.resolvedMain) return;
+    // A re-activation while a worker is already live is a no-op — the worker
+    // owns its own reload cycle; activatePlugin's idempotency normally prevents
+    // this, but guard defensively against the unload-race re-entry path.
+    if (this.devWorkers.has(pluginId)) return;
+
+    const { host, revoke } = this.createHost(pluginId);
+    const workerHost = new PluginDevWorkerHost({
+      pluginId,
+      pluginDir: plugin.dir,
+      bundlePath: plugin.resolvedMain,
+    });
+    const bridge = new PluginDevWorkerMainBridge({
+      pluginId,
+      host,
+      workerHost,
+      getCapabilities: () => this.plugins.get(pluginId)?.manifest.capabilities ?? [],
+      clearPriorRegistrations: () => {
+        // Drop the prior generation's activate-time registrations before the
+        // reloaded worker re-registers, so a handler the new code stopped
+        // registering doesn't linger. Manifest-declared commands are registered
+        // once at load time and NOT replayed on reload, so only imperative
+        // (`host.registerAction`) actions are cleared — clearing all of them
+        // would erase the plugin's palette commands after the first reload.
+        this.removeHandlers(pluginId);
+        this.unregisterImperativePluginActions(pluginId);
+      },
+      // Fires on every activation outcome (initial + each reload). Keeps the
+      // provenance `loadError` in sync so a fix-and-save clears a stale error
+      // and a freshly-introduced one is recorded — the first-activation promise
+      // alone can't see post-reload outcomes.
+      onActivationResult: (result) => {
+        if (plugin.isBuiltin) return;
+        if (result.ok) {
+          if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
+            this.records.upsertInstalledRecord(pluginId, { loadError: null });
+          }
+        } else {
+          this.records.upsertInstalledRecord(pluginId, {
+            loadError: { message: result.error, at: Date.now() },
+          });
+        }
+      },
+    });
+
+    const entry = { workerHost, bridge, revoke };
+    this.devWorkers.set(pluginId, entry);
+
+    // Register the teardown disposer up front so a concurrent unloadPlugin()
+    // during fork/activation tears the worker down through the normal cascade.
+    const cleanup = (): void => {
+      bridge.dispose();
+      workerHost.dispose();
+      revoke();
+      if (this.devWorkers.get(pluginId) === entry) {
+        this.devWorkers.delete(pluginId);
+      }
+    };
+    this.cleanupMap.set(pluginId, cleanup);
+
+    try {
+      await workerHost.start();
+    } catch (err) {
+      // Fork failure — no worker exists, so this is a hard activation failure.
+      cleanup();
+      const loadError = toPluginLoadError(err);
+      if (!plugin.isBuiltin) {
+        this.records.upsertInstalledRecord(pluginId, { loadError });
+      }
+      console.error(`[PluginService] Failed to start dev worker for ${pluginId}:`, err);
+      throw err;
+    }
+
+    // If an unload raced the fork, the cleanup already disposed everything.
+    if (!this.plugins.has(pluginId) || this.devWorkers.get(pluginId) !== entry) {
+      cleanup();
+      return;
+    }
+
+    // Bound the first activation so a plugin with a hanging `activate()` (or a
+    // never-resolving top-level await in the worker) can't stall the
+    // `Promise.allSettled` startup gate forever. On timeout the worker stays
+    // alive and watching — `onActivationResult` will clear/record the error if
+    // activation eventually settles or a reload follows. Mirrors the in-process
+    // ACTIVATE_TIMEOUT_MS contract. The provenance `loadError` is owned by
+    // `onActivationResult`; this catch only logs and unblocks startup.
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        bridge.waitForActivation(),
+        new Promise<void>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(
+                `Dev plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
+              )
+            );
+          }, ACTIVATE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (err) {
+      console.error(`[PluginService] Dev plugin "${pluginId}" activation:`, err);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -2441,6 +2634,15 @@ export class PluginService {
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>
       unregisterForgeProviderImpls(pluginId)
     );
+    // Mirror the load-path notify (loadPlugin, ~line 1152): a runtime disable
+    // removes forge descriptors/impls from the registry, so workspace hosts
+    // whose PR polling resolved (or no-matched) against this provider must
+    // re-evaluate. A spurious notify for a plugin that contributed no forge
+    // provider is harmless — PullRequestService only invalidates a cached
+    // no-match. Without this, live-disable left stale provider resolution.
+    runUnloadStep(pluginId, "notifyForgeProviderRegistryUpdated", () =>
+      this.workspaceClient?.notifyForgeProviderRegistryUpdated()
+    );
     runUnloadStep(pluginId, "unregisterFileDecorationProviders", () =>
       unregisterFileDecorationProviders(pluginId)
     );
@@ -2546,11 +2748,14 @@ export class PluginService {
   }
 
   listPlugins(): LoadedPluginInfo[] {
-    // Desired state is the live persisted list; the running state is fixed for
-    // the session (`this.plugins` = loaded at launch, `this.disabledPlugins` =
-    // skipped at launch — disabling never unloads at runtime). Reporting both
-    // lets the renderer show the correct switch position and a "restart
-    // required" cue that survives a tab remount (#9284).
+    // Desired state is the live persisted list; the running state is
+    // `this.plugins` (loaded) vs `this.disabledPlugins` (skipped). For user
+    // plugins these are fixed for the session, so a toggle diverges them and
+    // raises a "restart required" cue (#9284). Built-ins transition live
+    // (#9304): `setEnabled` moves the entry between the two maps immediately, so
+    // the running state already matches the desired state and pendingRestart is
+    // false. Reporting both keeps the switch position and the cue correct across
+    // a tab remount.
     const desiredDisabled = this.records.getDisabledIds();
     const installed = this.records.getInstalledRecords();
 
@@ -2624,14 +2829,103 @@ export class PluginService {
 
   /**
    * Toggle a plugin's disabled state in Preferences (#9284). Persists to
-   * `plugins.disabled` in electron-store; the change takes effect on next
-   * launch (no synchronous unload — the renderer surfaces a restart-required
-   * cue). Idempotent: enabling an already-enabled plugin or disabling an
-   * already-disabled one is a no-op write. Permissive by design — the store is
-   * a declared-intent list, not a live registry, so no existence check.
+   * `plugins.disabled` in electron-store, then — for built-in plugins only —
+   * applies the change live (#9304): disabling unloads the running plugin,
+   * enabling re-registers and re-activates it, so the toggle takes effect
+   * without an app restart. User plugins stay persist-only and surface the
+   * restart-required cue, because their on-disk code can change between toggles
+   * and Node's ESM module cache has no eviction API (the dev-worker fork path
+   * exists precisely to sidestep that for recompiling dev plugins) — re-running
+   * a built-in's bundled, immutable `activate()` carries no such risk.
+   *
+   * Persists first so a crash mid-transition is recoverable: next launch reads
+   * the persisted intent and reaches the same state. Idempotent: toggling to
+   * the current state is a no-op write and a no-op transition. Permissive by
+   * design — the store is a declared-intent list, so no existence check.
    */
-  setEnabled(pluginId: string, enabled: boolean): void {
+  async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    // Persist intent first (throws on an empty id, validated in the store).
     this.records.setEnabled(pluginId, enabled);
+
+    const isBuiltin =
+      this.plugins.get(pluginId)?.isBuiltin ??
+      this.disabledPlugins.get(pluginId)?.isBuiltin ??
+      false;
+    if (!isBuiltin) return;
+
+    // Serialise live transitions per id so concurrent toggles can't interleave
+    // their unload/load map mutations. Swallow the prior chain's rejection —
+    // `_applyBuiltinToggle` never rejects, but the guard keeps the chain alive.
+    const prior = this.enableTransitions.get(pluginId) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(() => this._applyBuiltinToggle(pluginId, enabled));
+    this.enableTransitions.set(pluginId, next);
+    try {
+      await next;
+    } finally {
+      if (this.enableTransitions.get(pluginId) === next) {
+        this.enableTransitions.delete(pluginId);
+      }
+    }
+  }
+
+  /**
+   * Apply a live enable/disable transition for a built-in plugin (#9304).
+   * Disable: tear the running plugin down through the full `unloadPlugin()`
+   * cascade, then move its manifest into `disabledPlugins` so `listPlugins()`
+   * keeps surfacing it for the toggle. Enable: clear the name reservation and
+   * skipped entry (so `loadPlugin`'s duplicate guard doesn't reject the
+   * re-load), re-register from the cached manifest dir, then activate. Always
+   * broadcasts provenance so every view re-pulls `listPlugins()` and the
+   * restart-required cue clears. Never throws — activation errors are persisted
+   * to `loadError` inside `activatePlugin`, and a failed re-register restores
+   * the skipped state.
+   */
+  private async _applyBuiltinToggle(pluginId: string, enabled: boolean): Promise<void> {
+    try {
+      if (!enabled) {
+        const running = this.plugins.get(pluginId);
+        if (!running) return; // already not running — nothing to unload
+        const { manifest, dir } = running;
+        this.unloadPlugin(pluginId);
+        this.disabledPlugins.set(pluginId, { manifest, dir, isBuiltin: true });
+        this.reservedNames.add(pluginId);
+        return;
+      }
+
+      const entry = this.disabledPlugins.get(pluginId);
+      if (!entry) return; // already running — nothing to load
+      // Release ONLY the name reservation up front (the duplicate guard's actual
+      // gate), but keep the disabledPlugins entry in place across the async load.
+      // This keeps the id resolvable as a built-in at every await point, so a
+      // concurrent setEnabled can't slip past the isBuiltin check into the
+      // persist-only path while the load is mid-flight. loadPlugin() with an
+      // empty disabled set never touches disabledPlugins, so the entry is safe.
+      this.reservedNames.delete(pluginId);
+      let loaded: LoadedPlugin | null = null;
+      try {
+        loaded = await this.loadPlugin(path.dirname(entry.dir), path.basename(entry.dir), {
+          isBuiltin: true,
+          disabled: new Set<string>(),
+        });
+      } catch (err) {
+        // A throw (e.g. a malformed `when` expression in the manifest) must not
+        // strand the plugin in neither map — fall through to the restore path.
+        console.error(`[PluginService] Re-load of built-in "${pluginId}" threw:`, err);
+      }
+      if (!loaded) {
+        // Engine gate, manifest error, or a throw: restore the reservation. The
+        // disabledPlugins entry was never removed, so the row stays visible.
+        // Persisted intent stays "enabled" → pendingRestart:true.
+        this.reservedNames.add(pluginId);
+        return;
+      }
+      // Loaded: it's now in `plugins`. Drop the skipped entry synchronously
+      // (no await before this line) so the two maps never both miss the id.
+      this.disabledPlugins.delete(pluginId);
+      await this.activatePlugin(pluginId);
+    } finally {
+      this.broadcaster.broadcastProvenanceChanged();
+    }
   }
 
   /**
@@ -2812,6 +3106,32 @@ export class PluginService {
     this.pluginActionOwners.delete(pluginId);
 
     this.broadcaster.broadcastPluginActions();
+  }
+
+  /**
+   * Unregister only the IMPERATIVE actions a plugin registered via
+   * `host.registerAction` during `activate()`, leaving manifest-declared
+   * commands intact. Used by the dev hot-reload path (#9304): a reload re-runs
+   * only `activate()`, not the manifest registration, so wiping every action
+   * (as {@link unregisterPluginActions} does) would erase the plugin's palette
+   * commands after the first reload.
+   */
+  unregisterImperativePluginActions(pluginId: string): void {
+    const owners = this.pluginActionOwners.get(pluginId);
+    if (!owners || owners.size === 0) return;
+
+    let changed = false;
+    for (const id of [...owners]) {
+      if (this.manifestCommandIds.has(id)) continue; // keep manifest commands
+      this.pluginActions.delete(id);
+      this.actionValidators.delete(id);
+      this.pluginActionHandlers.delete(id);
+      this.commandModulePaths.delete(id);
+      owners.delete(id);
+      changed = true;
+    }
+    if (owners.size === 0) this.pluginActionOwners.delete(pluginId);
+    if (changed) this.broadcaster.broadcastPluginActions();
   }
 
   /** Flattened snapshot of all plugin-registered actions (for renderer pull-on-mount). */

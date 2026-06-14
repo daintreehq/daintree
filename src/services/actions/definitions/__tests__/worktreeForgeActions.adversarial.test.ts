@@ -10,17 +10,11 @@ const systemClientMock = vi.hoisted(() => ({
   openExternal: vi.fn(),
 }));
 
-const githubClientMock = vi.hoisted(() => ({
-  openIssue: vi.fn(),
-  openPR: vi.fn(),
-}));
-
 const mockWorktrees = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
 vi.mock("@/clients", () => ({
   forgeClient: forgeClientMock,
   systemClient: systemClientMock,
-  githubClient: githubClientMock,
 }));
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -71,11 +65,10 @@ describe("worktree forge actions", () => {
   });
 
   describe("worktree.openIssue", () => {
-    it("routes through forgeClient, never githubClient", async () => {
+    it("routes through forgeClient", async () => {
       mockWorktrees.set("wt1", { path: "/repo", issueNumber: 42 });
       await get("worktree.openIssue").run?.(undefined, ctx);
       expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 42);
-      expect(githubClientMock.openIssue).not.toHaveBeenCalled();
     });
 
     it("throws when worktree has no issue number", async () => {
@@ -107,7 +100,6 @@ describe("worktree forge actions", () => {
       mockWorktrees.set("wt1", { path: "/repo", linked: { pr: { url } } });
       await get("worktree.openPR").run?.(undefined, ctx);
       expect(systemClientMock.openExternal).toHaveBeenCalledWith(url);
-      expect(githubClientMock.openPR).not.toHaveBeenCalled();
     });
 
     it("rejects a non-http(s) PR url", async () => {

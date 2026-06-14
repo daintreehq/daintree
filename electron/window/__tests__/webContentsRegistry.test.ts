@@ -199,6 +199,76 @@ describe("webContentsRegistry", () => {
     expect(getAppWebContents(win)).toBe(win.webContents);
   });
 
+  it("marks a webContents cached and clears the mark on unregister", async () => {
+    const {
+      isCachedViewWebContents,
+      registerCachedViewWebContents,
+      unregisterCachedViewWebContents,
+    } = await loadRegistry();
+    const wc = createWebContents(201);
+
+    expect(isCachedViewWebContents(wc.id)).toBe(false);
+
+    registerCachedViewWebContents(wc as unknown as WebContents);
+    expect(isCachedViewWebContents(wc.id)).toBe(true);
+
+    unregisterCachedViewWebContents(wc.id);
+    expect(isCachedViewWebContents(wc.id)).toBe(false);
+
+    // Idempotent: repeated calls neither throw nor flip state.
+    unregisterCachedViewWebContents(wc.id);
+    registerCachedViewWebContents(wc as unknown as WebContents);
+    registerCachedViewWebContents(wc as unknown as WebContents);
+    expect(isCachedViewWebContents(wc.id)).toBe(true);
+  });
+
+  it("clears the cached mark when the project view's webContents is destroyed", async () => {
+    const { isCachedViewWebContents, registerCachedViewWebContents, registerProjectView } =
+      await loadRegistry();
+    const wc = createWebContents(202);
+
+    registerProjectView("project-a", wc as unknown as WebContents);
+    registerCachedViewWebContents(wc as unknown as WebContents);
+    expect(isCachedViewWebContents(wc.id)).toBe(true);
+
+    wc.emitDestroyed();
+    expect(isCachedViewWebContents(wc.id)).toBe(false);
+  });
+
+  it("stale-prune in getAllAppWebContents clears the cached mark", async () => {
+    const {
+      getAllAppWebContents,
+      isCachedViewWebContents,
+      registerCachedViewWebContents,
+      registerProjectView,
+    } = await loadRegistry();
+    const wc = createWebContents(204);
+
+    registerProjectView("project-a", wc as unknown as WebContents);
+    registerCachedViewWebContents(wc as unknown as WebContents);
+
+    // fromId returns null (mock default) → the prune branch fires.
+    getAllAppWebContents();
+
+    expect(isCachedViewWebContents(wc.id)).toBe(false);
+  });
+
+  it("clears the cached mark on unregisterProjectView so a reused id is never silenced", async () => {
+    const {
+      isCachedViewWebContents,
+      registerCachedViewWebContents,
+      registerProjectView,
+      unregisterProjectView,
+    } = await loadRegistry();
+    const wc = createWebContents(203);
+
+    registerProjectView("project-a", wc as unknown as WebContents);
+    registerCachedViewWebContents(wc as unknown as WebContents);
+
+    unregisterProjectView(wc.id);
+    expect(isCachedViewWebContents(wc.id)).toBe(false);
+  });
+
   it("allows unregister and later re-register without leaving stale listener state", async () => {
     const { registerWebContents, unregisterWebContents } = await loadRegistry();
     const firstWindow = createWindow(1);

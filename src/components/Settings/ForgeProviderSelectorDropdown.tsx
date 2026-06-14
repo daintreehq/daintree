@@ -159,7 +159,7 @@ export function ForgeProviderSelectorDropdown({
                 ? `forge-provider-selector-item-${items[activeIndex].id}`
                 : undefined
             }
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
           />
         </div>
         <div

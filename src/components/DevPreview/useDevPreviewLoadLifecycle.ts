@@ -77,22 +77,13 @@ interface UseDevPreviewLoadLifecycleParams {
   onRenderProcessGone?: (details: { reason: string; exitCode: number }) => void;
 }
 
-export interface WebviewCrashInfo {
-  reason: string;
-  exitCode: number;
-}
-
 interface UseDevPreviewLoadLifecycleResult {
   isWebviewReady: boolean;
   setIsWebviewReady: React.Dispatch<React.SetStateAction<boolean>>;
   isLoading: boolean;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  isSlowLoad: boolean;
-  setIsSlowLoad: React.Dispatch<React.SetStateAction<boolean>>;
   webviewLoadError: WebviewLoadError | null;
   setWebviewLoadError: React.Dispatch<React.SetStateAction<WebviewLoadError | null>>;
-  webviewCrashed: WebviewCrashInfo | null;
-  setWebviewCrashed: React.Dispatch<React.SetStateAction<WebviewCrashInfo | null>>;
   reconnectAttempt: number;
   clearLoadTimers: () => void;
   clearRetryState: () => void;
@@ -113,9 +104,7 @@ export function useDevPreviewLoadLifecycle({
 }: UseDevPreviewLoadLifecycleParams): UseDevPreviewLoadLifecycleResult {
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSlowLoad, setIsSlowLoad] = useState(false);
   const [webviewLoadError, setWebviewLoadError] = useState<WebviewLoadError | null>(null);
-  const [webviewCrashed, setWebviewCrashed] = useState<WebviewCrashInfo | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
 
   // Read projectId through a ref so a late project-hydration transition
@@ -124,7 +113,6 @@ export function useDevPreviewLoadLifecycle({
   const projectIdRef = useRef(projectId);
 
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const slowLoadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryCountRef = useRef<number>(0);
 
@@ -174,10 +162,6 @@ export function useDevPreviewLoadLifecycle({
   });
 
   const clearLoadTimers = useCallback(() => {
-    if (slowLoadTimeoutRef.current) {
-      clearTimeout(slowLoadTimeoutRef.current);
-      slowLoadTimeoutRef.current = null;
-    }
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
@@ -237,11 +221,6 @@ export function useDevPreviewLoadLifecycle({
     const handleRenderProcessGone = (e: Electron.RenderProcessGoneEvent) => {
       const { reason, exitCode } = e.details;
       setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -258,7 +237,6 @@ export function useDevPreviewLoadLifecycle({
       proxyRetryCountRef.current = 0;
       pendingHttpErrorRef.current = false;
       if (reason === "clean-exit") return;
-      setWebviewCrashed({ reason, exitCode });
       setWebviewLoadError(null);
       onRenderProcessGone?.({ reason, exitCode });
     };
@@ -266,9 +244,7 @@ export function useDevPreviewLoadLifecycle({
     const handleDidStartLoading = () => {
       setIsLoading(true);
       setWebviewLoadError(null);
-      setWebviewCrashed(null);
       setReconnectAttempt(0);
-      setIsSlowLoad(false);
       // Fresh navigation: drop any stale HTTP-error latch. did-frame-navigate,
       // which fires after this for the same navigation, re-sets it if needed.
       pendingHttpErrorRef.current = false;
@@ -279,9 +255,6 @@ export function useDevPreviewLoadLifecycle({
         clearTimeout(proxyRetryRef.current);
         proxyRetryRef.current = null;
       }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
@@ -290,21 +263,11 @@ export function useDevPreviewLoadLifecycle({
         failLoadRetryRef.current = null;
       }
       failLoadRetryCountRef.current = 0;
-      slowLoadTimeoutRef.current = setTimeout(() => {
-        try {
-          if (webview.isLoading()) {
-            setIsSlowLoad(true);
-          }
-        } catch {
-          // Webview detached before timeout fired
-        }
-      }, 5000);
       loadTimeoutRef.current = setTimeout(() => {
         loadTimeoutRef.current = null;
         try {
           if (webview.isLoading()) {
             webview.stop();
-            setIsSlowLoad(false);
             setIsLoading(false);
             setWebviewLoadError({
               code: "timeout",
@@ -319,11 +282,6 @@ export function useDevPreviewLoadLifecycle({
 
     const handleDidStopLoading = () => {
       setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -332,11 +290,6 @@ export function useDevPreviewLoadLifecycle({
 
     const handleDidFinishLoad = () => {
       setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -352,7 +305,6 @@ export function useDevPreviewLoadLifecycle({
       }
 
       setWebviewLoadError(null);
-      setWebviewCrashed(null);
       setReconnectAttempt(0);
       failLoadRetryCountRef.current = 0;
       proxyRetryCountRef.current = 0;
@@ -405,11 +357,6 @@ export function useDevPreviewLoadLifecycle({
       if (!e.isMainFrame) return;
 
       setIsLoading(false);
-      setIsSlowLoad(false);
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -559,16 +506,11 @@ export function useDevPreviewLoadLifecycle({
       if (e.httpResponseCode !== 502) return;
       pendingHttpErrorRef.current = true;
       setIsLoading(false);
-      setIsSlowLoad(false);
       setReconnectAttempt(0);
       failLoadRetryCountRef.current = 0;
       if (failLoadRetryRef.current) {
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
-      }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -690,10 +632,6 @@ export function useDevPreviewLoadLifecycle({
         clearTimeout(proxyRetryRef.current);
         proxyRetryRef.current = null;
       }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -728,10 +666,6 @@ export function useDevPreviewLoadLifecycle({
         }
       } catch {
         // WebContents not available yet
-      }
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-        slowLoadTimeoutRef.current = null;
       }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -802,9 +736,6 @@ export function useDevPreviewLoadLifecycle({
 
   useEffect(() => {
     return () => {
-      if (slowLoadTimeoutRef.current) {
-        clearTimeout(slowLoadTimeoutRef.current);
-      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
@@ -822,12 +753,8 @@ export function useDevPreviewLoadLifecycle({
     setIsWebviewReady,
     isLoading,
     setIsLoading,
-    isSlowLoad,
-    setIsSlowLoad,
     webviewLoadError,
     setWebviewLoadError,
-    webviewCrashed,
-    setWebviewCrashed,
     reconnectAttempt,
     clearLoadTimers,
     clearRetryState,

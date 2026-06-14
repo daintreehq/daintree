@@ -185,15 +185,17 @@ export function NotificationCenterEntry({
           "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-daintree-accent/50"
       )}
     >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "w-1.5 shrink-0 self-start mt-1.5",
-          isNew && "h-1.5 rounded-full bg-status-info"
+      <div className={cn("relative shrink-0", config.className)}>
+        {/* The unread dot floats in the row's px-3 gutter (absolute, anchored
+            to the icon) so read rows don't carry a phantom spacer column and
+            the icon shares the 12px gutter with the header and section labels. */}
+        {isNew && (
+          <span
+            aria-hidden="true"
+            className="absolute right-full mr-[3px] top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-status-info"
+          />
         )}
-      />
-      <div className={cn("mt-0.5 shrink-0", config.className)}>
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
         {entry.title && (
@@ -329,6 +331,101 @@ export function NotificationCenterEntry({
   );
 }
 
+// Module-level so the try/catch/finally and awaited import() expressions stay
+// outside RowOptionsMenu — both bail React Compiler memoization for the
+// per-row component.
+async function reportNotificationOnGitHub(
+  entry: NotificationHistoryEntry,
+  messageString: string
+): Promise<void> {
+  const correlationId = entry.correlationId;
+  if (!correlationId) return;
+  try {
+    // Lazy-load the report-flow dependencies so they stay off the boot
+    // path — appClient + buildNotificationReportUrl + logger together push
+    // the renderer eager-import count past budget when imported statically.
+    const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
+      import("@/clients/appClient"),
+      import("@/components/ErrorBoundary/buildReportIssueUrl"),
+      import("@/utils/logger"),
+    ]);
+    let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
+    try {
+      envInfo = await appClient.getVersionInfo();
+    } catch (envError) {
+      logError("Failed to load version info for inbox report", envError);
+      envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
+    }
+
+    const reportMessage =
+      entry.title && messageString
+        ? `${entry.title} — ${messageString}`
+        : entry.title || messageString || "Notification";
+
+    const { url, fullBody, usedClipboardFallback } = buildNotificationReportUrl({
+      correlationId,
+      message: reportMessage,
+      notificationType: entry.type,
+      context: entry.context,
+      envInfo,
+    });
+
+    if (usedClipboardFallback) {
+      const writeText = window.electron?.clipboard?.writeText;
+      let clipboardOk = false;
+      if (writeText) {
+        try {
+          await writeText(fullBody);
+          clipboardOk = true;
+        } catch (clipboardError) {
+          logError("Failed to copy notification report to clipboard", clipboardError);
+        }
+      }
+      if (clipboardOk) {
+        notify({
+          type: "info",
+          title: "Report details copied",
+          message:
+            "The full notification report was copied to your clipboard — paste it into the issue body.",
+          transient: true,
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      } else {
+        notify({
+          type: "info",
+          title: "Report too long to send",
+          message: "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
+          inboxMessage: "Couldn't copy notification report to clipboard.",
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+        });
+      }
+    }
+
+    if (!window.electron?.system?.openExternal) return;
+    try {
+      const result = await actionService.dispatch(
+        "system.openExternal",
+        { url },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        await window.electron.system.openExternal(url);
+      }
+    } catch (dispatchError) {
+      logError("Failed to open notification report URL", dispatchError);
+    }
+  } catch (reportError) {
+    // buildNotificationReportUrl can surface URIError (lone surrogates in
+    // title/message) and JSON.stringify can surface TypeError (circular
+    // refs / BigInt in context). Without this catch the rejection escapes
+    // the fire-and-forget call site as an unhandled promise.
+
+    console.warn("Failed to build notification report", reportError);
+  }
+}
+
 interface RowOptionsMenuProps {
   entry: NotificationHistoryEntry;
   onDropdownOpenChange?: (open: boolean) => void;
@@ -404,98 +501,14 @@ function RowOptionsMenu({
     void actionService.dispatch("panel.focus", { panelId }).catch(() => undefined);
   };
 
-  const handleReportOnGitHub = async () => {
+  const handleReportOnGitHub = () => {
     if (reportInFlight) return;
     if (!entry.correlationId) return;
     if (entry.type !== "error" && entry.type !== "warning") return;
     setReportInFlight(true);
-    try {
-      // Lazy-load the report-flow dependencies so they stay off the boot
-      // path — appClient + buildNotificationReportUrl + logger together push
-      // the renderer eager-import count past budget when imported statically.
-      const [{ appClient }, { buildNotificationReportUrl }, { logError }] = await Promise.all([
-        import("@/clients/appClient"),
-        import("@/components/ErrorBoundary/buildReportIssueUrl"),
-        import("@/utils/logger"),
-      ]);
-      let envInfo: Awaited<ReturnType<typeof appClient.getVersionInfo>>;
-      try {
-        envInfo = await appClient.getVersionInfo();
-      } catch (envError) {
-        logError("Failed to load version info for inbox report", envError);
-        envInfo = { appVersion: "unknown", electron: "unknown", chrome: "unknown", os: "unknown" };
-      }
-
-      const reportMessage =
-        entry.title && messageString
-          ? `${entry.title} — ${messageString}`
-          : entry.title || messageString || "Notification";
-
-      const { url, fullBody, usedClipboardFallback } = buildNotificationReportUrl({
-        correlationId: entry.correlationId,
-        message: reportMessage,
-        notificationType: entry.type,
-        context: entry.context,
-        envInfo,
-      });
-
-      if (usedClipboardFallback) {
-        const writeText = window.electron?.clipboard?.writeText;
-        let clipboardOk = false;
-        if (writeText) {
-          try {
-            await writeText(fullBody);
-            clipboardOk = true;
-          } catch (clipboardError) {
-            logError("Failed to copy notification report to clipboard", clipboardError);
-          }
-        }
-        if (clipboardOk) {
-          notify({
-            type: "info",
-            title: "Report details copied",
-            message:
-              "The full notification report was copied to your clipboard — paste it into the issue body.",
-            transient: true,
-            priority: "high",
-            context: { eventKind: "uiFeedback" },
-          });
-        } else {
-          notify({
-            type: "info",
-            title: "Report too long to send",
-            message:
-              "Couldn't copy the full report. Quote the correlation ID when filing the issue.",
-            inboxMessage: "Couldn't copy notification report to clipboard.",
-            priority: "high",
-            context: { eventKind: "uiFeedback" },
-          });
-        }
-      }
-
-      if (!window.electron?.system?.openExternal) return;
-      try {
-        const result = await actionService.dispatch(
-          "system.openExternal",
-          { url },
-          { source: "user" }
-        );
-        if (!result.ok) {
-          await window.electron.system.openExternal(url);
-        }
-      } catch (dispatchError) {
-        logError("Failed to open notification report URL", dispatchError);
-      }
-    } catch (reportError) {
-      // buildNotificationReportUrl can surface URIError (lone surrogates in
-      // title/message) and JSON.stringify can surface TypeError (circular
-      // refs / BigInt in context). Without this catch the rejection escapes
-      // the `void handleReportOnGitHub()` site as an unhandled promise.
-
-      console.warn("Failed to build notification report", reportError);
-    } finally {
+    void reportNotificationOnGitHub(entry, messageString).finally(() => {
       setReportInFlight(false);
-    }
+    });
   };
 
   return (
@@ -518,7 +531,7 @@ function RowOptionsMenu({
                 onUnsnooze?.();
               }}
             >
-              <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+              <Clock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               {snoozedUntil !== undefined
                 ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
                 : "Unsnooze"}
@@ -526,7 +539,7 @@ function RowOptionsMenu({
           ) : (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <Clock className="mr-2 h-3 w-3" aria-hidden="true" />
+                <Clock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Snooze
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
@@ -546,13 +559,13 @@ function RowOptionsMenu({
         {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
         {supportsCopyCorrelationId && (
           <DropdownMenuItem onSelect={handleCopyCorrelationId}>
-            <Copy className="mr-2 h-3 w-3" aria-hidden="true" />
+            <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Copy correlation ID
           </DropdownMenuItem>
         )}
         {supportsGoToSource && (
           <DropdownMenuItem onSelect={handleGoToSource}>
-            <ArrowRight className="mr-2 h-3 w-3" aria-hidden="true" />
+            <ArrowRight className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Go to source
           </DropdownMenuItem>
         )}
@@ -563,7 +576,7 @@ function RowOptionsMenu({
               void handleReportOnGitHub();
             }}
           >
-            <Bug className="mr-2 h-3 w-3" aria-hidden="true" />
+            <Bug className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Report on GitHub
           </DropdownMenuItem>
         )}

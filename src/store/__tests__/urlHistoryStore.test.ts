@@ -617,7 +617,13 @@ describe("urlHistoryStore persistence migration", () => {
     const backing = installLocalStorage({ [STORAGE_KEY]: legacyBlob });
 
     const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
-    store.getState().recordVisit("proj1", "http://b.test/", "B");
+    vi.useFakeTimers();
+    try {
+      store.getState().recordVisit("proj1", "http://b.test/", "B");
+      vi.advanceTimersByTime(300);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const written = backing.get(STORAGE_KEY);
     expect(written).toBeDefined();

@@ -25,6 +25,28 @@ function readDefaultProviderId(): string | null {
   return normalizeProviderId(store.get("forgeDefaultProviderId"));
 }
 
+// PluginService is loaded lazily (mirrors forgeRpcServer) so this eagerly
+// registered handler module never constructs the singleton at import time.
+type PluginInitGate = { waitForInit(): Promise<void> };
+let pluginServicePromise: Promise<PluginInitGate> | null = null;
+
+/**
+ * Block registry reads until startup plugin load + activation has settled.
+ * Forge provider descriptors register during the DEFERRED `PluginService.
+ * initialize()` (which only runs after the renderer reports first-interactive),
+ * so a mount-time `forge:resolve-provider` / `forge:get-providers` call always
+ * races it. Answering from the pre-init empty registry returns `{entry: null}`,
+ * which the renderer caches for the session (`useResolvedForgeProvider`'s
+ * resolutionCache) — no later signal re-triggers resolution, so every forge
+ * surface (stats pills, sidebar affordances) silently stays hidden. Same
+ * init-race guard as `handleToolbarButtons` (#9285); the workspace-host got
+ * its equivalent via the "not-ready" retry status (#9997).
+ */
+function awaitPluginInit(): Promise<void> {
+  pluginServicePromise ??= import("../../services/PluginService.js").then((m) => m.pluginService);
+  return pluginServicePromise.then((svc) => svc.waitForInit());
+}
+
 /**
  * Look up a registered provider's declared credential fields by canonical id.
  * Returns `[]` when the provider declares none (or is not registered) — the
@@ -70,14 +92,12 @@ function recordHasCredential(raw: string | undefined): boolean {
  * branch→PR detection can use them. Mirrors `syncWorkspaceToken` in
  * `GitHubTokenOrchestrator` exactly: a best-effort live push that only
  * reaches currently-spawned hosts and swallows errors when the client is not
- * yet initialized. Note this is a live push only — like the GitHub path,
- * there is no boot-time replay of persisted credentials into a freshly
- * spawned host, and the workspace host currently only consumes GitHub
- * credentials (`PRIntegrationService.updateForgeCredentials` no-ops for
- * non-GitHub ids until a provider plugin wires its own auth module). The
- * `forgeCredentials` store entry is the durable source of truth; wiring a
- * boot-time replay for third-party providers is a provider-agnostic
- * follow-on, not part of #8454's settings/auth surface.
+ * yet initialized. The host applies no credential VALUES itself — forge calls
+ * route over the RPC bridge to main — the push signals presence/absence so
+ * detection refreshes or resets promptly (`PRIntegrationService.
+ * updateForgeCredentials`). Freshly spawned hosts are covered by the
+ * registry-backed ready replay in `WorkspaceHostProcess`; the
+ * `forgeCredentials` store entry stays the durable source of truth.
  */
 async function syncWorkspaceCredential(
   providerId: string,
@@ -117,7 +137,8 @@ export function registerForgeSettingsHandlers(): () => void {
   );
 
   cleanups.push(
-    typedHandle(CHANNELS.FORGE_GET_PROVIDERS, () => {
+    typedHandle(CHANNELS.FORGE_GET_PROVIDERS, async () => {
+      await awaitPluginInit();
       return getRegisteredForgeProviders();
     })
   );
@@ -128,6 +149,7 @@ export function registerForgeSettingsHandlers(): () => void {
         return { entry: null, resolvedVia: null };
       }
       try {
+        await awaitPluginInit();
         const project = projectStore.getProjectById(projectId);
         if (!project) return { entry: null, resolvedVia: null };
 

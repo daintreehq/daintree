@@ -27,6 +27,7 @@ import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { createBrushCmsRepo, type DemoRepo } from "../helpers/screenshotFixtures";
+import { T_LONG } from "../helpers/timeouts";
 
 const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "demo");
 mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -101,6 +102,10 @@ const FPS = Number(process.env.DAINTREE_DEMO_FPS ?? 60);
 const BITRATE_BPS = Math.round(
   Number(process.env.DAINTREE_DEMO_BITRATE_MBPS ?? OUT.bitrateMbps) * 1_000_000
 );
+// Opt in to exact preset dimensions. Local work areas can be shorter than the
+// requested 16:9 window once the OS menu bar/dock are accounted for; in the
+// default mode the test records the actual backing-store dimensions instead.
+const STRICT_DIMS = process.env.DAINTREE_DEMO_STRICT_DIMS === "1";
 
 // Hide scrollbars + caret for a clean frame, but DO NOT freeze CSS
 // transitions — we want the app's own motion alive in a video. The demo
@@ -157,6 +162,20 @@ async function bootDemoProject(repo: DemoRepo): Promise<{
   return { app: ctx.app, page };
 }
 
+async function resolveCaptureTarget(page: Page): Promise<{ width: number; height: number }> {
+  if (STRICT_DIMS) {
+    return { width: CAPTURE_W, height: CAPTURE_H };
+  }
+
+  return await page.evaluate(() => {
+    const scale = window.devicePixelRatio || 1;
+    return {
+      width: Math.round(window.innerWidth * scale),
+      height: Math.round(window.innerHeight * scale),
+    };
+  });
+}
+
 test.describe.serial("Demo Video — worktree dashboard", () => {
   test("worktree-dashboard-reel", async () => {
     const repo = createBrushCmsRepo(String(process.env.TEST_WORKER_INDEX ?? "0"));
@@ -167,15 +186,15 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       const { page } = booted;
 
       // The demo bridge API must be exposed (proves --demo-mode took effect).
-      await page.waitForFunction(() => !!window.electron?.demo, undefined, { timeout: 30_000 });
+      await page.waitForFunction(() => !!window.electron?.demo, undefined, { timeout: T_LONG });
 
       // Wait for the worktree dashboard to actually populate before recording.
       const sidebar = page.locator(SEL.sidebar.aside);
-      await expect(sidebar).toBeAttached({ timeout: 30_000 });
+      await expect(sidebar).toBeAttached({ timeout: T_LONG });
       await page
         .locator('[data-worktree-branch], [data-worktree-is-main="true"]')
         .first()
-        .waitFor({ state: "visible", timeout: 30_000 });
+        .waitFor({ state: "visible", timeout: T_LONG });
 
       // Let the worktree git poll settle and React finish mounting the demo
       // overlay components (DemoCursor/DemoOverlay/DemoCaptureBridge).
@@ -183,6 +202,7 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       await dismissBlockingPalette(page);
 
       const outputPath = path.join(OUTPUT_DIR, "worktree-dashboard.webm");
+      const capture = await resolveCaptureTarget(page);
 
       // Run the whole choreography inside the renderer so each demo command's
       // round-trip is awaited tightly. Beats are best-effort; capture always
@@ -209,6 +229,7 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
             width: cap.width,
             height: cap.height,
           });
+          let stop;
           try {
             // Recorder emits its first chunk at the 1s timeslice boundary.
             await d.sleep(1200);
@@ -262,9 +283,9 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
             await safe("dismiss c5", () => d.dismissAnnotation("c5"));
             await d.sleep(600);
           } finally {
-            // Always finalize the recording, even if a beat threw.
+            // Always finalize the recording, even if an unguarded sleep threw.
+            stop = await d.stopCapture();
           }
-          const stop = await d.stopCapture();
           return { stop, log };
         },
         {
@@ -272,8 +293,8 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
             outputPath,
             fps: FPS,
             videoBitsPerSecond: BITRATE_BPS,
-            width: CAPTURE_W,
-            height: CAPTURE_H,
+            width: capture.width,
+            height: capture.height,
           },
           sel: {
             sidebar: SEL.sidebar.aside,
@@ -286,7 +307,7 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       );
 
       console.log(
-        `[demo-reel] config: ${RESOLUTION} ${CAPTURE_W}×${CAPTURE_H} @ ${FPS}fps, ` +
+        `[demo-reel] config: ${RESOLUTION} ${capture.width}×${capture.height} @ ${FPS}fps, ` +
           `${(BITRATE_BPS / 1_000_000).toFixed(0)} Mbps · zoom ${ZOOM}× ` +
           `(logical ${LOGICAL_W}×${LOGICAL_H}, scale ${SCALE})`
       );
@@ -311,9 +332,9 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
       // missing pin — log which case this run exercised so coverage is visible.
       const NATIVE_W = LOGICAL_W * SCALE;
       const NATIVE_H = LOGICAL_H * SCALE;
-      const pinLoadBearing = NATIVE_W !== CAPTURE_W || NATIVE_H !== CAPTURE_H;
+      const pinLoadBearing = NATIVE_W !== capture.width || NATIVE_H !== capture.height;
       console.log(
-        `[demo-reel] native ${NATIVE_W}×${NATIVE_H} → target ${CAPTURE_W}×${CAPTURE_H} ` +
+        `[demo-reel] native ${NATIVE_W}×${NATIVE_H} → target ${capture.width}×${capture.height} ` +
           `(pin ${pinLoadBearing ? "load-bearing — true regression guard" : "no-op for this preset"})`
       );
       const dims = readVideoDimensions(outputPath);
@@ -330,10 +351,9 @@ test.describe.serial("Demo Video — worktree dashboard", () => {
         // opt in with DAINTREE_DEMO_STRICT_DIMS=1; elsewhere assert only that a
         // non-degenerate frame was recorded. The opt-in checks for "1"
         // explicitly so DAINTREE_DEMO_STRICT_DIMS=0 reads as off, not on.
-        const strictDims = process.env.DAINTREE_DEMO_STRICT_DIMS === "1";
-        if (!process.env.CI || strictDims) {
-          expect(dims.width).toBe(CAPTURE_W);
-          expect(dims.height).toBe(CAPTURE_H);
+        if (!process.env.CI || STRICT_DIMS) {
+          expect(dims.width).toBe(capture.width);
+          expect(dims.height).toBe(capture.height);
         } else {
           expect(dims.width).toBeGreaterThan(0);
           expect(dims.height).toBeGreaterThan(0);

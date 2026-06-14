@@ -21,9 +21,9 @@ export function HelpIntroBanner({ onDismiss }: HelpIntroBannerProps) {
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss"
-        className="text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+        className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
       >
-        <X className="w-3.5 h-3.5" />
+        <X className="w-3 h-3" />
       </button>
     </div>
   );

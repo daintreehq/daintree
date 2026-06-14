@@ -1,6 +1,37 @@
-import { forwardRef, useEffect, useMemo, useState } from "react";
-import { parseDiff, Diff, Hunk, tokenize, markEdits, DiffType, ViewType } from "react-diff-view";
-import type { HunkData, HunkTokens, TokenizeOptions } from "react-diff-view";
+import {
+  forwardRef,
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactElement } from "react";
+import {
+  parseDiff,
+  Diff,
+  Hunk,
+  Decoration,
+  tokenize,
+  markEdits,
+  pickRanges,
+  getChangeKey,
+  expandFromRawCode,
+  getCollapsedLinesCountBetween,
+} from "react-diff-view";
+import type {
+  ChangeData,
+  DiffType,
+  HunkData,
+  HunkTokens,
+  RenderGutter,
+  RenderToken,
+  TokenNode,
+  TokenizeOptions,
+  ViewType,
+} from "react-diff-view";
 import { refractor } from "refractor/core";
 import type { Syntax } from "refractor/core";
 import bash from "refractor/bash";
@@ -12,17 +43,54 @@ import markdown from "refractor/markdown";
 import tsx from "refractor/tsx";
 import typescript from "refractor/typescript";
 import "react-diff-view/style/index.css";
-import { AlertCircle, ChevronRight, ExternalLink } from "lucide-react";
+// Our overrides — must come after the library stylesheet it overrides.
+import "./DiffViewer.css";
+import {
+  Check,
+  ChevronRight,
+  ChevronsDown,
+  ChevronsUp,
+  Copy,
+  ExternalLink,
+  FileDiff as FileDiffIcon,
+  FileQuestion,
+  FileWarning,
+  FileX,
+  UnfoldVertical,
+} from "lucide-react";
 import { join } from "@shared/utils/path";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
 import { actionService } from "@/services/ActionService";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { getFilePath, shouldCollapseByDefault, estimateFileDiffBytes } from "./diffCollapseUtils";
+import { EmptyState } from "@/components/ui/EmptyState";
+import {
+  DIFF_SOFT_COLLAPSE_BYTES,
+  getFilePath,
+  shouldCollapseByDefault,
+  estimateFileDiffBytes,
+} from "./diffCollapseUtils";
+import { detectMovedLines } from "./diffMovedUtils";
+import { suppressFullLineEdits } from "./diffEditSuppression";
+import { computeSearchRanges, computeTrailingWsRanges } from "./diffTokenRanges";
+import type { SideRanges } from "./diffTokenRanges";
 import { formatBytes } from "@/lib/formatBytes";
 
 for (const lang of [bash, css, javascript, jsx, json, markdown, tsx, typescript]) {
   refractor.register(lang);
 }
+
+/**
+ * react-diff-view's tokenize expects refractor v3's highlight() contract — a
+ * plain array of nodes. refractor v4+ returns a hast Root object, whose
+ * non-iterable shape makes the token tree walk throw, which the catch in
+ * useTokens silently turns into tokens = null: no syntax highlighting, no
+ * word-level edit pills, no search marks. Unwrapping .children restores the
+ * v3 shape the library walks correctly.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- structurally satisfies the lib's { highlight } contract; the v5 Root type can't
+const refractorAdapter = {
+  highlight: (code: string, language: string) => refractor.highlight(code, language).children,
+} as unknown as typeof refractor;
 
 const LANG_LOADERS: Record<string, () => Promise<{ default: Syntax }>> = {
   c: () => import("refractor/c"),
@@ -77,26 +145,132 @@ function ensureLanguage(language: string): Promise<void> {
 
 export interface DiffViewerProps {
   diff: string;
-  filePath: string;
   viewType?: ViewType;
   /** Absolute path to the worktree root, used to resolve per-file open-in-editor paths */
   rootPath?: string;
+  /**
+   * Full new-side file content for single-file working-tree diffs. Enables
+   * "expand hidden lines" between hunks; omit for branch/ref diffs where the
+   * loaded file may not match the diff's new side.
+   */
+  source?: string | null;
+  /** Soft-wrap long lines instead of horizontal scrolling */
+  wrapLines?: boolean;
+  /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
+  searchQuery?: string;
   onRetry?: () => void;
-  /** Fired when a collapsible file is expanded or collapsed, so consumers can re-scan the hunk rows that just appeared or disappeared */
+  /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal), so consumers can re-scan the live DOM */
   onToggleCollapse?: () => void;
+  /** Fired after a file's token pass commits (highlighting, search marks) — the signal that .diff-search-match spans are scannable */
+  onTokensRendered?: () => void;
 }
+
+/**
+ * Default line number plus a textual +/- marker so insert/delete state never
+ * relies on color alone (WCAG 1.4.1; survives forced-colors). Gutters are
+ * user-select: none, so markers stay out of copied text.
+ */
+const renderGutterWithMarker: RenderGutter = ({ change, renderDefault, wrapInAnchor }) => (
+  <>
+    <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
+    <span className="diff-line-marker">
+      {change.type === "insert" ? "+" : change.type === "delete" ? "-" : ""}
+    </span>
+  </>
+);
+
+/** Moved-aware variant: adds screen-reader text so relocation isn't styling-only. */
+function makeGutterRenderer(movedKeys: ReadonlySet<string>): RenderGutter {
+  if (movedKeys.size === 0) return renderGutterWithMarker;
+  const render: RenderGutter = ({ change, renderDefault, wrapInAnchor }) => (
+    <>
+      <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
+      <span className="diff-line-marker">
+        {change.type === "insert" ? "+" : change.type === "delete" ? "-" : ""}
+      </span>
+      {change.type !== "normal" && movedKeys.has(getChangeKey(change)) && (
+        <span className="sr-only">moved</span>
+      )}
+    </>
+  );
+  return render;
+}
+
+function flattenTokenText(token: TokenNode): string {
+  if (typeof token.value === "string") return token.value;
+  if (!token.children) return "";
+  let text = "";
+  for (const child of token.children) {
+    text += flattenTokenText(child);
+  }
+  return text;
+}
+
+function renderWhitespaceGlyphs(text: string): ReactElement[] {
+  const out: ReactElement[] = [];
+  let spaceRun = "";
+  const flushSpaces = () => {
+    if (!spaceRun) return;
+    out.push(
+      <span key={out.length} className="diff-ws diff-ws-space">
+        {spaceRun}
+      </span>
+    );
+    spaceRun = "";
+  };
+  for (const ch of text) {
+    if (ch === " ") {
+      spaceRun += ch;
+    } else {
+      flushSpaces();
+      out.push(
+        <span key={out.length} className="diff-ws diff-ws-tab">
+          {"\t"}
+        </span>
+      );
+    }
+  }
+  flushSpaces();
+  return out;
+}
+
+/**
+ * Whitespace-only edit segments are otherwise invisible — the highlight pill
+ * has no glyphs in it. Overlay · / → markers via CSS while keeping the real
+ * space/tab characters as the DOM text, so copied code stays byte-identical.
+ * Edits containing visible characters render normally; their pill boundary
+ * already shows what changed.
+ */
+export const renderTokenWithInvisibles: RenderToken = (token, renderDefault, index) => {
+  if (token.type !== "edit") return renderDefault(token, index);
+  const text = flattenTokenText(token);
+  if (!text || /[^ \t]/.test(text)) return renderDefault(token, index);
+  return (
+    <span key={index} className="diff-code-edit diff-ws-visualized">
+      {renderWhitespaceGlyphs(text)}
+    </span>
+  );
+};
+
+/** Changed-line budget above which word-level edit marking is skipped. */
+const MAX_INTRALINE_CHANGES = 3000;
 
 function useTokens(
   hunks: HunkData[],
-  language: string
+  language: string,
+  enabled: boolean,
+  highlight: boolean,
+  extraRanges: SideRanges | null
 ): {
   tokens: HunkTokens | null;
   langLoadFailed: boolean;
 } {
+  const needsGrammar = enabled && highlight;
   const [langReady, setLangReady] = useState(() => refractor.registered(language));
   const [langLoadFailed, setLangLoadFailed] = useState(() => FAILED_LANGS.has(language));
 
   useEffect(() => {
+    if (!needsGrammar) return;
     if (refractor.registered(language)) {
       setLangReady(true);
       setLangLoadFailed(false);
@@ -113,32 +287,135 @@ function useTokens(
     return () => {
       cancelled = true;
     };
-  }, [language]);
+  }, [language, needsGrammar]);
 
-  const tokens = useMemo(() => {
-    if (!hunks.length || !langReady) return null;
+  const [tokens, setTokens] = useState<HunkTokens | null>(null);
 
-    const options: TokenizeOptions = {
-      highlight: true,
-      refractor,
-      language,
-      enhancers: [markEdits(hunks, { type: "block" })],
-    };
-
-    try {
-      return tokenize(hunks, options);
-    } catch {
-      return null;
+  // Two-pass paint: the unhighlighted table commits first, then tokenization
+  // runs post-paint and lands as a low-priority update. Collapsed files skip
+  // the work entirely until expanded; size-gated files keep markEdits
+  // word-level marks but skip the grammar walk (highlight: false).
+  useEffect(() => {
+    if (!enabled || !hunks.length || (highlight && !langReady)) {
+      setTokens(null);
+      return;
     }
-  }, [hunks, language, langReady]);
+    let cancelled = false;
+    // Past the budget, intra-line diffing (diff-match-patch per change block)
+    // is churn-on-churn: the marks stop being review signal and the per-block
+    // diffs get slow. Whole-line fills only — the same large-hunk fallback
+    // git diff-highlight and VS Code apply.
+    let changedLines = 0;
+    for (const hunk of hunks) {
+      for (const change of hunk.changes) {
+        if (change.type !== "normal") changedLines++;
+      }
+    }
+    const intraLineEdits = changedLines <= MAX_INTRALINE_CHANGES;
+    const options: TokenizeOptions = {
+      highlight,
+      refractor: refractorAdapter,
+      language,
+      enhancers: [
+        ...(intraLineEdits ? [markEdits(hunks, { type: "block" }), suppressFullLineEdits()] : []),
+        ...(extraRanges ? [pickRanges(extraRanges.old, extraRanges.new)] : []),
+      ],
+    };
+    startTransition(() => {
+      if (cancelled) return;
+      try {
+        setTokens(tokenize(hunks, options) ?? null);
+      } catch (err) {
+        // A null token pass silently degrades highlighting, edit pills, and
+        // search marks to plain text — keep the failure observable.
+        console.warn("Diff tokenization failed", err);
+        setTokens(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hunks, language, langReady, enabled, highlight, extraRanges]);
 
   return { tokens, langLoadFailed };
 }
 
+/**
+ * Estimate a line's rendered width in monospace columns for the centered-split
+ * scroll range. Tabs count at the default tab-size of 8 (a deliberate
+ * overestimate — tabs advance to the next stop, so the real width is ≤ this;
+ * the only cost is extra blank scroll space past the longest line). CJK and
+ * other wide glyphs occupy two columns, so they count once more.
+ */
+const WIDE_CHAR_RE =
+  /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]|\p{Extended_Pictographic}/gu;
+const NON_ASCII_RE = /[^\u0020-\u00FF]/;
+
+function estimateLineColumns(text: string): number {
+  let cols = text.length;
+  if (text.includes("\t")) {
+    cols += (text.match(/\t/g) ?? []).length * 7;
+  }
+  if (NON_ASCII_RE.test(text)) {
+    cols += (text.match(WIDE_CHAR_RE) ?? []).length;
+  }
+  return cols;
+}
+
+/**
+ * Build an old-side source (indexed by old line numbers, as
+ * `expandFromRawCode` expects) from the new-side file content. Unchanged
+ * regions are byte-identical between revisions, differing only by the running
+ * insert/delete offset — and expansion only ever reads unchanged regions, so
+ * positions inside hunks can stay empty.
+ */
+function buildSyntheticOldSource(newSource: string, hunks: HunkData[]): string[] | null {
+  if (!hunks.length) return null;
+  const newLines = newSource.split("\n");
+  let inserts = 0;
+  let deletes = 0;
+  for (const hunk of hunks) {
+    for (const change of hunk.changes) {
+      if (change.type === "insert") inserts++;
+      else if (change.type === "delete") deletes++;
+    }
+  }
+  const oldTotal = newLines.length - inserts + deletes;
+  if (oldTotal <= 0) return null;
+  const oldLines = new Array<string>(oldTotal).fill("");
+  let delta = 0;
+  let prevOldEnd = 0;
+  for (const hunk of hunks) {
+    if (hunk.oldStart <= prevOldEnd) return null;
+    for (let oldLine = prevOldEnd + 1; oldLine < hunk.oldStart; oldLine++) {
+      oldLines[oldLine - 1] = newLines[oldLine + delta - 1] ?? "";
+    }
+    delta += hunk.newLines - hunk.oldLines;
+    prevOldEnd = hunk.oldStart + hunk.oldLines - 1;
+  }
+  for (let oldLine = prevOldEnd + 1; oldLine <= oldTotal; oldLine++) {
+    oldLines[oldLine - 1] = newLines[oldLine + delta - 1] ?? "";
+  }
+  return oldLines;
+}
+
 export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function DiffViewer(
-  { diff, viewType = "split", rootPath, onRetry, onToggleCollapse },
+  {
+    diff,
+    viewType = "split",
+    rootPath,
+    source,
+    wrapLines = false,
+    searchQuery,
+    onRetry,
+    onToggleCollapse,
+    onTokensRendered,
+  },
   ref
 ) {
+  // Keep keystrokes responsive: highlighting re-tokenizes the whole file, so
+  // the query lands as a deferred value and the table catches up after paint.
+  const deferredSearchQuery = useDeferredValue(searchQuery ?? "");
   const files = useMemo(() => {
     try {
       const parsed = parseDiff(diff);
@@ -153,89 +430,267 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     }
   }, [diff]);
 
+  // Raw per-file slices of the diff text, used by the per-file copy buttons.
+  // Falls back to null (buttons hidden) when the segment count doesn't line up
+  // with the parsed files (e.g. non-git-format input).
+  const fileTexts = useMemo(() => {
+    if (!files.length) return null;
+    const starts: number[] = [];
+    const re = /^diff --git /gm;
+    let match;
+    while ((match = re.exec(diff)) !== null) starts.push(match.index);
+    if (starts.length !== files.length) return null;
+    return starts.map((start, i) => diff.slice(start, starts[i + 1] ?? diff.length));
+  }, [diff, files]);
+
+  // Context expansion is only sound when the supplied source is the diff's
+  // new side, which callers guarantee only for single-file diffs.
+  const oldSource = useMemo(() => {
+    if (!source || files.length !== 1) return null;
+    const file = files[0];
+    if (file.type !== "modify" && file.type !== "rename" && file.type !== "copy") return null;
+    return buildSyntheticOldSource(source, file.hunks ?? []);
+  }, [source, files]);
+
   if (!diff || diff === "NO_CHANGES") {
     return (
-      <div className="flex items-center justify-center p-8 text-text-muted">
-        No changes detected
+      <div className="p-8">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileDiffIcon />}
+          title="No changes detected"
+          instant
+        />
       </div>
     );
   }
 
   if (diff === "BINARY_FILE") {
     return (
-      <div className="flex items-center justify-center p-8 text-text-muted">
-        Binary file - cannot display diff
+      <div className="p-8">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileX />}
+          title="Binary file"
+          description="Diffs can't be shown for binary content"
+          instant
+        />
       </div>
     );
   }
 
   if (diff === "FILE_TOO_LARGE") {
     return (
-      <div className="flex items-center justify-center p-8 text-text-muted">
-        File too large to display diff ({">"} 1MB)
+      <div className="p-8">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileWarning />}
+          title="File too large"
+          description="Diffs over 1 MB aren't rendered"
+          instant
+        />
       </div>
     );
   }
 
   if (diff === "ERROR") {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 p-8">
-        <div className="flex items-center gap-2 text-status-error text-sm">
-          <AlertCircle className="w-4 h-4" />
-          Failed to load diff
-        </div>
-        {onRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
-          >
-            Retry
-          </button>
-        )}
+      <div className="p-8">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileWarning />}
+          title="Couldn't load diff"
+          action={
+            onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
+              >
+                Retry
+              </button>
+            )
+          }
+          instant
+        />
       </div>
     );
   }
 
   if (files.length === 0) {
     return (
-      <div className="flex items-center justify-center p-8 text-text-muted">
-        Unable to parse diff
+      <div className="p-8">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          icon={<FileQuestion />}
+          title="Unable to parse diff"
+          instant
+        />
       </div>
     );
   }
 
   return (
-    <div ref={ref} className="diff-viewer overflow-auto">
+    <div ref={ref} className="diff-viewer" data-wrap={wrapLines ? "true" : undefined}>
       {files.map((file, index) => (
         <FileDiff
           key={file.newRevision || file.oldRevision || index}
           file={file}
+          rawText={fileTexts?.[index] ?? null}
           viewType={viewType}
+          wrapLines={wrapLines}
+          searchQuery={deferredSearchQuery}
           rootPath={rootPath}
+          oldSource={files.length === 1 ? oldSource : null}
           onToggleCollapse={onToggleCollapse}
+          onTokensRendered={onTokensRendered}
         />
       ))}
     </div>
   );
 });
 
-interface FileDiffProps {
-  file: ReturnType<typeof parseDiff>[0];
-  viewType: ViewType;
-  rootPath?: string;
-  /** Fired whenever this file's collapse state is toggled (expand or collapse) */
-  onToggleCollapse?: () => void;
+const EXPAND_STEP = 50;
+const EXPAND_ALL_MAX = 60;
+const INITIAL_VISIBLE_HUNKS = 30;
+const SHOW_MORE_HUNKS_STEP = 60;
+const COPY_FEEDBACK_MS = 2000;
+
+interface HunkHeaderProps {
+  hunk: HunkData;
+  /** Old-line-number start of the gap above this hunk (end is hunk.oldStart, exclusive) */
+  gapStart: number;
+  hiddenCount: number;
+  onExpand: ((start: number, end: number) => void) | null;
 }
 
-function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps) {
+function HunkCopyButton({ hunk }: { hunk: HunkData }) {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    // New-side text (what the code looks like after the change); a pure
+    // deletion falls back to the removed lines so the button never copies "".
+    const newSide = hunk.changes.filter((c) => c.type !== "delete").map((c) => c.content);
+    const lines = newSide.length ? newSide : hunk.changes.map((c) => c.content);
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    } catch {
+      // Silently fail
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="diff-hunk-header-copy"
+      data-copied={copied || undefined}
+      onClick={() => void handleCopy()}
+      aria-label={copied ? "Copied!" : "Copy hunk"}
+      title={copied ? "Copied!" : "Copy hunk (new side)"}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
+function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) {
+  return (
+    <div className="diff-hunk-header-inner">
+      {hiddenCount > 0 && onExpand && (
+        <span className="diff-hunk-header-expanders">
+          {hiddenCount <= EXPAND_ALL_MAX ? (
+            <button type="button" onClick={() => onExpand(gapStart, hunk.oldStart)}>
+              <UnfoldVertical className="w-3 h-3" />
+              Expand {hiddenCount} {hiddenCount === 1 ? "line" : "lines"}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                title={`Show ${EXPAND_STEP} lines above this hunk`}
+                onClick={() =>
+                  onExpand(Math.max(hunk.oldStart - EXPAND_STEP, gapStart), hunk.oldStart)
+                }
+              >
+                <ChevronsUp className="w-3 h-3" />
+                Expand up
+              </button>
+              <button
+                type="button"
+                title={`Show ${EXPAND_STEP} lines below the previous hunk`}
+                onClick={() => onExpand(gapStart, Math.min(gapStart + EXPAND_STEP, hunk.oldStart))}
+              >
+                <ChevronsDown className="w-3 h-3" />
+                Expand down
+              </button>
+              <button type="button" onClick={() => onExpand(gapStart, hunk.oldStart)}>
+                Expand all {hiddenCount}
+              </button>
+            </>
+          )}
+        </span>
+      )}
+      {hiddenCount > 0 && !onExpand && (
+        <span className="diff-hunk-header-hidden-count">{hiddenCount} unchanged lines hidden</span>
+      )}
+      <span className="diff-hunk-header-text">{hunk.content}</span>
+      <HunkCopyButton hunk={hunk} />
+    </div>
+  );
+}
+
+interface FileDiffProps {
+  file: ReturnType<typeof parseDiff>[0];
+  /** Raw unified-diff text for just this file, when sliceable from the input */
+  rawText: string | null;
+  viewType: ViewType;
+  /** Soft-wrap mode (disables the centered-split horizontal scroll system) */
+  wrapLines: boolean;
+  /** Already-deferred search query ("" when search is inactive) */
+  searchQuery: string;
+  rootPath?: string;
+  /** Synthetic old-side source enabling context expansion (single-file diffs only) */
+  oldSource: string[] | null;
+  /** Fired whenever this file's rendered hunk rows change (collapse, expansion, reveal) */
+  onToggleCollapse?: () => void;
+  /** Fired after this file's token pass commits */
+  onTokensRendered?: () => void;
+}
+
+function FileDiff({
+  file,
+  rawText,
+  viewType,
+  wrapLines,
+  searchQuery,
+  rootPath,
+  oldSource,
+  onToggleCollapse,
+  onTokensRendered,
+}: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
     const derived = getLanguageForFile(relPath);
     return FAILED_LANGS.has(derived) ? "plaintext" : derived;
   }, [relPath]);
-  const { tokens, langLoadFailed } = useTokens(file.hunks ?? [], language);
   const diffType: DiffType = file.type as DiffType;
+
+  const fileBytes = useMemo(() => estimateFileDiffBytes(file), [file]);
+  const isLargeFile = fileBytes > DIFF_SOFT_COLLAPSE_BYTES;
 
   const collapseDecision = useMemo(() => shouldCollapseByDefault(file), [file]);
   const [isCollapsed, setIsCollapsed] = useState(collapseDecision.collapse);
@@ -243,6 +698,212 @@ function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps)
   useEffect(() => {
     setIsCollapsed(collapseDecision.collapse);
   }, [collapseDecision.collapse]);
+
+  // Context expansion mutates the rendered hunk set; reset when the file changes.
+  const [hunks, setHunks] = useState<HunkData[]>(file.hunks ?? []);
+  useEffect(() => {
+    setHunks(file.hunks ?? []);
+  }, [file]);
+
+  // Progressive reveal for very large expanded files: committing tens of
+  // thousands of table cells at once forces a full-table layout pass under
+  // width: max-content.
+  const [visibleHunkCount, setVisibleHunkCount] = useState(() =>
+    isLargeFile ? INITIAL_VISIBLE_HUNKS : Number.POSITIVE_INFINITY
+  );
+  useEffect(() => {
+    setVisibleHunkCount(isLargeFile ? INITIAL_VISIBLE_HUNKS : Number.POSITIVE_INFINITY);
+  }, [file, isLargeFile]);
+
+  const visibleHunks = useMemo(
+    () => (hunks.length > visibleHunkCount ? hunks.slice(0, visibleHunkCount) : hunks),
+    [hunks, visibleHunkCount]
+  );
+  const hiddenHunkCount = hunks.length - visibleHunks.length;
+
+  // Moved-block detection shares the large-file gate with syntax highlighting:
+  // past the soft-collapse threshold the diff is churn, not review material.
+  const movedKeys = useMemo(
+    () => (isCollapsed || isLargeFile ? null : detectMovedLines(visibleHunks)),
+    [visibleHunks, isCollapsed, isLargeFile]
+  );
+
+  const renderGutter = useMemo(
+    () => (movedKeys ? makeGutterRenderer(movedKeys) : renderGutterWithMarker),
+    [movedKeys]
+  );
+
+  const generateLineClassName = useCallback(
+    ({ changes, defaultGenerate }: { changes: ChangeData[]; defaultGenerate: () => string }) => {
+      const base = defaultGenerate();
+      if (!movedKeys?.size) return base;
+      let extra = "";
+      for (const change of changes) {
+        if (!change || change.type === "normal") continue;
+        if (!movedKeys.has(getChangeKey(change))) continue;
+        extra += change.type === "insert" ? " diff-line-moved-new" : " diff-line-moved-old";
+      }
+      return extra ? base + extra : base;
+    },
+    [movedKeys]
+  );
+
+  const searchRanges = useMemo(
+    () => (searchQuery && !isCollapsed ? computeSearchRanges(visibleHunks, searchQuery) : null),
+    [visibleHunks, searchQuery, isCollapsed]
+  );
+
+  const trailingWsRanges = useMemo(() => computeTrailingWsRanges(visibleHunks), [visibleHunks]);
+
+  const extraRanges = useMemo<SideRanges | null>(() => {
+    if (!searchRanges && trailingWsRanges.length === 0) return null;
+    return {
+      old: searchRanges?.old ?? [],
+      new: [...trailingWsRanges, ...(searchRanges?.new ?? [])],
+    };
+  }, [searchRanges, trailingWsRanges]);
+
+  const { tokens, langLoadFailed } = useTokens(
+    visibleHunks,
+    language,
+    !isCollapsed,
+    !isLargeFile,
+    extraRanges
+  );
+
+  useEffect(() => {
+    onTokensRendered?.();
+  }, [tokens, onTokensRendered]);
+
+  // Gutter columns get an explicit width sized to the widest line number plus
+  // the +/- marker, published as a CSS var that also positions the second
+  // sticky gutter column.
+  const gutterWidth = useMemo(() => {
+    let maxLine = 1;
+    for (const hunk of visibleHunks) {
+      maxLine = Math.max(
+        maxLine,
+        hunk.oldStart + hunk.oldLines - 1,
+        hunk.newStart + hunk.newLines - 1
+      );
+    }
+    const digits = Math.max(3, String(maxLine).length);
+    return `calc(${digits + 1}ch + 21px)`;
+  }, [visibleHunks]);
+
+  // Centered split: both panes get a fixed half of the viewport and share one
+  // horizontal scroll offset, instead of the old-side column growing to its
+  // longest line and shoving the new side off-screen. Only applies to true
+  // two-column tables — add/delete files render a single full-width side
+  // ("monotonous" in react-diff-view), and wrap mode has no horizontal
+  // overflow at all.
+  const isCenteredSplit =
+    viewType === "split" &&
+    !wrapLines &&
+    (diffType === "modify" || diffType === "rename" || diffType === "copy");
+
+  // Longest rendered line in monospace columns, sizing the shared scrollbar's
+  // range (published as --diff-max-line in ch units).
+  const maxLineCols = useMemo(() => {
+    if (!isCenteredSplit) return 0;
+    let max = 0;
+    for (const hunk of visibleHunks) {
+      for (const change of hunk.changes) {
+        const cols = estimateLineColumns(change.content);
+        if (cols > max) max = cols;
+      }
+    }
+    return max;
+  }, [visibleHunks, isCenteredSplit]);
+
+  const regionRef = useRef<HTMLDivElement | null>(null);
+  const hScrollbarRef = useRef<HTMLDivElement | null>(null);
+
+  // The scrollbar strip is the single scroll surface for both panes: its
+  // scrollLeft becomes --diff-hscroll, which shifts every code cell's content
+  // via text-indent — the shared offset is what locks the two sides together.
+  // Written straight to the DOM (not state) so scrolling never re-renders the
+  // diff tree.
+  const handleHScroll = useCallback(() => {
+    const region = regionRef.current;
+    const bar = hScrollbarRef.current;
+    if (!region || !bar) return;
+    region.style.setProperty("--diff-hscroll", `${bar.scrollLeft}px`);
+  }, []);
+
+  // Trackpad/wheel gestures over the diff forward their horizontal component
+  // to the scrollbar strip. Native listener because React delegates wheel as
+  // passive, which would make preventDefault a no-op.
+  useEffect(() => {
+    if (!isCenteredSplit) return;
+    const region = regionRef.current;
+    if (!region) return;
+    const onWheel = (event: WheelEvent) => {
+      const bar = hScrollbarRef.current;
+      if (!bar) return;
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      const maxScroll = bar.scrollWidth - bar.clientWidth;
+      if (maxScroll <= 0) return;
+      const next = Math.min(maxScroll, Math.max(0, bar.scrollLeft + event.deltaX));
+      if (next !== bar.scrollLeft) {
+        bar.scrollLeft = next;
+        event.preventDefault();
+      }
+    };
+    region.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      region.removeEventListener("wheel", onWheel);
+    };
+  }, [isCenteredSplit]);
+
+  // Keep the indent in sync when the scroll system mounts/unmounts or content
+  // changes under a non-zero offset (wrap toggle round-trip, collapse, hunk
+  // reveal) — the strip may clamp scrollLeft without firing a scroll event.
+  useEffect(() => {
+    const region = regionRef.current;
+    if (!region) return;
+    region.style.setProperty("--diff-hscroll", `${hScrollbarRef.current?.scrollLeft ?? 0}px`);
+  }, [isCenteredSplit, visibleHunks]);
+
+  // The strip only takes up vertical space when there is real overflow to
+  // scroll, measured from the spacer (estimated longest line) against the
+  // strip's own width. ResizeObserver re-measures on dialog resizes and
+  // spacer-width changes; it is absent under jsdom, where the initial
+  // measurement (always 0 > 0 → false) is all we need.
+  const [hasHOverflow, setHasHOverflow] = useState(false);
+  useEffect(() => {
+    if (!isCenteredSplit) {
+      setHasHOverflow(false);
+      return;
+    }
+    const bar = hScrollbarRef.current;
+    if (!bar) return;
+    const measure = () => {
+      setHasHOverflow(bar.scrollWidth > bar.clientWidth + 1);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    if (bar.firstElementChild) observer.observe(bar.firstElementChild);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isCenteredSplit, visibleHunks, maxLineCols]);
+
+  // Arrow-key horizontal scrolling parity with the focusable native scroller
+  // used by the other view modes.
+  const handleRegionKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const bar = hScrollbarRef.current;
+    if (!bar) return;
+    const maxScroll = bar.scrollWidth - bar.clientWidth;
+    if (maxScroll <= 0) return;
+    event.preventDefault();
+    const delta = event.key === "ArrowRight" ? 40 : -40;
+    bar.scrollLeft = Math.min(maxScroll, Math.max(0, bar.scrollLeft + delta));
+  }, []);
 
   const diffRegionId = useMemo(
     () =>
@@ -267,6 +928,26 @@ function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps)
 
   const firstHunkLine = file.hunks?.[0]?.newStart;
 
+  const [fileCopied, setFileCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
+
+  const handleCopyFileDiff = useCallback(async () => {
+    if (!rawText) return;
+    try {
+      await navigator.clipboard.writeText(rawText);
+      setFileCopied(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setFileCopied(false), COPY_FEEDBACK_MS);
+    } catch {
+      // Silently fail
+    }
+  }, [rawText]);
+
   const handleOpenInEditor = () => {
     if (!absolutePath) return;
     void actionService.dispatch(
@@ -284,12 +965,110 @@ function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps)
     setIsCollapsed((prev) => !prev);
   };
 
+  const handleExpandContext = useCallback(
+    (start: number, end: number) => {
+      if (!oldSource) return;
+      setHunks((prev) => {
+        try {
+          return expandFromRawCode(prev, oldSource, start, end);
+        } catch {
+          return prev;
+        }
+      });
+      onToggleCollapse?.();
+    },
+    [oldSource, onToggleCollapse]
+  );
+
+  const handleShowMoreHunks = () => {
+    setVisibleHunkCount((count) => count + SHOW_MORE_HUNKS_STEP);
+    onToggleCollapse?.();
+  };
+
+  const fileStyle: CSSProperties & Record<"--diff-gutter-width" | "--diff-max-line", string> = {
+    "--diff-gutter-width": gutterWidth,
+    // +1ch slack so the caret-width estimate never clips the last character.
+    "--diff-max-line": `${maxLineCols + 1}ch`,
+  };
+
+  const oldTotalLines = oldSource?.length ?? null;
+  const allHunksVisible = hiddenHunkCount === 0;
+  const lastVisibleHunk = visibleHunks[visibleHunks.length - 1];
+  const trailingGapStart = lastVisibleHunk
+    ? lastVisibleHunk.oldStart + lastVisibleHunk.oldLines
+    : null;
+  const trailingHiddenCount =
+    allHunksVisible && oldTotalLines !== null && trailingGapStart !== null
+      ? Math.max(0, oldTotalLines - trailingGapStart + 1)
+      : 0;
+
+  const renderHunkRows = (rendered: HunkData[]): ReactElement[] => {
+    const rows: ReactElement[] = [];
+    for (let i = 0; i < rendered.length; i++) {
+      const hunk = rendered[i];
+      if (!hunk) continue;
+      const previous = (i === 0 ? null : rendered[i - 1]) ?? null;
+      const hiddenCount = Math.max(0, getCollapsedLinesCountBetween(previous, hunk));
+      const gapStart = previous ? previous.oldStart + previous.oldLines : 1;
+      rows.push(
+        <Decoration key={`decoration-${hunk.oldStart}-${hunk.newStart}`}>
+          <HunkHeader
+            hunk={hunk}
+            gapStart={gapStart}
+            hiddenCount={hiddenCount}
+            onExpand={oldSource ? handleExpandContext : null}
+          />
+        </Decoration>
+      );
+      rows.push(<Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />);
+    }
+    if (trailingHiddenCount > 0 && trailingGapStart !== null && oldTotalLines !== null) {
+      rows.push(
+        <Decoration key="decoration-trailing">
+          <div className="diff-hunk-header-inner">
+            <span className="diff-hunk-header-expanders">
+              {trailingHiddenCount <= EXPAND_ALL_MAX ? (
+                <button
+                  type="button"
+                  onClick={() => handleExpandContext(trailingGapStart, oldTotalLines + 1)}
+                >
+                  <UnfoldVertical className="w-3 h-3" />
+                  Expand {trailingHiddenCount} {trailingHiddenCount === 1 ? "line" : "lines"}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    title={`Show ${EXPAND_STEP} lines below the last hunk`}
+                    onClick={() =>
+                      handleExpandContext(trailingGapStart, trailingGapStart + EXPAND_STEP)
+                    }
+                  >
+                    <ChevronsDown className="w-3 h-3" />
+                    Expand down
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExpandContext(trailingGapStart, oldTotalLines + 1)}
+                  >
+                    Expand all {trailingHiddenCount}
+                  </button>
+                </>
+              )}
+            </span>
+          </div>
+        </Decoration>
+      );
+    }
+    return rows;
+  };
+
   return (
-    <div className="mb-2">
+    <div className="mb-2" style={fileStyle}>
       {relPath && (
-        <div className="flex items-center justify-between px-3 py-1.5 bg-daintree-sidebar border-b border-daintree-border text-xs text-daintree-text/60 font-mono">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-daintree-sidebar border-b border-daintree-border text-xs font-mono">
           <TruncatedTooltip content={relPath}>
-            <span className="truncate">{relPath}</span>
+            <span className="truncate text-daintree-text/80">{relPath}</span>
           </TruncatedTooltip>
           {langLoadFailed && (
             <span
@@ -300,18 +1079,33 @@ function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps)
               Plain text
             </span>
           )}
-          <div className="flex items-center gap-2 shrink-0">
+          {!langLoadFailed && isLargeFile && !isCollapsed && (
+            <span className="text-xs text-text-muted" data-testid="diff-highlight-off-badge">
+              Highlighting off for large diff
+            </span>
+          )}
+          <div className="flex items-center gap-2 shrink-0 text-daintree-text/60">
             {(additions > 0 || deletions > 0) && (
               <span className="flex items-center gap-1">
                 {additions > 0 && <span className="text-status-success">+{additions}</span>}
                 {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
               </span>
             )}
+            {rawText && (
+              <button
+                onClick={() => void handleCopyFileDiff()}
+                title={fileCopied ? "Copied!" : "Copy file diff"}
+                aria-label={fileCopied ? "Copied!" : "Copy file diff"}
+                className="shrink-0 flex items-center px-1.5 py-0.5 rounded hover:bg-tint/5 hover:text-daintree-text transition-colors"
+              >
+                {fileCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+              </button>
+            )}
             {absolutePath && (
               <button
                 onClick={handleOpenInEditor}
                 title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-                className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-daintree-text transition-colors"
+                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-daintree-text transition-colors"
               >
                 <ExternalLink className="w-3 h-3" />
                 Open
@@ -333,7 +1127,7 @@ function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps)
           <span className="text-left">
             {collapseDecision.reason === "generated"
               ? "Generated file collapsed"
-              : `Large diff (${formatBytes(estimateFileDiffBytes(file))})`}
+              : `Large diff (${formatBytes(fileBytes)})`}
           </span>
           <span className="ml-auto text-daintree-text/50 font-mono text-xs">
             {isCollapsed ? "Show diff" : "Hide diff"}
@@ -341,17 +1135,51 @@ function FileDiff({ file, viewType, rootPath, onToggleCollapse }: FileDiffProps)
         </button>
       )}
       {!isCollapsed && (
-        <div id={diffRegionId} className="diff-file-scroll">
+        <div
+          id={diffRegionId}
+          ref={regionRef}
+          className={isCenteredSplit ? "diff-file-centered" : "diff-file-scroll"}
+          tabIndex={0}
+          role="region"
+          aria-label={relPath || "Diff"}
+          onKeyDown={isCenteredSplit ? handleRegionKeyDown : undefined}
+        >
           <Diff
             viewType={viewType}
             diffType={diffType}
-            hunks={file.hunks ?? []}
+            hunks={visibleHunks}
             tokens={tokens ?? undefined}
+            renderGutter={renderGutter}
+            renderToken={renderTokenWithInvisibles}
+            generateLineClassName={generateLineClassName}
+            optimizeSelection
           >
-            {(hunks: HunkData[]) =>
-              hunks.map((hunk) => <Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />)
-            }
+            {renderHunkRows}
           </Diff>
+          {hiddenHunkCount > 0 && (
+            <button
+              type="button"
+              onClick={handleShowMoreHunks}
+              className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
+            >
+              <UnfoldVertical className="w-3 h-3" />
+              Show {Math.min(hiddenHunkCount, SHOW_MORE_HUNKS_STEP)} more{" "}
+              {hiddenHunkCount === 1 ? "hunk" : "hunks"} ({hiddenHunkCount} remaining)
+            </button>
+          )}
+          {isCenteredSplit && (
+            <div
+              ref={hScrollbarRef}
+              className="diff-hscrollbar"
+              data-testid="diff-hscrollbar"
+              data-active={hasHOverflow || undefined}
+              onScroll={handleHScroll}
+              aria-hidden="true"
+              tabIndex={-1}
+            >
+              <div className="diff-hscroll-spacer" />
+            </div>
+          )}
         </div>
       )}
     </div>

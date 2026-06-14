@@ -19,19 +19,25 @@ function escapeRegex(str: string): string {
 }
 
 export class GitService {
-  private git: SimpleGit;
+  private git: Promise<SimpleGit> | null = null;
   private rootPath: string;
 
   constructor(rootPath: string) {
     this.rootPath = rootPath;
-    this.git = createHardenedGit(rootPath);
+  }
+
+  // Lazy so constructing a GitService that is never used cannot leave an
+  // unhandled rejection behind (createHardenedGit is async since #10395).
+  private getGit(): Promise<SimpleGit> {
+    this.git ??= createHardenedGit(this.rootPath);
+    return this.git;
   }
 
   async listBranches(): Promise<BranchInfo[]> {
     try {
       logDebug("Listing branches", { rootPath: this.rootPath });
 
-      const summary: BranchSummary = await this.git.branch(["-a"]);
+      const summary: BranchSummary = await (await this.getGit()).branch(["-a"]);
       const branches: BranchInfo[] = [];
 
       for (const [branchName, branchDetail] of Object.entries(summary.branches)) {
@@ -115,6 +121,7 @@ export class GitService {
     }
 
     try {
+      const git = await this.getGit();
       if (fromRemote) {
         logDebug("Creating worktree from remote branch", {
           path,
@@ -124,7 +131,7 @@ export class GitService {
 
         // `--end-of-options` after the subcommand flags so any leading-dash
         // ref or path that slipped past validation is treated as positional.
-        await this.git.raw([
+        await git.raw([
           "worktree",
           "add",
           "-b",
@@ -141,15 +148,7 @@ export class GitService {
           baseBranch,
         });
 
-        await this.git.raw([
-          "worktree",
-          "add",
-          "-b",
-          newBranch,
-          "--end-of-options",
-          path,
-          baseBranch,
-        ]);
+        await git.raw(["worktree", "add", "-b", newBranch, "--end-of-options", path, baseBranch]);
       }
 
       logDebug("Worktree created successfully", { path, newBranch });
@@ -166,7 +165,7 @@ export class GitService {
     Array<{ path: string; branch: string; bare: boolean; isMainWorktree: boolean }>
   > {
     try {
-      const output = await this.git.raw(["worktree", "list", "--porcelain"]);
+      const output = await (await this.getGit()).raw(["worktree", "list", "--porcelain"]);
       const worktrees: Array<{
         path: string;
         branch: string;
@@ -280,14 +279,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     try {
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
-      const diff = await this.git.diff([
-        "HEAD",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-        "--",
-        normalizedPath,
-      ]);
+      const diff = await (
+        await this.getGit()
+      ).diff(["HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--", normalizedPath]);
 
       if (diff.includes("Binary files")) {
         return "BINARY_FILE";
@@ -315,7 +309,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     branch1: string,
     branch2: string,
     filePath?: string,
-    useMergeBase?: boolean
+    useMergeBase?: boolean,
+    ignoreWhitespace?: boolean
   ): Promise<CrossWorktreeDiffResult | string> {
     // Validate before the equality fast-path so an invalid argv-shaped name
     // is rejected unconditionally — not silently accepted when both inputs
@@ -346,11 +341,14 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     if (filePath) {
       // Return the unified diff for a specific file
       try {
-        const diff = await this.git.raw([
+        const diff = await (
+          await this.getGit()
+        ).raw([
           "diff",
           "--no-ext-diff",
           "--no-textconv",
           "--no-color",
+          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,
           "--",
@@ -383,22 +381,25 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
     // Return the list of changed files with per-file churn (--numstat)
     try {
+      const git = await this.getGit();
       const [nameStatusOutput, numstatOutput, toplevel] = await Promise.all([
-        this.git.raw([
+        git.raw([
           "diff",
           "--no-ext-diff",
           "--no-textconv",
           "--name-status",
+          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
           "--end-of-options",
           range,
         ]),
-        this.git
+        git
           .raw([
             "diff",
             "--no-ext-diff",
             "--no-textconv",
             "--no-renames",
             "--numstat",
+            ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
             "--end-of-options",
             range,
           ])
@@ -413,7 +414,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
             );
             return "";
           }),
-        this.git.revparse(["--show-toplevel"]),
+        git.revparse(["--show-toplevel"]),
       ]);
 
       const gitRoot = realpathSync(toplevel.trim()).replace(/\\/g, "/");
@@ -502,7 +503,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   async getRemoteUrl(repoPath: string): Promise<string | null> {
     return this.handleGitOperation(async () => {
-      const git = createHardenedGit(repoPath);
+      const git = await createHardenedGit(repoPath);
       const remotes = await git.getRemotes(true);
       const origin = remotes.find((r) => r.name === "origin");
       return origin?.refs?.fetch || null;
@@ -511,7 +512,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   async listRemotes(repoPath: string): Promise<Array<{ name: string; fetchUrl: string }>> {
     return this.handleGitOperation(async () => {
-      const git = createHardenedGit(repoPath);
+      const git = await createHardenedGit(repoPath);
       const remotes = await git.getRemotes(true);
       return remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch || "" }));
     }, "listRemotes");
@@ -527,7 +528,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   async getRepositoryRoot(repoPath: string): Promise<string> {
     return this.handleGitOperation(async () => {
-      const git = createHardenedGit(repoPath);
+      const git = await createHardenedGit(repoPath);
       const root = await git.revparse(["--show-toplevel"]);
       return root.trim();
     }, "getRepositoryRoot");
@@ -545,7 +546,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     args.push("--end-of-options", worktreePath);
 
     return this.handleGitOperation(async () => {
-      await this.git.raw(args);
+      await (await this.getGit()).raw(args);
     }, "removeWorktree");
   }
 

@@ -19,17 +19,20 @@ import {
   repoEventsNoChangeCount,
   repoEventsLastProbeAt,
   getETagCacheVersion,
+  getRepoListEpoch,
+  invalidateRepoListCachesForCountChange,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
-import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import type { RepoStats, RestCountsSnapshot } from "./types.js";
-import type { GitHubIssue, GitHubPR } from "../../../../shared/types/github.js";
-import { parseIssueNode } from "./GitHubIssues.js";
-import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
+import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
+import type { RepoContext, RepoStats, RestCountsSnapshot } from "./types.js";
 import type {
+  GitHubIssue,
+  GitHubPR,
   RepositoryStats,
   GitHubFirstPageCachePayload,
-} from "../../../../electron/types/index.js";
+} from "../shared/types.js";
+import { parseIssueNode } from "./GitHubIssues.js";
+import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
 
 export interface RepoStatsAndPageResult {
   stats: RepoStats | null;
@@ -235,8 +238,32 @@ export async function fetchRestCounts(
   owner: string,
   repo: string
 ): Promise<RepoStats | null> {
+  // Per-repo singleflight: concurrent polls (multi-window — each
+  // `WebContentsView` runs its own poll loop) must not interleave. Two
+  // overlapping fetches read the same `prior` baseline, so the slower one can
+  // commit a stale `304` replay over the faster one's fresh counts and
+  // double-fire the count-buster (the second epoch bump would discard a list
+  // fetch that started after the first, forcing a redundant GraphQL refetch).
   const cacheKey = `${owner}/${repo}`;
+  const pending = restCountsInflight.get(cacheKey);
+  if (pending) return pending;
+  const promise = fetchRestCountsImpl(token, owner, repo, cacheKey);
+  restCountsInflight.set(cacheKey, promise);
+  const cleanup = () => {
+    if (restCountsInflight.get(cacheKey) === promise) restCountsInflight.delete(cacheKey);
+  };
+  promise.then(cleanup, cleanup);
+  return promise;
+}
 
+const restCountsInflight = new Map<string, Promise<RepoStats | null>>();
+
+async function fetchRestCountsImpl(
+  token: string,
+  owner: string,
+  repo: string,
+  cacheKey: string
+): Promise<RepoStats | null> {
   const block = gitHubRateLimitService.shouldBlockRequest("core");
   if (block.blocked) return null;
 
@@ -322,22 +349,63 @@ export async function fetchRestCounts(
     const lastUpdated = Date.now();
     const snapshot: RestCountsSnapshot = { combinedCount, prCount, repoEtag, prEtag, lastUpdated };
     restCountsCache.set(cacheKey, snapshot);
-    return { issueCount, prCount, lastUpdated };
+
+    // Count-as-cache-buster: a committed count that differs from the prior
+    // committed pair means cached list pages for the changed type are provably
+    // stale — drop them (zero network) so no path can serve a pre-change page
+    // for the rest of its 60s TTL. Per-type comparison: the derived issue
+    // count and the PR count move independently, and busting the unchanged
+    // type would just multiply refetch volume. First-ever commit (`!prior`)
+    // busts nothing — there is no baseline to have diverged from. Note the
+    // inverse does NOT hold: equal counts don't prove the pages are fresh
+    // (close-one-open-one), which is why the dropdown's own revalidation
+    // stays the correctness backstop.
+    if (prior) {
+      const priorIssueCount = prior.combinedCount - prior.prCount;
+      invalidateRepoListCachesForCountChange(owner, repo, {
+        issues: priorIssueCount !== issueCount,
+        prs: prior.prCount !== prCount,
+      });
+    }
+
+    // The refreshed-at stamps match `lastUpdated` here even on a 304 replay:
+    // a 304 is a direct GitHub confirmation that the count endpoint's content
+    // is unchanged, so the counts were genuinely re-verified now.
+    return {
+      issueCount,
+      prCount,
+      lastUpdated,
+      issueCountRefreshedAt: lastUpdated,
+      prCountRefreshedAt: lastUpdated,
+    };
   } catch {
     return null;
   }
 }
 
-export async function getRepoStatsAndPage(
-  cwd: string,
-  bypassCache = false,
+export interface RepoStatsForContextOptions {
+  bypassCache?: boolean;
+  /**
+   * Absolute project path recorded as metadata in the disk caches
+   * (`GitHubStatsCache` / `GitHubFirstPageCache`); empty when the caller has
+   * no local checkout (the forge `repoStats` capability).
+   */
+  projectPath?: string;
+  /**
+   * Re-resolve the repo context after a repo-not-found error. Supplied by the
+   * cwd wrapper to preserve its remote-changed retry; context-only callers
+   * omit it and get no retry.
+   */
+  refreshContext?: () => Promise<RepoContext | null>;
+}
+
+export async function getRepoStatsAndPageForContext(
+  context: RepoContext,
+  options: RepoStatsForContextOptions = {},
   _retried = false
 ): Promise<RepoStatsAndPageResult> {
-  const context = await getRepoContext(cwd);
-  if (!context) {
-    return { stats: null, issues: null, prs: null, error: "Not a GitHub repository" };
-  }
-
+  const bypassCache = options.bypassCache === true;
+  const projectPath = options.projectPath ?? "";
   const cacheKey = `${context.owner}/${context.repo}`;
   const persistentCache = GitHubStatsCache.getInstance();
   const client = GitHubAuth.createClient();
@@ -429,19 +497,30 @@ export async function getRepoStatsAndPage(
   } else {
     const token = GitHubAuth.getToken();
     if (token) {
-      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
-      const restCounts = restCountsCache.get(cacheKey);
+      const hadCountBaseline =
+        repoStatsAndPageSnapshotCache.get(cacheKey) !== undefined ||
+        restCountsCache.get(cacheKey) !== undefined;
       // Skip the network probe entirely while inside the adaptive window: never
       // poll `/events` faster than the server-advertised `X-Poll-Interval`, and
       // back off further on an idle repo. The cached snapshot (or, on the
       // background-only path, the last REST counts) stands in for the
       // "unchanged" result we'd otherwise pay a request to confirm.
       const withinBackoff =
-        (snapshot !== undefined || restCounts !== undefined) &&
+        hadCountBaseline &&
         Date.now() - (repoEventsLastProbeAt.get(cacheKey) ?? 0) < eventsProbeDelayMs(cacheKey);
       const probe: ActivityProbeResult = withinBackoff
         ? { status: "unchanged" }
         : await fetchActivityProbe(token, context.owner, context.repo);
+
+      // Read the count baselines only AFTER the probe await — two independent
+      // concurrent mutations can land during it: (1) a list query's write-back
+      // (`updateRepoStatsCount`) may have reconciled a stale snapshot/REST
+      // entry away, and (2) a concurrent poll's count-buster can drop the
+      // snapshot mid-probe. Serving a pre-await capture would resurrect the
+      // just-invalidated counts or re-warm the list caches from pages the bust
+      // already removed.
+      const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+      const restCounts = restCountsCache.get(cacheKey);
 
       if (probe.status === "changed") {
         pendingEventsEtag = probe.etag;
@@ -454,13 +533,28 @@ export async function getRepoStatsAndPage(
         // so an unchanged probe can't roll the pill back to pre-REST counts.
         const restCountsFresher =
           restCounts !== undefined && restCounts.lastUpdated >= (snapshot.stats.lastUpdated ?? 0);
+        // `lastUpdated` is re-stamped to now — the probe just confirmed the
+        // data is still current, and the freshness pill keys off it. The
+        // per-count refreshed-at stamps are NOT: the counts themselves were
+        // last read at the source's commit time, and claiming otherwise lets
+        // a stale cached count outrank a fresher dropdown-observed total in
+        // the renderer's recency arbitration (and permanently suppress the
+        // dropdown-open force refresh).
         const freshStats: RepoStats = restCountsFresher
           ? {
               issueCount: restCounts.combinedCount - restCounts.prCount,
               prCount: restCounts.prCount,
               lastUpdated: Date.now(),
+              issueCountRefreshedAt: restCounts.lastUpdated,
+              prCountRefreshedAt: restCounts.lastUpdated,
             }
-          : { ...snapshot.stats, lastUpdated: Date.now() };
+          : {
+              ...snapshot.stats,
+              lastUpdated: Date.now(),
+              issueCountRefreshedAt:
+                snapshot.stats.issueCountRefreshedAt ?? snapshot.stats.lastUpdated,
+              prCountRefreshedAt: snapshot.stats.prCountRefreshedAt ?? snapshot.stats.lastUpdated,
+            };
         repoStatsCache.set(cacheKey, freshStats);
         issueListCache.set(issuesListCacheKey, {
           items: snapshot.issues.items,
@@ -488,7 +582,7 @@ export async function getRepoStatsAndPage(
         // 10-min TTL so list content can't go stale indefinitely behind a
         // continuously-matching probe; aging out just forces a full refresh,
         // which the disk re-stamp keeps safe.
-        persistentCache.set(cacheKey, freshStats, cwd);
+        persistentCache.set(cacheKey, freshStats, projectPath);
         return {
           stats: freshStats,
           issues: { ...snapshot.issues },
@@ -509,9 +603,11 @@ export async function getRepoStatsAndPage(
           issueCount: restCounts.combinedCount - restCounts.prCount,
           prCount: restCounts.prCount,
           lastUpdated: Date.now(),
+          issueCountRefreshedAt: restCounts.lastUpdated,
+          prCountRefreshedAt: restCounts.lastUpdated,
         };
         repoStatsCache.set(cacheKey, freshStats);
-        persistentCache.set(cacheKey, freshStats, cwd);
+        persistentCache.set(cacheKey, freshStats, projectPath);
         return {
           stats: freshStats,
           issues: null,
@@ -537,7 +633,7 @@ export async function getRepoStatsAndPage(
     const restStats = token ? await fetchRestCounts(token, context.owner, context.repo) : null;
     if (restStats) {
       repoStatsCache.set(cacheKey, restStats);
-      persistentCache.set(cacheKey, restStats, cwd);
+      persistentCache.set(cacheKey, restStats, projectPath);
       // Commit the changed-probe's events ETag in lockstep with the counts it
       // describes — same deferred-commit discipline as the GraphQL path: a
       // failed count fetch leaves the old ETag so the next probe re-detects
@@ -600,6 +696,15 @@ export async function getRepoStatsAndPage(
     return { stats: null, issues: null, prs: null, error: message };
   }
 
+  // Mid-flight count-buster guard for the page-cache writes below — same
+  // discipline as the list fetchers: a concurrent background poll can commit
+  // a count change (and bust the list caches) while the heavy query is in
+  // flight, and server-side ordering between the two reads is unknowable.
+  // On an epoch move the page/snapshot writes are skipped (the next read
+  // refetches); the response is still returned and broadcast for display.
+  const issueEpochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
+  const prEpochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
+
   try {
     const result = (await client(REPO_STATS_AND_PAGE_QUERY, {
       owner: context.owner,
@@ -645,14 +750,17 @@ export async function getRepoStatsAndPage(
 
     const issueCount = issuesData?.totalCount ?? 0;
     const prCount = prsData?.totalCount ?? 0;
+    const fetchedAt = Date.now();
     const stats: RepoStats = {
       issueCount,
       prCount,
-      lastUpdated: Date.now(),
+      lastUpdated: fetchedAt,
+      issueCountRefreshedAt: fetchedAt,
+      prCountRefreshedAt: fetchedAt,
     };
 
     repoStatsCache.set(cacheKey, stats);
-    persistentCache.set(cacheKey, stats, cwd);
+    persistentCache.set(cacheKey, stats, projectPath);
 
     const parsedIssues = (issuesData?.nodes ?? []).filter(Boolean).map(parseIssueNode);
     const parsedPRs = (prsData?.nodes ?? []).filter(Boolean).map(parsePRNode);
@@ -671,7 +779,7 @@ export async function getRepoStatsAndPage(
           hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
         },
       },
-      cwd
+      projectPath
     );
 
     const issuesPage = {
@@ -686,25 +794,35 @@ export async function getRepoStatsAndPage(
       hasNextPage: prsData?.pageInfo?.hasNextPage ?? false,
       totalCount: prCount,
     };
-    issueListCache.set(issuesListCacheKey, {
-      items: issuesPage.items,
-      pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
-      totalCount: issuesPage.totalCount,
-    });
-    prListCache.set(prsListCacheKey, {
-      items: prsPage.items,
-      pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
-      totalCount: prsPage.totalCount,
-    });
+    const issueEpochUnchanged =
+      getRepoListEpoch("issue", context.owner, context.repo) === issueEpochAtStart;
+    const prEpochUnchanged = getRepoListEpoch("pr", context.owner, context.repo) === prEpochAtStart;
+    if (issueEpochUnchanged) {
+      issueListCache.set(issuesListCacheKey, {
+        items: issuesPage.items,
+        pageInfo: { hasNextPage: issuesPage.hasNextPage, endCursor: issuesPage.endCursor },
+        totalCount: issuesPage.totalCount,
+      });
+    }
+    if (prEpochUnchanged) {
+      prListCache.set(prsListCacheKey, {
+        items: prsPage.items,
+        pageInfo: { hasNextPage: prsPage.hasNextPage, endCursor: prsPage.endCursor },
+        totalCount: prsPage.totalCount,
+      });
+    }
 
     // Record the snapshot so the next poll can skip the heavy query when the
     // activity probe reports no change. Written only on a successful network
-    // fetch — a failed fetch must not advance it.
-    repoStatsAndPageSnapshotCache.set(cacheKey, {
-      stats,
-      issues: issuesPage,
-      prs: prsPage,
-    });
+    // fetch — a failed fetch must not advance it — and only when neither
+    // type's epoch moved mid-query (the snapshot embeds both first pages).
+    if (issueEpochUnchanged && prEpochUnchanged) {
+      repoStatsAndPageSnapshotCache.set(cacheKey, {
+        stats,
+        issues: issuesPage,
+        prs: prsPage,
+      });
+    }
 
     return {
       stats,
@@ -714,14 +832,13 @@ export async function getRepoStatsAndPage(
       nextPollIntervalMs: eventsProbeDelayMs(cacheKey),
     };
   } catch (error) {
-    if (!_retried && isRepoNotFoundError(error)) {
-      repoContextCache.invalidate(cwd);
-      const freshContext = await getRepoContext(cwd);
+    if (!_retried && isRepoNotFoundError(error) && options.refreshContext) {
+      const freshContext = await options.refreshContext();
       if (
         freshContext &&
         (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
       ) {
-        return getRepoStatsAndPage(cwd, bypassCache, true);
+        return getRepoStatsAndPageForContext(freshContext, options, true);
       }
     }
     const diskCached = persistentCache.get(cacheKey);
@@ -742,6 +859,71 @@ export async function getRepoStatsAndPage(
   }
 }
 
+export async function getRepoStatsAndPage(
+  cwd: string,
+  bypassCache = false
+): Promise<RepoStatsAndPageResult> {
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return { stats: null, issues: null, prs: null, error: "Not a GitHub repository" };
+  }
+
+  return getRepoStatsAndPageForContext(context, {
+    bypassCache,
+    projectPath: cwd,
+    refreshContext: async () => {
+      repoContextCache.invalidate(cwd);
+      return getRepoContext(cwd);
+    },
+  });
+}
+
+/**
+ * Context-variant core of {@link getFirstPageCache} — pure disk-cache reads.
+ * `projectPath` is echoed into the payload for cwd callers; context-only
+ * callers (the forge `repoStats` capability) leave it empty.
+ */
+export async function getFirstPageCacheForContext(
+  context: RepoContext,
+  projectPath = ""
+): Promise<GitHubFirstPageCachePayload | null> {
+  const repoKey = `${context.owner}/${context.repo}`;
+  const entry = GitHubFirstPageCache.getInstance().get(repoKey);
+  const cachedStats = GitHubStatsCache.getInstance().getForBootstrap(repoKey);
+
+  if (!entry && !cachedStats) return null;
+
+  if (entry) {
+    const payload: GitHubFirstPageCachePayload = {
+      projectPath,
+      issues: entry.issues,
+      prs: entry.prs,
+      lastUpdated: entry.lastUpdated,
+    };
+    if (cachedStats) {
+      payload.stats = {
+        issueCount: cachedStats.issueCount,
+        prCount: cachedStats.prCount,
+        lastUpdated: cachedStats.lastUpdated,
+      };
+    }
+    return payload;
+  }
+
+  if (!cachedStats) return null;
+  return {
+    projectPath,
+    issues: { items: [], endCursor: null, hasNextPage: false },
+    prs: { items: [], endCursor: null, hasNextPage: false },
+    lastUpdated: cachedStats.lastUpdated,
+    stats: {
+      issueCount: cachedStats.issueCount,
+      prCount: cachedStats.prCount,
+      lastUpdated: cachedStats.lastUpdated,
+    },
+  };
+}
+
 export async function getFirstPageCache(cwd: string): Promise<GitHubFirstPageCachePayload | null> {
   if (!path.isAbsolute(cwd)) return null;
 
@@ -753,41 +935,7 @@ export async function getFirstPageCache(cwd: string): Promise<GitHubFirstPageCac
     const context = await getRepoContext(resolved);
     if (!context) return null;
 
-    const repoKey = `${context.owner}/${context.repo}`;
-    const entry = GitHubFirstPageCache.getInstance().get(repoKey);
-    const cachedStats = GitHubStatsCache.getInstance().getForBootstrap(repoKey);
-
-    if (!entry && !cachedStats) return null;
-
-    if (entry) {
-      const payload: GitHubFirstPageCachePayload = {
-        projectPath: resolved,
-        issues: entry.issues,
-        prs: entry.prs,
-        lastUpdated: entry.lastUpdated,
-      };
-      if (cachedStats) {
-        payload.stats = {
-          issueCount: cachedStats.issueCount,
-          prCount: cachedStats.prCount,
-          lastUpdated: cachedStats.lastUpdated,
-        };
-      }
-      return payload;
-    }
-
-    if (!cachedStats) return null;
-    return {
-      projectPath: resolved,
-      issues: { items: [], endCursor: null, hasNextPage: false },
-      prs: { items: [], endCursor: null, hasNextPage: false },
-      lastUpdated: cachedStats.lastUpdated,
-      stats: {
-        issueCount: cachedStats.issueCount,
-        prCount: cachedStats.prCount,
-        lastUpdated: cachedStats.lastUpdated,
-      },
-    };
+    return await getFirstPageCacheForContext(context, resolved);
   } catch {
     return null;
   }
@@ -834,6 +982,8 @@ export async function getRepoStatsComplete(
       ghError: statsResult.error,
       stale: statsResult.stats?.stale,
       lastUpdated: statsResult.stats?.lastUpdated,
+      issueCountRefreshedAt: statsResult.stats?.issueCountRefreshedAt,
+      prCountRefreshedAt: statsResult.stats?.prCountRefreshedAt,
       rateLimitResetAt:
         rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,
       rateLimitKind: rateLimitState.blocked ? (rateLimitState.kind ?? undefined) : undefined,

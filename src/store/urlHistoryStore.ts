@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { sanitizeUrlForHistory } from "@shared/utils/urlHistory";
-import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
@@ -24,6 +24,15 @@ export function frecencyScore(entry: UrlHistoryEntry, now: number): number {
   return entry.visitCount * bucket.weight;
 }
 
+// Sort descending by frecency, computing each entry's score once instead of
+// per comparison (frecencyScore does a linear bucket lookup per call).
+function sortByFrecencyDesc(entries: UrlHistoryEntry[], now: number): UrlHistoryEntry[] {
+  return entries
+    .map((entry) => ({ entry, score: frecencyScore(entry, now) }))
+    .sort((a, b) => b.score - a.score)
+    .map(({ entry }) => entry);
+}
+
 export function getFrecencySuggestions(
   entries: UrlHistoryEntry[],
   query: string,
@@ -31,17 +40,13 @@ export function getFrecencySuggestions(
 ): UrlHistoryEntry[] {
   const now = Date.now();
   if (!query.trim()) {
-    return [...entries]
-      .sort((a, b) => frecencyScore(b, now) - frecencyScore(a, now))
-      .slice(0, limit);
+    return sortByFrecencyDesc(entries, now).slice(0, limit);
   }
   const lowerQuery = query.toLowerCase();
-  return entries
-    .filter(
-      (e) => e.url.toLowerCase().includes(lowerQuery) || e.title.toLowerCase().includes(lowerQuery)
-    )
-    .sort((a, b) => frecencyScore(b, now) - frecencyScore(a, now))
-    .slice(0, limit);
+  const filtered = entries.filter(
+    (e) => e.url.toLowerCase().includes(lowerQuery) || e.title.toLowerCase().includes(lowerQuery)
+  );
+  return sortByFrecencyDesc(filtered, now).slice(0, limit);
 }
 
 interface UrlHistoryState {
@@ -86,10 +91,9 @@ function migrateEntries(
         });
       }
     }
-    const pruned = pruneStaleEntries([...merged.values()], now);
+    let pruned = pruneStaleEntries([...merged.values()], now);
     if (pruned.length > MAX_ENTRIES_PER_PROJECT) {
-      pruned.sort((a, b) => frecencyScore(b, now) - frecencyScore(a, now));
-      pruned.length = MAX_ENTRIES_PER_PROJECT;
+      pruned = sortByFrecencyDesc(pruned, now).slice(0, MAX_ENTRIES_PER_PROJECT);
     }
     if (pruned.length > 0) result[projectId] = pruned;
   }
@@ -106,7 +110,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           const canonical = sanitizeUrlForHistory(url);
           if (canonical === null) return state;
           const now = Date.now();
-          const projectEntries = pruneStaleEntries(state.entries[projectId] ?? [], now).slice();
+          let projectEntries = pruneStaleEntries(state.entries[projectId] ?? [], now).slice();
           const existingIndex = projectEntries.findIndex((e) => e.url === canonical);
 
           if (existingIndex >= 0) {
@@ -127,8 +131,10 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           }
 
           if (projectEntries.length > MAX_ENTRIES_PER_PROJECT) {
-            projectEntries.sort((a, b) => frecencyScore(b, now) - frecencyScore(a, now));
-            projectEntries.length = MAX_ENTRIES_PER_PROJECT;
+            projectEntries = sortByFrecencyDesc(projectEntries, now).slice(
+              0,
+              MAX_ENTRIES_PER_PROJECT
+            );
           }
 
           return { entries: { ...state.entries, [projectId]: projectEntries } };
@@ -177,7 +183,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     }),
     {
       name: "daintree-url-history",
-      storage: createSafeJSONStorage(),
+      storage: createDebouncedSafeJSONStorage(300),
       version: 1,
       migrate: (persistedState) => persistedState as UrlHistoryState,
       merge: (persistedState, currentState) => {

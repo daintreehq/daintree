@@ -302,7 +302,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(true);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1", "t2"]);
@@ -316,7 +317,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(false);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1"]);
@@ -330,7 +332,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(true);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1", "t2"]);
@@ -344,10 +347,73 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(false);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1"]);
+    });
+
+    it("returns false when the target group does not exist", () => {
+      const t1 = createMockTerminal("t1", "wt-a", "grid");
+      setTerminals([t1]);
+      usePanelStore.setState({ tabGroups: new Map() });
+
+      const result = usePanelStore.getState().addPanelToGroup("missing-group", "t1");
+      expect(result).toBe(false);
+    });
+
+    it("returns false when the panel does not exist", () => {
+      const t1 = createMockTerminal("t1", "wt-a", "grid");
+      const group = createMockTabGroup("g1", "wt-a", ["t1"]);
+
+      setTerminals([t1]);
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+      const result = usePanelStore.getState().addPanelToGroup("g1", "missing-panel");
+      expect(result).toBe(false);
+
+      const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
+      expect(updatedGroup?.panelIds).toEqual(["t1"]);
+    });
+
+    it("returns true when the panel is already a member (idempotent)", () => {
+      const t1 = createMockTerminal("t1", "wt-a", "grid");
+      const group = createMockTabGroup("g1", "wt-a", ["t1"]);
+
+      setTerminals([t1]);
+      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t1");
+      expect(result).toBe(true);
+
+      const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
+      expect(updatedGroup?.panelIds).toEqual(["t1"]);
+    });
+
+    it("returns true and collapses the source group when moving the panel out of it", () => {
+      // Unique-membership enforcement removes the panel from its prior group
+      // first; when that leaves <=1 member the source group is deleted. The
+      // post-mutation verify must still report success for the target group.
+      const anchor = createMockTerminal("anchor", "wt-a", "grid");
+      const mover = createMockTerminal("mover", "wt-a", "grid");
+      const target = createMockTabGroup("g-target", "wt-a", ["anchor"]);
+      const source = createMockTabGroup("g-source", "wt-a", ["mover", "anchor2"]);
+
+      setTerminals([anchor, mover, createMockTerminal("anchor2", "wt-a", "grid")]);
+      usePanelStore.setState({
+        tabGroups: new Map([
+          ["g-target", target],
+          ["g-source", source],
+        ]),
+      });
+
+      const result = usePanelStore.getState().addPanelToGroup("g-target", "mover");
+      expect(result).toBe(true);
+
+      const groups = usePanelStore.getState().tabGroups;
+      expect(groups.get("g-target")?.panelIds).toEqual(["anchor", "mover"]);
+      expect(groups.has("g-source")).toBe(false);
     });
   });
 
@@ -404,7 +470,8 @@ describe("Tab Group Worktree Invariant", () => {
       setTerminals([t1, t2]);
       usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-      usePanelStore.getState().addPanelToGroup("g1", "t2");
+      const result = usePanelStore.getState().addPanelToGroup("g1", "t2");
+      expect(result).toBe(false);
 
       const updatedGroup = usePanelStore.getState().tabGroups.get("g1");
       expect(updatedGroup?.panelIds).toEqual(["t1"]);

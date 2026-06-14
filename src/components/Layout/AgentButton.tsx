@@ -34,8 +34,9 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
-import { ChevronDown, PanelBottom } from "lucide-react";
+import { ChevronDown, ExternalLink, PanelBottom } from "lucide-react";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentExternalLink } from "@shared/config/agentRegistry";
 import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import {
   isAgentLaunchable,
@@ -48,6 +49,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 import { resolveEffectivePresetId } from "@shared/types";
@@ -78,9 +80,29 @@ const stopPointer = (e: ReactPointerEvent) => {
   e.stopPropagation();
 };
 
+// Owns its own leading separator so both ContextMenuContent blocks stay
+// symmetrical — agents without links render nothing, including the separator.
+function AgentExternalLinkItems({ links }: { links?: AgentExternalLink[] }) {
+  if (!links || links.length === 0) return null;
+  return (
+    <>
+      <ContextMenuSeparator />
+      {links.map((link) => (
+        <ContextMenuActionItem
+          key={link.url}
+          actionId="system.openExternal"
+          args={{ url: link.url }}
+        >
+          <ExternalLink className="mr-2 h-3.5 w-3.5" />
+          {link.label}
+        </ContextMenuActionItem>
+      ))}
+    </>
+  );
+}
+
 interface WorktreeMenuItemsProps {
   agentType: AgentType;
-  worktrees: ReturnType<typeof useWorktrees>["worktrees"];
 }
 
 // Flattens the worktree picker from a nested 3-deep submenu (worktree →
@@ -98,7 +120,8 @@ interface WorktreeMenuItemsProps {
 // row's onSelect honors the ref and skips the grid dispatch when set.
 // pointerDown/pointerUp still stopPropagation to keep Radix from
 // treating the icon press as the row's primary selection event.
-function WorktreeMenuItems({ agentType, worktrees }: WorktreeMenuItemsProps) {
+function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
+  const { worktrees } = useWorktrees();
   const dockClickedRef = useRef(false);
   const source = useMenuActionSource();
   return (
@@ -154,7 +177,7 @@ export function AgentButton({
   availability,
   "data-toolbar-item": dataToolbarItem,
 }: AgentButtonProps) {
-  const { worktrees } = useWorktrees();
+  const hasWorktrees = useWorktreeStore((s) => s.worktrees.size > 0);
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
@@ -166,10 +189,11 @@ export function AgentButton({
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   // Radix Tooltip reopens on focus restoration. When the chevron's
-  // DropdownMenu closes, Radix returns focus to the chevron trigger and the
-  // tooltip would reopen on top of the freshly-launched action's surfaces.
-  // Gate both halves' tooltips on controlled state and hold suppression open
-  // until the next genuine pointer hover. Same pattern as AgentTrayButton.
+  // DropdownMenu or the right-click ContextMenu closes, Radix returns focus to
+  // the trigger and the tooltip would reopen on top of the freshly-launched
+  // action's surfaces. Gate both halves' tooltips on controlled state and hold
+  // suppression open until the next genuine pointer hover. Same pattern as
+  // AgentTrayButton.
   const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
   const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
@@ -372,43 +396,68 @@ export function AgentButton({
 
   if (!hasPresets) {
     return (
-      <ContextMenu>
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (open) {
+            setPrimaryTooltipOpen(false);
+            setChevronTooltipOpen(false);
+          }
+        }}
+      >
         <ContextMenuTrigger asChild>
-          <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleClick}
-                  aria-disabled={isLoading || undefined}
-                  data-toolbar-item={dataToolbarItem}
-                  onPointerEnter={(e) => {
-                    clearFocusRestoreSuppression();
-                    hover.onPointerEnter(e);
-                  }}
-                  onPointerLeave={hover.onPointerLeave}
-                  onPointerDown={hover.onPointerDown}
-                  onFocus={hover.onFocus}
-                  onBlur={hover.onBlur}
-                  className={cn(
-                    "toolbar-agent-button text-daintree-text relative",
-                    needsSetup && "opacity-70",
-                    "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  )}
-                  aria-label={ariaLabel}
-                  aria-keyshortcuts={ariaShortcut}
-                >
-                  {iconElement}
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {createTooltipContent(tooltipLabel, tooltipShortcut)}
-            </TooltipContent>
-          </Tooltip>
+          {/* Real DOM element as the trigger child: ContextMenuTrigger's
+              asChild Slot binds onContextMenu + ref here. Wrapping <Tooltip>
+              directly drops both (Tooltip.Root is a non-DOM provider), so
+              right-click never opens the menu. Mirrors the presets branch. */}
+          <span className="inline-flex">
+            <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleClick}
+                    aria-disabled={isLoading || undefined}
+                    data-toolbar-item={dataToolbarItem}
+                    onPointerEnter={(e) => {
+                      clearFocusRestoreSuppression();
+                      hover.onPointerEnter(e);
+                    }}
+                    onPointerLeave={hover.onPointerLeave}
+                    onPointerDown={hover.onPointerDown}
+                    onFocus={hover.onFocus}
+                    onBlur={hover.onBlur}
+                    className={cn(
+                      "toolbar-agent-button text-daintree-text relative",
+                      needsSetup && "opacity-70",
+                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                    )}
+                    aria-label={ariaLabel}
+                    aria-keyshortcuts={ariaShortcut}
+                  >
+                    {iconElement}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipContent(tooltipLabel, tooltipShortcut)}
+              </TooltipContent>
+            </Tooltip>
+          </span>
         </ContextMenuTrigger>
-        <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        <ContextMenuContent
+          className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+          onPointerDownOutside={() => {
+            wasPointerCloseRef.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            suppressTooltipsDuringFocusRestore();
+            if (wasPointerCloseRef.current) {
+              e.preventDefault();
+              wasPointerCloseRef.current = false;
+            }
+          }}
+        >
           <ContextMenuActionItem
             actionId="agent.launch"
             args={{ agentId: type }}
@@ -423,13 +472,13 @@ export function AgentButton({
           >
             Launch {config.name} in Dock
           </ContextMenuActionItem>
-          {worktrees.length > 0 && (
+          {hasWorktrees && (
             <ContextMenuSub>
               <ContextMenuSubTrigger disabled={!isLaunchable}>
                 Launch in Worktree
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                <WorktreeMenuItems agentType={type} worktrees={worktrees} />
+                <WorktreeMenuItems agentType={type} />
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
@@ -447,13 +496,21 @@ export function AgentButton({
           >
             {config.name} Settings...
           </ContextMenuActionItem>
+          <AgentExternalLinkItems links={config.externalLinks} />
         </ContextMenuContent>
       </ContextMenu>
     );
   }
 
   return (
-    <ContextMenu>
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (open) {
+          setPrimaryTooltipOpen(false);
+          setChevronTooltipOpen(false);
+        }
+      }}
+    >
       <ContextMenuTrigger asChild>
         <span className="inline-flex group/agent-split">
           <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
@@ -648,7 +705,19 @@ export function AgentButton({
           </DropdownMenu>
         </span>
       </ContextMenuTrigger>
-      <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+      <ContextMenuContent
+        className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+        onPointerDownOutside={() => {
+          wasPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(e) => {
+          suppressTooltipsDuringFocusRestore();
+          if (wasPointerCloseRef.current) {
+            e.preventDefault();
+            wasPointerCloseRef.current = false;
+          }
+        }}
+      >
         <ContextMenuActionItem
           actionId="agent.launch"
           args={{ agentId: type }}
@@ -719,13 +788,13 @@ export function AgentButton({
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
-        {worktrees.length > 0 && (
+        {hasWorktrees && (
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={!isLaunchable}>
               Launch in Worktree
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <WorktreeMenuItems agentType={type} worktrees={worktrees} />
+              <WorktreeMenuItems agentType={type} />
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
@@ -743,6 +812,7 @@ export function AgentButton({
         >
           {config.name} Settings...
         </ContextMenuActionItem>
+        <AgentExternalLinkItems links={config.externalLinks} />
       </ContextMenuContent>
     </ContextMenu>
   );

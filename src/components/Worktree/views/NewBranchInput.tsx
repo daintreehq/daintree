@@ -3,6 +3,7 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Spinner } from "@/components/ui/Spinner";
 import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import type { PrefixSuggestion } from "../branchPrefixUtils";
 
 interface NewBranchInputProps {
@@ -40,6 +41,10 @@ export function NewBranchInput({
   prefixListRef,
   inputRef,
 }: NewBranchInputProps) {
+  // isCheckingBranch goes true on every keystroke (it also gates submit), but
+  // the debounced check usually resolves fast — only show the spinner for
+  // genuinely slow validations.
+  const showCheckingSpinner = useDohertyGate(isCheckingBranch);
   return (
     <div className="space-y-2">
       <label htmlFor="new-branch" className="block text-sm font-medium text-daintree-text">
@@ -73,7 +78,7 @@ export function NewBranchInput({
               aria-controls="prefix-list"
               aria-expanded={prefixPickerOpen}
             />
-            {isCheckingBranch && (
+            {showCheckingSpinner && (
               <Spinner
                 size="md"
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
@@ -83,7 +88,7 @@ export function NewBranchInput({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="w-[var(--radix-popover-trigger-width)] p-0 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]"
+          className="w-[var(--radix-popover-trigger-width)] p-0"
           onOpenAutoFocus={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.stopPropagation()}
         >

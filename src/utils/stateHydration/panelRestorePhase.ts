@@ -2,7 +2,11 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { getPanelKindConfig, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logWarn } from "@/utils/logger";
-import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type {
+  TerminalState,
+  BackendTerminalInfo,
+  TerminalReconnectResult,
+} from "@shared/types/ipc/terminal";
 import type { AgentSettings } from "@shared/types/agentSettings";
 import type { WorktreeState } from "@shared/types";
 import type { AgentPreset } from "@/config/agents";
@@ -32,6 +36,13 @@ export interface PanelRestoreContext {
   addPanel: AddPanelFn;
   withHydrationBatch: (run: () => Promise<void>) => Promise<void>;
   backendTerminalMap: Map<string, BackendTerminalInfo>;
+  /**
+   * Bulk-prefetched `terminal:reconnect` probe results keyed by saved panel id
+   * (#10390). When a saved id is present here, `reconnectWithTimeout` consumes
+   * the prefetched result instead of firing a per-panel IPC inside the
+   * serialized spawn queue. Absent ids fall back to the individual probe.
+   */
+  prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   terminalSizes: Record<string, { cols: number; rows: number }>;
   activeWorktreeId: string | null;
   projectRoot: string;
@@ -52,6 +63,16 @@ interface PanelRestoreTaskEntry {
 
 export interface PanelRestorePhaseResult {
   restoreTasks: TerminalRestoreTask[];
+  /**
+   * Sparse map of saved panel id → restored panel id, populated only for
+   * panels whose restored id differs from their saved id (e.g. a PTY panel
+   * whose reconnect timed out and was respawned with a freshly generated id,
+   * see #10440). Consumers that reference saved ids — notably tab-group
+   * hydration — must remap through this before validating against live ids,
+   * or the membership is silently filtered out and the group destroyed.
+   * Empty when every panel restored under its original saved id.
+   */
+  savedIdToRestoredId: Map<string, string>;
 }
 
 /**
@@ -70,6 +91,7 @@ export async function restorePanelsPhase(
     addPanel,
     withHydrationBatch,
     backendTerminalMap,
+    prefetchedReconnectResults,
     terminalSizes,
     activeWorktreeId,
     projectRoot,
@@ -83,6 +105,7 @@ export async function restorePanelsPhase(
   } = ctx;
 
   const restoreTasks: TerminalRestoreTask[] = [];
+  const savedIdToRestoredId = new Map<string, string>();
 
   if (savedPanels && savedPanels.length > 0) {
     // Build a single-pass map of worktreeId → highest lastActiveAt across saved
@@ -220,7 +243,11 @@ export async function restorePanelsPhase(
             const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
             if (panelKindHasPty(kind)) {
-              const reconnectOutcome = await reconnectWithTimeout(saved.id, logHydrationInfo);
+              const reconnectOutcome = await reconnectWithTimeout(
+                saved.id,
+                logHydrationInfo,
+                prefetchedReconnectResults?.[saved.id]
+              );
               const reconnectTimedOut = reconnectOutcome.status === "timeout";
               const reconnectedTerminal =
                 reconnectOutcome.status === "found" ? reconnectOutcome.terminal : null;
@@ -426,6 +453,17 @@ export async function restorePanelsPhase(
         .map(([, id]) => id);
       restoreTerminalOrder(orderedIds);
     }
+
+    // Build the saved→restored id remap (#10440). Only panels whose restored
+    // id diverged from the saved id need an entry; identity mappings (the
+    // common clean-reconnect case) are skipped so downstream consumers can
+    // fast-path on an empty map.
+    for (const [index, restoredId] of restoredIdsByIndex.entries()) {
+      const savedId = savedPanels[index]?.id;
+      if (savedId !== undefined && savedId !== restoredId) {
+        savedIdToRestoredId.set(savedId, restoredId);
+      }
+    }
   }
 
   // Restore any orphaned backend terminals not in saved state (append at end).
@@ -511,5 +549,5 @@ export async function restorePanelsPhase(
     }
   }
 
-  return { restoreTasks };
+  return { restoreTasks, savedIdToRestoredId };
 }

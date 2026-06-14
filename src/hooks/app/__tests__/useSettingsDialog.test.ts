@@ -3,11 +3,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
-vi.mock("@/components/Settings/settingsTabRegistry", () => ({
+vi.mock("@/components/Settings/settingsTabIds", () => ({
   isSettingsTab: (tab: string) => ["general", "code-forge", "appearance"].includes(tab),
 }));
 
+import type { SettingsTab } from "@/components/Settings/settingsTabIds";
 import { useSettingsDialog } from "../useSettingsDialog";
+
+// Stale/fake ids exercised below sit outside the SettingsTab union by design —
+// the hook normalizes or validates them at runtime.
+const asTab = (tab: string) => tab as SettingsTab;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -18,7 +23,7 @@ describe("useSettingsDialog — forge subtab normalization", () => {
     const { result } = renderHook(() => useSettingsDialog());
 
     act(() => {
-      result.current.handleOpenSettingsTab({ tab: "github" });
+      result.current.handleOpenSettingsTab({ tab: asTab("github") });
     });
 
     expect(result.current.settingsTab).toBe("code-forge");
@@ -61,7 +66,7 @@ describe("useSettingsDialog — forge subtab normalization", () => {
     const { result } = renderHook(() => useSettingsDialog());
 
     act(() => {
-      result.current.handleOpenSettingsTab({ tab: "forge" });
+      result.current.handleOpenSettingsTab({ tab: asTab("forge") });
     });
 
     expect(result.current.settingsTab).toBe("code-forge");
@@ -88,7 +93,7 @@ describe("useSettingsDialog — forge subtab normalization", () => {
     const { result } = renderHook(() => useSettingsDialog());
 
     act(() => {
-      result.current.handleOpenSettingsTab({ tab: "appearance", subtab: "github" });
+      result.current.handleOpenSettingsTab({ tab: asTab("appearance"), subtab: "github" });
     });
 
     expect(result.current.settingsTab).toBe("appearance");

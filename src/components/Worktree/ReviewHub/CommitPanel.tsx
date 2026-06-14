@@ -225,13 +225,16 @@ export function CommitPanel({
       const hasModifier = e.altKey || e.metaKey || e.ctrlKey;
       const isCaretAtStart =
         e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0;
-      const isCyclingHistory = historyIndexRef.current >= 0 || pendingFirstApplyRef.current;
+      const visibleMessage = e.currentTarget.value;
+      const isCyclingHistory =
+        pendingFirstApplyRef.current ||
+        (historyIndexRef.current >= 0 &&
+          historyMessagesRef.current?.[historyIndexRef.current] === visibleMessage);
 
       if (isHistoryKey && !hasModifier && (isCaretAtStart || isCyclingHistory)) {
         e.preventDefault();
 
         if (e.key === "ArrowUp") {
-          const visibleMessage = e.currentTarget.value;
           if (historyIndexRef.current < 0) {
             const cachedIndex = historyMessagesRef.current?.indexOf(visibleMessage) ?? -1;
             if (cachedIndex >= 0) {
@@ -387,7 +390,7 @@ export function CommitPanel({
           // Fallback keeps themes without --review-commit-input-bg byte-identical.
           "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-daintree-bg))] px-3 py-2 text-xs font-mono",
           "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
-          "placeholder:text-daintree-text/30 text-daintree-text",
+          "placeholder:text-text-placeholder text-daintree-text",
           "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed"
         )}

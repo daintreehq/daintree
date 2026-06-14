@@ -141,14 +141,18 @@ test.describe.serial("Core: Terminal Recipes", () => {
       // Make a change to trigger dirty state
       await editor.locator(SEL.recipeEditor.nameInput).fill("Modified Recipe");
 
-      // Cancel but dismiss the confirm (stay in editor)
-      window.once("dialog", (dialog) => dialog.dismiss());
+      // Cancel but keep editing via the discard-changes confirm (stay in editor)
       await editor.locator(SEL.recipeEditor.cancelButton).click();
+      const discardDialog = window.getByRole("alertdialog").filter({ hasText: "Discard changes" });
+      await expect(discardDialog).toBeVisible({ timeout: T_SHORT });
+      await discardDialog.locator(SEL.confirmDialog.cancel).click();
+      await expect(discardDialog).not.toBeVisible({ timeout: T_SHORT });
       await expect(editor).toBeVisible({ timeout: T_SHORT });
 
-      // Cancel again and accept the confirm (close editor without saving)
-      window.once("dialog", (dialog) => dialog.accept());
+      // Cancel again and confirm the discard (close editor without saving)
       await editor.locator(SEL.recipeEditor.cancelButton).click();
+      await expect(discardDialog).toBeVisible({ timeout: T_SHORT });
+      await discardDialog.locator(SEL.confirmDialog.confirm).click();
       await expect(editor).not.toBeVisible({ timeout: T_SHORT });
 
       // Re-select recipes tab and reopen to verify original name was preserved

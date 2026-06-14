@@ -58,44 +58,74 @@ export function GridScrollbar({
   scrollRoot: HTMLElement | null;
   revision: string | number;
 }) {
-  const [metrics, setMetrics] = useState<ScrollMetrics>({
-    scrollTop: 0,
+  // React state holds only what changes the rendered tree: the thumb's height
+  // and whether the content overflows at all. Per-scroll position is written
+  // straight to the thumb element as a composited transform inside an
+  // rAF-coalesced listener — routing it through setState re-rendered the
+  // component and invalidated layout (`top`) on every scroll frame.
+  const [dims, setDims] = useState<{ scrollHeight: number; clientHeight: number }>({
     scrollHeight: 0,
     clientHeight: 0,
   });
   const [phase, setPhase] = useState<"idle" | "hover" | "drag">("idle");
   const trackRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startY: number; startScrollTop: number } | null>(null);
 
   useEffect(() => {
     const el = scrollRoot;
     if (!el) return;
-    const measure = () => {
-      setMetrics((prev) => {
-        const next: ScrollMetrics = {
-          scrollTop: el.scrollTop,
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-        };
-        return prev.scrollTop === next.scrollTop &&
-          prev.scrollHeight === next.scrollHeight &&
-          prev.clientHeight === next.clientHeight
+    let rafId: number | null = null;
+    const syncDims = () => {
+      setDims((prev) =>
+        prev.scrollHeight === el.scrollHeight && prev.clientHeight === el.clientHeight
           ? prev
-          : next;
-      });
+          : { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }
+      );
+    };
+    const writeThumb = () => {
+      rafId = null;
+      const thumb = thumbRef.current;
+      if (!thumb) return;
+      const live: ScrollMetrics = {
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      };
+      const trackHeight = Math.max(0, live.clientHeight - 2 * TRACK_INSET_PX);
+      const geo = computeThumbGeometry(live, trackHeight, THUMB_MIN_PX);
+      if (!geo) return;
+      thumb.style.transform = `translateY(${geo.top}px)`;
+      const maxScroll = live.scrollHeight - live.clientHeight;
+      thumb.setAttribute(
+        "aria-valuenow",
+        String(maxScroll > 0 ? Math.round((live.scrollTop / maxScroll) * 100) : 0)
+      );
+      // Content height can grow mid-scroll without a resize or revision bump;
+      // the equality guard makes this a no-op on ordinary frames.
+      syncDims();
+    };
+    const schedule = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(writeThumb);
+    };
+    const measure = () => {
+      syncDims();
+      schedule();
     };
     measure();
-    el.addEventListener("scroll", measure, { passive: true });
+    el.addEventListener("scroll", schedule, { passive: true });
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => {
-      el.removeEventListener("scroll", measure);
+      el.removeEventListener("scroll", schedule);
       ro.disconnect();
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [scrollRoot, revision]);
 
-  const trackHeight = Math.max(0, metrics.clientHeight - 2 * TRACK_INSET_PX);
-  const geometry = computeThumbGeometry(metrics, trackHeight, THUMB_MIN_PX);
+  const trackHeight = Math.max(0, dims.clientHeight - 2 * TRACK_INSET_PX);
+  const geometry = computeThumbGeometry({ scrollTop: 0, ...dims }, trackHeight, THUMB_MIN_PX);
 
   const onThumbPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -144,13 +174,20 @@ export function GridScrollbar({
     (e: React.PointerEvent<HTMLDivElement>) => {
       // A click in the empty track pages toward the click, like a real scrollbar.
       const track = trackRef.current;
-      if (!scrollRoot || !track || !geometry) return;
+      if (!scrollRoot || !track) return;
+      const live: ScrollMetrics = {
+        scrollTop: scrollRoot.scrollTop,
+        scrollHeight: scrollRoot.scrollHeight,
+        clientHeight: scrollRoot.clientHeight,
+      };
+      const geo = computeThumbGeometry(live, track.clientHeight, THUMB_MIN_PX);
+      if (!geo) return;
       e.stopPropagation();
       const clickY = e.clientY - track.getBoundingClientRect().top;
-      const dir = clickY < geometry.top ? -1 : 1;
+      const dir = clickY < geo.top ? -1 : 1;
       scrollRoot.scrollBy({ top: dir * scrollRoot.clientHeight * 0.9, behavior: "smooth" });
     },
-    [scrollRoot, geometry]
+    [scrollRoot]
   );
 
   const onWheel = useCallback(
@@ -173,9 +210,6 @@ export function GridScrollbar({
 
   if (!scrollRoot || !geometry) return null;
 
-  const maxScroll = metrics.scrollHeight - metrics.clientHeight;
-  const valueNow = maxScroll > 0 ? Math.round((metrics.scrollTop / maxScroll) * 100) : 0;
-
   return (
     <div
       ref={trackRef}
@@ -191,10 +225,14 @@ export function GridScrollbar({
       }}
     >
       <div
+        ref={thumbRef}
         role="scrollbar"
         aria-orientation="vertical"
         aria-controls="panel-grid"
-        aria-valuenow={valueNow}
+        // Kept out of React's render path along with the thumb position; the
+        // scroll listener owns both. The constant initial value means React's
+        // prop diff never overwrites the imperatively-written attribute.
+        aria-valuenow={0}
         aria-valuemin={0}
         aria-valuemax={100}
         tabIndex={-1}
@@ -209,7 +247,7 @@ export function GridScrollbar({
           "absolute inset-x-0 cursor-default rounded-[7px] border-2 border-transparent bg-clip-padding transition-colors",
           phase === "idle" ? "bg-[var(--scrollbar-thumb)]" : "bg-[var(--scrollbar-thumb-hover)]"
         )}
-        style={{ height: geometry.height, top: geometry.top }}
+        style={{ height: geometry.height, top: 0 }}
       />
     </div>
   );

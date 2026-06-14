@@ -52,10 +52,12 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: vi.fn(() => null),
+    getAllProjects: vi.fn(() => []),
     getProjectById: vi.fn(() => null),
     getProjectStateWithRecovery: vi.fn(),
     saveProjectState: vi.fn(),
     enqueueProjectStateUpdate: vi.fn(async () => undefined),
+    readInRepoPresets: vi.fn(async () => ({})),
   },
 }));
 
@@ -127,6 +129,8 @@ import { CRASH_CRITICAL_FIELDS, registerAppStateHandlers } from "../handlers/app
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { markPerformance } from "../../utils/performance.js";
+import { PERF_MARKS } from "../../../shared/perf/marks.js";
 import type { HandlerDependencies } from "../types.js";
 
 function shouldTriggerBackup(updates: Record<string, unknown>): boolean {
@@ -576,6 +580,7 @@ describe("app:boot handler", () => {
       agentSettings: { agents: {} },
       gpuWebGLHardware: true,
       gpuHardwareAccelerationDisabled: false,
+      gpuDisabledReason: null,
       gpuAngleFallbackActive: false,
       safeMode: false,
       isWindowsStore: false,
@@ -737,6 +742,218 @@ describe("app:boot handler", () => {
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
   });
 
+  it("folds tabGroups/terminalSizes/draftInputs from the project state into the payload", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    const tabGroups = [
+      { id: "g1", location: "grid" as const, activeTabId: "t1", panelIds: ["t1", "t2"] },
+    ];
+    const terminalSizes = { t1: { cols: 80, rows: 24 } };
+    const draftInputs = { t1: "half-typed prompt" };
+    vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+      state: {
+        projectId: "p1",
+        sidebarWidth: 350,
+        terminals: [],
+        tabGroups,
+        terminalSizes,
+        draftInputs,
+      },
+      quarantinedPath: undefined,
+    });
+
+    const result = await invokeBoot();
+    expect(result.tabGroups).toEqual(tabGroups);
+    expect(result.terminalSizes).toEqual(terminalSizes);
+    expect(result.draftInputs).toEqual(draftInputs);
+  });
+
+  it("defaults tabGroups/terminalSizes/draftInputs to empty when the project state is null", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+
+    const result = await invokeBoot();
+    // Matches the standalone getTabGroups/getTerminalSizes/getDraftInputs
+    // handlers' null-state returns.
+    expect(result.tabGroups).toEqual([]);
+    expect(result.terminalSizes).toEqual({});
+    expect(result.draftInputs).toEqual({});
+  });
+
+  it("leaves tabGroups/terminalSizes/draftInputs undefined on the no-project fallback branch", async () => {
+    const result = await invokeBoot();
+    expect(result.tabGroups).toBeUndefined();
+    expect(result.terminalSizes).toBeUndefined();
+    expect(result.draftInputs).toBeUndefined();
+  });
+
+  it("folds in-repo project presets into the payload when a project is resolved", async () => {
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    const presets = { claude: [{ id: "team-preset", name: "Team" }] };
+    vi.mocked(projectStore.readInRepoPresets).mockResolvedValue(
+      presets as unknown as Awaited<ReturnType<typeof projectStore.readInRepoPresets>>
+    );
+
+    const result = await invokeBoot();
+    expect(projectStore.readInRepoPresets).toHaveBeenCalledWith("/p");
+    expect(result.projectPresets).toEqual(presets);
+  });
+
+  it("degrades projectPresets to empty when the in-repo read fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    vi.mocked(projectStore.readInRepoPresets).mockRejectedValueOnce(new Error("EACCES"));
+
+    const result = await invokeBoot();
+    expect(result.projectPresets).toEqual({});
+    warnSpy.mockRestore();
+  });
+
+  it("leaves projectPresets undefined on the no-project fallback branch", async () => {
+    const result = await invokeBoot();
+    expect(projectStore.readInRepoPresets).not.toHaveBeenCalled();
+    expect(result.projectPresets).toBeUndefined();
+  });
+
+  it("folds a fully-migrated appTheme config into the boot payload", async () => {
+    const appTheme = {
+      colorSchemeId: "daintree",
+      customSchemes: [{ id: "custom-1", name: "Custom", type: "dark", tokens: {} }],
+      accentColorOverride: "#ff0000",
+      colorVisionMode: "red-green",
+    };
+    const storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      if (key === "appTheme") return appTheme;
+      return undefined;
+    });
+
+    const result = await invokeBoot();
+    expect(result.appTheme).toEqual(appTheme);
+  });
+
+  it("leaves appTheme off the payload when the stored config still needs migration or defaulting", async () => {
+    const storeModule = await import("../../store.js");
+    for (const stored of [
+      undefined,
+      {},
+      { colorSchemeId: "" },
+      { colorSchemeId: "daintree", customSchemes: '[{"id":"legacy"}]' },
+    ]) {
+      vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+        if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+        if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+        if (key === "agentSettings") return {};
+        if (key === "appTheme") return stored;
+        return undefined;
+      });
+
+      const result = await invokeBoot();
+      expect(result.appTheme).toBeUndefined();
+    }
+  });
+
+  describe("APP_HYDRATE_PREFETCH perf mark", () => {
+    const prefetchMarkCalls = () =>
+      vi
+        .mocked(markPerformance)
+        .mock.calls.filter(([mark]) => mark === PERF_MARKS.APP_HYDRATE_PREFETCH);
+
+    const setCurrentProject = () => {
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+    };
+
+    it("emits exactly one hit mark when the prefetch cache services the hydrate", async () => {
+      setCurrentProject();
+      vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig: { resourceMonitoringEnabled: false },
+        project: null,
+        agentSettings: {},
+        gpuWebGLHardware: true,
+        gpuHardwareAccelerationDisabled: false,
+        gpuAngleFallbackActive: false,
+        safeMode: false,
+        isWindowsStore: false,
+      } as unknown as ReturnType<typeof consumePrefetchedHydrateResult>);
+
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]).toEqual({ hit: true, projectId: "p1", reason: "hit" });
+      // The fast path must not pay the full config.json parse — the cached
+      // HydrateResult already carries appState.
+      const storeModule = await import("../../store.js");
+      expect(storeModule.store.get).not.toHaveBeenCalledWith("appState");
+    });
+
+    it("emits a miss mark when the cache is eligible but empty", async () => {
+      setCurrentProject();
+
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "miss" });
+      expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+    });
+
+    it("emits a no-project mark without probing the cache", async () => {
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]).toEqual({ hit: false, projectId: null, reason: "no-project" });
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+    });
+
+    it("emits a safe-mode mark without probing (consume would destroy the entry)", async () => {
+      setCurrentProject();
+      crashGuard.isSafeMode.mockReturnValue(true);
+
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "safe-mode" });
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+    });
+
+    it("emits a panel-filter mark without probing when crash recovery set a filter", async () => {
+      setCurrentProject();
+      crashService.consumePanelFilter.mockReturnValue(["panel-x"] as unknown as null);
+
+      await invokeBoot();
+
+      const calls = prefetchMarkCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]).toEqual({ hit: false, projectId: "p1", reason: "panel-filter" });
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not hydrate a closed URL project before the project view binding is ready", async () => {
     vi.mocked(getWindowForWebContents).mockReturnValue({
       id: 7,
@@ -777,5 +994,98 @@ describe("app:boot handler", () => {
     expect(result.project).toBeNull();
     expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("app:set-state handler", () => {
+  async function invokeSetState(payload: unknown) {
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get("app:set-state");
+    if (!handler) throw new Error("app:set-state handler not registered");
+    await handler(makeInvokeEvent(), payload);
+    cleanup();
+  }
+
+  let storeModule: typeof import("../../store.js");
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ipcHandlers.clear();
+    storeModule = await import("../../store.js");
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350 };
+      if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
+      if (key === "agentSettings") return {};
+      return undefined;
+    }) as never);
+  });
+
+  it("persists a multi-field update as a single merged appState write", async () => {
+    await invokeSetState({ sidebarWidth: 400, focusMode: true, activeWorktreeId: "wt-1" });
+
+    const setMock = vi.mocked(storeModule.store.set);
+    expect(setMock).toHaveBeenCalledTimes(1);
+    expect(setMock).toHaveBeenCalledWith(
+      "appState",
+      expect.objectContaining({
+        terminals: [],
+        sidebarWidth: 400,
+        focusMode: true,
+        activeWorktreeId: "wt-1",
+      })
+    );
+    expect(storeModule.store.delete).not.toHaveBeenCalled();
+  });
+
+  it("preserves unrelated persisted fields in the merged write", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState") return { terminals: [], sidebarWidth: 350, hasSeenWelcome: true };
+      return undefined;
+    }) as never);
+
+    await invokeSetState({ focusMode: true });
+
+    // store.set is called in the (key, value) form; read through an untyped
+    // view since vi.mocked resolves the single-argument set(object) overload.
+    const calls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+    const written = calls[0]![1];
+    expect(written).toMatchObject({ sidebarWidth: 350, hasSeenWelcome: true, focusMode: true });
+  });
+
+  it("drops cleared fields from the merged object instead of writing undefined", async () => {
+    vi.mocked(storeModule.store.get).mockImplementation(((key: string) => {
+      if (key === "appState") {
+        return {
+          terminals: [],
+          sidebarWidth: 350,
+          focusPanelState: { sidebarWidth: 300, diagnosticsOpen: false },
+        };
+      }
+      return undefined;
+    }) as never);
+
+    await invokeSetState({ focusPanelState: null });
+
+    const setMock = vi.mocked(storeModule.store.set);
+    expect(setMock).toHaveBeenCalledTimes(1);
+    const calls = setMock.mock.calls as unknown as unknown[][];
+    const written = calls[0]![1];
+    expect(written).not.toHaveProperty("focusPanelState");
+    expect(written).toMatchObject({ sidebarWidth: 350 });
+    expect(storeModule.store.delete).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when no field survives validation", async () => {
+    await invokeSetState({ sidebarWidth: 99999 });
+    expect(storeModule.store.set).not.toHaveBeenCalled();
+  });
+
+  it("schedules a crash backup only for crash-critical fields", async () => {
+    await invokeSetState({ sidebarWidth: 400 });
+    expect(crashService.scheduleBackup).not.toHaveBeenCalled();
+
+    await invokeSetState({ focusMode: true });
+    expect(crashService.scheduleBackup).toHaveBeenCalledTimes(1);
   });
 });

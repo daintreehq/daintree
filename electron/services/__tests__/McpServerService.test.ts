@@ -110,7 +110,6 @@ const storeState = vi.hoisted(() => ({
     fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
-    auditLog: [] as Array<Record<string, unknown>>,
   },
 }));
 
@@ -126,6 +125,26 @@ const storeMocks = vi.hoisted(() => ({
       throw new Error(`Unexpected store key: ${key}`);
     }
     storeState.mcpServer = value;
+  }),
+}));
+
+const auditLogsState = vi.hoisted(() => ({
+  mcpAuditLog: [] as Array<Record<string, unknown>>,
+  mcpTurnOutcomeLog: [] as Array<Record<string, unknown>>,
+}));
+
+const auditLogsStoreMocks = vi.hoisted(() => ({
+  get: vi.fn((key: string) => {
+    if (key !== "mcpAuditLog" && key !== "mcpTurnOutcomeLog") {
+      throw new Error(`Unexpected audit-logs store key: ${key}`);
+    }
+    return auditLogsState[key as keyof typeof auditLogsState];
+  }),
+  set: vi.fn((key: string, value: Array<Record<string, unknown>>) => {
+    if (key !== "mcpAuditLog" && key !== "mcpTurnOutcomeLog") {
+      throw new Error(`Unexpected audit-logs store key: ${key}`);
+    }
+    auditLogsState[key as keyof typeof auditLogsState] = value;
   }),
 }));
 
@@ -154,6 +173,27 @@ vi.mock("../../store.js", () => ({
   store: {
     get: storeMocks.get,
     set: storeMocks.set,
+  },
+  auditLogsStore: {
+    get: auditLogsStoreMocks.get,
+    set: auditLogsStoreMocks.set,
+  },
+}));
+
+vi.mock("../persistence/auditRingStore.js", () => ({
+  auditRingStore: {
+    readAll: (ring: string) => {
+      if (ring !== "mcpAuditLog" && ring !== "mcpTurnOutcomeLog") {
+        throw new Error(`Unexpected audit ring: ${ring}`);
+      }
+      return auditLogsState[ring as keyof typeof auditLogsState];
+    },
+    writeAll: (ring: string, records: Array<Record<string, unknown>>) => {
+      if (ring !== "mcpAuditLog" && ring !== "mcpTurnOutcomeLog") {
+        throw new Error(`Unexpected audit ring: ${ring}`);
+      }
+      auditLogsStoreMocks.set(ring, records);
+    },
   },
 }));
 
@@ -542,10 +582,13 @@ describe("McpServerService", () => {
       fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
-      auditLog: [],
     };
+    auditLogsState.mcpAuditLog = [];
+    auditLogsState.mcpTurnOutcomeLog = [];
     storeMocks.get.mockClear();
     storeMocks.set.mockClear();
+    auditLogsStoreMocks.get.mockClear();
+    auditLogsStoreMocks.set.mockClear();
     paneTokenTiers.clear();
     electronMocks.ipcMain.removeAllListeners();
     electronMocks.webContentsById.clear();
@@ -776,7 +819,7 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "github.listPullRequests" as ActionId,
+          id: "forge.listPRs" as ActionId,
           title: "List PRs",
           description: "List pull requests",
           category: "github",
@@ -804,7 +847,7 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const ghTool = result.tools.find((t) => t.name === "github.listPullRequests");
+    const ghTool = result.tools.find((t) => t.name === "forge.listPRs");
     const systemTool = result.tools.find((t) => t.name === "system.checkCommand");
     const wtTool = result.tools.find((t) => t.name === "worktree.create");
 
@@ -2623,6 +2666,12 @@ describe("McpServerService", () => {
         description:
           "Toggle the focused terminal between the dock and the grid. Pushes a layout undo snapshot so the move can be reversed.",
       }),
+      createManifestEntry({
+        id: "terminal.rename" as ActionId,
+        title: "Rename Terminal",
+        description:
+          "Rename a terminal. Accepts an optional terminalId (defaults to the focused terminal) and a name; omitting the name opens the rename dialog.",
+      }),
       waitUntilIdleManifestEntry(),
       createManifestEntry({
         id: "recipe.list" as ActionId,
@@ -2706,9 +2755,9 @@ describe("McpServerService", () => {
         description: "Validate credentials via the forge provider",
       }),
       createManifestEntry({
-        id: "github.openPR" as ActionId,
+        id: "forge.openPR" as ActionId,
         title: "Open PR",
-        description: "Open a pull request on GitHub",
+        description: "Open a pull request via the forge provider",
       }),
     ];
 
@@ -3283,15 +3332,12 @@ describe("McpServerService", () => {
 
       expect(getAuditRecords(service)).toHaveLength(1);
 
-      storeMocks.set.mockClear();
+      auditLogsStoreMocks.set.mockClear();
       (service as unknown as { clearAuditLog: () => void }).clearAuditLog();
 
       expect(getAuditRecords(service)).toHaveLength(0);
       // clearAuditLog must persist synchronously, not wait for the debounce.
-      expect(storeMocks.set).toHaveBeenCalled();
-      const lastCall = storeMocks.set.mock.calls[storeMocks.set.mock.calls.length - 1];
-      expect(lastCall[0]).toBe("mcpServer");
-      expect((lastCall[1] as { auditLog: unknown[] }).auditLog).toEqual([]);
+      expect(auditLogsStoreMocks.set).toHaveBeenCalledWith("mcpAuditLog", []);
     });
 
     it("does not record dispatches when capture is disabled", async () => {
@@ -3327,7 +3373,7 @@ describe("McpServerService", () => {
           durationMs: 5,
         },
       ];
-      storeState.mcpServer.auditLog = seeded;
+      auditLogsState.mcpAuditLog = seeded;
 
       const { window } = createMockWindow();
       await service.start(window);
@@ -3392,23 +3438,21 @@ describe("McpServerService", () => {
       });
       try {
         await client.callTool({ name: "actions.list", arguments: { x: 1 } });
-        storeMocks.set.mockClear();
+        auditLogsStoreMocks.set.mockClear();
 
         // Before the debounce window expires, no flush.
         vi.advanceTimersByTime(1000);
-        expect(storeMocks.set).not.toHaveBeenCalled();
+        expect(auditLogsStoreMocks.set).not.toHaveBeenCalled();
 
         // After the 2s window the debounced flush fires once.
         vi.advanceTimersByTime(1500);
-        const calls = storeMocks.set.mock.calls.filter((call) => call[0] === "mcpServer");
+        const calls = auditLogsStoreMocks.set.mock.calls.filter(
+          (call) => call[0] === "mcpAuditLog"
+        );
         expect(calls.length).toBeGreaterThanOrEqual(1);
         const last = calls[calls.length - 1];
-        expect(
-          (last[1] as unknown as { auditLog: Array<{ toolId: string }> }).auditLog
-        ).toHaveLength(1);
-        expect(
-          (last[1] as unknown as { auditLog: Array<{ toolId: string }> }).auditLog[0].toolId
-        ).toBe("actions.list");
+        expect(last[1] as Array<{ toolId: string }>).toHaveLength(1);
+        expect((last[1] as Array<{ toolId: string }>)[0].toolId).toBe("actions.list");
       } finally {
         vi.useRealTimers();
       }
@@ -3437,12 +3481,12 @@ describe("McpServerService", () => {
         await client.callTool({ name: ACTIONS_LIST_TOOL, arguments: {} });
         // Pending debounce timer is now set with the record in the buffer.
         (service as unknown as { clearAuditLog: () => void }).clearAuditLog();
-        storeMocks.set.mockClear();
+        auditLogsStoreMocks.set.mockClear();
 
         // Advance well past the original debounce window. The cancelled
         // timer must not fire and re-persist the cleared record.
         vi.advanceTimersByTime(5000);
-        expect(storeMocks.set).not.toHaveBeenCalled();
+        expect(auditLogsStoreMocks.set).not.toHaveBeenCalled();
         expect(getAuditRecords(service)).toHaveLength(0);
       } finally {
         vi.useRealTimers();
@@ -3468,9 +3512,11 @@ describe("McpServerService", () => {
 
       // Mutate config — historically this clobbered auditLog because the
       // setter wrote back the spread of getConfig() without the in-memory log.
+      // The ring now lives in the dedicated audit-logs store, so config
+      // writes are structurally unable to touch it.
       service.setAuditMaxRecords(750);
 
-      expect(storeState.mcpServer.auditLog).toHaveLength(1);
+      expect(auditLogsState.mcpAuditLog).toHaveLength(1);
       expect(getAuditRecords(service)).toHaveLength(1);
     });
   });
@@ -4375,9 +4421,9 @@ describe("McpServerService", () => {
     function manifestForResources(): ActionManifestEntry[] {
       return [
         createManifestEntry({
-          id: "github.listIssues" as ActionId,
+          id: "forge.listIssues" as ActionId,
           title: "List Issues",
-          description: "List GitHub issues",
+          description: "List forge issues",
           kind: "query",
         }),
         createManifestEntry({
@@ -4495,9 +4541,9 @@ describe("McpServerService", () => {
       expect(patterns).toContain("daintree://agent/{id}/state");
     });
 
-    it("readResource for project issues dispatches github.listIssues", async () => {
+    it("readResource for project issues dispatches forge.listIssues", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
-        if (payload.actionId === "github.listIssues") {
+        if (payload.actionId === "forge.listIssues") {
           return { ok: true, result: [{ number: 1, title: "Hello" }] };
         }
         return { ok: true, result: [] };
@@ -4517,7 +4563,7 @@ describe("McpServerService", () => {
       expect(content.mimeType).toBe("application/json");
       expect(JSON.parse(content.text)).toEqual([{ number: 1, title: "Hello" }]);
       expect(dispatchMock).toHaveBeenCalledWith(
-        expect.objectContaining({ actionId: "github.listIssues" })
+        expect.objectContaining({ actionId: "forge.listIssues" })
       );
     });
 

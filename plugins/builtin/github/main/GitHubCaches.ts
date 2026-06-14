@@ -1,23 +1,27 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { Cache } from "../../../../electron/utils/cache.js";
-import { GitHubFirstPageCache } from "../../../../electron/services/GitHubFirstPageCache.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubFirstPageCache } from "./GitHubFirstPageCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
   GitHubPRCIStatus,
   GitHubPRCISummary,
   GitHubListResponse,
-  IssueTooltipData,
-  PRTooltipData,
-} from "../../../../shared/types/github.js";
+} from "../shared/types.js";
 import type {
   RepoContext,
   RepoStats,
   RepoStatsAndPageSnapshot,
   RestCountsSnapshot,
 } from "./types.js";
-import type { Issue, PR, Page } from "../../../../shared/types/forge.js";
+import type {
+  Issue,
+  IssueTooltipData,
+  PR,
+  PRTooltipData,
+  Page,
+} from "../../../../shared/types/forge.js";
 
 export const repoContextCache = new Cache<string, RepoContext>({ maxSize: 20, defaultTTL: 300000 });
 export const repoStatsCache = new Cache<string, RepoStats>({ maxSize: 20, defaultTTL: 60000 });
@@ -184,6 +188,92 @@ export function getETagCacheVersion(): number {
   return etagCacheVersion;
 }
 
+/**
+ * Invalidate the ETag baselines of any in-flight conditional fetch. Bumped by
+ * the cache-clear paths below and by `updateRepoStatsCount` when a list
+ * query's observed total disagrees with a stored count baseline — without the
+ * bump, a `fetchRestCounts` already past its cache read could 304-recommit
+ * the just-invalidated counts and resurrect the stale value.
+ */
+export function bumpETagCacheVersion(): void {
+  etagCacheVersion++;
+}
+
+/**
+ * Per-repo, per-type list-cache epochs for the count-as-cache-buster
+ * (#10122 family). Bumped by {@link invalidateRepoListCachesForCountChange}
+ * when the cheap REST count poll observes a changed open count. List fetchers
+ * capture the epoch before their network call and skip the shared-cache write
+ * when it moved — without this, a list query already in flight when the count
+ * delta lands would repopulate the just-busted cache with a page fetched
+ * before the change, pinning it for the full 60s TTL.
+ *
+ * Deliberately separate from `etagCacheVersion`: that guards REST/event ETag
+ * commit baselines in `fetchRestCounts`, and bumping it here would discard
+ * unrelated in-flight count commits.
+ *
+ * Keyed `${type}:${owner}/${repo}`. A plain Map (not a TTL cache): entries are
+ * one integer per repo the session has polled, and an epoch must never be
+ * evicted mid-flight or the guard would compare against a fresh zero.
+ */
+const repoListCacheEpochs = new Map<string, number>();
+
+export function getRepoListEpoch(type: "issue" | "pr", owner: string, repo: string): number {
+  return repoListCacheEpochs.get(`${type}:${owner}/${repo}`) ?? 0;
+}
+
+function bumpRepoListEpoch(type: "issue" | "pr", owner: string, repo: string): void {
+  const key = `${type}:${owner}/${repo}`;
+  repoListCacheEpochs.set(key, (repoListCacheEpochs.get(key) ?? 0) + 1);
+}
+
+/** Drop every entry whose key starts with `prefix`. `Cache.forEach` snapshots
+ *  entries up front, so invalidating inside the walk is safe. */
+function invalidateByPrefix(cache: Cache<string, unknown>, prefix: string): void {
+  const keys: string[] = [];
+  cache.forEach((_value, key) => {
+    if (key.startsWith(prefix)) keys.push(key);
+  });
+  for (const key of keys) cache.invalidate(key);
+}
+
+/**
+ * Count-as-cache-buster: the cheap REST count poll observed a different open
+ * count, so every cached list page for the changed type is provably stale —
+ * drop it (zero network; the next read refetches) and bump the type's epoch so
+ * in-flight list queries can't write a pre-change page back.
+ *
+ * Per-type on purpose: issue churn must not evict PR pages (and vice versa) —
+ * busting both on any delta would double the refetch volume on active repos.
+ * The combined stats-and-page snapshot embeds BOTH first pages, so any delta
+ * drops it; same for the legacy list caches that the `window.electron.github`
+ * dropdown IPC path still reads alongside the forge caches.
+ *
+ * List keys are `${type}:${owner}/${repo}:${state}:${search}:${sort}:${cursor}`
+ * (see `buildListCacheKey`), so the repo prefix sweeps every state/sort/cursor
+ * variant — a close/merge/reopen changes the closed and all views too.
+ */
+export function invalidateRepoListCachesForCountChange(
+  owner: string,
+  repo: string,
+  changed: { issues: boolean; prs: boolean }
+): void {
+  if (!changed.issues && !changed.prs) return;
+  if (changed.issues) {
+    const prefix = `issue:${owner}/${repo}:`;
+    invalidateByPrefix(forgeIssueListCache as Cache<string, unknown>, prefix);
+    invalidateByPrefix(issueListCache as Cache<string, unknown>, prefix);
+    bumpRepoListEpoch("issue", owner, repo);
+  }
+  if (changed.prs) {
+    const prefix = `pr:${owner}/${repo}:`;
+    invalidateByPrefix(forgePRListCache as Cache<string, unknown>, prefix);
+    invalidateByPrefix(prListCache as Cache<string, unknown>, prefix);
+    bumpRepoListEpoch("pr", owner, repo);
+  }
+  repoStatsAndPageSnapshotCache.invalidate(`${owner}/${repo}`);
+}
+
 export interface PRRequiredStatusEntry {
   ciStatus: GitHubPRCIStatus | undefined;
   ciSummary: GitHubPRCISummary | undefined;
@@ -191,9 +281,11 @@ export interface PRRequiredStatusEntry {
 export const MAX_REVIEW_THREAD_PAGES = 5;
 export const REVIEW_THREADS_PER_PAGE = 100;
 
+export const REVIEW_THREADS_TTL_MS = 300000;
+
 export const reviewThreadsCache = new Cache<string, Record<string, number>>({
   maxSize: 200,
-  defaultTTL: 300000,
+  defaultTTL: REVIEW_THREADS_TTL_MS,
 });
 
 export const prRequiredStatusCache = new Cache<string, PRRequiredStatusEntry>({
@@ -310,6 +402,16 @@ export function clearGitHubCaches(): void {
 export function _resetForgeQueryCachesForTests(): void {
   forgeQueryCache.clear();
   forgeQueryInflight.clear();
+}
+
+/**
+ * ISO timestamp → epoch milliseconds for the forge tooltip shapes. `0` for
+ * missing/unparseable values — mirrors `isoToMs` in `forgeProvider.ts`.
+ */
+export function isoToEpochMs(value: unknown): number {
+  if (typeof value !== "string") return 0;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : 0;
 }
 
 export function truncateBody(body: string | null | undefined, maxLength = 150): string {

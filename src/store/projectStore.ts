@@ -95,6 +95,14 @@ interface ProjectState {
   isLoading: boolean;
   error: string | null;
   /**
+   * True once the batched boot payload has seeded `projects` + `currentProject`
+   * (#10390). The Toolbar's mount effect uses this to skip its redundant
+   * initial `loadProjects()` + `getCurrentProject()` IPC pair during the boot
+   * window; post-switch refetches are unaffected. Never reset — boot seeding
+   * happens once per renderer context.
+   */
+  isBootstrapped: boolean;
+  /**
    * Set when a project switch committed to the new project but its worktree
    * load threw (#8400). Surfaced as a Tier 3 inline recovery banner. Transient
    * — never persisted, cleared on the next switch start or a successful retry.
@@ -300,7 +308,7 @@ function getProjectOpenErrorMessage(error: unknown): string {
     return "Permission denied. You don't have access to this directory.";
   }
 
-  return message || "Failed to open project.";
+  return message || "Couldn't open project.";
 }
 
 function isPersistedProject(value: unknown): value is Project {
@@ -319,6 +327,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   projects: [],
   currentProject: null,
   isLoading: false,
+  isBootstrapped: false,
   gitInitDialogOpen: false,
   gitInitDirectoryPath: null,
   createFolderDialogOpen: false,
@@ -346,7 +355,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         component: "projectStore",
         details: { path: resolvedPath || path },
       });
-      const errorMessage = formatErrorMessage(error, "Failed to add project");
+      const errorMessage = formatErrorMessage(error, "Couldn't add project");
 
       // Absolute-path check: POSIX (/...), Windows drive letter (C:\... / C:/...),
       // and Windows UNC (\\server\share...) are all "absolute" here.
@@ -386,12 +395,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
                   } catch (markError) {
                     const markMessage = formatErrorMessage(
                       markError,
-                      "Failed to mark directory as safe"
+                      "Couldn't mark directory as safe"
                     );
                     // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
                     notify({
                       type: "error",
-                      title: "Failed to mark as safe",
+                      title: "Couldn't mark as safe",
                       message: markMessage,
                       duration: 6000,
                     });
@@ -431,7 +440,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const retryPath = resolvedPath ?? path.trim();
       notify({
         type: "error",
-        title: "Failed to add project",
+        title: "Couldn't add project",
         message,
         actions: [
           {
@@ -540,7 +549,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const message = getProjectOpenErrorMessage(error);
       notify({
         type: "error",
-        title: "Failed to switch project",
+        title: "Couldn't switch project",
         message,
         actions: [
           {
@@ -727,7 +736,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const message = getProjectOpenErrorMessage(error);
       notify({
         type: "error",
-        title: "Failed to reopen project",
+        title: "Couldn't reopen project",
         message,
         actions: [
           {

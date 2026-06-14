@@ -29,6 +29,10 @@ const NON_COLOR_THEME_TOKENS = new Set([
   "panel-state-edge-radius",
   "focus-ring-offset",
   "chrome-noise-texture",
+  "scrim-blur",
+  "scrim-blur-palette",
+  "grain-opacity",
+  "grain-blend",
 ]);
 
 function collectSourceFiles(dir: string): string[] {
@@ -130,6 +134,25 @@ describe("color system contract", () => {
     expect(indexCss).toMatch(
       /--dock-item-border-waiting:\s*rgb\(from var\(--color-activity-waiting\) r g b \/ 0\.3\)/
     );
+  });
+
+  it("panel focus chrome consumes the extension vars WITH fallbacks (omission = legacy recipe)", () => {
+    // The panel-focus-* / panel-selected-bg extension keys are only safe
+    // because every consumer carries the pre-extension recipe as its var()
+    // fallback — a theme that authors none of them must render identically.
+    // Guard the fallback's presence (not its literal value) at each site.
+    for (const selector of [".terminal-selected", ".assistant-focused", ".terminal-focused"]) {
+      const block = indexCss.match(
+        new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{[^}]+\\}`)
+      )?.[0];
+      expect(block, `${selector} rule exists`).toBeTruthy();
+      expect(block, `${selector} themeable border with fallback`).toMatch(
+        /var\(\s*--panel-focus-border,\s*color-mix\(/
+      );
+      expect(block, `${selector} themeable shadow with fallback`).toMatch(
+        /var\(\s*--panel-focus-shadow,\s*inset /
+      );
+    }
   });
 
   it("wires :root --background to --theme-surface-canvas", () => {

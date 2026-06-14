@@ -342,8 +342,6 @@ export function sortFiles(
   return sorted;
 }
 
-export const FILTER_DEBOUNCE_MS = 200;
-
 export function isSortKey(v: string): v is SortKey {
   return v === "path" || v === "status" || v === "churn";
 }

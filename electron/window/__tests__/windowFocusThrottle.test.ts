@@ -24,7 +24,6 @@ const mockSetDiskSpaceInterval = vi.fn();
 const mockRefreshDiskSpace = vi.fn();
 const mockSetAppMetricsInterval = vi.fn();
 const mockRefreshAppMetrics = vi.fn();
-const mockRefreshGitHubTokenHealth = vi.fn().mockResolvedValue(undefined);
 const mockRefreshAgentConnectivity = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../../services/DiskSpaceMonitor.js", () => ({
@@ -35,10 +34,6 @@ vi.mock("../../services/DiskSpaceMonitor.js", () => ({
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   setAppMetricsMonitorPollInterval: mockSetAppMetricsInterval,
   refreshAppMetricsMonitor: mockRefreshAppMetrics,
-}));
-
-vi.mock("../../services/github/GitHubTokenHealthService.js", () => ({
-  gitHubTokenHealthService: { refresh: mockRefreshGitHubTokenHealth },
 }));
 
 vi.mock("../../services/connectivity/AgentConnectivityService.js", () => ({
@@ -115,7 +110,6 @@ describe("WindowFocusThrottle", () => {
     mockRefreshDiskSpace.mockClear();
     mockSetAppMetricsInterval.mockClear();
     mockRefreshAppMetrics.mockClear();
-    mockRefreshGitHubTokenHealth.mockClear();
     mockRefreshAgentConnectivity.mockClear();
     // Re-import to get fresh module state
     vi.resetModules();
@@ -153,10 +147,6 @@ describe("WindowFocusThrottle", () => {
     vi.doMock("../../services/ProcessMemoryMonitor.js", () => ({
       setAppMetricsMonitorPollInterval: mockSetAppMetricsInterval,
       refreshAppMetricsMonitor: mockRefreshAppMetrics,
-    }));
-
-    vi.doMock("../../services/github/GitHubTokenHealthService.js", () => ({
-      gitHubTokenHealthService: { refresh: mockRefreshGitHubTokenHealth },
     }));
 
     vi.doMock("../../services/connectivity/AgentConnectivityService.js", () => ({

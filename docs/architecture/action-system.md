@@ -258,7 +258,7 @@ Use the Event Inspector (Developer Tools) to view action history in real-time.
 | `agent` | AI agent spawning | `agent.launch` |
 | `worktree` | Git worktree management | `worktree.create`, `worktree.delete`, `worktree.refresh` |
 | `project` | Project switching/config | `project.switch`, `project.add` |
-| `github` | GitHub integration | `github.openPR`, `github.listPullRequests` |
+| `forge` | Forge (issues/PRs) integration, provider-routed | `forge.openPR`, `forge.listPRs` |
 | `git` | Git operations | `git.getProjectPulse`, `git.listCommits` |
 | `navigation` | UI navigation | `nav.toggleFocusMode` |
 | `app` | Application settings | `app.settings.openTab` |

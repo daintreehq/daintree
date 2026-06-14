@@ -239,9 +239,85 @@ export function FleetArmingRibbon(): ReactElement | null {
   );
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId) ?? null;
-  usePanelStore((s) => s.panelIds);
-  usePanelStore((s) => s.panelsById);
+  // Panel-store re-render triggers keep the selection-menu preset counts
+  // fresh, but only while the ribbon is actually visible — when it isn't,
+  // return a constant so agent ticks don't re-render the hidden ribbon.
+  // Hook order stays stable; only the subscription payload is gated.
+  const ribbonActive = armedCount >= 2;
+  usePanelStore((s) => (ribbonActive ? s.panelIds : null));
+  usePanelStore((s) => (ribbonActive ? s.panelsById : null));
 
+  // Bare Esc on the ribbon → exit the fleet. Scoped to ribbon-owned
+  // controls (the bar's own keydown handler) so terminals' Esc handling
+  // for menus / prompts under live echo (#5750) still wins everywhere
+  // else. Defined before the early returns to keep hook order stable.
+  const handleRibbonKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "Escape") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (popoverOpen || pending !== null || pendingDeleteFleetId !== null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      exitFleet();
+    },
+    [exitFleet, popoverOpen, pending, pendingDeleteFleetId]
+  );
+
+  // Render confirmation before the armedCount<2 null guard so single-agent
+  // keybindings (fleet.restart / fleet.kill always require confirmation)
+  // stay reachable — and so draining 3→1 while a confirm is pending
+  // doesn't strand a live Enter listener with no visible UI. The failure
+  // banner is rendered alongside so a prior partial-failure surface stays
+  // visible while the user is in the confirm flow.
+  if (armedCount > 0 && pending !== null) {
+    const message = buildConfirmMessage(
+      pending.kind,
+      pending.targetCount,
+      pending.sessionLossCount
+    );
+    return (
+      <div data-testid="fleet-arming-ribbon-group">
+        <FleetFailureBanner />
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className={cn(
+            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
+            // Keep the Fleet surface continuous through confirm-pending so the
+            // mode chrome doesn't visually exit and re-enter during a confirm.
+            "bg-category-amber-subtle",
+            "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
+          )}
+          data-testid="fleet-arming-ribbon"
+          data-pending-action={pending.kind}
+        >
+          <span className="font-medium text-daintree-accent">{message}</span>
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
+            <span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+                Enter
+              </kbd>{" "}
+              to confirm
+            </span>
+            <span>
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+                Esc
+              </kbd>{" "}
+              to cancel
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (armedCount < 2) {
+    return null;
+  }
+
+  // Below the early returns so the five O(panels) scans and the menu JSX
+  // only run while the ribbon is actually visible.
   const presetCounts = {
     waitingCurrent: computeArmByStateIds("waiting", "current", activeWorktreeId).length,
     waitingAll: computeArmByStateIds("waiting", "all", activeWorktreeId).length,
@@ -332,75 +408,6 @@ export function FleetArmingRibbon(): ReactElement | null {
       <SavedFleetsSection onRequestDelete={handleRequestDeleteFleet} />
     </>
   );
-
-  // Bare Esc on the ribbon → exit the fleet. Scoped to ribbon-owned
-  // controls (the bar's own keydown handler) so terminals' Esc handling
-  // for menus / prompts under live echo (#5750) still wins everywhere
-  // else. Defined before the early returns to keep hook order stable.
-  const handleRibbonKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.key !== "Escape") return;
-      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (popoverOpen || pending !== null || pendingDeleteFleetId !== null) return;
-      e.preventDefault();
-      e.stopPropagation();
-      exitFleet();
-    },
-    [exitFleet, popoverOpen, pending, pendingDeleteFleetId]
-  );
-
-  // Render confirmation before the armedCount<2 null guard so single-agent
-  // keybindings (fleet.restart / fleet.kill always require confirmation)
-  // stay reachable — and so draining 3→1 while a confirm is pending
-  // doesn't strand a live Enter listener with no visible UI. The failure
-  // banner is rendered alongside so a prior partial-failure surface stays
-  // visible while the user is in the confirm flow.
-  if (armedCount > 0 && pending !== null) {
-    const message = buildConfirmMessage(
-      pending.kind,
-      pending.targetCount,
-      pending.sessionLossCount
-    );
-    return (
-      <div data-testid="fleet-arming-ribbon-group">
-        <FleetFailureBanner />
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className={cn(
-            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
-            // Keep the Fleet surface continuous through confirm-pending so the
-            // mode chrome doesn't visually exit and re-enter during a confirm.
-            "bg-category-amber-subtle",
-            "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
-          )}
-          data-testid="fleet-arming-ribbon"
-          data-pending-action={pending.kind}
-        >
-          <span className="font-medium text-daintree-accent">{message}</span>
-          <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
-            <span>
-              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
-                Enter
-              </kbd>{" "}
-              to confirm
-            </span>
-            <span>
-              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
-                Esc
-              </kbd>{" "}
-              to cancel
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (armedCount < 2) {
-    return null;
-  }
 
   // Entrance is a low-bounce spring (~200ms). Exit is critically damped and
   // faster (~120ms) so the bar tucks away cleanly without overshoot —

@@ -1,4 +1,5 @@
-import type { ComponentType } from "react";
+import { useEffect, type ComponentType } from "react";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 /**
  * Slot registry for renderer-side views contributed by built-in plugins. The
@@ -7,27 +8,70 @@ import type { ComponentType } from "react";
  * preserving the plugin boundary while `contributes.experimental_views` from the plugin
  * manifest is unimplemented. Slot ids are dot-namespaced by plugin
  * (`github.bulkCreateWorktreeDialog`) so the host can grep the seam.
+ *
+ * Registration is unconditional (plugin renderer bundles are imported eagerly
+ * at app start), but resolution is enable-aware: a slot registered with an
+ * owning `pluginId` resolves to `null` while that plugin is disabled, so host
+ * UI drops plugin-contributed views live with the Preferences toggle. React
+ * consumers must use {@link useBuiltinView}; {@link getBuiltinView} reads the
+ * same gate non-reactively and won't re-render on toggle.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- slot props vary per consumer; the cast site at getBuiltinView() preserves type safety
 type AnyComponent = ComponentType<any>;
 
-const REGISTRY = new Map<string, AnyComponent>();
+interface SlotEntry {
+  component: AnyComponent;
+  /** Owning plugin id (manifest name). Slots registered without one are never gated. */
+  pluginId: string | null;
+}
 
-export function registerBuiltinView(slotId: string, component: AnyComponent): void {
+const REGISTRY = new Map<string, SlotEntry>();
+
+export function registerBuiltinView(
+  slotId: string,
+  component: AnyComponent,
+  opts?: { pluginId?: string }
+): void {
   if (REGISTRY.has(slotId)) {
     console.warn(`[builtinRendererRegistry] Slot "${slotId}" already registered, overwriting`);
   }
-  REGISTRY.set(slotId, component);
+  REGISTRY.set(slotId, { component, pluginId: opts?.pluginId ?? null });
 }
 
 export function unregisterBuiltinView(slotId: string): boolean {
   return REGISTRY.delete(slotId);
 }
 
+function resolveSlot<P>(
+  slotId: string,
+  disabledPluginIds: ReadonlySet<string>
+): ComponentType<P> | null {
+  const entry = REGISTRY.get(slotId);
+  if (!entry) return null;
+  if (entry.pluginId !== null && disabledPluginIds.has(entry.pluginId)) return null;
+  return entry.component as ComponentType<P>;
+}
+
+/**
+ * Non-reactive resolution — reads the current disabled set once. For callers
+ * outside React render; components should use {@link useBuiltinView} so a
+ * live plugin toggle re-renders them.
+ */
 export function getBuiltinView<P>(slotId: string): ComponentType<P> | null {
-  const component = REGISTRY.get(slotId);
-  return (component as ComponentType<P> | undefined) ?? null;
+  return resolveSlot<P>(slotId, usePluginRuntimeStore.getState().disabledPluginIds);
+}
+
+/**
+ * Reactive slot resolution: re-renders when the owning plugin is enabled or
+ * disabled at runtime. Also initializes the plugin-runtime mirror on first
+ * mount (idempotent), so any slot consumer is enough to start tracking.
+ */
+export function useBuiltinView<P>(slotId: string): ComponentType<P> | null {
+  const disabledPluginIds = usePluginRuntimeStore((s) => s.disabledPluginIds);
+  const init = usePluginRuntimeStore((s) => s.init);
+  useEffect(() => init(), [init]);
+  return resolveSlot<P>(slotId, disabledPluginIds);
 }
 
 export function __resetBuiltinRendererRegistryForTests(): void {

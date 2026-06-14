@@ -32,6 +32,8 @@ export interface GitInitProgressEvent {
  * `context.completedSteps` carries the partial progress for diagnostics.
  */
 export interface GitInitResult {
+  /** "success" when the workflow finished cleanly; "error" when it resolved with a terminal error (e.g. initial commit skipped). Named to avoid the forbidden `ok`/`success` envelope keys. */
+  outcome: "success" | "error";
   /** Steps completed during a successful init */
   completedSteps: GitInitStepType[];
 }

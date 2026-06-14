@@ -16,10 +16,11 @@ import { isPtyPanel } from "@shared/types/panel";
 // as the write, so deferring the write by a frame would break dispatch
 // ordering. See issue #8589 for the perf-vs-correctness trade-off.
 
-type ActivityPatch = Pick<
-  TerminalActivityPayload,
-  "headline" | "status" | "type" | "timestamp" | "lastCommand"
->;
+// `timestamp` is deliberately excluded: nothing reads it from the panel, and
+// folding it into the patch would defeat the no-op short-circuit below — a
+// re-delivered activity event with identical visible fields always carries a
+// fresh emit-time timestamp.
+type ActivityPatch = Pick<TerminalActivityPayload, "headline" | "status" | "type" | "lastCommand">;
 
 interface FlowStatusPatch {
   status: PersistableFlowStatus;
@@ -57,10 +58,9 @@ export function enqueueActivityUpdate(
   headline: string,
   status: TerminalActivityPayload["status"],
   type: TerminalActivityPayload["type"],
-  timestamp: number,
   lastCommand: string | undefined
 ): void {
-  activityBuffer.set(terminalId, { headline, status, type, timestamp, lastCommand });
+  activityBuffer.set(terminalId, { headline, status, type, lastCommand });
   schedule();
 }
 
@@ -139,7 +139,6 @@ export function flushPanelStatusBuffer(): void {
           terminal.activityHeadline === patch.headline &&
           terminal.activityStatus === patch.status &&
           terminal.activityType === patch.type &&
-          terminal.activityTimestamp === patch.timestamp &&
           terminal.lastCommand === patch.lastCommand
         ) {
           continue;
@@ -149,7 +148,6 @@ export function flushPanelStatusBuffer(): void {
           activityHeadline: patch.headline,
           activityStatus: patch.status,
           activityType: patch.type,
-          activityTimestamp: patch.timestamp,
           lastCommand: patch.lastCommand,
         };
         changed = true;

@@ -80,18 +80,18 @@ export function PluginMcpConfirmDialog() {
           <div className="flex items-center gap-2 text-xs">
             <DangerTierBadge tier={current.dangerTier} />
             {current.reason === "raw-changed" && (
-              <span className="text-amber-500 font-medium">Tool description changed</span>
+              <span className="text-status-warning font-medium">Tool description changed</span>
             )}
             {current.reason === "schema-changed" && (
-              <span className="text-amber-500 font-medium">Tool inputs changed</span>
+              <span className="text-status-warning font-medium">Tool inputs changed</span>
             )}
             {current.reason === "revoked" && (
-              <span className="text-amber-500 font-medium">Previously revoked</span>
+              <span className="text-status-warning font-medium">Previously revoked</span>
             )}
           </div>
 
           <div>
-            <div className="text-xs text-daintree-text/60 uppercase tracking-wide mb-1">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 mb-1">
               Tool description
             </div>
             <p className="text-sm text-daintree-text/80 whitespace-pre-wrap break-words">
@@ -101,7 +101,7 @@ export function PluginMcpConfirmDialog() {
 
           {current.declaredCapabilities.length > 0 && (
             <div>
-              <div className="text-xs text-daintree-text/60 uppercase tracking-wide mb-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 mb-1">
                 Plugin capabilities
               </div>
               <ul className="text-xs font-mono text-daintree-text/70 space-y-0.5">
@@ -114,7 +114,7 @@ export function PluginMcpConfirmDialog() {
 
           {showArgsPreview && (
             <div>
-              <div className="text-xs text-daintree-text/60 uppercase tracking-wide mb-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 mb-1">
                 Arguments
               </div>
               <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">

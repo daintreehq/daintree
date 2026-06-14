@@ -78,14 +78,11 @@ vi.mock("../../../../../shared/utils/gitOperationErrors.js", () => ({
   extractGitErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }));
 
-vi.mock("../../../../services/github/index.js", () => ({
-  parseGitHubRepoUrl: (url: string) => {
-    // Only the github.com hosts the gh fast-path cares about. Returning null
-    // for anything else (or when parsing fails) keeps the simple-git path on,
-    // which is what these tests exercise.
-    const m = /^https?:\/\/github\.com\/([^/]+)\/([^/.]+)/i.exec(url);
-    return m ? { owner: m[1], repo: m[2] } : null;
-  },
+// No provider matches → the handler skips the forge clone capability and
+// takes the simple-git path these tests exercise.
+vi.mock("../../../../services/forgeProviderRegistry.js", () => ({
+  getActiveProvider: () => undefined,
+  getForgeProviderImpl: () => undefined,
 }));
 
 vi.mock("../../../../../shared/utils/errorMessage.js", () => ({
@@ -126,25 +123,11 @@ vi.mock("../../../../utils/hardenedGit.js", () => ({
     (createAuthenticatedGitMock as unknown as (...a: unknown[]) => unknown)(...args),
 }));
 
+// `spawnSync` is the Windows `taskkill` in `killCloneProcessTree`; it's the
+// only child_process export the handler still uses.
 const spawnSyncMock = vi.fn();
-// `execFile` is the `gh auth status` probe in `probeGhAuth`. These tests
-// exercise the simple-git path, so the probe must report failure (calls back
-// with an Error) → the handler falls through to `createAuthenticatedGit`.
-// `spawn` is the `gh repo clone` fast path; it's never reached when the probe
-// fails, but the mock has to expose the export so the destructuring import in
-// `gitClone.ts` doesn't throw.
-const execFileMock = vi.fn(
-  (_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
-    queueMicrotask(() => cb(new Error("not authed")));
-    return { kill: vi.fn() };
-  }
-);
-const spawnMock = vi.fn();
 vi.mock("child_process", () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-  execFile: (...args: unknown[]) =>
-    (execFileMock as unknown as (...a: unknown[]) => unknown)(...args),
-  spawn: (...args: unknown[]) => (spawnMock as unknown as (...a: unknown[]) => unknown)(...args),
 }));
 
 const statMock = vi.fn();

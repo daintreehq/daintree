@@ -14,7 +14,7 @@ export function registerWorktreeServiceActions(
   actions.set("worktree.refresh", () => ({
     id: "worktree.refresh",
     title: "Refresh Sidebar",
-    description: "Refresh worktrees, pull requests, and GitHub stats",
+    description: "Refresh worktrees, pull requests, and forge stats",
     category: "worktree",
     kind: "command",
     danger: "safe",

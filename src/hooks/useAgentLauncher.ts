@@ -36,11 +36,30 @@ import {
   sanitizeAgentEnv,
 } from "@/config/agents";
 import type { AgentCliDetail } from "@shared/types/ipc";
+import { applyPresetBehaviorOverrides } from "@/utils/agentRuntimeSettings";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 
 function escapePowerShellSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Sanitize an assistant-supplied terminal name for use as a panel title.
+ * Strips ASCII control characters (an LLM could emit newlines, tabs, or ANSI
+ * escape sequences), collapses internal whitespace, and trims. Returns "" when
+ * nothing printable remains, which the caller treats as "no name" (falls back
+ * to the default computed title with no `titleMode` pin).
+ */
+function sanitizeTerminalName(raw: string): string {
+  let out = "";
+  for (const ch of raw) {
+    const code = ch.codePointAt(0) ?? 0;
+    // Drop C0 controls (0x00–0x1f) and DEL (0x7f); replace with a space so
+    // adjacent words don't fuse, then collapse the runs below.
+    out += code <= 0x1f || code === 0x7f ? " " : ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 export interface LaunchAgentOptions {
@@ -103,6 +122,13 @@ export interface LaunchAgentOptions {
    * (#6951, #7651).
    */
   requestedId?: string;
+  /**
+   * Caller-supplied terminal name (e.g. an assistant naming the agent at
+   * spawn time). When non-empty after trimming, it overrides the computed
+   * title and pins it with `titleMode: "custom"` so agent detection can't
+   * rewrite it. Empty/whitespace falls back to the default computed title.
+   */
+  name?: string;
 }
 
 export interface UseAgentLauncherReturn {
@@ -402,17 +428,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             presetEnv = { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv };
           }
 
-          // Merge per-preset behavioral overrides on top of agent-level settings
-          const effectiveEntry = preset
-            ? {
-                ...entry,
-                ...(preset.dangerousEnabled !== undefined && {
-                  dangerousEnabled: preset.dangerousEnabled,
-                }),
-                ...(preset.customFlags !== undefined && { customFlags: preset.customFlags }),
-                ...(preset.inlineMode !== undefined && { inlineMode: preset.inlineMode }),
-              }
-            : entry;
+          // Merge per-preset behavioral overrides (incl. tri-state bypass mode)
+          // on top of agent-level settings via the shared resolver.
+          const effectiveEntry = applyPresetBehaviorOverrides(entry, preset);
 
           // Resolve clipboard directory for agents that need it (e.g. Gemini)
           let clipboardDirectory: string | undefined;
@@ -430,12 +448,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             agentConfig.command,
             cachedLaunchCliDetail
           );
+          const globalSkipPermissions = launchSettings?.globalSkipPermissions ?? false;
           command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
             initialPrompt: launchOptions?.prompt,
             interactive: launchOptions?.interactive ?? true,
             clipboardDirectory,
             modelId: launchOptions?.modelId,
             presetArgs: preset?.args?.join(" "),
+            globalSkipPermissions,
           });
 
           // Capture process-level flags for session resume persistence
@@ -443,6 +463,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             launchFlags = buildAgentLaunchFlags(effectiveEntry, agentId, {
               modelId: launchOptions?.modelId,
               presetArgs: preset?.args,
+              globalSkipPermissions,
             });
           }
 
@@ -478,6 +499,16 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         const presetTitle = isAgent && preset ? preset.name : title;
+        // A caller-supplied name overrides the computed title and pins it so
+        // agent detection can't rewrite it. Strip control characters (an LLM
+        // assistant could emit newlines/ANSI/tabs) and collapse whitespace so
+        // tab chrome and aria labels stay intact. Empty/whitespace after
+        // sanitizing is treated as no name — fall back to the default title
+        // with no `titleMode`.
+        const trimmedName = launchOptions?.name
+          ? sanitizeTerminalName(launchOptions.name)
+          : undefined;
+        const customTitle = trimmedName ? { titleMode: "custom" as const } : {};
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
@@ -487,7 +518,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               kind: "terminal",
               launchAgentId: agentId,
               command: command as string,
-              title: presetTitle,
+              title: trimmedName || presetTitle,
+              ...customTitle,
               cwd,
               worktreeId: targetWorktreeId || undefined,
               location: launchOptions?.location,
@@ -505,7 +537,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             }
           : {
               kind: "terminal",
-              title,
+              title: trimmedName || title,
+              ...customTitle,
               cwd,
               worktreeId: targetWorktreeId || undefined,
               command,
@@ -534,7 +567,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               id: gateId,
               kind: "terminal",
               launchAgentId: agentId,
-              title: presetTitle,
+              title: trimmedName || presetTitle,
+              ...customTitle,
               worktreeId: targetWorktreeId || undefined,
               cwd,
               cols: 80,

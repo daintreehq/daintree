@@ -1,13 +1,13 @@
 // eager-import-allow: reads/writes store data via sync fs and store.get while migrating the store
 import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
-import { tightenFilePermissions } from "../store.js";
+import { invalidateStoreValueCache, tightenFilePermissions } from "../store.js";
 import fs from "fs";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getCurrentDiskSpaceStatus } from "./DiskSpaceMonitor.js";
 
-export const LATEST_SCHEMA_VERSION = 21;
+export const LATEST_SCHEMA_VERSION = 23;
 
 export interface Migration {
   version: number;
@@ -148,6 +148,9 @@ export class MigrationRunner {
 
     try {
       fs.renameSync(backupPath, storePath);
+      // The rename swapped config.json behind electron-store's back — drop
+      // the store proxy's value cache so reads reflect the restored file.
+      invalidateStoreValueCache();
       // Backups created by older builds may carry 0o644; tighten the
       // restored live config so the rollback never relaxes permissions.
       tightenFilePermissions(storePath);

@@ -2253,7 +2253,7 @@ describe("MCP_DEDUP_ALLOWLIST widening (#8468)", () => {
   });
 
   it("adds the git/forge mutation cohort", () => {
-    for (const tool of ["git.commit", "git.push", "forge.openIssue", "github.openPR"]) {
+    for (const tool of ["git.commit", "git.push", "forge.openIssue", "forge.openPR"]) {
       expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(true);
     }
   });

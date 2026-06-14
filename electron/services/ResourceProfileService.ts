@@ -1,5 +1,5 @@
 import os from "os";
-import { app, powerMonitor } from "electron";
+import { powerMonitor } from "electron";
 import {
   monitorEventLoopDelay,
   performance,
@@ -8,8 +8,10 @@ import {
 } from "node:perf_hooks";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { getFocusThrottlePollMultiplier } from "../window/focusThrottleState.js";
 import { logInfo } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
+import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
@@ -89,9 +91,18 @@ const LOW_FRACTION = 0.08;
 // reflects that fleet size scales pressure roughly linearly. A flat +1 was
 // indistinguishable across 8, 16, and 24 agents — those have wildly different
 // memory footprints and the service must react accordingly.
+// The tier boundaries scale with device RAM like every other memory signal:
+// the per-GB rates reproduce the originally-tuned 8/16/24 on a 16 GB
+// baseline, and the absolute values act as floors so smaller machines keep
+// the original behavior. On a 128 GB machine 24 agents (~5–12 GB at the
+// estimate above) are trivial, and the RAM-scaled sys-available signal
+// catches genuine starvation independently.
 const FLEET_COUNT_HIGH = 8;
 const FLEET_COUNT_VERY_HIGH = 16;
 const FLEET_COUNT_CRITICAL = 24;
+const FLEET_AGENTS_PER_GB_HIGH = FLEET_COUNT_HIGH / 16;
+const FLEET_AGENTS_PER_GB_VERY_HIGH = FLEET_COUNT_VERY_HIGH / 16;
+const FLEET_AGENTS_PER_GB_CRITICAL = FLEET_COUNT_CRITICAL / 16;
 
 // System-available memory thresholds expressed as fractions of total RAM so
 // devices with very different physical memory behave consistently. On macOS
@@ -108,6 +119,12 @@ export interface ResourceProfileDeps {
   getAllProjectViewManagers: () => ProjectViewManager[];
   getProjectStatsService: () => ProjectStatsService | null;
   getUserCachedViewLimit: () => number;
+  /**
+   * Renderer-saturation signal from ProcessMemoryMonitor's 30s LoAF sampling
+   * (any active view with a sustained high-blocking streak). Optional so test
+   * fixtures and legacy callers keep compiling; absent reads as no pressure.
+   */
+  hasSustainedRendererSaturation?: () => boolean;
 }
 
 export class ResourceProfileService {
@@ -129,6 +146,9 @@ export class ResourceProfileService {
   private readonly memoryThresholdLowMb: number;
   private readonly sysMemThresholdHighMb: number;
   private readonly sysMemThresholdLowMb: number;
+  private readonly fleetCountHigh: number;
+  private readonly fleetCountVeryHigh: number;
+  private readonly fleetCountCritical: number;
   private lagInterval: NodeJS.Timeout | null = null;
   private lagHistogram: IntervalHistogram | null = null;
   private lagPreviousElu: EventLoopUtilization | null = null;
@@ -150,6 +170,19 @@ export class ResourceProfileService {
     this.memoryThresholdLowMb = totalRamMb * LOW_FRACTION;
     this.sysMemThresholdHighMb = totalRamMb * SYS_AVAILABLE_HIGH_FRACTION;
     this.sysMemThresholdLowMb = totalRamMb * SYS_AVAILABLE_LOW_FRACTION;
+    const totalRamGb = totalRamMb / 1024;
+    this.fleetCountHigh = Math.max(
+      FLEET_COUNT_HIGH,
+      Math.ceil(totalRamGb * FLEET_AGENTS_PER_GB_HIGH)
+    );
+    this.fleetCountVeryHigh = Math.max(
+      FLEET_COUNT_VERY_HIGH,
+      Math.ceil(totalRamGb * FLEET_AGENTS_PER_GB_VERY_HIGH)
+    );
+    this.fleetCountCritical = Math.max(
+      FLEET_COUNT_CRITICAL,
+      Math.ceil(totalRamGb * FLEET_AGENTS_PER_GB_CRITICAL)
+    );
   }
 
   private onThermalStateChange = (details: { state: string }): void => {
@@ -256,26 +289,64 @@ export class ResourceProfileService {
     // Paint-gate values are no-ops at default but pushed for symmetry so the
     // profile config remains the single source of truth — drift in the PVM
     // defaults stops mattering.
-    const initialConfig = RESOURCE_PROFILE_CONFIGS[this.currentProfile];
     for (const pvm of this.deps.getAllProjectViewManagers()) {
-      try {
-        pvm.setLowMemoryFreeThresholdMb(initialConfig.lowMemoryFreeThresholdMb);
-      } catch {
-        // non-critical
+      this.applyCurrentProfileTo(pvm);
+    }
+
+    this.startLagMonitor();
+  }
+
+  /**
+   * Push the current profile's settings to a single ProjectViewManager.
+   * Called from start() for managers alive at service start AND for every
+   * manager created later (new window) — applyProfile() fans out only on
+   * transitions, so without this a late-created PVM keeps its DEFAULT_*
+   * balanced constants while the app sits in another profile. Each setter is
+   * isolated in its own try/catch, mirroring applyProfile().
+   */
+  applyCurrentProfileTo(pvm: ProjectViewManager): void {
+    const config = RESOURCE_PROFILE_CONFIGS[this.currentProfile];
+    if (this.currentProfile === "efficiency") {
+      // Same gating as applyProfile: only clamp cached views when memory
+      // contributed to entering efficiency.
+      if (this.lastMemoryScore > 0) {
+        try {
+          pvm.setCachedViewLimit(1);
+        } catch {
+          // non-critical
+        }
       }
       try {
-        pvm.setPaintGateTimeoutMs(initialConfig.paintGateTimeoutMs);
-      } catch {
-        // non-critical
-      }
-      try {
-        pvm.setPaintGateHardTimeoutMs(initialConfig.paintGateHardTimeoutMs);
+        pvm.setEfficiencyFreeze(true);
       } catch {
         // non-critical
       }
     }
-
-    this.startLagMonitor();
+    try {
+      pvm.setLowMemoryFreeThresholdMb(config.lowMemoryFreeThresholdMb);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setPaintGateTimeoutMs(config.paintGateTimeoutMs);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setPaintGateHardTimeoutMs(config.paintGateHardTimeoutMs);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setWarmPaintGateTimeoutMs(config.warmPaintGateTimeoutMs);
+    } catch {
+      // non-critical
+    }
+    try {
+      pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
+    } catch {
+      // non-critical
+    }
   }
 
   private startLagMonitor(): void {
@@ -613,9 +684,12 @@ export class ResourceProfileService {
     let pressureScore = 0;
     let memoryScore = 0;
 
-    // Memory signal
+    // Memory signal. Read through the shared snapshot: ProcessMemoryMonitor's
+    // poll runs on the same aligned 30s tick (registered earlier) and primes
+    // it, so this eval normally reuses that sweep instead of re-scanning the
+    // full process table back-to-back.
     try {
-      const metrics = app.getAppMetrics();
+      const metrics = getAppMetricsSnapshot();
       let totalPrivateMb = 0;
       for (const proc of metrics) {
         // workingSetSize is the only cross-platform field — privateBytes is
@@ -655,12 +729,24 @@ export class ResourceProfileService {
     // agent fleet scored identically to an 8-worktree project and could
     // never reach `efficiency` from fleet size alone.
     const agentCount = this.cachedActiveAgentCount;
-    if (agentCount >= FLEET_COUNT_CRITICAL) {
+    if (agentCount >= this.fleetCountCritical) {
       pressureScore += 3;
-    } else if (agentCount >= FLEET_COUNT_VERY_HIGH) {
+    } else if (agentCount >= this.fleetCountVeryHigh) {
       pressureScore += 2;
-    } else if (agentCount >= FLEET_COUNT_HIGH) {
+    } else if (agentCount >= this.fleetCountHigh) {
       pressureScore += 1;
+    }
+
+    // Renderer-saturation signal. The lag monitor watches only the MAIN
+    // process event loop; the saturation users actually feel under agent
+    // output floods — xterm parse/paint jank — lives in renderer loops and is
+    // sampled by ProcessMemoryMonitor's LoAF collection on the same cadence.
+    try {
+      if (this.deps.hasSustainedRendererSaturation?.()) {
+        pressureScore += 1;
+      }
+    } catch {
+      // Signal unavailable — score stays unchanged.
     }
 
     // System-available memory signal. The app-private signal above only sees
@@ -699,13 +785,19 @@ export class ResourceProfileService {
 
     logInfo("resource-profile-changed", { from: previous, to: profile });
 
+    // While the window-focus throttle is engaged, polling cadences are owned
+    // by the throttle (profile baseline × multiplier). Push multiplied values
+    // so a transition landing mid-blur can't silently un-throttle the pollers;
+    // the next focus event rewrites baselines from the live profile.
+    const pollMultiplier = getFocusThrottlePollMultiplier();
+
     // Update workspace-host polling intervals
     const workspaceClient = this.deps.getWorkspaceClient();
     if (workspaceClient) {
       try {
         workspaceClient.updateMonitorConfig({
-          pollIntervalActive: config.pollIntervalActive,
-          pollIntervalBackground: config.pollIntervalBackground,
+          pollIntervalActive: config.pollIntervalActive * pollMultiplier,
+          pollIntervalBackground: config.pollIntervalBackground * pollMultiplier,
           fetchIntervalActiveMs: config.fetchIntervalActiveMs,
           fetchIntervalBackgroundMs: config.fetchIntervalBackgroundMs,
           backgroundGitWatcherCap: config.backgroundGitWatcherCap,
@@ -730,6 +822,11 @@ export class ResourceProfileService {
     if (ptyClient) {
       try {
         ptyClient.setResourceProfile(profile);
+        if (pollMultiplier !== 1) {
+          // set-resource-profile resets the host's process-tree cadence to the
+          // profile baseline — re-apply the throttle on top.
+          ptyClient.setProcessTreePollInterval(config.processTreePollInterval * pollMultiplier);
+        }
       } catch {
         // non-critical
       }
@@ -739,7 +836,7 @@ export class ResourceProfileService {
     const statsService = this.deps.getProjectStatsService();
     if (statsService) {
       try {
-        statsService.updatePollInterval(config.projectStatsPollInterval);
+        statsService.updatePollInterval(config.projectStatsPollInterval * pollMultiplier);
       } catch {
         // non-critical
       }
@@ -801,11 +898,11 @@ export class ResourceProfileService {
         // non-critical
       }
 
-      // Push per-profile paint-gate timeouts. Cold starts run measurably
-      // slower under efficiency (memory/thermal/battery pressure), so the
-      // soft warning bound stretches from 3s to 5s and the hard fall-through
-      // bound from 8s to 12s. Each setter wrapped in its own try/catch so a
-      // throw from one doesn't skip the other.
+      // Push per-profile paint-gate timeouts (cold and warm). Both cold
+      // starts and warm wake fan-outs run measurably slower under efficiency
+      // (memory/thermal/battery pressure), so the bounds stretch with the
+      // profile. Each setter wrapped in its own try/catch so a throw from
+      // one doesn't skip the others.
       try {
         pvm.setPaintGateTimeoutMs(config.paintGateTimeoutMs);
       } catch {
@@ -813,6 +910,16 @@ export class ResourceProfileService {
       }
       try {
         pvm.setPaintGateHardTimeoutMs(config.paintGateHardTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setWarmPaintGateTimeoutMs(config.warmPaintGateTimeoutMs);
+      } catch {
+        // non-critical
+      }
+      try {
+        pvm.setWarmPaintGateHardTimeoutMs(config.warmPaintGateHardTimeoutMs);
       } catch {
         // non-critical
       }

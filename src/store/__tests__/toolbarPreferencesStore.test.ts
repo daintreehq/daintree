@@ -274,9 +274,10 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
+      // v9→v10 renames "github-stats" to "forge-stats" after the v8 conversion.
       expect(store.getState().layout.pinnedButtons).toEqual({
         terminal: false,
-        "github-stats": false,
+        "forge-stats": false,
         "copy-tree": false,
       });
     });
@@ -580,7 +581,7 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       expect(store.getState().layout.pinnedButtons).toEqual({
-        "github-stats": false,
+        "forge-stats": false,
         "copy-tree": false,
       });
     });
@@ -929,6 +930,56 @@ describe("toolbarPreferencesStore", () => {
         expect(leftButtons).not.toContain("plugin.acme.foo.btn");
         expect(rightButtons).toContain("daintreehq.tool.opener");
         expect(rightButtons).not.toContain("plugin.daintreehq.tool.opener");
+      });
+    });
+
+    describe("v9→v10 forge-stats rename", () => {
+      it("renames github-stats in position arrays and pinned keys", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "github-stats"],
+                rightButtons: ["github-stats", "settings"],
+                pinnedButtons: { "github-stats": false, "copy-tree": false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 9,
+          })
+        );
+
+        const store = await loadStore();
+        const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
+        expect(leftButtons).toContain("forge-stats");
+        expect(leftButtons).not.toContain("github-stats");
+        expect(rightButtons).toContain("forge-stats");
+        expect(rightButtons).not.toContain("github-stats");
+        expect(pinnedButtons["forge-stats"]).toBe(false);
+        expect(pinnedButtons["copy-tree"]).toBe(false);
+        expect(pinnedButtons).not.toHaveProperty("github-stats");
+      });
+
+      it("is a no-op on already-renamed v10-shaped state", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal"],
+                rightButtons: ["forge-stats", "settings"],
+                pinnedButtons: { "forge-stats": false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 9,
+          })
+        );
+
+        const store = await loadStore();
+        expect(store.getState().layout.pinnedButtons).toEqual({ "forge-stats": false });
+        expect(store.getState().layout.rightButtons).toContain("forge-stats");
       });
     });
   });

@@ -120,7 +120,9 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
     if (!isActionOpen) return [];
-    const entries = actionService.list();
+    // Palette rows never read the JSON schemas — skip their compilation and
+    // cloning so first open doesn't pay the deferred ~300-action compile.
+    const entries = actionService.list(undefined, { includeSchemas: false });
     return entries
       .filter((e) => {
         if (e.kind !== "command") return false;
@@ -136,23 +138,24 @@ export function useActionPalette(): UseActionPaletteReturn {
       .map(toActionPaletteItem);
   }, [isActionOpen]);
 
+  // Strip confirm-danger ids from the MRU/Favorites lists so destructive actions
+  // persisted from a pre-fix session don't keep surfacing in the
+  // "Recently used" rail or get a search-rank bonus (issue #7481).
+  const confirmDangerIds = useMemo(
+    () => new Set(allActions.filter((item) => item.danger === "confirm").map((item) => item.id)),
+    [allActions]
+  );
+  const itemById = useMemo(() => new Map(allActions.map((item) => [item.id, item])), [allActions]);
+  const hiddenSet = useMemo(() => new Set(hiddenActionIds), [hiddenActionIds]);
+  const pinnedSet = useMemo(() => new Set(pinnedActionIds), [pinnedActionIds]);
+
   const filterFn = useCallback(
     (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
-      // Strip confirm-danger ids from the MRU/Favorites lists so destructive actions
-      // persisted from a pre-fix session don't keep surfacing in the
-      // "Recently used" rail or get a search-rank bonus (issue #7481).
-      const confirmDangerIds = new Set(
-        items.filter((item) => item.danger === "confirm").map((item) => item.id)
-      );
-      const hiddenSet = new Set(hiddenActionIds);
-      const pinnedSet = new Set(pinnedActionIds);
       // Keep the full frecency entries (id + score) so `rankActionMatches` can
       // derive the MRU bonus from the frecency score, not list position (#8823).
       const actionMruList = getSortedActionMruList().filter(({ id }) => !confirmDangerIds.has(id));
 
       if (!query.trim()) {
-        const itemById = new Map(items.map((item) => [item.id, item]));
-
         // Favorites: ordered by pin time (insertion order), strip danger:"confirm"
         // and skip ids the action registry no longer exposes.
         const pinnedItems: ActionPaletteItem[] = [];
@@ -184,7 +187,7 @@ export function useActionPalette(): UseActionPaletteReturn {
         isSettingsOpen: context.isSettingsOpen,
       });
     },
-    [getSortedActionMruList, pinnedActionIds, hiddenActionIds]
+    [getSortedActionMruList, pinnedActionIds, confirmDangerIds, itemById, hiddenSet, pinnedSet]
   );
 
   const {
@@ -313,14 +316,13 @@ export function useActionPalette(): UseActionPaletteReturn {
   // can render the "Favorites" / "Recently used" divider at the right offset.
   const pinnedCount = useMemo(() => {
     if (query.trim()) return 0;
-    const pinnedSet = new Set(pinnedActionIds);
     let count = 0;
     for (const item of results) {
       if (pinnedSet.has(item.id)) count++;
       else break;
     }
     return count;
-  }, [query, results, pinnedActionIds]);
+  }, [query, results, pinnedSet]);
 
   const isShowingRecentlyUsed = query.trim() === "" && results.length > 0;
 

@@ -24,7 +24,9 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#2A3A35",
     accent: "#4A9E7F",
-    accentSecondary: "#5BA38E",
+    // Coral second lane: keep H well clear of danger clay (#D17B72) so the
+    // lanes never alias; ≥ 3:1 on every surface.
+    accentSecondary: "#EB7A4D",
     status: {
       success: "#5A8068",
       warning: "#C99F59",
@@ -39,8 +41,13 @@ export const theme: BuiltInThemeSource = {
     },
     overlayTint: "#8CC8B4",
     terminal: {
-      cursor: "#F2B850",
-      selection: "rgba(74,158,127,0.18)",
+      // ANSI set is audited against this background, not the canvas (all ≥ 3:1).
+      background: "#0D1416",
+      foreground: "#DCE6E3",
+      // Keep the cursor hue-distinct from ANSI red so it never aliases danger.
+      cursor: "#F4683C",
+      // Cyan-glass selection, deliberately not the accent green.
+      selection: "rgba(74,176,184,0.22)",
       red: "#D17B72",
       green: "#4A9E7F",
       yellow: "#C99F59",
@@ -69,8 +76,10 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "crisp",
-      materialBlur: 12,
-      materialSaturation: 115,
+      materialBlur: 8,
+      materialSaturation: 110,
+      radiusScale: 0.95,
+      grainCharacter: "coarse",
     },
   },
   tokens: {
@@ -78,7 +87,11 @@ export const theme: BuiltInThemeSource = {
     "border-interactive": "rgba(140,200,180,0.12)",
     "border-strong": "rgba(140,200,180,0.20)",
     "border-subtle": "rgba(140,200,180,0.08)",
-    "focus-ring": "rgba(74,158,127,0.30)",
+    "focus-ring": "rgba(74,158,127,0.50)",
+    // Boldest authored grain in the catalog; stays under the 0.05 ceiling.
+    "grain-opacity": "0.04",
+    "scrim-blur": "4px",
+    "scrim-blur-palette": "2px",
     "scrim-medium": "rgba(6,12,10,0.50)",
     "scrim-soft": "rgba(6,12,10,0.25)",
     "scrim-strong": "rgba(6,12,10,0.70)",
@@ -90,18 +103,37 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#5BB5D9",
     "search-selected-result-border": "#5BB5D9",
     "search-selected-result-icon": "#5BB5D9",
-    "shadow-ambient": "0 1px 3px rgba(6,12,10,0.40), 0 1px 2px rgba(6,12,10,0.30)",
-    "shadow-color": "rgba(6,12,10,0.55)",
-    "shadow-dialog": "inset 0 1px 0 rgba(140,200,180,0.06), 0 24px 64px rgba(6,12,10,0.55)",
-    "shadow-floating": "0 12px 40px rgba(6,12,10,0.55), 0 4px 12px rgba(6,12,10,0.35)",
-    "surface-toolbar": "#131917",
+    // Tight contact shadows, high alpha, no spread — matches the crisp strategy.
+    "shadow-ambient": "0 1px 2px rgba(6,12,10,0.50), 0 1px 1px rgba(6,12,10,0.35)",
+    "shadow-color": "rgba(6,12,10,0.60)",
+    "shadow-dialog": "inset 0 1px 0 rgba(140,200,180,0.06), 0 18px 48px rgba(6,12,10,0.62)",
+    "shadow-floating": "0 2px 6px rgba(6,12,10,0.45), 0 8px 20px rgba(6,12,10,0.50)",
+    "surface-toolbar": "#111615",
   },
   extensions: {
+    "dock-bg": "#111615",
+    // Active dock pill shares the panel-focus ink, keeping accent green scarce
+    // in chrome.
+    "dock-item-bg-active": "rgba(140,200,180,0.10)",
+    // Membership marker, not a second focus anchor — keep it below
+    // panel-focus-border brightness.
+    "dock-item-border-active": "rgba(176,216,202,0.38)",
+    // Focus chrome inked from the overlayTint water-light; no other
+    // accent-family fill may appear in the panel region, and selected/focused
+    // share this one ink. Outer-only (inset rings read as a defect on panes).
+    "panel-focus-border": "rgba(176,216,202,0.38)",
+    "panel-focus-shadow": "0 0 0 1px rgba(140,200,180,0.16)",
     "pulse-before-bg": "#0E1211",
     "pulse-card-bg": "#1A2421",
-    "pulse-card-shadow": "0 1px 3px rgba(6,12,10,0.40), 0 1px 2px rgba(6,12,10,0.30)",
-    "pulse-control-hover-bg": "rgba(74,158,127,0.05)",
+    "pulse-card-shadow": "0 1px 2px rgba(6,12,10,0.50), 0 1px 1px rgba(6,12,10,0.35)",
+    "pulse-control-hover-bg": "rgba(255,255,255,0.05)",
     "pulse-empty-bg": "#1F2D29",
+    // Sea-green heat ramp climbing to the accent at heat-4.
+    "pulse-heat-1": "#1F332B",
+    "pulse-heat-2": "#2D5747",
+    "pulse-heat-3": "#377B62",
+    "pulse-heat-4": "#4A9E7F",
+    "pulse-heat-color": "#4A9E7F",
     "pulse-missed-bg": "rgba(209,123,114,0.18)",
     "pulse-range-bg": "#161D1B",
     "pulse-ring-offset": "#1A2421",
@@ -109,27 +141,34 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#23322E",
     "settings-kbd-bg": "#21302C",
     "settings-nav-active-bg": "rgba(74,158,127,0.15)",
-    "settings-nav-hover-bg": "rgba(74,158,127,0.08)",
+    "settings-nav-hover-bg": "rgba(255,255,255,0.04)",
     "settings-search-bg": "#21302C",
     "settings-sidebar-bg": "rgba(17,22,21,0.70)",
-    "sidebar-action-hover-bg": "rgba(74,158,127,0.08)",
+    // Composited settings-sidebar-bg over the shell.
+    "settings-sidebar-scroll-fade": "#161E1C",
+    "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
     "sidebar-active-bg": "rgba(255,255,255,0.05)",
     "sidebar-hover-bg": "rgba(255,255,255,0.03)",
-    "toolbar-agent-hover-bg": "rgba(74,158,127,0.06)",
-    "toolbar-control-active-bg": "rgba(74,158,127,0.14)",
-    "toolbar-control-armed-bg": "rgba(74,158,127,0.14)",
+    "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
+    // Hover/armed are neutral light, never accent — the accent keeps one
+    // membership fill per region (settings-nav-active-bg). Armed/active hold
+    // the +0.04 alpha step over hover.
+    "toolbar-control-active-bg": "rgba(255,255,255,0.12)",
+    "toolbar-control-armed-bg": "rgba(255,255,255,0.12)",
     "toolbar-control-armed-shadow": "inset 0 0 0 1px rgba(255,255,255,0.12)",
-    "toolbar-control-hover-bg": "rgba(74,158,127,0.10)",
+    "toolbar-control-hover-bg": "rgba(255,255,255,0.05)",
     "toolbar-divider": "rgba(42,58,53,0.5)",
-    "toolbar-project-bg": "rgba(140,200,180,0.05)",
+    "toolbar-project-bg":
+      "linear-gradient(180deg, rgba(140,200,180,0.06), rgba(6,12,10,0.02)), rgba(255,255,255,0.04)",
     "toolbar-project-border": "rgba(42,58,53,0.5)",
-    "toolbar-project-chip-bg": "rgba(140,200,180,0.05)",
+    "toolbar-project-chip-bg": "rgba(255,255,255,0.04)",
     "toolbar-project-chip-border": "rgba(42,58,53,0.5)",
     "toolbar-project-shadow": "none",
-    "toolbar-stats-bg": "rgba(140,200,180,0.05)",
+    "toolbar-stats-bg": "rgba(255,255,255,0.04)",
     "toolbar-stats-border": "rgba(42,58,53,0.5)",
     "toolbar-stats-divider": "rgba(42,58,53,0.5)",
-    "toolbar-stats-hover-bg": "rgba(74,158,127,0.10)",
-    "worktree-section-hover-bg": "rgba(74,158,127,0.04)",
+    "toolbar-stats-hover-bg": "rgba(255,255,255,0.08)",
+    "welcome-mark-color": "#F4683C",
+    "worktree-section-hover-bg": "rgba(255,255,255,0.03)",
   },
 };

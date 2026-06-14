@@ -31,7 +31,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
 
     it("imports the agent-state dot helpers and notify", () => {
       expect(source).toContain("agentStateDotColor");
-      expect(source).toContain("getDominantAgentState");
+      expect(source).toContain("deriveAgentDominantStates");
       expect(source).toContain('import { notify } from "@/lib/notify"');
     });
   });
@@ -51,7 +51,12 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   describe("agent-state dots", () => {
     it("derives a per-agent dominant state map scoped to the active worktree", () => {
       expect(source).toContain("agentDominantStates");
-      expect(source).toMatch(/getDominantAgentState\(states\)/);
+      // Shared with AgentTrayButton so the overflow dot matches the visible
+      // agent button; computed inside useShallow so agent ticks that don't
+      // change a dominant state don't re-render the toolbar.
+      expect(source).toMatch(
+        /useShallow\(\(s\) => deriveAgentDominantStates\(s\.panelsById, s\.panelIds, activeWorktreeId\)\)/
+      );
     });
 
     it("renders the dot through a dedicated component so the keybinding hook is at component scope", () => {
@@ -106,12 +111,12 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
   });
 
-  describe("github-stats group label", () => {
-    it("wraps the three GitHub items in a labelled group", () => {
+  describe("forge-stats group label", () => {
+    it("wraps the three forge items in a group labelled with the provider name", () => {
       // DropdownMenuLabel alone is insufficient — the Group wires role=group +
       // aria-labelledby so the boundary is announced.
       expect(source).toMatch(
-        /<DropdownMenuGroup[\s\S]*?<DropdownMenuLabel>GitHub<\/DropdownMenuLabel>/
+        /<DropdownMenuGroup[\s\S]*?<DropdownMenuLabel>\{forgeProviderName\}<\/DropdownMenuLabel>/
       );
     });
   });

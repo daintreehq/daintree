@@ -63,9 +63,10 @@ export function computeOverflow(
 
   // Sort removable items by priority descending (lowest priority = highest number
   // = removed first), then by reverse position (later items removed first within
-  // same priority). Pinned items are excluded from removal entirely.
+  // same priority). Pinned items are excluded from removal entirely. The index
+  // within removableIds preserves relative order, which is all the tiebreak needs.
   const sortedForRemoval = removableIds
-    .map((id) => ({ id, index: orderedIds.indexOf(id), priority: priorities[id] ?? 3 }))
+    .map((id, index) => ({ id, index, priority: priorities[id] ?? 3 }))
     .sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
       return b.index - a.index;

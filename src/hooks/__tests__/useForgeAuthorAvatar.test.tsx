@@ -1,68 +1,79 @@
 // @vitest-environment jsdom
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useForgeAuthorAvatar } from "../useForgeAuthorAvatar";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 const resolveAuthorAvatar = vi.fn();
+const resolvedProvider = vi.hoisted(() => ({
+  entry: null as unknown,
+  providerId: null as string | null,
+}));
+
+vi.mock("@/clients", () => ({
+  forgeClient: {
+    resolveAuthorAvatar: (...args: unknown[]) => resolveAuthorAvatar(...args),
+  },
+}));
+
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (selector: (s: unknown) => unknown) =>
+    selector({ currentProject: { id: "project-1", path: "/repo" } }),
+}));
+
+vi.mock("@/hooks/useResolvedForgeProvider", () => ({
+  useResolvedForgeProvider: () => ({
+    entry: resolvedProvider.entry,
+    providerId: resolvedProvider.providerId,
+    resolvedVia: null,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
+import { useForgeAuthorAvatar } from "../useForgeAuthorAvatar";
+
+function setProviderResolved(resolved: boolean) {
+  resolvedProvider.entry = resolved
+    ? { pluginId: "daintree.github", contribution: { id: "github", name: "GitHub" } }
+    : null;
+  resolvedProvider.providerId = resolved ? "daintree.github.github" : null;
+}
 
 beforeEach(() => {
   resolveAuthorAvatar.mockReset();
-  (globalThis as { window: Window }).window.electron = {
-    github: { resolveAuthorAvatar },
-  } as unknown as Window["electron"];
+  setProviderResolved(true);
 });
 
 describe("useForgeAuthorAvatar", () => {
   it("returns undefined while loading, then the resolved URL", async () => {
     resolveAuthorAvatar.mockResolvedValue("https://avatars.example/u/1");
     const { result } = renderHook(() =>
-      useForgeAuthorAvatar({
-        email: "dev@example.com",
-        linkedProviderId: BUILTIN_GITHUB_PROVIDER_ID,
-      })
+      useForgeAuthorAvatar({ email: "dev@example.com", cwd: "/repo/wt" })
     );
     expect(result.current).toBeUndefined();
     await waitFor(() => expect(result.current).toBe("https://avatars.example/u/1"));
-    expect(resolveAuthorAvatar).toHaveBeenCalledWith("dev@example.com");
+    expect(resolveAuthorAvatar).toHaveBeenCalledWith("/repo/wt", "dev@example.com");
   });
 
-  it("does not call the provider for a non-GitHub forge", () => {
-    renderHook(() =>
-      useForgeAuthorAvatar({ email: "dev@example.com", linkedProviderId: "gitlab.gitlab" })
-    );
+  it("does not call the provider when no forge provider resolves", () => {
+    setProviderResolved(false);
+    renderHook(() => useForgeAuthorAvatar({ email: "dev@example.com", cwd: "/repo/wt" }));
     expect(resolveAuthorAvatar).not.toHaveBeenCalled();
   });
 
-  it("does not call the provider when there is no linked provider", () => {
-    renderHook(() =>
-      useForgeAuthorAvatar({ email: "dev@example.com", linkedProviderId: undefined })
-    );
+  it("does not call the provider without a cwd", () => {
+    renderHook(() => useForgeAuthorAvatar({ email: "dev@example.com", cwd: undefined }));
     expect(resolveAuthorAvatar).not.toHaveBeenCalled();
   });
 
   it("does not call the provider for an empty email", () => {
-    renderHook(() =>
-      useForgeAuthorAvatar({ email: "   ", linkedProviderId: BUILTIN_GITHUB_PROVIDER_ID })
-    );
+    renderHook(() => useForgeAuthorAvatar({ email: "   ", cwd: "/repo/wt" }));
     expect(resolveAuthorAvatar).not.toHaveBeenCalled();
-  });
-
-  it("normalizes a legacy provider id before routing", async () => {
-    resolveAuthorAvatar.mockResolvedValue("https://avatars.example/legacy");
-    const { result } = renderHook(() =>
-      useForgeAuthorAvatar({ email: "dev@example.com", linkedProviderId: "github" })
-    );
-    await waitFor(() => expect(result.current).toBe("https://avatars.example/legacy"));
   });
 
   it("stays undefined when the provider resolves null", async () => {
     resolveAuthorAvatar.mockResolvedValue(null);
     const { result } = renderHook(() =>
-      useForgeAuthorAvatar({
-        email: "nobody@example.com",
-        linkedProviderId: BUILTIN_GITHUB_PROVIDER_ID,
-      })
+      useForgeAuthorAvatar({ email: "nobody@example.com", cwd: "/repo/wt" })
     );
     await waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalled());
     expect(result.current).toBeUndefined();
@@ -71,28 +82,10 @@ describe("useForgeAuthorAvatar", () => {
   it("swallows provider rejection and stays undefined", async () => {
     resolveAuthorAvatar.mockRejectedValue(new Error("ipc failed"));
     const { result } = renderHook(() =>
-      useForgeAuthorAvatar({
-        email: "dev@example.com",
-        linkedProviderId: BUILTIN_GITHUB_PROVIDER_ID,
-      })
+      useForgeAuthorAvatar({ email: "dev@example.com", cwd: "/repo/wt" })
     );
     await waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalled());
     expect(result.current).toBeUndefined();
-  });
-
-  it("clears the avatar when the forge changes from GitHub to non-GitHub", async () => {
-    resolveAuthorAvatar.mockResolvedValue("https://avatars.example/u/1");
-    const { result, rerender } = renderHook(
-      ({ provider }) =>
-        useForgeAuthorAvatar({ email: "dev@example.com", linkedProviderId: provider }),
-      { initialProps: { provider: BUILTIN_GITHUB_PROVIDER_ID as string } }
-    );
-    await waitFor(() => expect(result.current).toBe("https://avatars.example/u/1"));
-
-    resolveAuthorAvatar.mockClear();
-    rerender({ provider: "gitlab.gitlab" });
-    expect(result.current).toBeUndefined();
-    expect(resolveAuthorAvatar).not.toHaveBeenCalled();
   });
 
   it("does not apply a stale response after the email changes", async () => {
@@ -106,7 +99,7 @@ describe("useForgeAuthorAvatar", () => {
     resolveAuthorAvatar.mockResolvedValueOnce("https://avatars.example/second");
 
     const { result, rerender } = renderHook(
-      ({ email }) => useForgeAuthorAvatar({ email, linkedProviderId: BUILTIN_GITHUB_PROVIDER_ID }),
+      ({ email }) => useForgeAuthorAvatar({ email, cwd: "/repo/wt" }),
       { initialProps: { email: "first@example.com" } }
     );
 

@@ -22,9 +22,13 @@ const terminalSectionSource = readFileSync(
 const envPopoverSource = readFileSync(resolve(__dirname, "../EnvironmentPopover.tsx"), "utf-8");
 
 describe("WorktreeCard interaction-state axes (issue #6963)", () => {
-  it("uses ring-inset (no background) for the isOver drop-target", () => {
-    expect(cardSource).toMatch(
-      /isOver\s*&&\s*!isActive\s*&&\s*"ring-2 ring-inset ring-border-default"/
+  it("marks the panel drop-target via data-drop-target, painted as an inset ring in CSS", () => {
+    expect(cardSource).toMatch(/data-drop-target=\{isPanelDropTarget \? "true" : undefined\}/);
+    // The ring lives in sidebar.css as an inset box-shadow because the
+    // unlayered base card declarations override layered Tailwind utilities.
+    expect(cardSource).not.toMatch(/isOver\s*&&\s*!isActive\s*&&\s*"ring-2/);
+    expect(sidebarCss).toMatch(
+      /\.sidebar-worktree-card\[data-drop-target="true"\]\s*\{[^}]*inset 0 0 0 2px var\(--theme-border-strong\)/
     );
   });
 
@@ -41,12 +45,12 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
     expect(cardSource).toContain("[html[data-dragging='true']_&]:hover:shadow-none");
   });
 
-  it("suppresses sidebar hover background while a drag is active for both hover paths", () => {
+  it("suppresses sidebar hover background while a drag is active, except on the drop target", () => {
     expect(sidebarCss).toMatch(
-      /html\[data-dragging="true"\][^{]*\.sidebar-worktree-card\[data-hoverable="true"\]:hover/
+      /html\[data-dragging="true"\][^{]*\.sidebar-worktree-card\[data-hoverable="true"\]:not\(\[data-drop-target="true"\]\):hover/
     );
     expect(sidebarCss).toMatch(
-      /html\[data-dragging="true"\][^{]*\.sidebar-worktree-card\[data-hovered="true"\]/
+      /html\[data-dragging="true"\][^{]*\.sidebar-worktree-card\[data-hovered="true"\]:not\(\[data-drop-target="true"\]\)/
     );
   });
 
@@ -153,12 +157,12 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).toContain("cursor-not-allowed opacity-30");
   });
 
-  it("sets aria-disabled on the disabled grip", () => {
-    expect(cardSource).toContain('aria-disabled="true"');
-  });
-
-  it("labels the disabled grip for screen readers", () => {
-    expect(cardSource).toContain('aria-label="Manual reorder paused while filter is active"');
+  it("hides the pointer-only grips from assistive tech instead of dead aria-labels", () => {
+    // The grips are role-less and non-focusable (SortableWorktreeCard strips
+    // dnd-kit's role/tabIndex), so an aria-label would claim a phantom
+    // control — keyboard reorder is the row's Alt+Arrow path.
+    expect(cardSource).not.toContain('aria-label="Drag to reorder"');
+    expect(cardSource).not.toContain('aria-label="Manual reorder paused while filter is active"');
   });
 
   it("shows the disabled explanation in a TooltipContent", () => {
@@ -172,7 +176,7 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
 
   it("keeps the enabled grip with cursor-grab and dragHandleListeners", () => {
     expect(cardSource).toContain("cursor-grab active:cursor-grabbing");
-    expect(cardSource).toContain('aria-label="Drag to reorder"');
+    expect(cardSource).toContain("{...dragHandleListeners}");
   });
 
   it("preserves the group-hover delay on the enabled grip", () => {

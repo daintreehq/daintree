@@ -43,6 +43,12 @@ export interface HostContext {
   visualSignalView: Int32Array | null;
   analysisBuffer: SharedRingBuffer | null;
   ptyPool: PtyPool | null;
+  /**
+   * True when the boot-time homedir pool warm was deferred because main
+   * signalled an imminent project restore (DAINTREE_PTY_DEFER_POOL_WARM).
+   * Consumed (set false) by the first set-active-project / project-switch.
+   */
+  initialPoolWarmDeferred: boolean;
 
   // Stable function references
   sendEvent: (event: PtyHostEvent) => void;

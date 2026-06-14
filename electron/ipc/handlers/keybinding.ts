@@ -9,7 +9,7 @@ import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 
-function getValidatedOverrides(): Record<string, string[]> {
+export function getValidatedOverrides(): Record<string, string[]> {
   const raw = store.get("keybindingOverrides.overrides");
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return {};

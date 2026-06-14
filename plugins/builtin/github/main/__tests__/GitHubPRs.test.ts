@@ -39,8 +39,14 @@ vi.mock("../GitHubCaches.js", async () => {
   };
 });
 
-import { getPRReviewThreads, parsePRNode } from "../GitHubPRs.js";
-import { MAX_REVIEW_THREAD_PAGES } from "../GitHubCaches.js";
+import { getPRReviewThreads, parsePRNode, updateRepoStatsCount } from "../GitHubPRs.js";
+import {
+  MAX_REVIEW_THREAD_PAGES,
+  repoStatsCache,
+  repoStatsAndPageSnapshotCache,
+  restCountsCache,
+  getETagCacheVersion,
+} from "../GitHubCaches.js";
 
 function makeThreadNode(path: string, isResolved = false, isOutdated = false) {
   return { path, isResolved, isOutdated };
@@ -462,5 +468,116 @@ describe("parsePRNode — global CI aggregates", () => {
   it("normalises lowercase mergeStateStatus to uppercase", () => {
     const pr = parsePRNode(makeBaseNode({ mergeStateStatus: "clean" }));
     expect(pr.mergeStateStatus).toBe("CLEAN");
+  });
+});
+
+describe("updateRepoStatsCount — long-lived count cache reconciliation", () => {
+  const KEY = "owner/repo";
+
+  beforeEach(() => {
+    repoStatsCache.clear();
+    repoStatsAndPageSnapshotCache.clear();
+    restCountsCache.clear();
+    // Seed the in-memory stats entry so the function takes the cached-update
+    // branch and never touches the real on-disk GitHubStatsCache.
+    repoStatsCache.set(KEY, {
+      issueCount: 5,
+      prCount: 1,
+      lastUpdated: 1_000,
+      issueCountRefreshedAt: 1_000,
+      prCountRefreshedAt: 1_000,
+    });
+  });
+
+  function seedSnapshot(issueCount: number, prCount: number): void {
+    repoStatsAndPageSnapshotCache.set(KEY, {
+      stats: {
+        issueCount,
+        prCount,
+        lastUpdated: 1_000,
+        issueCountRefreshedAt: 1_000,
+        prCountRefreshedAt: 1_000,
+      },
+      issues: { items: [], endCursor: null, hasNextPage: false, totalCount: issueCount },
+      prs: { items: [], endCursor: null, hasNextPage: false, totalCount: prCount },
+    });
+  }
+
+  function seedRestCounts(combinedCount: number, prCount: number): void {
+    restCountsCache.set(KEY, {
+      combinedCount,
+      prCount,
+      repoEtag: '"r1"',
+      prEtag: '"p1"',
+      lastUpdated: 1_000,
+    });
+  }
+
+  it("applies the observed count and stamps only that kind's refreshed-at", () => {
+    updateRepoStatsCount(KEY, "pr", 2);
+
+    const updated = repoStatsCache.get(KEY);
+    expect(updated?.prCount).toBe(2);
+    expect(updated?.issueCount).toBe(5);
+    expect(updated?.prCountRefreshedAt).toBeGreaterThan(1_000);
+    // A PR list write-back says nothing about the issue count — refreshing
+    // its recency too would let a stale issue count outrank a real
+    // issue-list observation and suppress the issue dropdown's forced
+    // refresh.
+    expect(updated?.issueCountRefreshedAt).toBe(1_000);
+  });
+
+  it("drops a page snapshot whose PR count disagrees with the list-observed total", () => {
+    seedSnapshot(5, 1);
+
+    updateRepoStatsCount(KEY, "pr", 2);
+
+    // The snapshot's first-page items are stale by the same evidence as its
+    // count — the whole entry must go, or the next unchanged-probe poll
+    // resurrects the old count for up to the snapshot's 10-minute TTL.
+    expect(repoStatsAndPageSnapshotCache.get(KEY)).toBeUndefined();
+  });
+
+  it("keeps a page snapshot that agrees with the list-observed total", () => {
+    seedSnapshot(5, 2);
+
+    updateRepoStatsCount(KEY, "pr", 2);
+
+    expect(repoStatsAndPageSnapshotCache.get(KEY)).not.toBeUndefined();
+  });
+
+  it("drops a REST count baseline whose PR count disagrees, forcing an unconditional re-read", () => {
+    seedRestCounts(6, 1);
+    const versionBefore = getETagCacheVersion();
+
+    updateRepoStatsCount(KEY, "pr", 2);
+
+    // Dropping the entry discards its ETags too — the next background poll
+    // must re-read both REST legs instead of 304-replaying the stale count.
+    expect(restCountsCache.get(KEY)).toBeUndefined();
+    // The version bump invalidates any in-flight conditional fetch that read
+    // its baseline before the drop, so it can't 304-recommit the stale value.
+    expect(getETagCacheVersion()).toBeGreaterThan(versionBefore);
+  });
+
+  it("keeps a REST count baseline that agrees with the list-observed total", () => {
+    seedRestCounts(6, 2);
+    const versionBefore = getETagCacheVersion();
+
+    updateRepoStatsCount(KEY, "pr", 2);
+
+    expect(restCountsCache.get(KEY)).not.toBeUndefined();
+    // No baseline dropped — in-flight conditional fetches stay valid.
+    expect(getETagCacheVersion()).toBe(versionBefore);
+  });
+
+  it("compares issue updates against the derived REST issue count (combined − PRs)", () => {
+    seedRestCounts(6, 1);
+
+    updateRepoStatsCount(KEY, "issue", 5);
+    expect(restCountsCache.get(KEY)).not.toBeUndefined();
+
+    updateRepoStatsCount(KEY, "issue", 7);
+    expect(restCountsCache.get(KEY)).toBeUndefined();
   });
 });

@@ -33,7 +33,7 @@ export function registerGitInitHandlers(): () => void {
       throw new Error("Path is not a directory");
     }
 
-    const git = createHardenedGit(directoryPath);
+    const git = await createHardenedGit(directoryPath);
     await git.init();
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_INIT_GIT, handleProjectInitGit));
@@ -92,7 +92,7 @@ export function registerGitInitHandlers(): () => void {
         throw new Error("Path is not a directory");
       }
 
-      const git = createHardenedGit(directoryPath);
+      const git = await createHardenedGit(directoryPath);
 
       emitProgress("init", "start", "Initializing Git repository...");
       await git.init();
@@ -149,11 +149,12 @@ export function registerGitInitHandlers(): () => void {
         completedSteps.push("add");
         emitProgress("add", "success", "Files staged");
 
+        const commitMessage = initialCommitMessage.trim() || "Initial commit";
         emitProgress("commit", "start", "Creating initial commit...");
         try {
-          await git.commit(initialCommitMessage);
+          await git.commit(commitMessage);
           completedSteps.push("commit");
-          emitProgress("commit", "success", `Committed: ${initialCommitMessage}`);
+          emitProgress("commit", "success", `Committed: ${commitMessage}`);
         } catch (commitError) {
           const errorMsg = formatErrorMessage(commitError, "Failed to create initial commit");
           if (errorMsg.includes("user.email") || errorMsg.includes("user.name")) {
@@ -168,14 +169,14 @@ export function registerGitInitHandlers(): () => void {
               "Repository initialized — initial commit skipped",
               identityHelp
             );
-            return { completedSteps };
+            return { outcome: "error" as const, completedSteps };
           }
           throw commitError;
         }
       }
 
       emitProgress("complete", "success", "Git initialization complete");
-      return { completedSteps };
+      return { outcome: "success" as const, completedSteps };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Git initialization failed");
       emitProgress("error", "error", "Git initialization failed", errorMessage);

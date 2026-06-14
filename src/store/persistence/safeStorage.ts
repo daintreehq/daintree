@@ -305,6 +305,7 @@ function parseBackup<T>(raw: string | null): StorageValue<T> | null {
 
 export function createSafeJSONStorage<T>(): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
+  const lastWritten = new Map<string, string>();
 
   return {
     getItem: (name) => {
@@ -333,14 +334,20 @@ export function createSafeJSONStorage<T>(): PersistStorage<T> {
     },
     setItem: (name, value) => {
       const serialized = JSON.stringify(value);
+      if (lastWritten.get(name) === serialized) return;
       // Only advance the backup when the primary write actually reached durable
       // storage. On a quota failure the primary keeps its old value, so writing
       // a newer backup would leave the two inconsistent and recover stale state.
-      if (raw.setItem(name, serialized) === "durable") {
+      const result = raw.setItem(name, serialized);
+      if (result === "durable") {
+        lastWritten.set(name, serialized);
         raw.writeBackup(name, serialized);
+      } else if (result === "memory") {
+        lastWritten.set(name, serialized);
       }
     },
     removeItem: (name) => {
+      lastWritten.delete(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },
@@ -400,6 +407,7 @@ export function createDebouncedSafeJSONStorage<T>(delayMs: number): PersistStora
     setItem: (name, value) => {
       const serialized = JSON.stringify(value);
       const existing = pending.get(name);
+      if (existing?.value === serialized) return;
       if (existing) clearTimeout(existing.timer);
       const timer = setTimeout(() => flush(name), delayMs);
       pending.set(name, { timer, value: serialized });

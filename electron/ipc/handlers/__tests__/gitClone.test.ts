@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { EventEmitter } from "events";
 import path from "node:path";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -52,9 +51,11 @@ vi.mock("../../../utils/hardenedGit.js", () => ({
   createAuthenticatedGit: createAuthenticatedGitMock,
 }));
 
-const parseGitHubRepoUrlMock = vi.hoisted(() => vi.fn());
-vi.mock("../../../services/github/index.js", () => ({
-  parseGitHubRepoUrl: parseGitHubRepoUrlMock,
+const getActiveProviderMock = vi.hoisted(() => vi.fn());
+const getForgeProviderImplMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../services/forgeProviderRegistry.js", () => ({
+  getActiveProvider: getActiveProviderMock,
+  getForgeProviderImpl: getForgeProviderImplMock,
 }));
 
 const childProcessMock = vi.hoisted(() => ({
@@ -77,6 +78,7 @@ vi.mock("fs", () => ({ default: fsMock, ...fsMock }));
 
 import { CHANNELS } from "../../channels.js";
 import { registerGitCloneHandlers } from "../projectCrud/gitClone.js";
+import type { CloneCapability } from "../../../../shared/types/forge.js";
 
 function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(
@@ -84,57 +86,6 @@ function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unkn
   );
   if (!call) throw new Error(`No handler registered for channel: ${channel}`);
   return call[1] as (...args: unknown[]) => Promise<unknown>;
-}
-
-class FakeChildProcess extends EventEmitter {
-  pid = 12345;
-  stderr = new EventEmitter() as EventEmitter & { setEncoding: (e: string) => void };
-  stdout = new EventEmitter();
-  kill = vi.fn();
-  constructor() {
-    super();
-    this.stderr.setEncoding = vi.fn();
-  }
-}
-
-type MakeChildOptions = {
-  onSpawn?: (child: FakeChildProcess) => void;
-  closeCode?: number | null;
-  emitImmediately?: boolean;
-};
-
-function makeChild(opts: MakeChildOptions = {}) {
-  const child = new FakeChildProcess();
-  const { onSpawn, closeCode = 0, emitImmediately = true } = opts;
-  if (emitImmediately) {
-    // Defer to next tick so caller can attach listeners.
-    queueMicrotask(() => {
-      onSpawn?.(child);
-      child.emit("close", closeCode);
-    });
-  } else {
-    onSpawn?.(child);
-  }
-  return child;
-}
-
-function setAuthSuccess() {
-  // execFile("gh", ["auth", "status"], opts, cb) — call cb with no error.
-  childProcessMock.execFile.mockImplementation(
-    (_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
-      queueMicrotask(() => cb(null));
-      return new FakeChildProcess();
-    }
-  );
-}
-
-function setAuthFailure(err: Error = new Error("not authed")) {
-  childProcessMock.execFile.mockImplementation(
-    (_cmd: string, _args: string[], _opts: unknown, cb: (e: Error | null) => void) => {
-      queueMicrotask(() => cb(err));
-      return new FakeChildProcess();
-    }
-  );
 }
 
 function setFsHappyPath() {
@@ -157,92 +108,60 @@ function makeCtxEvent() {
   return { sender: { id: 1 } };
 }
 
+function setProvider(clone: CloneCapability | undefined) {
+  getActiveProviderMock.mockReturnValue({
+    pluginId: "daintree.github",
+    contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+  });
+  getForgeProviderImplMock.mockReturnValue(clone ? { clone } : {});
+}
+
+const TARGET_PATH = path.join("/abs/parent", "repo");
+
 beforeEach(() => {
   vi.clearAllMocks();
   setFsHappyPath();
-  parseGitHubRepoUrlMock.mockReturnValue({ owner: "owner", repo: "repo" });
+  getActiveProviderMock.mockReturnValue(undefined);
+  getForgeProviderImplMock.mockReturnValue(undefined);
   createAuthenticatedGitMock.mockReturnValue({
     clone: vi.fn().mockResolvedValue(undefined),
   });
 });
 
-describe("gitClone — gh repo clone fast path", () => {
-  it("uses gh repo clone when URL is github.com and gh is authenticated", async () => {
-    setAuthSuccess();
-    let spawnedArgs: string[] | undefined;
-    childProcessMock.spawn.mockImplementation((_cmd: string, args: string[]) => {
-      spawnedArgs = args;
-      return makeChild();
+describe("gitClone — forge provider clone path", () => {
+  it("uses the provider's cloneRepository when probeAuth reports authenticated", async () => {
+    const cloneRepository = vi.fn().mockResolvedValue(undefined);
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      cloneRepository,
     });
 
     const cleanup = registerGitCloneHandlers();
     const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
-    const targetPath = path.join("/abs/parent", "repo");
 
     const result = await handler(makeCtxEvent(), makeOptions());
 
-    expect(childProcessMock.spawn).toHaveBeenCalledWith(
-      "gh",
-      expect.arrayContaining(["repo", "clone", "owner/repo"]),
-      expect.objectContaining({ cwd: "/abs/parent" })
+    expect(getForgeProviderImplMock).toHaveBeenCalledWith("daintree.github.github");
+    expect(cloneRepository).toHaveBeenCalledWith(
+      "https://github.com/owner/repo",
+      TARGET_PATH,
+      expect.objectContaining({
+        shallow: false,
+        signal: expect.any(AbortSignal),
+        onProgress: expect.any(Function),
+      })
     );
-    expect(spawnedArgs?.slice(0, 4)).toEqual(["repo", "clone", "owner/repo", "repo"]);
     expect(createAuthenticatedGitMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ clonedPath: targetPath });
+    expect(result).toEqual({ clonedPath: TARGET_PATH });
 
     cleanup();
   });
 
-  it("falls back to simple-git when gh auth status fails", async () => {
-    setAuthFailure();
-
-    const cleanup = registerGitCloneHandlers();
-    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
-
-    await handler(makeCtxEvent(), makeOptions());
-
-    expect(childProcessMock.spawn).not.toHaveBeenCalled();
-    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
-
-    cleanup();
-  });
-
-  it("falls back to simple-git when gh is not on PATH (ENOENT)", async () => {
-    const enoent = Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
-    setAuthFailure(enoent);
-
-    const cleanup = registerGitCloneHandlers();
-    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
-
-    await handler(makeCtxEvent(), makeOptions());
-
-    expect(childProcessMock.spawn).not.toHaveBeenCalled();
-    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
-
-    cleanup();
-  });
-
-  it("skips gh probe and uses simple-git for non-github.com URLs", async () => {
-    parseGitHubRepoUrlMock.mockReturnValue(null);
-
-    const cleanup = registerGitCloneHandlers();
-    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
-
-    await handler(makeCtxEvent(), makeOptions({ url: "https://gitlab.com/owner/repo" }));
-
-    expect(childProcessMock.execFile).not.toHaveBeenCalled();
-    expect(childProcessMock.spawn).not.toHaveBeenCalled();
-    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
-
-    cleanup();
-  });
-
-  it("appends -- --depth 1 to gh args when shallowClone is true", async () => {
-    setAuthSuccess();
-    let spawnedArgs: string[] | undefined;
-    childProcessMock.spawn.mockImplementation((_cmd: string, args: string[]) => {
-      spawnedArgs = args;
-      return makeChild();
+  it("forwards shallowClone to the capability as shallow: true", async () => {
+    const cloneRepository = vi.fn().mockResolvedValue(undefined);
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      cloneRepository,
     });
 
     const cleanup = registerGitCloneHandlers();
@@ -250,27 +169,23 @@ describe("gitClone — gh repo clone fast path", () => {
 
     await handler(makeCtxEvent(), makeOptions({ shallowClone: true }));
 
-    expect(spawnedArgs).toEqual(["repo", "clone", "owner/repo", "repo", "--", "--depth", "1"]);
+    expect(cloneRepository).toHaveBeenCalledWith(
+      expect.any(String),
+      TARGET_PATH,
+      expect.objectContaining({ shallow: true })
+    );
 
     cleanup();
   });
 
-  it("emits progress for the four stage patterns on stderr", async () => {
-    setAuthSuccess();
-
-    childProcessMock.spawn.mockImplementation(() => {
-      const child = new FakeChildProcess();
-      queueMicrotask(() => {
-        child.stderr.emit(
-          "data",
-          "Counting objects:  50% (5/10)\rCounting objects: 100% (10/10), done.\n" +
-            "Compressing objects:  75% (3/4)\rCompressing objects: 100% (4/4), done.\n" +
-            "Receiving objects:  50% (5/10)\rReceiving objects: 100% (10/10), done.\n" +
-            "Resolving deltas: 100% (3/3), done.\n"
-        );
-        child.emit("close", 0);
-      });
-      return child;
+  it("relays capability progress callbacks as clone-progress events", async () => {
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      cloneRepository: vi.fn(
+        async (_url: string, _dir: string, opts: { onProgress?: (...a: unknown[]) => void }) => {
+          opts.onProgress?.("receiving", 42, "receiving: 42%");
+        }
+      ),
     });
 
     const cleanup = registerGitCloneHandlers();
@@ -278,25 +193,123 @@ describe("gitClone — gh repo clone fast path", () => {
 
     await handler(makeCtxEvent(), makeOptions());
 
-    const events = broadcastToRendererMock.mock.calls.map((c) => c[1] as { stage: string });
-    const stages = events.map((e) => e.stage);
-    expect(stages).toContain("counting");
-    expect(stages).toContain("compressing");
-    expect(stages).toContain("receiving");
-    expect(stages).toContain("resolving");
+    const events = broadcastToRendererMock.mock.calls.map(
+      (c) => c[1] as { stage: string; progress: number }
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ stage: "receiving", progress: 42, message: "receiving: 42%" })
+    );
 
     cleanup();
   });
 
-  it("rejects with INTERNAL when gh repo clone exits non-zero (no simple-git fallback)", async () => {
-    setAuthSuccess();
-    childProcessMock.spawn.mockImplementation(() => {
-      const child = new FakeChildProcess();
-      queueMicrotask(() => {
-        child.stderr.emit("data", "fatal: repository not found\n");
-        child.emit("close", 1);
-      });
-      return child;
+  it("falls back to simple-git when probeAuth reports unauthenticated", async () => {
+    const cloneRepository = vi.fn();
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: false, reason: "not signed in" }),
+      cloneRepository,
+    });
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions());
+
+    expect(cloneRepository).not.toHaveBeenCalled();
+    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
+
+    cleanup();
+  });
+
+  it("falls back to simple-git when probeAuth rejects", async () => {
+    setProvider({
+      probeAuth: vi.fn().mockRejectedValue(new Error("probe blew up")),
+      cloneRepository: vi.fn(),
+    });
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions());
+
+    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
+
+    cleanup();
+  });
+
+  it("uses simple-git directly when no provider matches the URL", async () => {
+    getActiveProviderMock.mockReturnValue(undefined);
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions({ url: "https://gitlab.com/owner/repo" }));
+
+    expect(getForgeProviderImplMock).not.toHaveBeenCalled();
+    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
+
+    cleanup();
+  });
+
+  it("uses simple-git when the matching provider has no clone capability", async () => {
+    setProvider(undefined);
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions());
+
+    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
+
+    cleanup();
+  });
+
+  it("clones the authenticated URL via simple-git when only getAuthenticatedCloneUrl exists", async () => {
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      getAuthenticatedCloneUrl: vi
+        .fn()
+        .mockResolvedValue("https://x-access-token:TOKEN@github.com/owner/repo"),
+    });
+    const gitCloneMock = vi.fn().mockResolvedValue(undefined);
+    createAuthenticatedGitMock.mockReturnValue({ clone: gitCloneMock });
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions());
+
+    expect(gitCloneMock).toHaveBeenCalledWith(
+      "https://x-access-token:TOKEN@github.com/owner/repo",
+      "repo",
+      []
+    );
+
+    cleanup();
+  });
+
+  it("clones the original URL when getAuthenticatedCloneUrl returns null", async () => {
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      getAuthenticatedCloneUrl: vi.fn().mockResolvedValue(null),
+    });
+    const gitCloneMock = vi.fn().mockResolvedValue(undefined);
+    createAuthenticatedGitMock.mockReturnValue({ clone: gitCloneMock });
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions());
+
+    expect(gitCloneMock).toHaveBeenCalledWith("https://github.com/owner/repo", "repo", []);
+
+    cleanup();
+  });
+
+  it("rejects without a simple-git fallback when cloneRepository fails", async () => {
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      cloneRepository: vi.fn().mockRejectedValue(new Error("gh repo clone exited with code 1")),
     });
 
     const cleanup = registerGitCloneHandlers();
@@ -311,50 +324,13 @@ describe("gitClone — gh repo clone fast path", () => {
     cleanup();
   });
 
-  it("aborts gh clone on cancel via taskkill on Windows and SIGTERM on Unix", async () => {
-    setAuthSuccess();
-    const realPlatform = process.platform;
-
-    let capturedChild: FakeChildProcess | undefined;
-    childProcessMock.spawn.mockImplementation(() => {
-      const child = new FakeChildProcess();
-      capturedChild = child;
-      // Don't auto-close — we want the cancel path to drive the close.
-      return child;
+  it("cleans up the partial clone directory on capability-path failure", async () => {
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      cloneRepository: vi.fn().mockRejectedValue(new Error("boom")),
     });
-
-    const cleanup = registerGitCloneHandlers();
-    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
-    const cancelHandler = getInvokeHandler(CHANNELS.PROJECT_CLONE_CANCEL);
-
-    const clonePromise = handler(makeCtxEvent(), makeOptions());
-
-    // Wait a tick so spawn has been called and the abort listener is wired.
-    await new Promise((r) => setTimeout(r, 5));
-
-    // Trigger cancel.
-    await cancelHandler(makeCtxEvent());
-
-    // Drive the close after kill.
-    capturedChild?.emit("close", null);
-
-    await expect(clonePromise).rejects.toMatchObject({ code: "CANCELLED" });
-
-    if (realPlatform === "win32") {
-      expect(childProcessMock.spawnSync).toHaveBeenCalledWith(
-        "taskkill",
-        expect.arrayContaining(["/F", "/T", "/PID"]),
-        expect.objectContaining({ windowsHide: true })
-      );
-    }
-    // The cleanup of partial dirs should not have been called (access returns ENOENT in happy path)
-    cleanup();
-  });
-
-  it("cleans up partial clone directory on gh-path failure", async () => {
-    setAuthSuccess();
-    // First access (target exists check) rejects (ENOENT — proceed), second access
-    // (partial-clone cleanup check) resolves (target exists — must be removed).
+    // First access (target exists check) rejects (ENOENT — proceed), second
+    // access (partial-clone cleanup check) resolves (target exists — remove).
     let accessCallCount = 0;
     fsMock.promises.access.mockImplementation(() => {
       accessCallCount++;
@@ -364,11 +340,8 @@ describe("gitClone — gh repo clone fast path", () => {
       return Promise.resolve(undefined);
     });
 
-    childProcessMock.spawn.mockImplementation(() => makeChild({ closeCode: 128 }));
-
     const cleanup = registerGitCloneHandlers();
     const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
-    const targetPath = path.join("/abs/parent", "repo");
 
     await expect(handler(makeCtxEvent(), makeOptions())).rejects.toMatchObject({
       name: "GitOperationError",
@@ -376,9 +349,41 @@ describe("gitClone — gh repo clone fast path", () => {
     });
 
     expect(fsMock.promises.rm).toHaveBeenCalledWith(
-      targetPath,
+      TARGET_PATH,
       expect.objectContaining({ recursive: true, force: true })
     );
+
+    cleanup();
+  });
+
+  it("rejects with CANCELLED when the clone is cancelled mid-capability-clone", async () => {
+    let observedSignal: AbortSignal | undefined;
+    setProvider({
+      probeAuth: vi.fn().mockResolvedValue({ authenticated: true }),
+      cloneRepository: vi.fn(
+        (_url: string, _dir: string, opts: { signal?: AbortSignal }) =>
+          new Promise<void>((_, reject) => {
+            observedSignal = opts.signal;
+            opts.signal?.addEventListener("abort", () => reject(new Error("Clone cancelled")), {
+              once: true,
+            });
+          })
+      ),
+    });
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+    const cancelHandler = getInvokeHandler(CHANNELS.PROJECT_CLONE_CANCEL);
+
+    const clonePromise = handler(makeCtxEvent(), makeOptions());
+
+    // Wait a tick so the capability has been invoked and the signal captured.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(observedSignal).toBeDefined();
+
+    await cancelHandler(makeCtxEvent());
+
+    await expect(clonePromise).rejects.toMatchObject({ code: "CANCELLED" });
 
     cleanup();
   });

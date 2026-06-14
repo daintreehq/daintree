@@ -621,20 +621,21 @@ export function BrowserPane({
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
-    if (!webview || !isWebviewReady) return;
+    if (!webview || !isWebviewReady) return false;
     let url: string;
     try {
       url = webview.getURL();
     } catch {
-      return;
+      return false;
     }
-    if (!url || url === "about:blank") return;
-    if (screenshotInFlightRef.current) return;
+    if (!url || url === "about:blank") return false;
+    if (screenshotInFlightRef.current) return false;
     screenshotInFlightRef.current = true;
     try {
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
       await window.electron.clipboard.writeImage(pngData);
+      return true;
     } catch {
       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
       notify({
@@ -642,6 +643,7 @@ export function BrowserPane({
         title: "Screenshot failed",
         message: "Couldn't copy the screenshot to clipboard",
       });
+      return false;
     } finally {
       screenshotInFlightRef.current = false;
     }
@@ -815,13 +817,7 @@ export function BrowserPane({
           { source: "user" }
         )
       }
-      onCaptureScreenshot={() =>
-        void actionService.dispatch(
-          "browser.captureScreenshot",
-          { terminalId: id },
-          { source: "user" }
-        )
-      }
+      onCaptureScreenshot={handleCaptureScreenshot}
       onToggleDevTools={() =>
         void actionService.dispatch(
           "browser.toggleDevTools",

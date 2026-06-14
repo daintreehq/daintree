@@ -5,7 +5,7 @@
  * Switching projects swaps the visible view (<16ms for cached views).
  */
 
-import { app, BrowserWindow, WebContentsView, session } from "electron";
+import { app, BrowserWindow, WebContentsView, session, webContents } from "electron";
 import path from "path";
 import { performance } from "node:perf_hooks";
 import {
@@ -14,6 +14,8 @@ import {
   unregisterWebContents,
   registerProjectView,
   unregisterProjectView,
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
 } from "./webContentsRegistry.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
@@ -27,12 +29,14 @@ import type { PtyClient } from "../services/PtyClient.js";
 import { events } from "../services/events.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo, logWarn } from "../utils/logger.js";
+import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import {
   injectSkeletonCss,
   injectSkeletonProjectIdentity,
   resolveInitialColorSchemeId,
   resolveInitialCanvasBackgroundColor,
+  resolveE2EPreloadArgs,
   resolveInstanceRole,
   INITIAL_COLOR_SCHEME_ARG,
   INITIAL_PROJECT_ID_ARG,
@@ -52,7 +56,6 @@ import {
   unthrottleCpuWebContents,
 } from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
-import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
   beginWindowRecreating,
   endWindowRecreating,
@@ -68,6 +71,13 @@ const CRASH_LOOP_THRESHOLD = 3;
 // observable benefit. Unfreeze is always immediate — keeping a view frozen
 // after we've decided to leave efficiency is the worst-of-both-worlds.
 const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
+// Trailing-edge debounce for forwarding resize-end content bounds to cached
+// project views (#10415). Cached renderers are CPU-throttled (and CDP-frozen
+// under efficiency), so mid-drag spam is pure waste — only the settled size
+// matters. IPC to a frozen renderer queues in Mojo and delivers on unfreeze,
+// so no wake cycle is needed. Single debounce on `resize` rather than the
+// `resized` event because Linux never emits `resized`.
+const BACKGROUND_RESIZE_DEBOUNCE_MS = 300;
 /**
  * Soft paint-gate timeout (ms). At this point the gate logs that the
  * incoming view is taking longer than the typical cold start, but the
@@ -96,7 +106,9 @@ const DEFAULT_WARM_PAINT_GATE_HARD_TIMEOUT_MS = 1_500;
  * Period between renderer-memory samples for cached (non-active) views. 30 s
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
- * jank. The sampler is silent telemetry only — no behaviour change.
+ * jank. Each tick also evaluates the low-memory pressure floor (see
+ * `maybeEvictUnderPressure`), bounding pressure-eviction latency to one
+ * sample period without a new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
@@ -230,6 +242,7 @@ export class ProjectViewManager {
   private evictionTimestamps = new Map<string, number>();
   private efficiencyFreezeEnabled = false;
   private efficiencyFreezeTimer: NodeJS.Timeout | null = null;
+  private backgroundResizeTimer: NodeJS.Timeout | null = null;
   private pendingPaintGate: PaintGate | null = null;
   private paintGateTimeoutMs = DEFAULT_PAINT_GATE_TIMEOUT_MS;
   private paintGateHardTimeoutMs = DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS;
@@ -298,6 +311,7 @@ export class ProjectViewManager {
       if (outgoing && !outgoing.webContents.isDestroyed() && outgoing !== view) {
         outgoing.setBounds({ x: 0, y: 0, width, height });
       }
+      this.scheduleBackgroundResizeNotify();
     };
     win.on("resize", this.resizeHandler);
     win.on("maximize", this.resizeHandler);
@@ -305,22 +319,42 @@ export class ProjectViewManager {
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
 
-    // Outer try/catch is load-bearing: `setAlignedInterval` calls the callback
-    // synchronously on the first aligned tick BEFORE installing the recurring
-    // `setInterval`. If the first tick throws, the recurring interval is never
-    // installed and all subsequent sampling is silently lost. Any uncaught throw
-    // also reaches `uncaughtException`. Sampling failures are pure telemetry
-    // and must never destabilise the manager.
-    this.cachedMemoryTimerCleanup = setAlignedInterval(() => {
-      if (this.disposed) return;
-      try {
-        this.sampleCachedViewMemory();
-      } catch (error) {
-        logWarn("projectview.cached-memory.error", {
-          error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
-        });
+    // Per-instance random phase offset: every window has its own sampler, and
+    // app.getAppMetrics() costs 5–50ms of synchronous main-thread work. A
+    // wall-clock-aligned interval would collapse all windows onto the same
+    // tick and stack those costs; the jittered first delay spreads them across
+    // the sample window. try/catch is load-bearing: an uncaught throw would
+    // stop rescheduling and reach `uncaughtException`. Sampling failures are
+    // pure telemetry and must never destabilise the manager.
+    let sampleTimer: NodeJS.Timeout | null = null;
+    const scheduleSample = (delayMs: number) => {
+      sampleTimer = setTimeout(() => {
+        if (this.disposed) return;
+        try {
+          this.sampleCachedViewMemory();
+        } catch (error) {
+          logWarn("projectview.cached-memory.error", {
+            error: formatErrorMessage(error, "sampleCachedViewMemory threw"),
+          });
+        }
+        try {
+          this.maybeEvictUnderPressure();
+        } catch (error) {
+          logWarn("projectview.pressure-check.error", {
+            error: formatErrorMessage(error, "maybeEvictUnderPressure threw"),
+          });
+        }
+        scheduleSample(CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
+      }, delayMs);
+      sampleTimer.unref?.();
+    };
+    scheduleSample(Math.random() * CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
+    this.cachedMemoryTimerCleanup = () => {
+      if (sampleTimer) {
+        clearTimeout(sampleTimer);
+        sampleTimer = null;
       }
-    }, CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
+    };
   }
 
   /**
@@ -476,6 +510,18 @@ export class ProjectViewManager {
       // can move focus, and the warm gate may have run for hundreds of ms.
       if (!cached.view.webContents.isDestroyed()) {
         cached.view.webContents.focus();
+        // Post-reveal repaint (#10362): the renderer's wake fan-out ran while
+        // this view was occluded behind the anti-flash bridge, where Chromium
+        // culls paints for a non-foreground WebContentsView — so agent
+        // terminals can stay garbled until the user clicks each pane. Now the
+        // bridge is gone and the view is the focused foreground surface: force a
+        // fresh composite and tell the renderer to re-run its terminal redraw.
+        // Skip when a superseding switch has already moved on — this view is no
+        // longer the revealed foreground, so repainting it would be wasted work.
+        if (this.activeProjectId === projectId) {
+          cached.view.webContents.invalidate();
+          cached.view.webContents.send(CHANNELS.APP_VIEW_REVEALED);
+        }
       }
       const cachedIntent = this.consumePendingFocusIntent(projectId);
       if (cachedIntent) {
@@ -655,8 +701,13 @@ export class ProjectViewManager {
       view.webContents.focus();
     }
 
-    // Evict LRU views if over limit
-    this.evictStaleViews("lru");
+    // Evict LRU views if over limit — deferred off the switch promise;
+    // evictStaleViews re-checks all state at run time.
+    setImmediate(() => {
+      if (!this.disposed && !this.win.isDestroyed()) {
+        this.evictStaleViews("lru");
+      }
+    });
 
     return { view, isNew: true };
   }
@@ -861,6 +912,26 @@ export class ProjectViewManager {
   }
 
   /**
+   * Set the soft warm-reactivation paint-gate timeout (ms). Does NOT retime
+   * an in-flight gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setWarmPaintGateTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.warmPaintGateTimeoutMs = ms;
+  }
+
+  /**
+   * Set the hard warm-reactivation paint-gate timeout (ms). Does NOT retime
+   * an in-flight gate — the value is captured at gate creation. Called by
+   * `ResourceProfileService` to push per-profile timing.
+   */
+  setWarmPaintGateHardTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.warmPaintGateHardTimeoutMs = ms;
+  }
+
+  /**
    * Set the available-memory floor (MB) below which eviction clamps the
    * effective cap to 1 view for the current pass without mutating
    * `maxCachedViews`. `null` disables the override.
@@ -908,6 +979,33 @@ export class ProjectViewManager {
       const wc = entry.view.webContents;
       if (wc.isDestroyed()) continue;
       void freezeWebContents(wc);
+    }
+  }
+
+  private scheduleBackgroundResizeNotify(): void {
+    if (this.backgroundResizeTimer) {
+      clearTimeout(this.backgroundResizeTimer);
+    }
+    this.backgroundResizeTimer = setTimeout(() => {
+      this.backgroundResizeTimer = null;
+      this.notifyBackgroundResize();
+    }, BACKGROUND_RESIZE_DEBOUNCE_MS);
+  }
+
+  // Forward the settled content bounds to every cached view so its renderer
+  // can keep PTY geometry tracking the window while detached (#10415). The
+  // detached view's own viewport stays stale until reattach — setBounds()
+  // does not propagate to a detached WebContentsView — so the renderer
+  // derives terminal sizes from these bounds instead of from layout.
+  private notifyBackgroundResize(): void {
+    if (this.disposed || this.win.isDestroyed()) return;
+    const { width, height } = this.win.getContentBounds();
+    for (const [projectId, entry] of this.views) {
+      if (projectId === this.activeProjectId) continue;
+      if (entry.state !== "cached") continue;
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed()) continue;
+      wc.send(CHANNELS.PROJECT_BACKGROUND_RESIZE, { width, height });
     }
   }
 
@@ -960,6 +1058,11 @@ export class ProjectViewManager {
     }
     this.efficiencyFreezeEnabled = false;
 
+    if (this.backgroundResizeTimer) {
+      clearTimeout(this.backgroundResizeTimer);
+      this.backgroundResizeTimer = null;
+    }
+
     this.clearPaintGate();
     for (const projectId of Array.from(this.views.keys())) {
       this.cleanupEntry(projectId);
@@ -986,6 +1089,9 @@ export class ProjectViewManager {
     // Throttle background view to reduce CPU and allow Chromium to reclaim memory
     if (!current.view.webContents.isDestroyed()) {
       const cachedWcId = current.view.webContents.id;
+      // Mark cached so visible-only broadcasts (log batches) skip this
+      // renderer — pushed messages have no backpressure once throttled/frozen.
+      registerCachedViewWebContents(current.view.webContents);
       // Close live producer ports BEFORE applying CPU throttle. Once throttled,
       // Chromium can freeze the renderer after ~5 min hidden or under memory
       // pressure; any messages still posted by main/utility processes
@@ -1003,6 +1109,17 @@ export class ProjectViewManager {
       // keeps the event loop and MessagePort dispatch alive while slowing
       // V8/Blink CPU time for this single renderer.
       void throttleCpuWebContents(current.view.webContents);
+
+      // <webview> guests (browser/dev-preview panels) are separate renderer
+      // processes with their own CDP targets — the host's throttle does not
+      // propagate. Throttle each guest too, or a cached project's dev-preview
+      // SPA keeps running at full rate with only native 1 Hz timer
+      // throttling. Guests are intentionally NOT CDP-frozen: freezing kills
+      // dev-server HMR websockets and would fight the dock-hide freeze owned
+      // by useWebviewThrottle.
+      this.forEachGuest(current.view.webContents, (guest) => {
+        void throttleCpuWebContents(guest);
+      });
 
       // Flush pending DOMStorage writes (synchronous — view stays alive in
       // cache, so data loss is not a concern)
@@ -1050,6 +1167,10 @@ export class ProjectViewManager {
   private activateView(entry: ViewEntry, insertBehind = false): void {
     registerAppView(this.win, entry.view);
 
+    if (!entry.view.webContents.isDestroyed()) {
+      unregisterCachedViewWebContents(entry.view.webContents.id);
+    }
+
     // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
     // view activations are async, so an activating view may still be frozen
     // even if we've left efficiency in the meantime. Chromium does not
@@ -1068,6 +1189,12 @@ export class ProjectViewManager {
     // why setBackgroundThrottling is unsuitable (window-wide in Electron 28+).
     if (!entry.view.webContents.isDestroyed()) {
       void unthrottleCpuWebContents(entry.view.webContents);
+      // Mirror the guest throttle applied in deactivateEntry. CPU rate only —
+      // a guest the dock-hide path froze stays frozen (separate mechanism,
+      // released by useWebviewThrottle when its tab is shown).
+      this.forEachGuest(entry.view.webContents, (guest) => {
+        void unthrottleCpuWebContents(guest);
+      });
     }
 
     // `insertBehind` stacks the incoming view at z-index 0 (below the still-
@@ -1093,6 +1220,44 @@ export class ProjectViewManager {
     entry.state = "active";
     entry.lastUsed = Date.now();
     this.activeProjectId = entry.projectId;
+  }
+
+  /**
+   * Invoke `fn` for every live <webview> guest embedded in `hostWc`. There is
+   * no main-side attach tracking, so guests are resolved by scanning
+   * webContents.getAllWebContents() for hostWebContents identity —
+   * O(total webContents), called only on view activation/deactivation.
+   */
+  private forEachGuest(
+    hostWc: Electron.WebContents,
+    fn: (guest: Electron.WebContents) => void
+  ): void {
+    try {
+      for (const guest of webContents.getAllWebContents()) {
+        if (guest.isDestroyed()) continue;
+        if (guest.hostWebContents !== hostWc) continue;
+        fn(guest);
+      }
+    } catch {
+      // Best-effort: enumeration unavailable (tests / teardown) — guests
+      // simply keep their current CPU rate.
+    }
+  }
+
+  /** Sum the footprint of `hostWc`'s <webview> guests from a pid index. */
+  private sumGuestMemoryKb(
+    hostWc: Electron.WebContents,
+    memoryByPid: ReadonlyMap<number, number>
+  ): number {
+    let totalKb = 0;
+    this.forEachGuest(hostWc, (guest) => {
+      const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
+      if (typeof getPid !== "function") return;
+      const pid = getPid.call(guest);
+      if (typeof pid !== "number" || pid <= 0) return;
+      totalKb += memoryByPid.get(pid) ?? 0;
+    });
+    return totalKb;
   }
 
   private getUnboundOutgoingView(): WebContentsView | null {
@@ -1152,7 +1317,9 @@ export class ProjectViewManager {
         sandbox: true,
         webviewTag: true,
         navigateOnDragDrop: false,
-        v8CacheOptions: "code",
+        // Matches createWindow.ts: write the V8 code cache on first load so
+        // post-install/update launches warm up one launch sooner.
+        v8CacheOptions: app.isPackaged ? "bypassHeatCheck" : "code",
         // Seed the renderer with the persisted theme so project-switch cold
         // starts and LRU-evicted views paint the saved scheme on first frame
         // instead of a prefers-color-scheme default (#9169). The project id is
@@ -1166,6 +1333,7 @@ export class ProjectViewManager {
           `${INITIAL_COLOR_SCHEME_ARG}=${resolveInitialColorSchemeId()}`,
           `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
           `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
+          ...resolveE2EPreloadArgs(),
           // Demo mode is gated in the renderer on process.argv. Electron does
           // not forward main-process CLI switches to renderer argv, so the
           // `--demo-mode` flag must be threaded explicitly for the DemoCursor /
@@ -1419,19 +1587,33 @@ export class ProjectViewManager {
           availableMb < this.lowMemoryFreeThresholdMb);
 
       // OS-pressure memory eviction is distinct from a crash: the renderer is
-      // reclaimed by the OS without a V8 abort. The view goes blank and does
-      // not auto-reload, so an explicit reload is required. It does not count
-      // toward the crash-loop guard because repeated OS evictions under memory
-      // pressure are not a sign of a looping crash bug.
+      // reclaimed by the OS without a V8 abort. For the ACTIVE view the blank
+      // frame is user-visible, so an explicit reload is required. It does not
+      // count toward the crash-loop guard because repeated OS evictions under
+      // memory pressure are not a sign of a looping crash bug.
       if (details.reason === "memory-eviction") {
         if (projectId && projectId === this.activeProjectId) {
           notifyError(new Error("A project view was reloaded due to memory pressure."), {
             source: "renderer-crash",
           });
-        } else {
+          setImmediate(() => {
+            if (!wc.isDestroyed()) wc.reload();
+          });
+          return;
+        }
+        // Cached view: the OS reclaimed this renderer precisely because
+        // memory is scarce. A background reload would immediately respawn a
+        // full renderer (~100-500 MB) under the same pressure — and since
+        // memory-eviction is exempt from the crash-loop guard, the
+        // evict→reload→evict cycle has no backstop. Treat it as an LRU
+        // eviction instead: memory stays reclaimed and the next visit goes
+        // through the existing cold-start paint-gate path.
+        if (projectId && crashEntry?.state === "cached") {
           console.warn(
-            `[ProjectViewManager] Cached view reloaded due to memory pressure (project: ${projectId})`
+            `[ProjectViewManager] Cached view reclaimed by OS memory pressure; evicting (project: ${projectId})`
           );
+          this.evictDeadView(projectId, wc, "memory-eviction");
+          return;
         }
         setImmediate(() => {
           if (!wc.isDestroyed()) wc.reload();
@@ -1502,18 +1684,24 @@ export class ProjectViewManager {
               }
             });
         });
+      } else if (
+        projectId &&
+        projectId !== this.activeProjectId &&
+        crashEntry?.state === "cached"
+      ) {
+        // A crashed cached view has no user-visible reason to be resurrected
+        // in the background — evict it and let the next visit cold-start
+        // instead of paying a full renderer respawn now.
+        console.warn(
+          `[ProjectViewManager] Cached view crashed; evicting instead of background reload (project: ${projectId})`
+        );
+        this.evictDeadView(projectId, wc, "crash");
       } else {
         console.log("[ProjectViewManager] Renderer crash, auto-reloading view");
-        // Only the active view's crash is observable to the user — a cached
-        // view auto-reloading silently has no UI signal worth a toast.
         if (projectId && projectId === this.activeProjectId) {
           notifyError(new Error("A project view crashed and was automatically reloaded."), {
             source: "renderer-crash",
           });
-        } else {
-          console.warn(
-            `[ProjectViewManager] Cached view crashed and was auto-reloaded (project: ${projectId})`
-          );
         }
         setImmediate(() => {
           if (!wc.isDestroyed()) wc.reload();
@@ -1546,6 +1734,37 @@ export class ProjectViewManager {
 
     // Fullscreen events are handled by the window-level resize handler
     // and the sendToRenderer in createWindow.ts — no per-view listeners needed.
+  }
+
+  /**
+   * Evict a cached view whose renderer is already gone (OS memory eviction or
+   * crash) instead of reloading it in the background. Deferred one tick like
+   * the reload branches; re-checks state at run time — if the view was
+   * activated between the event and this tick, reload instead so the user
+   * isn't left on a blank frame.
+   */
+  private evictDeadView(
+    projectId: string,
+    wc: Electron.WebContents,
+    trigger: "memory-eviction" | "crash"
+  ): void {
+    setImmediate(() => {
+      if (this.disposed || this.win.isDestroyed()) return;
+      const entry = this.views.get(projectId);
+      if (!entry || entry.view.webContents.id !== wc.id) return;
+      if (entry.state !== "cached" || projectId === this.activeProjectId) {
+        if (!wc.isDestroyed()) wc.reload();
+        return;
+      }
+      logInfo("projectview.eviction", {
+        projectId,
+        reason: trigger,
+        ageMs: Date.now() - entry.lastUsed,
+        activeAgent: this.hasActiveAgent(projectId),
+      });
+      this.evictionTimestamps.set(projectId, Date.now());
+      this.cleanupEntry(projectId);
+    });
   }
 
   private cleanupEntry(projectId: string): void {
@@ -1688,7 +1907,9 @@ export class ProjectViewManager {
     // the most valuable view. Eviction is pure LRU (see #8602).
     const memoryByPid = new Map<number, number>();
     try {
-      for (const proc of app.getAppMetrics()) {
+      // Shared TTL snapshot: the eviction log line tolerates a few seconds of
+      // staleness, so a pass landing near another sampler's sweep reuses it.
+      for (const proc of getAppMetricsSnapshot()) {
         const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
         if (typeof kb === "number" && kb > 0) {
           memoryByPid.set(proc.pid, kb);
@@ -1707,6 +1928,10 @@ export class ProjectViewManager {
       if (typeof pid !== "number" || pid <= 0) return 0;
       return memoryByPid.get(pid) ?? 0;
     };
+    const guestMemoryFor = (entry: ViewEntry): number =>
+      entry.view.webContents.isDestroyed()
+        ? 0
+        : this.sumGuestMemoryKb(entry.view.webContents, memoryByPid);
 
     // Outgoing view of an open paint gate is still on-screen and serving as
     // the anti-flash bridge — treat it as non-evictable, same as the active
@@ -1744,6 +1969,7 @@ export class ProjectViewManager {
       const [projectId, entry, activeAgent] = candidates.shift()!;
       const ageMs = Date.now() - entry.lastUsed;
       const memoryKb = memoryFor(entry);
+      const guestMemoryKb = guestMemoryFor(entry);
       const ctx: Record<string, unknown> = {
         projectId,
         reason: effectiveReason,
@@ -1751,6 +1977,7 @@ export class ProjectViewManager {
         activeAgent,
       };
       if (memoryKb > 0) ctx.memoryKb = memoryKb;
+      if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
       if (availableMb != null) ctx.memoryAvailableMb = availableMb;
       logInfo("projectview.eviction", ctx);
       this.evictionTimestamps.set(projectId, Date.now());
@@ -1771,7 +1998,10 @@ export class ProjectViewManager {
 
     const memoryByPid = new Map<number, number>();
     try {
-      for (const proc of app.getAppMetrics()) {
+      // Shared TTL snapshot — telemetry tolerates staleness; per-window
+      // samplers near the 30s aligned sweeps reuse them instead of stacking
+      // additional full-process-table scans.
+      for (const proc of getAppMetricsSnapshot()) {
         const kb = proc.memory.privateBytes ?? proc.memory.workingSetSize;
         if (typeof kb === "number" && kb > 0) {
           memoryByPid.set(proc.pid, kb);
@@ -1795,15 +2025,39 @@ export class ProjectViewManager {
         if (typeof pid !== "number" || pid <= 0) continue;
         const memoryKb = memoryByPid.get(pid);
         if (typeof memoryKb !== "number" || memoryKb <= 0) continue;
-        logInfo("projectview.cached-memory", {
+        // Webview guests (browser/dev-preview panels) are separate processes
+        // whose footprint the host pid lookup misses entirely — for a
+        // dev-preview page the guest is often larger than the host. Reported
+        // as a separate component so the keep-warm cost stays decomposable.
+        const guestMemoryKb = this.sumGuestMemoryKb(wc, memoryByPid);
+        const ctx: Record<string, unknown> = {
           projectId,
           memoryKb,
           pid,
-        });
+        };
+        if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
+        logInfo("projectview.cached-memory", ctx);
       } catch {
         // Telemetry only — skip this view and continue with the rest.
       }
     }
+  }
+
+  /**
+   * Periodic pressure check, piggybacked on the cached-view memory sampler so
+   * the `lowMemoryFreeThresholdMb` floor has a trigger that doesn't depend on
+   * the user switching projects. Without this, a session idling with several
+   * cached views (~100–500 MB each) while free RAM drifts below the floor
+   * reclaims nothing until the next cold-start switch or profile-driven
+   * `setCachedViewLimit` call. Delegates to `evictStaleViews`, so the LRU
+   * ordering, agent protection, and paint-gate exclusions all apply.
+   */
+  private maybeEvictUnderPressure(): void {
+    if (this.views.size <= 1) return;
+    if (this.lowMemoryFreeThresholdMb == null) return;
+    const availableMb = this.getAvailableMemoryMb();
+    if (availableMb == null || availableMb >= this.lowMemoryFreeThresholdMb) return;
+    this.evictStaleViews("pressure");
   }
 
   /**

@@ -100,7 +100,7 @@ export function RecipeRunnerList({
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder="Search recipes…"
-              className="w-full pl-8 pr-3 py-2 text-sm bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/40 focus:border-daintree-accent/40"
+              className="w-full pl-8 pr-3 py-2 text-sm bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/40 focus:border-daintree-accent/40"
             />
           </div>
         </div>

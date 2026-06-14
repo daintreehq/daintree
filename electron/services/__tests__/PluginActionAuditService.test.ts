@@ -1,16 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The service module statically imports the electron-store-backed `store` for
-// its singleton factory. These tests exercise the class directly with injected
-// callbacks, so stub `store` to keep the unit test hermetic (no electron).
+// The service module statically imports the electron-store-backed `store` and
+// `auditLogsStore` for its singleton factory / default log store. These tests
+// exercise the class directly with injected callbacks, so stub both to keep
+// the unit test hermetic (no electron).
 vi.mock("../../store.js", () => ({
   store: { get: vi.fn(() => ({})), set: vi.fn() },
+  auditLogsStore: { get: vi.fn(), set: vi.fn() },
 }));
 
 import { events, type DaintreeEventMap } from "../events.js";
 import { PluginActionAuditService } from "../PluginActionAuditService.js";
 
-/** In-memory stand-in for the `plugins` store slice. */
+/**
+ * In-memory stand-in for the `plugins` config slice plus the audit-logs ring.
+ * The ring is kept under the same `auditLog` key so seeding and assertions
+ * read naturally, but it round-trips through the injected `logStore` (the
+ * real ring lives in the audit-logs store since migration023).
+ */
 function makeConfigStore(initial: Record<string, unknown> = {}) {
   let config: Record<string, unknown> = { auditEnabled: true, auditMaxRecords: 500, ...initial };
   return {
@@ -19,6 +26,12 @@ function makeConfigStore(initial: Record<string, unknown> = {}) {
     },
     readConfig: () => config,
     raw: () => config,
+    logStore: {
+      read: () => config.auditLog,
+      write: (records: unknown[]) => {
+        config = { ...config, auditLog: records };
+      },
+    },
   };
 }
 
@@ -41,7 +54,7 @@ describe("PluginActionAuditService", () => {
 
   beforeEach(() => {
     store = makeConfigStore();
-    service = new PluginActionAuditService(store.saveConfig, store.readConfig);
+    service = new PluginActionAuditService(store.saveConfig, store.readConfig, store.logStore);
   });
 
   afterEach(() => {
@@ -165,7 +178,7 @@ describe("PluginActionAuditService", () => {
 
   it("flushes to the store after the debounce window (oldest-first)", () => {
     vi.useFakeTimers();
-    const svc = new PluginActionAuditService(store.saveConfig, store.readConfig);
+    const svc = new PluginActionAuditService(store.saveConfig, store.readConfig, store.logStore);
     svc.append({
       pluginId: "p",
       actionId: "first",
@@ -194,7 +207,7 @@ describe("PluginActionAuditService", () => {
 
   it("dispose() flushes pending records synchronously", () => {
     vi.useFakeTimers();
-    const svc = new PluginActionAuditService(store.saveConfig, store.readConfig);
+    const svc = new PluginActionAuditService(store.saveConfig, store.readConfig, store.logStore);
     svc.append({
       pluginId: "p",
       actionId: "x",
@@ -218,7 +231,7 @@ describe("PluginActionAuditService", () => {
         { pluginId: "p", actionId: "a" }, // missing id
       ],
     });
-    const svc = new PluginActionAuditService(seeded.saveConfig, seeded.readConfig);
+    const svc = new PluginActionAuditService(seeded.saveConfig, seeded.readConfig, seeded.logStore);
     const records = svc.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.id).toBe("ok");
@@ -242,7 +255,7 @@ describe("PluginActionAuditService", () => {
         },
       ],
     });
-    const svc = new PluginActionAuditService(seeded.saveConfig, seeded.readConfig);
+    const svc = new PluginActionAuditService(seeded.saveConfig, seeded.readConfig, seeded.logStore);
     const records = svc.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.actionId).toBe("seeded");

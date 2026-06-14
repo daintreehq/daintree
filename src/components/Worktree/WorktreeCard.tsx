@@ -8,7 +8,8 @@ import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import { useIsWorktreeSortDragging } from "../DragDrop/DndProvider";
+import { useIsWorktreeSortDragging, type WorktreeDragData } from "../DragDrop/DndProvider";
+import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
 import { GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -94,7 +95,7 @@ export interface WorktreeCardProps {
   onMoveDown?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
-  projectHealth?: import("@shared/types").ProjectHealthData | null;
+  projectHealth?: import("@shared/types/ipc/forge").ForgeProjectHealthPayload | null;
   /**
    * Multi-select state (grid variant only). When provided, modifier-clicks
    * (Ctrl/Cmd/Shift) route through `onToggleSelect` instead of `onSelect`
@@ -607,7 +608,7 @@ export function WorktreeCard({
     hasActiveAgent: terminalCounts.byState.working > 0,
   });
 
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef, isOver, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
     data: {
       type: "worktree",
@@ -620,8 +621,23 @@ export function WorktreeCard({
     if (!isActive) setNodeRef(node);
   };
 
+  const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
+  // Only drops handleDragEnd will actually accept: a single-panel drag —
+  // group drags are rejected by cancelDrop, accordion drags never reach the
+  // worktree-drop branch, and worktree-sort drags carry no terminal.
+  const isMovablePanelDrag =
+    activeDragData?.terminal !== undefined &&
+    activeDragData.origin !== "accordion" &&
+    !(activeDragData.groupId && (activeDragData.groupPanelIds?.length ?? 0) > 1);
+  // The sidebar row stacks two same-size droppables (this drop target inside
+  // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
+  // by registration order — `over` can be either id, so match both. Mirrors
+  // the dual-id handling in DndProvider's handleDragEnd.
+  const isPanelDropTarget =
+    !isActive && isMovablePanelDrag && (isOver || over?.id === getWorktreeSortDragId(worktree.id));
+
   const isMuted =
-    (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
+    (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isPanelDropTarget;
 
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverWorktreeIdRef = useRef(worktree.id);
@@ -704,7 +720,6 @@ export function WorktreeCard({
               "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)] [html[data-dragging='true']_&]:hover:shadow-none",
             variant === "sidebar" && !isActive && "bg-transparent",
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
-            isOver && !isActive && "ring-2 ring-inset ring-border-default",
             // Sidebar selection carries the full-height right accent border in
             // sidebar.css, so the cwd stripe is grid-only — stacking both on
             // one right edge read as a broken double marker (#9711 round-3
@@ -719,6 +734,7 @@ export function WorktreeCard({
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
           data-hovered={isFocused && !isActive && variant === "sidebar" ? "true" : undefined}
+          data-drop-target={isPanelDropTarget ? "true" : undefined}
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
@@ -773,7 +789,7 @@ export function WorktreeCard({
                 "absolute inset-0 z-20 pointer-events-none animate-input-receipt-flash",
                 variant === "grid" && "rounded-lg"
               )}
-              style={{ background: "color-mix(in oklch, currentColor 10%, transparent)" }}
+              style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
               aria-hidden="true"
               data-testid="worktree-card-input-receipt"
             />
@@ -860,8 +876,7 @@ export function WorktreeCard({
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
                       className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
-                      aria-label="Manual reorder paused while filter is active"
-                      aria-disabled="true"
+                      aria-hidden="true"
                     >
                       <GripVertical className="w-3 h-3" />
                     </div>
@@ -880,7 +895,11 @@ export function WorktreeCard({
                       ? "bg-overlay-emphasis text-text-primary"
                       : "text-text-primary/25 group-hover/card:text-text-primary/40 group-hover/card:bg-overlay-soft"
                   )}
-                  aria-label="Drag to reorder"
+                  // Pointer-only affordance: the grip is non-focusable (the row
+                  // strips dnd-kit's role/tabIndex), so an aria-label here is
+                  // dead ARIA claiming a phantom control. Keyboard reorder is
+                  // the row's Alt+Arrow path (aria-keyshortcuts on the row).
+                  aria-hidden="true"
                   {...dragHandleListeners}
                 >
                   <GripVertical className="w-3 h-3" />

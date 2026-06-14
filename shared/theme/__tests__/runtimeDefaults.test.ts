@@ -6,7 +6,9 @@ import {
   ANSI_CYAN_FALLBACK,
   ANSI_MAGENTA_FALLBACK,
   BUILT_IN_APP_SCHEMES,
+  getAppThemeCssVariables,
   normalizeAppColorScheme,
+  resolveGrainImage,
 } from "../themes.js";
 
 function makePaletteWithoutTerminal(): ThemePalette {
@@ -146,6 +148,109 @@ describe("scrollbar-track default — subtle gutter tint", () => {
       tokens: { "scrollbar-track": "#abcdef" },
     });
     expect(scheme.tokens["scrollbar-track"]).toBe("#abcdef");
+  });
+});
+
+describe("scrim-blur defaults — material lengths, themeable per scheme", () => {
+  it("every built-in theme resolves both scrim blur tokens as non-negative px lengths", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      for (const key of ["scrim-blur", "scrim-blur-palette"] as const) {
+        const value = scheme.tokens[key];
+        expect(value, `${scheme.id} ${key}`).toMatch(/^\d+(\.\d+)?px$/);
+        expect(parseFloat(value), `${scheme.id} ${key} non-negative`).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it("an explicit override wins over the engine default (0 is legal — clarity themes)", () => {
+    const scheme = normalizeAppColorScheme({
+      palette: makePaletteWithoutTerminal(),
+      tokens: { "scrim-blur": "18px", "scrim-blur-palette": "0px" },
+    });
+    expect(scheme.tokens["scrim-blur"]).toBe("18px");
+    expect(scheme.tokens["scrim-blur-palette"]).toBe("0px");
+  });
+});
+
+describe("grain material defaults — opacity scalar + blend keyword", () => {
+  it("every built-in theme resolves grain-opacity in (0, 1) and a blend keyword", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const opacity = parseFloat(scheme.tokens["grain-opacity"]);
+      expect(Number.isFinite(opacity), `${scheme.id} grain-opacity numeric`).toBe(true);
+      expect(opacity, `${scheme.id} grain-opacity > 0`).toBeGreaterThan(0);
+      expect(opacity, `${scheme.id} grain-opacity < 1`).toBeLessThan(1);
+      expect(scheme.tokens["grain-blend"], `${scheme.id} grain-blend keyword`).toMatch(
+        /^[a-z][a-z-]*$/
+      );
+    }
+  });
+
+  it("explicit grain overrides win over the engine defaults", () => {
+    const scheme = normalizeAppColorScheme({
+      palette: makePaletteWithoutTerminal(),
+      tokens: { "grain-opacity": "0.035", "grain-blend": "screen" },
+    });
+    expect(scheme.tokens["grain-opacity"]).toBe("0.035");
+    expect(scheme.tokens["grain-blend"]).toBe("screen");
+  });
+});
+
+describe("grainCharacter — curated texture resolution and conditional emission", () => {
+  it("each curated character resolves to a distinct, non-empty data-URI background-image", () => {
+    const coarse = resolveGrainImage("coarse");
+    const paper = resolveGrainImage("paper");
+    for (const value of [coarse, paper]) {
+      expect(value).toBeTruthy();
+      expect(value).toMatch(/^url\("data:image\/svg\+xml,/);
+    }
+    expect(coarse).not.toBe(paper);
+  });
+
+  it("curated data-URIs decode to seamless-tiling SVG turbulence documents", () => {
+    for (const character of ["coarse", "paper"] as const) {
+      const value = resolveGrainImage(character)!;
+      const encoded = value.slice('url("data:image/svg+xml,'.length, -'")'.length);
+      const svg = decodeURIComponent(encoded);
+      expect(svg, `${character} decodes to svg`).toMatch(/^<svg /);
+      expect(svg, `${character} uses feTurbulence`).toContain("<feTurbulence");
+      expect(svg, `${character} tiles seamlessly`).toContain("stitchTiles='stitch'");
+    }
+  });
+
+  it("'none' resolves to the none keyword; unset and 'fine' emit nothing", () => {
+    expect(resolveGrainImage("none")).toBe("none");
+    expect(resolveGrainImage("fine")).toBeUndefined();
+    expect(resolveGrainImage(undefined)).toBeUndefined();
+  });
+
+  it("a palette without grainCharacter emits NO --grain-image var (CSS keeps the bundled asset)", () => {
+    const scheme = normalizeAppColorScheme({ palette: makePaletteWithoutTerminal() });
+    const variables = getAppThemeCssVariables(scheme);
+    expect(Object.keys(variables)).not.toContain("--grain-image");
+  });
+
+  it("a strategy grainCharacter emits --grain-image through the extension pipeline", () => {
+    const palette = makePaletteWithoutTerminal();
+    const coarseScheme = normalizeAppColorScheme({
+      palette: { ...palette, strategy: { grainCharacter: "coarse" } },
+    });
+    expect(getAppThemeCssVariables(coarseScheme)["--grain-image"]).toBe(
+      resolveGrainImage("coarse")
+    );
+
+    const noneScheme = normalizeAppColorScheme({
+      palette: { ...palette, strategy: { grainCharacter: "none" } },
+    });
+    expect(getAppThemeCssVariables(noneScheme)["--grain-image"]).toBe("none");
+  });
+
+  it("an explicitly authored grain-image extension wins over the strategy field", () => {
+    const palette = makePaletteWithoutTerminal();
+    const scheme = normalizeAppColorScheme({
+      palette: { ...palette, strategy: { grainCharacter: "coarse" } },
+      extensions: { "grain-image": "none" },
+    });
+    expect(getAppThemeCssVariables(scheme)["--grain-image"]).toBe("none");
   });
 });
 

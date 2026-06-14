@@ -107,7 +107,8 @@ Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resour
 | `fetchIntervalActiveMs` / `fetchIntervalBackgroundMs` | 20 s / 3 min | 30 s / 5 min | 45 s / 10 min | Renderer FetchScheduler |
 | `memoryPressureInactiveMs` | 60 min | 30 min | 15 min | HibernationService |
 | `lowMemoryFreeThresholdMb` | `null` | 768 | 1024 | ProjectViewManager eviction floor |
-| `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager paint gate |
+| `paintGateTimeoutMs` / `paintGateHardTimeoutMs` (ms) | 1500 / 4000 | 1500 / 4000 | 2500 / 6000 | ProjectViewManager cold paint gate |
+| `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` (ms) | 500 / 1500 | 500 / 1500 | 800 / 2500 | ProjectViewManager warm paint gate |
 
 ## Fan-out contract
 
@@ -149,7 +150,7 @@ Engage is gated by warm-up (5 ticks) and a 30 s re-engage cooldown after any for
 - `setCachedViewLimit(1)` on efficiency entry — but **only when `lastMemoryScore > 0`** (`:755`). Battery/thermal/CPU-only triggers are handled by freezing alone; destroying renderers is reserved for genuine memory pressure. On exit the limit is restored to `getUserCachedViewLimit()` (the user's `cachedProjectViews` setting, default 1).
 - `setLowMemoryFreeThresholdMb(config...)` pushed on **every** transition. Inside `evictStaleViews` (`:1377`) this is a per-pass floor: when system-available RAM drops below it, `effectiveMax` clamps to 1 for that pass **without mutating** the user's `maxCachedViews`, so the user's setting takes effect again as soon as pressure subsides. Eviction order is **pure LRU** — memory size is logged but never drives eviction order, because the largest renderer is usually the project the user is actively working in (#8602). The outgoing view of an open paint gate is treated as non-evictable so a mid-gate `setCachedViewLimit(1)` can't expose an unpainted frame. Re-entering an evicted project cold-starts a fresh view; `evictionTimestamps` records when each projectId was last evicted for revival-timing telemetry (`:335`).
 
-**3. Paint-gate timeouts** — `paintGateTimeoutMs` (soft) and `paintGateHardTimeoutMs` (hard) bound the anti-flash hand-off when switching project views. The soft bound only logs a warning; the hard bound force-detaches the outgoing view assuming the incoming renderer is stuck. Both stretch under `efficiency` (2.5 s / 6 s vs 1.5 s / 4 s) because cold starts run measurably slower under memory/thermal/battery pressure — without the stretch, degraded hardware would spam false-timeout warnings.
+**3. Paint-gate timeouts** — `paintGateTimeoutMs` (soft) and `paintGateHardTimeoutMs` (hard) bound the anti-flash hand-off when switching project views; `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` are the warm-reactivation equivalents, bounding the wait for the cached view's wake fan-out (atlas repair + missed-buffer replay) to signal `APP_VIEW_WARM_PAINTED`. The soft bounds only log a warning; the hard bounds force-detach the outgoing view assuming the incoming renderer is stuck. All stretch under `efficiency` (cold 2.5 s / 6 s vs 1.5 s / 4 s; warm 0.8 s / 2.5 s vs 0.5 s / 1.5 s) because both cold starts and wake fan-outs run measurably slower under memory/thermal/battery pressure — without the stretch, degraded hardware would spam false-timeout warnings and drop the warm bridge mid-repaint.
 
 > `start()` pushes the initial profile's `lowMemoryFreeThresholdMb` and paint-gate values to every PVM on launch (`:248`), so the config table is the single source of truth even when the service stays on its default `balanced` and `applyProfile()` never runs.
 

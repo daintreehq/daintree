@@ -518,8 +518,8 @@ export function DaintreeAssistantSettingsTab() {
       <header className="flex items-start gap-3 pb-4 border-b border-daintree-border">
         <DaintreeIcon className="w-6 h-6 text-daintree-text shrink-0 mt-0.5" size={24} />
         <div>
-          <h3 className="text-base font-medium text-daintree-text">Daintree Assistant</h3>
-          <p className="text-xs text-daintree-text/60 mt-1 select-text">
+          <h3 className="text-sm font-medium text-daintree-text">Daintree Assistant</h3>
+          <p className="text-xs text-daintree-text/50 mt-1 select-text">
             Controls the help assistant launched from the dock — the tools it can call and how its
             activity is recorded. Changes apply to new help sessions.
           </p>
@@ -895,6 +895,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
       >
         <span className="flex items-center gap-2">
           <ChevronRight
+            data-animated-chevron
             className={cn(
               "w-3.5 h-3.5 transition-transform duration-150",
               isOpen ? "rotate-90" : "rotate-0"

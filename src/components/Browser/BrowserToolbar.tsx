@@ -74,7 +74,7 @@ interface BrowserToolbarProps {
   onOpenExternal: () => void;
   onPromoteToPortal?: () => void;
   onZoomChange?: (zoomFactor: number) => void;
-  onCaptureScreenshot?: () => void | Promise<void>;
+  onCaptureScreenshot?: () => Promise<boolean>;
   onToggleConsole?: () => void;
   onToggleDevTools?: () => void;
   onViewportPresetChange?: (preset: ViewportPresetId | undefined) => void;
@@ -462,9 +462,18 @@ export function BrowserToolbar({
 
   const handleCaptureScreenshot = useCallback(async () => {
     if (!onCaptureScreenshot) return;
-    await onCaptureScreenshot();
-    setScreenshotCopied(true);
+    let success = false;
+    try {
+      success = await onCaptureScreenshot();
+    } catch (err) {
+      logError("Failed to capture screenshot", err);
+    }
     if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
+    if (!success) {
+      setScreenshotCopied(false);
+      return;
+    }
+    setScreenshotCopied(true);
     screenshotCopiedTimerRef.current = setTimeout(
       () => setScreenshotCopied(false),
       COPIED_FEEDBACK_RESET_MS
@@ -562,7 +571,7 @@ export function BrowserToolbar({
         {longPressDir === "back" && recentBackEntries.length > 0 && (
           <div
             ref={longPressDropdownRef}
-            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
           >
             {recentBackEntries.map((entry) => (
               <button
@@ -608,7 +617,7 @@ export function BrowserToolbar({
         {longPressDir === "forward" && recentForwardEntries.length > 0 && (
           <div
             ref={longPressDropdownRef}
-            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 top-full mt-1 z-50 min-w-[220px] rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
           >
             {recentForwardEntries.map((entry) => (
               <button
@@ -897,7 +906,7 @@ export function BrowserToolbar({
                 "bg-daintree-bg border border-overlay",
                 "focus:outline-hidden focus:border-border-strong",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                "text-daintree-text placeholder:text-daintree-text/40",
+                "text-daintree-text placeholder:text-text-placeholder",
                 error && "border-status-error/50"
               )}
               placeholder="localhost:3000"
@@ -915,7 +924,7 @@ export function BrowserToolbar({
             ref={dropdownRef}
             id={listboxId}
             role="listbox"
-            className="absolute left-0 right-0 top-full mt-1 z-50 bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
           >
             {suggestions.map((entry, index) => (
               <div

@@ -1,6 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { FleetScopeToken } from "@shared/types/worktree";
+import type { Issue, PR } from "@shared/types/forge";
+
+function makeIssue(overrides: Partial<Issue> = {}): Issue {
+  return {
+    number: 123,
+    title: "Issue title",
+    body: "",
+    state: "open",
+    rawState: "OPEN",
+    url: "https://github.com/org/repo/issues/123",
+    author: { login: "tester", avatarUrl: "", rawData: null },
+    assignees: [],
+    labels: [],
+    commentCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+    ...overrides,
+  };
+}
+
+function makePR(overrides: Partial<PR> = {}): PR {
+  return {
+    number: 99,
+    title: "PR title",
+    body: "",
+    state: "open",
+    rawState: "OPEN",
+    isDraft: false,
+    merged: false,
+    url: "https://github.com/org/repo/pull/99",
+    author: { login: "alice", avatarUrl: "", rawData: null },
+    baseRef: "main",
+    headRef: "feature/pr-branch",
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+    ...overrides,
+  };
+}
 
 const {
   appSetStateMock,
@@ -140,16 +180,7 @@ describe("worktreeStore", () => {
     });
 
     expect(() =>
-      useWorktreeSelectionStore.getState().openCreateDialog({
-        number: 123,
-        title: "x",
-        url: "https://github.com/org/repo/issues/123",
-        state: "OPEN",
-        updatedAt: new Date().toISOString(),
-        author: { login: "tester", avatarUrl: "https://example.com/avatar.png" },
-        assignees: [],
-        commentCount: 0,
-      })
+      useWorktreeSelectionStore.getState().openCreateDialog(makeIssue({ title: "x" }))
     ).not.toThrow();
 
     if (originalWindow) {
@@ -162,17 +193,7 @@ describe("worktreeStore", () => {
   });
 
   it("openCreateDialogForPR opens dialog with PR context and clears issue context", () => {
-    const pr = {
-      number: 99,
-      title: "PR title",
-      url: "https://github.com/org/repo/pull/99",
-      state: "OPEN" as const,
-      isDraft: false,
-      updatedAt: new Date().toISOString(),
-      author: { login: "alice", avatarUrl: "" },
-      headRefName: "feature/pr-branch",
-      isFork: false,
-    };
+    const pr = makePR();
 
     useWorktreeSelectionStore.getState().openCreateDialogForPR(pr);
 
@@ -183,28 +204,10 @@ describe("worktreeStore", () => {
   });
 
   it("openCreateDialog clears PR context when opening for an issue", () => {
-    const pr = {
-      number: 99,
-      title: "PR title",
-      url: "https://github.com/org/repo/pull/99",
-      state: "OPEN" as const,
-      isDraft: false,
-      updatedAt: new Date().toISOString(),
-      author: { login: "alice", avatarUrl: "" },
-      headRefName: "feature/pr-branch",
-    };
+    const pr = makePR();
     useWorktreeSelectionStore.getState().openCreateDialogForPR(pr);
 
-    const issue = {
-      number: 123,
-      title: "Issue title",
-      url: "https://github.com/org/repo/issues/123",
-      state: "OPEN" as const,
-      updatedAt: new Date().toISOString(),
-      author: { login: "bob", avatarUrl: "" },
-      assignees: [],
-      commentCount: 0,
-    };
+    const issue = makeIssue();
     useWorktreeSelectionStore.getState().openCreateDialog(issue);
 
     const { createDialog } = useWorktreeSelectionStore.getState();
@@ -213,15 +216,7 @@ describe("worktreeStore", () => {
   });
 
   it("closeCreateDialog clears both issue and PR context", () => {
-    const pr = {
-      number: 99,
-      title: "PR title",
-      url: "https://github.com/org/repo/pull/99",
-      state: "OPEN" as const,
-      isDraft: false,
-      updatedAt: new Date().toISOString(),
-      author: { login: "alice", avatarUrl: "" },
-    };
+    const pr = makePR();
     useWorktreeSelectionStore.getState().openCreateDialogForPR(pr);
     useWorktreeSelectionStore.getState().closeCreateDialog();
 
@@ -233,16 +228,7 @@ describe("worktreeStore", () => {
 
   it("openBulkCreateDialog stores onComplete callback", () => {
     const onComplete = vi.fn();
-    const issue = {
-      number: 1,
-      title: "issue",
-      url: "https://github.com/org/repo/issues/1",
-      state: "OPEN" as const,
-      updatedAt: new Date().toISOString(),
-      author: { login: "u", avatarUrl: "" },
-      assignees: [],
-      commentCount: 0,
-    };
+    const issue = makeIssue({ number: 1, title: "issue" });
     useWorktreeSelectionStore.getState().openBulkCreateDialog([issue], onComplete);
 
     const { bulkCreateDialog } = useWorktreeSelectionStore.getState();
@@ -253,16 +239,7 @@ describe("worktreeStore", () => {
 
   it("openBulkCreateDialogForPRs stores onComplete callback", () => {
     const onComplete = vi.fn();
-    const pr = {
-      number: 1,
-      title: "pr",
-      url: "https://github.com/org/repo/pull/1",
-      state: "OPEN" as const,
-      isDraft: false,
-      updatedAt: new Date().toISOString(),
-      author: { login: "u", avatarUrl: "" },
-      headRefName: "feature/pr",
-    };
+    const pr = makePR({ number: 1, title: "pr", headRef: "feature/pr" });
     useWorktreeSelectionStore.getState().openBulkCreateDialogForPRs([pr], onComplete);
 
     const { bulkCreateDialog } = useWorktreeSelectionStore.getState();
@@ -306,15 +283,9 @@ describe("worktreeStore", () => {
     });
 
     expect(() =>
-      useWorktreeSelectionStore.getState().openCreateDialogForPR({
-        number: 5,
-        title: "fork pr",
-        url: "https://github.com/org/repo/pull/5",
-        state: "OPEN",
-        isDraft: false,
-        updatedAt: new Date().toISOString(),
-        author: { login: "tester", avatarUrl: "" },
-      })
+      useWorktreeSelectionStore
+        .getState()
+        .openCreateDialogForPR(makePR({ number: 5, title: "fork pr" }))
     ).not.toThrow();
 
     if (originalWindow) {

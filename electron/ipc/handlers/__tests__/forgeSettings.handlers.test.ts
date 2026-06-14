@@ -20,7 +20,10 @@ const storeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../store.js", () => ({ store: storeMock }));
+vi.mock("../../../store.js", () => ({
+  store: storeMock,
+  auditLogsStore: { get: vi.fn(() => []), set: vi.fn() },
+}));
 
 const registryMock = vi.hoisted(() => ({
   getRegisteredForgeProviders: vi.fn<() => ForgeProviderEntry[]>(() => []),
@@ -57,6 +60,17 @@ const gitServiceCacheMock = vi.hoisted(() => ({ getGitService: vi.fn(() => gitSe
 
 vi.mock("../../../services/GitServiceCache.js", () => ({
   gitServiceCache: gitServiceCacheMock,
+}));
+
+// The handlers lazy-import PluginService to gate registry reads behind
+// startup load + activation (the #9285 init-race guard); stub the singleton
+// so tests never construct the real service.
+const pluginServiceMock = vi.hoisted(() => ({
+  waitForInit: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../../../services/PluginService.js", () => ({
+  pluginService: pluginServiceMock,
 }));
 
 import { registerForgeSettingsHandlers } from "../forgeSettings.js";
@@ -193,7 +207,7 @@ describe("registerForgeSettingsHandlers", () => {
     expect(getSettings(null)).toEqual({ defaultProviderId: null });
   });
 
-  it("getProviders returns the live registry contents", () => {
+  it("getProviders returns the live registry contents", async () => {
     const entries: ForgeProviderEntry[] = [
       {
         pluginId: "acme.gitea",
@@ -207,7 +221,52 @@ describe("registerForgeSettingsHandlers", () => {
     registryMock.getRegisteredForgeProviders.mockReturnValue(entries);
     registerForgeSettingsHandlers();
     const getProviders = findHandler("forge:get-providers");
-    expect(getProviders(null)).toEqual(entries);
+    await expect(getProviders(null)).resolves.toEqual(entries);
+  });
+
+  it("getProviders reads the registry only after plugin init settles", async () => {
+    let releaseGate: () => void = () => {};
+    pluginServiceMock.waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    registerForgeSettingsHandlers();
+    const getProviders = findHandler("forge:get-providers");
+    const inFlight = getProviders(null) as Promise<unknown>;
+    // Drain enough microtasks for the lazy-import chain to reach the gate.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(pluginServiceMock.waitForInit).toHaveBeenCalledTimes(1);
+    expect(registryMock.getRegisteredForgeProviders).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(registryMock.getRegisteredForgeProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolveProvider resolves only after plugin init settles (descriptors register during deferred init)", async () => {
+    let releaseGate: () => void = () => {};
+    pluginServiceMock.waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    resolverMock.resolveForgeProvider.mockReturnValueOnce({ entry: null, resolvedVia: null });
+    registerForgeSettingsHandlers();
+    const resolveProvider = findHandler("forge:resolve-provider");
+    const inFlight = resolveProvider(null, "project-1") as Promise<unknown>;
+    // Drain enough microtasks for the lazy-import chain to reach the gate;
+    // the gate itself (not import latency) must be what holds the handler.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(pluginServiceMock.waitForInit).toHaveBeenCalledTimes(1);
+    // getProjectById is the first synchronous call after the gate — asserting
+    // on it (not just the resolver, which sits behind further awaits) proves
+    // the gate is what blocks, so this test fails on the un-gated handler.
+    expect(projectStoreMock.getProjectById).not.toHaveBeenCalled();
+    expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(projectStoreMock.getProjectById).toHaveBeenCalledTimes(1);
+    expect(resolverMock.resolveForgeProvider).toHaveBeenCalledTimes(1);
   });
 
   it("cleanup removes all registered handlers", () => {

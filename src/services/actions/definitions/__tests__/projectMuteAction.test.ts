@@ -124,7 +124,7 @@ describe("project.muteNotifications", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock.mock.calls[0]![0]).toMatchObject({
       type: "error",
-      title: "Failed to mute notifications",
+      title: "Couldn't mute notifications",
       message: "read failed",
     });
   });

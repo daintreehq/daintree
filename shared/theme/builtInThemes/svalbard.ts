@@ -9,40 +9,29 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/svalbard.webp",
   palette: {
     type: "light",
-    // Arctic shoreline composition (#9714, on the Bondi template from #9711):
-    // ONE cool glacial stone family for the whole field (H~237-248) with
-    // snow-white content on top. The tundra's warmth appears only as detail —
-    // amber search highlights, the warning status, the terminal cursor, the
-    // project-pill whisper — never as a field surface. Everything that
-    // carries content lifts TOWARD white — never a darker fill on a light
-    // container (the old ramp topped out at L 0.979 and read as one dim
-    // blue-gray sheet).
-    // Ramp L 0.882/0.936/0.958/0.979/1.0: steps 0.0207-0.0548 (gate ≥ 0.02,
-    // runaway ratio 2.65 < 3), span 0.119, panel→elevated not the smallest
-    // step. The grid is WET STONE — a full register deeper and richer than
-    // the dry-stone sidebar, so chrome/field/well read as three planes and
-    // white panels get real figure-ground pop.
+    // One glacial family; content lifts toward white — never a darker fill on
+    // a light container. Chroma decreases monotonically up the ramp (sea ice →
+    // snow) — keep that arc when editing. Warmth is detail only (search,
+    // warning, cursor, project pill), never a field surface.
     surfaces: {
-      grid: "#CDDAE4",
-      sidebar: "#E3EBF3",
-      canvas: "#ECF2F7",
-      panel: "#F3F9FD",
+      grid: "#C2D9E6",
+      sidebar: "#DEEAF1",
+      canvas: "#E9F0F5",
+      panel: "#F3F7FA",
       elevated: "#FFFFFF",
     },
     text: {
-      // Near-neutral cool ink — the old text carried C≈0.035 of blue, which
-      // read dirty on the hued field. Floored like Bondi: muted 4.8:1 on the
-      // grid, 6.1:1 on canvas; secondary 6.0:1 on the grid.
+      // Near-neutral cool ink; muted ≥ 4.7:1 on the grid, 6.0:1 on canvas.
       primary: "#192128",
       secondary: "#444D57",
       muted: "#555B63",
       inverse: "#FDFDFE",
     },
     border: "#C5CFD6",
-    accent: "#1577A8",
+    // 5.0:1 on white, 3.5:1 outline on the grid, 5.0:1 under inverse button text.
+    accent: "#0077A3",
     accentSecondary: "#1F7E62",
-    // success/danger/warning render as TEXT (diff numerals, status labels) on
-    // the near-white chips — all hold ≥ 4.5:1 on every surface up to #FFFFFF.
+    // Status colors render as text — ≥ 4.5:1 up to #FFFFFF and ≥ 3:1 on the grid.
     status: {
       success: "#1E7A5C",
       warning: "#8A661A",
@@ -55,21 +44,17 @@ export const theme: BuiltInThemeSource = {
       working: "#1E7A5C",
       waiting: "#8A661A",
     },
-    // Glacial ink, desaturated: the overlay/wash ladder composites onto the
-    // stone field, and the old navy tint (#142332, C 0.035) read as a storm
-    // front in dialog scrims. Same hue family as the field, chroma whispered.
+    // Desaturated glacial ink: a chromatic tint here reads as a storm front
+    // in dialog scrims.
     overlayTint: "#273037",
     terminal: {
-      // Deep arctic water below the ice shelf — its own dark environment.
-      background: "#1B2531",
+      background: "#14202D",
       foreground: "#C9D3DE",
-      // 3.59:1 on the terminal background (the old #8C9E94 was a stray
-      // green-gray on the blue-night water).
+      // 3.8:1 on the terminal background.
       muted: "#6E7B8A",
-      // Tundra amber — the one warm signal in the dark water (the old
-      // #8F7335 cursor sat at 3.4:1 and disappeared).
+      // The one warm signal in the dark water; 7.5:1 on the background.
       cursor: "#E8A03C",
-      selection: "#2A3A4A",
+      selection: "#28394E",
       red: "#E06058",
       green: "#33BE92",
       yellow: "#E8A03C",
@@ -90,151 +75,156 @@ export const theme: BuiltInThemeSource = {
       number: "#7E5C14",
       string: "#177053",
       operator: "#286287",
-      keyword: "#7A4FA8",
-      function: "#3A5FB0",
-      // The old chip #68B0B8 sat at 2.1:1 on the panel; the aurora-green
-      // accentSecondary holds 4.7:1.
+      // ≥ 4.5:1 on the canvas render surface.
+      keyword: "#734F99",
+      function: "#006487",
       link: "#1E6A88",
       quote: "#566472",
       chip: "#1F7E62",
     },
     strategy: {
-      shadowStyle: "light",
-      materialBlur: 14,
-      materialSaturation: 118,
+      // Intent marker only: all three shadow stacks are token-authored below
+      // (removing those overrides would surface crisp's black hairlines).
+      shadowStyle: "crisp",
+      materialBlur: 8,
+      materialSaturation: 105,
+      radiusScale: 0.9,
+      // Cold border ink; border-interactive@0.2 must composite ≥ 1.18:1 on white.
+      borderInkOverride: "#394A56",
+      grainCharacter: "fine",
     },
   },
   tokens: {
-    "accent-muted": "rgba(21,119,168,0.30)",
-    "accent-soft": "rgba(21,119,168,0.18)",
-    "focus-ring": "rgba(21,119,168,0.35)",
+    "accent-muted": "rgba(0,119,163,0.30)",
+    "accent-soft": "rgba(0,119,163,0.18)",
+    "focus-ring": "rgba(0,119,163,0.35)",
+    "grain-opacity": "0.016",
     "overlay-hover": "rgba(39,48,55,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(39,48,55,0.055)",
-    // Opaque elevate-to-select for menu/palette rows on white popovers; cool
-    // so a selected row reads as the same material, not a warm slab. A half
-    // register lighter than Bondi's equivalent (dL 0.052 vs 0.064 below
-    // white): at equal depth a cool fill reads heavier than a warm one, and
-    // the Bondi-matched value read as a blue-grey slab in design review.
+    // Opaque elevate-to-select for menu/palette rows on white popovers.
     "overlay-raised": "#E8EFF4",
     // GitHub-brand defaults fail AA on the near-white panel.
     "pr-merged": "#6C5CA8",
     "pr-draft": "#586470",
     "scrollbar-thumb": "#6E7981",
     "scrollbar-thumb-hover": "color-mix(in oklab, #6E7981 85%, #192128)",
-    // Engine light scrims (0.22/0.36/0.55) read as a storm front here.
+    "scrim-blur": "2px",
+    "scrim-blur-palette": "2px",
     "scrim-soft": "rgba(39,48,55,0.16)",
     "scrim-medium": "rgba(39,48,55,0.28)",
     "scrim-strong": "rgba(39,48,55,0.46)",
-    // Search is the tundra's warmth — the opposing temperature exists only
-    // as small details on the cool field (mirror of Bondi's sea-blue
-    // highlights on warm sand).
+    // Search is the warm detail lane on the cool field.
     "search-highlight-background": "rgba(194,126,26,0.14)",
     "search-highlight-text": "#875807",
     "search-match-badge-background": "rgba(194,126,26,0.14)",
     "search-match-badge-text": "#875807",
     "search-selected-result-border": "rgba(194,126,26,0.34)",
     "search-selected-result-icon": "#875807",
-    // Two-layer contact+spread; the engine "light" single penumbra has no
-    // contact edge on a near-white field.
-    "shadow-ambient": "0 1px 2px rgba(34,42,48,0.10), 0 6px 16px rgba(34,42,48,0.10)",
-    // Dialogs sit a full z-tier above menus/popovers (the floating fallback
-    // would give a centered modal the same shadow as a context menu).
-    "shadow-dialog": "0 2px 6px rgba(34,42,48,0.10), 0 24px 60px rgba(34,42,48,0.18)",
-    "shadow-floating": "0 1px 3px rgba(34,42,48,0.12), 0 12px 32px rgba(34,42,48,0.14)",
-    // In-card chips: a cool stone inset one quiet step below the white card,
-    // not a recessed slab.
+    // Blue shadow ink, tight contact edge; two layers because the engine
+    // "light" single penumbra has no contact edge on a near-white field.
+    "shadow-ambient": "0 1px 1px rgba(51,80,105,0.16), 0 4px 10px rgba(51,80,105,0.10)",
+    "shadow-color": "rgba(51,80,105,0.12)",
+    // Dialogs sit a full z-tier above menus/popovers.
+    "shadow-dialog": "0 2px 4px rgba(51,80,105,0.14), 0 18px 44px rgba(51,80,105,0.20)",
+    "shadow-floating": "0 1px 2px rgba(51,80,105,0.18), 0 10px 26px rgba(51,80,105,0.13)",
     "surface-inset": "#EAF0F5",
-    // Inputs are raised on light, never recessed (the old #D6E1EA input sat
-    // BELOW its container and read as a well).
+    // Inputs are raised on light, never recessed.
     "surface-input": "#FAFCFE",
-    // Fog chrome: the frame (toolbar/dock/panel caps/dialog headers) carries
-    // Svalbard's glacial note at whisper chroma, one register apart from the
-    // field surfaces rather than a different temperature.
-    "surface-toolbar": "#EAEFF3",
+    "surface-toolbar": "#E3EDF3",
     "terminal-bright-black": "#525E6C",
     "terminal-white": "#C9D3DE",
-    "text-link": "#11618C",
+    // 6.5:1 on white, 4.5:1 on the grid.
+    "text-link": "#006589",
     // 4.3:1 on the raised input.
     "text-placeholder": "rgba(25,33,40,0.60)",
   },
   extensions: {
-    "dock-bg": "#EAEFF3",
+    "dock-bg": "#E3EDF3",
     "dock-input-bg": "#FAFCFE",
+    // Lifts to white — the engine fallback's 12% accent tint would be a second
+    // accent fill in the dock region; the active border stays the one signal.
+    "dock-item-bg-active": "#FFFFFF",
     // Registry format guard: shadow-color channels, alpha ≥ 0.25.
     "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
-    // Panel title bars join the fog chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#ECF1F4",
-    "panel-header-focus-bg": "#F2F7FA",
-    // Emoji tiles get a white-gloss lift instead of the dark-theme black wash
-    // (which rendered murky gray chips on the light field).
+    // Accent-family focus ink — no other accent fill in the panel region;
+    // outer ring only, never an inset (reads as a defect on panes). Selected
+    // and focused share this border; panel-selected-bg keeps its fallback.
+    "panel-focus-border": "rgba(68,144,177,0.85)",
+    "panel-focus-shadow": "0 0 0 1px rgba(68,144,177,0.25), 0 1px 2px rgba(51,80,105,0.10)",
+    // Unselected caps sit a clear step below the field (sidebar-grid midpoint)
+    // so the focused pane's bright cap reads side by side.
+    "panel-header-bg": "#D0E1EB",
+    "panel-header-focus-bg": "#EFF4F8",
+    // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":
       "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
-    "project-tile-shadow": "inset 0 1px 1px rgba(34,42,48,0.10), 0 0 0 1px rgba(35,43,51,0.10)",
-    "pulse-before-bg": "#CDDAE4",
+    "project-tile-shadow": "inset 0 1px 1px rgba(51,80,105,0.12), 0 0 0 1px rgba(51,80,105,0.12)",
+    "pulse-before-bg": "#C2D9E6",
     "pulse-card-bg": "#FFFFFF",
     "pulse-card-header-bg": "#F5F8FB",
-    "pulse-card-shadow": "0 1px 2px rgba(34,42,48,0.10), 0 4px 10px rgba(34,42,48,0.08)",
+    "pulse-card-shadow": "0 1px 2px rgba(51,80,105,0.12), 0 4px 10px rgba(51,80,105,0.08)",
     "pulse-control-hover-bg": "rgba(39,48,55,0.05)",
-    "pulse-empty-bg": "#ECF2F7",
-    "pulse-heat-high-opacity": "0.85",
-    "pulse-heat-low-opacity": "0.38",
-    "pulse-heat-medium-opacity": "0.62",
-    // Aurora green — activity reads as the sky lighting up.
-    "pulse-heat-color": "#1F7E62",
-    // Opaque so the streak-break signal clears the 3:1 graphical floor.
+    "pulse-empty-bg": "#E9F0F5",
+    // Aurora heat ramp: opaque stops with strictly monotonic lightness so
+    // intensity survives grayscale/CVD; level 1 must stay ≥ JND above the
+    // empty cell.
+    "pulse-heat-1": "#99D3B9",
+    "pulse-heat-2": "#37B08A",
+    "pulse-heat-3": "#008D94",
+    "pulse-heat-4": "#6A499B",
+    "pulse-heat-color": "#6A499B",
+    // Opaque so the streak-break signal clears the 3:1 graphical floor — the
+    // missed day stays unambiguous red, never aurora.
     "pulse-missed-bg": "#C0413E",
-    "pulse-range-bg": "#ECF2F7",
+    "pulse-range-bg": "#E9F0F5",
     "pulse-ring-offset": "#FFFFFF",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #CDDAE4 25%, #ECF2F7 50%, #CDDAE4 75%)",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #C2D9E6 25%, #E9F0F5 50%, #C2D9E6 75%)",
     "dialog-header-bg": "#F5FAFD",
     "review-commit-input-bg": "#FAFCFE",
-    "settings-kbd-bg": "#EAF0F5",
+    // Small-chrome gradient between two audited near-white stops; label ink
+    // holds 7.3:1 on the darker stop.
+    "settings-kbd-bg": "linear-gradient(180deg, #FBFDFE, #E6EEF4)",
     "settings-kbd-border": "#C5CFD6",
-    // Nav selection elevates to white + the 2px accent marker; the inherited
-    // overlay-raised darker-lift is for menu rows on white popovers only.
+    // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
-    // Flat like the dark themes: the white fill + 2px accent marker carry
-    // selection, no ring or shadow.
     "settings-nav-active-shadow": "none",
     "settings-nav-hover-bg": "rgba(30,42,58,0.05)",
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
-    "settings-sidebar-bg": "rgba(227,235,243,0.60)",
+    "settings-sidebar-bg": "rgba(222,234,241,0.60)",
+    // Composited settings-sidebar-bg over the shell.
+    "settings-sidebar-scroll-fade": "#E6EFF5",
     "sidebar-action-hover-bg": "rgba(30,42,58,0.05)",
-    // Worktree cards are snow highlights on the stone field; hover brightens
-    // toward white; selected is pure white + the accent rail.
-    // idle < hover < selected is audit-enforced — the old ladder darkened on
-    // selection (active sat BELOW the cards around it); these sit ~1.4 OKLab
-    // points apart.
-    // Soft contact shadow only — no ring: the card must not read as bordered
-    // (#9711 round-3 owner decision; selection = bg + right accent border).
+    // idle < hover < selected (audit-enforced); contact shadow only, no ring —
+    // selection = bg + right accent rail.
     "sidebar-card-bg": "#F1F7FC",
-    "sidebar-card-shadow": "0 1px 2px rgba(28,40,52,0.05)",
+    "sidebar-card-shadow": "0 1px 2px rgba(51,80,105,0.08)",
     "sidebar-active-bg": "#FFFFFF",
     "sidebar-hover-bg": "#F9FBFD",
     "toolbar-agent-hover-bg": "rgba(25,33,40,0.06)",
     "toolbar-control-hover-bg": "rgba(25,33,40,0.06)",
-    // Accent restraint: hover affordance is the bg, not a blue foreground.
+    // Accent restraint: hover affordance is the bg, not an accent foreground.
     "toolbar-control-hover-fg": "#192128",
     "toolbar-control-hover-shadow": "none",
     "toolbar-divider": "rgba(197,207,214,0.7)",
     "toolbar-pill-radius": "0.5rem",
-    // One tundra-amber whisper on the project pill; everything else quiet ink.
-    // Pills sit LIGHTER than the chrome strip (raised, like all content).
-    "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(232,160,60,0.07), rgba(25,33,40,0.02)), #F6F8FA",
+    // Pills sit lighter than the chrome strip (raised, like all content).
+    "toolbar-project-bg": "#F7FAFC",
     "toolbar-project-border": "rgba(197,207,214,0.75)",
     "toolbar-project-chip-bg": "rgba(25,33,40,0.04)",
     "toolbar-project-chip-border": "rgba(197,207,214,0.75)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
-    "toolbar-shadow": "0 1px 2px rgba(34,42,48,0.06)",
+    "toolbar-shadow": "0 1px 2px rgba(51,80,105,0.07)",
     "toolbar-stats-bg": "#F6F8FA",
     "toolbar-stats-border": "rgba(197,207,214,0.7)",
     "toolbar-stats-divider": "rgba(197,207,214,0.7)",
     "toolbar-stats-hover-bg": "#F9FBFD",
+    // The welcome field stays flat (a screen-tall wash would band); the mark
+    // carries the warm note instead, 3.5:1 on canvas.
+    "welcome-mark-color": "#A47634",
     // Filter rail sits flush on the field; the raised search input carries it.
-    "worktree-filter-bar-bg": "#E3EBF3",
+    "worktree-filter-bar-bg": "#DEEAF1",
     // Active quick-state tab lifts to white under its inset underline.
     "worktree-quick-state-active-bg": "#FFFFFF",
     "worktree-search-input-bg": "#FAFCFE",

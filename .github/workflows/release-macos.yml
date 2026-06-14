@@ -204,8 +204,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # x64 has no arch suffix because electron-builder treats it as the default arch
-          # (builder-util getArchSuffix returns "" for the default); arm64 and universal do.
+          # Unpacked dir names come from electron-builder's getArchSuffix, which
+          # returns "" for the default arch (x64) — so release/mac/ is the x64
+          # bundle. Compressed artifacts carry an explicit -x64 suffix instead,
+          # via the artifactName overrides in electron-builder.config.cjs (#10380).
           apps=(
             "release/mac-arm64/Daintree.app"
             "release/mac/Daintree.app"

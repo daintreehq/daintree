@@ -8,18 +8,17 @@ import {
   type ReactNode,
 } from "react";
 import { GitBranch, Key, Check, AlertCircle, ScrollText } from "lucide-react";
-import { GitHubIcon } from "@/components/icons/brands";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
-import { makeForgeProviderId, BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ForgeProviderSelectorDropdown,
   type ForgeProviderOption,
 } from "./ForgeProviderSelectorDropdown";
-import { GitHubSettingsTab } from "./GitHubSettingsTab";
+import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
@@ -30,14 +29,9 @@ import { useTabLoad } from "@/hooks";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 
-type ForgeIcon = ComponentType<{ className?: string; size?: number; "aria-hidden"?: boolean }>;
-
-function getForgeIcon(canonicalId: string): ForgeIcon {
-  return canonicalId === BUILTIN_GITHUB_PROVIDER_ID ? GitHubIcon : GitBranch;
-}
+type ForgeIcon = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
 const GENERAL_ID = "general";
-const GITHUB_ID = BUILTIN_GITHUB_PROVIDER_ID;
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
 const COPY_FEEDBACK_MS = 2000;
 
@@ -48,11 +42,15 @@ interface CodeForgeSettingsTabProps {
 
 export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForgeSettingsTabProps) {
   const [providers, setProviders] = useState<ForgeProviderEntry[]>([]);
+  // Sequence overlapping fetches (initial load + provenance refetches) so a
+  // slow older response can't overwrite a newer provider list.
+  const providersSeqRef = useRef(0);
 
   const loadProviders = useCallback(async () => {
+    const seq = ++providersSeqRef.current;
     try {
       const loaded = await window.electron.forge.getProviders();
-      setProviders(loaded);
+      if (seq === providersSeqRef.current) setProviders(loaded);
     } catch (err) {
       logError("Failed to load forge providers for CodeForgeSettingsTab", err);
       throw err;
@@ -64,6 +62,18 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     errorMessage: "Couldn't load forge providers",
     timeoutMessage: "Forge providers took too long to load.",
   });
+
+  // Refetch on plugin enable/disable so the provider dropdown (and the
+  // provider subtabs below) track the live forge registry, not a mount-time
+  // snapshot — same broadcast PluginsTab follows.
+  useEffect(() => {
+    return window.electron.plugin.onProvenanceChanged(() => {
+      void loadProviders().catch(() => {
+        // useTabLoad owns initial-load errors; a failed live refresh keeps
+        // the previous list rather than tearing down the tab.
+      });
+    });
+  }, [loadProviders]);
 
   const [auditRecords, setAuditRecords] = useState<ForgeAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
@@ -198,16 +208,24 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     [providers]
   );
 
-  const effectiveSubtab =
-    activeSubtab &&
-    (activeSubtab === GENERAL_ID || providerOptions.some((p) => p.id === activeSubtab))
-      ? activeSubtab
-      : GITHUB_ID;
+  // Subtab resolution is provider-generic. A fresh open (no subtab yet)
+  // defaults to the first registered provider so the tab lands on something
+  // configurable; a stale subtab (e.g. a deep-link to a provider whose plugin
+  // was disabled — the provider list omits it) falls back to General, because
+  // defaulting to a panel for an absent provider is exactly the "disable does
+  // nothing" bug (#9304 follow-up) and General settings always exist.
+  const isKnownSubtab =
+    activeSubtab !== null &&
+    (activeSubtab === GENERAL_ID || providerOptions.some((p) => p.id === activeSubtab));
+  const effectiveSubtab = isKnownSubtab
+    ? (activeSubtab as string)
+    : activeSubtab !== null
+      ? GENERAL_ID
+      : (providerOptions[0]?.id ?? GENERAL_ID);
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
   const isGeneral = effectiveSubtab === GENERAL_ID;
-  const isGitHub = effectiveSubtab === GITHUB_ID;
   const selectedEntry = !isGeneral
     ? providers.find((p) => makeForgeProviderId(p.pluginId, p.contribution.id) === effectiveSubtab)
     : null;
@@ -266,26 +284,17 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           </>
         )}
 
-        {isGitHub && (
-          <ForgeProviderCard name="GitHub" Icon={GitHubIcon}>
-            <GitHubSettingsTab />
-          </ForgeProviderCard>
-        )}
-
-        {!isGeneral && !isGitHub && selectedEntry && (
+        {!isGeneral && selectedEntry && (
           <ForgeProviderCard
             name={selectedEntry.contribution.name}
-            Icon={getForgeIcon(
-              makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)
-            )}
+            iconSlotId={selectedEntry.contribution.slots?.icon}
           >
-            <ProviderSettingsBody
+            <ProviderPanel
               providerId={makeForgeProviderId(
                 selectedEntry.pluginId,
                 selectedEntry.contribution.id
               )}
-              pluginId={selectedEntry.pluginId}
-              contribution={selectedEntry.contribution}
+              entry={selectedEntry}
             />
           </ForgeProviderCard>
         )}
@@ -304,17 +313,28 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   );
 }
 
+/**
+ * Provider brand icon resolved through the provider's `slots.icon` builtin-view
+ * ref. Falls back to a neutral `GitBranch` glyph when the provider declares no
+ * icon slot or the owning plugin's view is unregistered/disabled.
+ */
+function ProviderIcon({ slotId, className }: { slotId?: string; className?: string }) {
+  const SlotIcon = useBuiltinView<{ className?: string; "aria-hidden"?: boolean }>(slotId ?? "");
+  const Icon: ForgeIcon = SlotIcon ?? GitBranch;
+  return <Icon className={className} aria-hidden={true} />;
+}
+
 interface ForgeProviderCardProps {
   name: string;
-  Icon: ForgeIcon;
+  iconSlotId?: string;
   children: ReactNode;
 }
 
-function ForgeProviderCard({ name, Icon, children }: ForgeProviderCardProps) {
+function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProps) {
   return (
     <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
       <div className="flex items-center gap-3 pb-3 border-b border-daintree-border">
-        <Icon className="w-6 h-6 text-daintree-text" aria-hidden={true} />
+        <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-daintree-text" />
         <div>
           <h4 className="text-sm font-medium text-daintree-text">{name} settings</h4>
           <p className="text-xs text-daintree-text/50 select-text">
@@ -324,6 +344,27 @@ function ForgeProviderCard({ name, Icon, children }: ForgeProviderCardProps) {
       </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * Body of a provider's settings card. A provider-owned panel contributed via
+ * `slots.settingsTab` wins (the slot resolves null while the owning plugin is
+ * disabled, so disabling genuinely removes the plugin's settings interface);
+ * otherwise the host renders the generic credential form built from the
+ * provider's declared `credentialFields`.
+ */
+function ProviderPanel({ providerId, entry }: { providerId: string; entry: ForgeProviderEntry }) {
+  const SlotView = useBuiltinView<Record<string, never>>(
+    entry.contribution.slots?.settingsTab ?? ""
+  );
+  if (SlotView) return <SlotView />;
+  return (
+    <ProviderSettingsBody
+      providerId={providerId}
+      pluginId={entry.pluginId}
+      contribution={entry.contribution}
+    />
   );
 }
 
@@ -338,7 +379,11 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
   const capabilities = contribution.capabilities;
 
   return (
-    <div className="space-y-4">
+    // `forge-access-token` is the stable anchor settings-search and the
+    // token-recovery surfaces target — generic for any provider, regardless
+    // of whether the provider ships its own settings slot or uses the host
+    // credential form below.
+    <div className="space-y-4" id="forge-access-token">
       {credentialFields.length > 0 ? (
         <GenericCredentialForm
           providerId={providerId}
@@ -523,7 +568,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               placeholder={field.placeholder}
               aria-label={field.label}
               autoComplete={field.type === "password" ? "new-password" : "off"}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent transition-colors"
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors"
               disabled={isSaving}
             />
             {field.helpText && (

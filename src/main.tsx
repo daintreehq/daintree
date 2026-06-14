@@ -5,6 +5,10 @@
 // a Portal throws.
 import "./lib/trustedTypesPolicy";
 
+// Fires the `app:boot` IPC at the top of entry-graph evaluation — see the
+// module comment for ordering semantics (#8820).
+import "./lib/bootIpcEager";
+
 import { initBuiltInPanelKinds } from "./panels/registry";
 initBuiltInPanelKinds();
 
@@ -32,15 +36,6 @@ import {
   onRecoverableError,
 } from "./utils/reactRootErrorCallbacks";
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
-import { getSafeBootPromise } from "./lib/bootPromise";
-
-// Fire `app:boot` at module-eval time, before `bootstrap()` imports App and
-// calls `createRoot`. The IPC round-trip then overlaps React parse and the
-// first commit; `App` reads the cached promise via `use()` (#8820). Warming the
-// safe wrapper (not just `getBootPromise`) means its derived `.then` chain is
-// also annotated before first render, so `use()` can read it synchronously when
-// the IPC beats React's parse + commit.
-void getSafeBootPromise();
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
@@ -48,13 +43,13 @@ let cleanupOrchestrator: (() => void) | undefined;
 ensureLatin400Preload(latin400Woff2Url);
 
 async function bootstrap() {
-  // Fire-and-forget — `Sentry.init` runs synchronously inside, then the
-  // consent snapshot hydrates as a detached IPC continuation. Awaiting
-  // here would block the first React render on a renderer→main round-trip
-  // (#8632); the SDK is ready for `captureException` the moment this
-  // call returns, and `bootstrap().catch()` below has its own dynamic
+  // Fire-and-forget — the SDK module loads via dynamic import off the
+  // first-render path, with a pre-init capture queue replaying anything
+  // recorded before `Sentry.init` runs. Awaiting here would block the
+  // first React render on the chunk fetch plus a renderer→main consent
+  // round-trip (#8632); `bootstrap().catch()` below has its own dynamic
   // import fallback in case this throws before init.
-  initRendererSentry();
+  void initRendererSentry();
 
   cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 

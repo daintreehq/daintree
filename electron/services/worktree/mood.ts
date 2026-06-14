@@ -9,7 +9,7 @@ const MS_PER_DAY = 1000 * 60 * 60 * 24;
  */
 export async function getLastCommitAgeInDays(worktreePath: string): Promise<number | null> {
   try {
-    const git = createHardenedGit(worktreePath);
+    const git = await createHardenedGit(worktreePath);
     const log = await git.log({ maxCount: 1 });
     const lastDate = log.latest?.date;
     if (!lastDate) return null;
@@ -45,7 +45,13 @@ export async function categorizeWorktree(
       return "active";
     }
 
-    const ageDays = await getLastCommitAgeInDays(worktree.path);
+    // The consolidated git log in getWorktreeChangesWithStats already carries
+    // the last-commit timestamp — only fork git when it's absent.
+    const ts = changes?.lastCommitTimestampMs;
+    const ageDays =
+      ts !== undefined
+        ? Math.max(0, (Date.now() - ts) / MS_PER_DAY)
+        : await getLastCommitAgeInDays(worktree.path);
     if (ageDays !== null && ageDays > staleThresholdDays) {
       return "stale";
     }

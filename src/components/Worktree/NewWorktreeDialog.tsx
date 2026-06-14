@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderGit2, Check, AlertCircle } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 
 import { worktreeClient, forgeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -20,6 +21,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
@@ -45,12 +47,31 @@ import {
 
 type BranchMode = "new" | "existing";
 
-/** Map the GitHub uppercase PR state to the workspace-host lowercase form. */
-function normalizeSourcePrState(state: GitHubPR["state"]): "open" | "closed" | "merged" {
+const branchListCache = new Map<string, BranchInfo[]>();
+
+export function clearBranchListCache(): void {
+  branchListCache.clear();
+}
+
+function deriveDefaultBaseBranch(branchList: BranchInfo[]): {
+  name: string;
+  fromRemote: boolean;
+} {
+  const currentBranch = branchList.find((b) => b.current);
+  const mainBranch =
+    branchList.find((b) => b.name === "main") || branchList.find((b) => b.name === "master");
+  const name = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
+  const info = branchList.find((b) => b.name === name);
+  return { name, fromRemote: !!info?.remote };
+}
+
+/** Collapse the normalized forge PR state to the workspace-host form (declined folds into closed). */
+function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged" {
   switch (state) {
-    case "MERGED":
+    case "merged":
       return "merged";
-    case "CLOSED":
+    case "closed":
+    case "declined":
       return "closed";
     default:
       return "open";
@@ -62,8 +83,8 @@ interface NewWorktreeDialogProps {
   onClose: () => void;
   rootPath: string;
   onWorktreeCreated?: (worktreeId: string) => void;
-  initialIssue?: GitHubIssue | null;
-  initialPR?: GitHubPR | null;
+  initialIssue?: Issue | null;
+  initialPR?: PR | null;
   initialRecipeId?: string | null;
   initialBranchInput?: string | null;
 }
@@ -90,6 +111,7 @@ export function NewWorktreeDialog({
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
   const keepEditingButtonRef = useRef<HTMLButtonElement>(null);
   const isCreatingRef = useRef(false);
+  const baseBranchTouchedRef = useRef(false);
 
   const { errors, setValidationError, clearErrors, markTouched, resetErrors } =
     useWorktreeFormErrors();
@@ -102,17 +124,26 @@ export function NewWorktreeDialog({
   const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
-  const worktreeMap = useWorktreeStore((s) => s.worktrees);
-  const { recipes, runRecipeWithResults } = useRecipeStore();
+  const inUseBranches = useWorktreeStore(
+    useShallow((s) => {
+      const names: string[] = [];
+      for (const wt of s.worktrees.values()) {
+        if (wt.branch) names.push(wt.branch);
+      }
+      return names.sort();
+    })
+  );
+  const recipes = useRecipeStore((s) => s.recipes);
+  const runRecipeWithResults = useRecipeStore((s) => s.runRecipeWithResults);
   const currentProject = useProjectStore((s) => s.currentProject);
   const projectId = currentProject?.id ?? "";
   const lastSelectedWorktreeRecipeId = lastSelectedWorktreeRecipeIdByProject[projectId];
+  const { entry: forgeEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const forgeName = forgeEntry?.contribution.name ?? "the forge";
 
-  // Forge-agnostic viewer identity. Resolved per-cwd via the active forge
-  // provider's `identity` capability (GitHub today; GitLab/Gitea tomorrow)
-  // instead of the GitHub-specific `useGitHubConfigStore` so a non-GitHub
-  // project mirrors through the right identity. `null` means "no token /
-  // unsupported" — mirrors the old `!githubConfig?.username` path.
+  // Forge-agnostic viewer identity, resolved per-cwd via the active forge
+  // provider's `identity` capability so every project mirrors through the
+  // right identity. `null` means "no token / unsupported".
   const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
@@ -190,6 +221,7 @@ export function NewWorktreeDialog({
 
   const onSelectBranch = useCallback(
     (name: string, isRemote: boolean) => {
+      baseBranchTouchedRef.current = true;
       setBaseBranch(name);
       setFromRemote(isRemote);
     },
@@ -219,12 +251,9 @@ export function NewWorktreeDialog({
   });
 
   const existingBranchCandidates = useMemo(() => {
-    const inUseSet = new Set<string>();
-    for (const wt of worktreeMap.values()) {
-      if (wt.branch) inUseSet.add(wt.branch);
-    }
+    const inUseSet = new Set(inUseBranches);
     return branches.filter((b) => !b.remote && !inUseSet.has(b.name));
-  }, [branches, worktreeMap]);
+  }, [branches, inUseBranches]);
 
   const filteredExistingBranches = useMemo(() => {
     const q = existingBranchQuery.trim().toLowerCase();
@@ -311,10 +340,14 @@ export function NewWorktreeDialog({
   useEffect(() => {
     if (!isOpen) return;
 
-    setLoading(true);
+    // PR opens bypass the cache: PR-branch resolution may fetch from the
+    // remote and must run against a fresh branch list.
+    const cached = initialPR ? undefined : branchListCache.get(rootPath);
+
+    setLoading(!cached);
     resetErrors();
     setPrBranchResolved(null);
-    setBranches([]);
+    setBranches(cached ?? []);
     setBaseBranch("");
     setIsDismissing(false);
     setBranchMode("new");
@@ -322,7 +355,14 @@ export function NewWorktreeDialog({
     setExistingBranchQuery("");
     setWorktreeMode("local");
     isCreatingRef.current = false;
+    baseBranchTouchedRef.current = false;
     // resetErrors() is NOT called here — touched refs are managed by individual hooks
+
+    if (cached) {
+      const seed = deriveDefaultBaseBranch(cached);
+      setBaseBranch(seed.name);
+      setFromRemote(seed.fromRemote);
+    }
 
     let isCurrent = true;
 
@@ -340,12 +380,13 @@ export function NewWorktreeDialog({
       .then(async (branchList) => {
         if (!isCurrent) return;
 
+        branchListCache.set(rootPath, branchList);
         setBranches(branchList);
 
-        if (initialPR?.headRefName) {
-          const remoteBranchName = `origin/${initialPR.headRefName}`;
+        if (initialPR?.headRef) {
+          const remoteBranchName = `origin/${initialPR.headRef}`;
           const remoteBranch = branchList.find((b) => b.name === remoteBranchName);
-          const localBranch = branchList.find((b) => b.name === initialPR.headRefName && !b.remote);
+          const localBranch = branchList.find((b) => b.name === initialPR.headRef && !b.remote);
           if (remoteBranch) {
             setBaseBranch(remoteBranchName);
             setFromRemote(true);
@@ -356,13 +397,14 @@ export function NewWorktreeDialog({
             setPrBranchResolved(true);
           } else {
             try {
-              await worktreeClient.fetchPRBranch(rootPath, initialPR.number, initialPR.headRefName);
+              await worktreeClient.fetchPRBranch(rootPath, initialPR.number, initialPR.headRef);
               if (!isCurrent) return;
               const updatedBranches = await worktreeClient.listBranches(rootPath);
               if (!isCurrent) return;
+              branchListCache.set(rootPath, updatedBranches);
               setBranches(updatedBranches);
               const fetchedLocal = updatedBranches.find(
-                (b) => b.name === initialPR.headRefName && !b.remote
+                (b) => b.name === initialPR.headRef && !b.remote
               );
               if (fetchedLocal) {
                 setBaseBranch(fetchedLocal.name);
@@ -387,22 +429,18 @@ export function NewWorktreeDialog({
               setFromRemote(false);
             }
           }
-        } else {
-          const currentBranch = branchList.find((b) => b.current);
-          const mainBranch =
-            branchList.find((b) => b.name === "main") ||
-            branchList.find((b) => b.name === "master");
-
-          const initialBranch =
-            currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
-          setBaseBranch(initialBranch);
-
-          const initialBranchInfo = branchList.find((b) => b.name === initialBranch);
-          setFromRemote(!!initialBranchInfo?.remote);
+        } else if (!baseBranchTouchedRef.current) {
+          const next = deriveDefaultBaseBranch(branchList);
+          setBaseBranch(next.name);
+          setFromRemote(next.fromRemote);
         }
       })
       .catch((err) => {
         if (!isCurrent) return;
+        if (cached) {
+          logError("Failed to refresh branches", err);
+          return;
+        }
         setValidationError(`Failed to load branches: ${err.message}`, null);
         setBranches([]);
         setBaseBranch("");
@@ -569,7 +607,7 @@ export function NewWorktreeDialog({
                 sourcePrTitle: snapInitialPR.title,
                 sourcePrUrl: snapInitialPR.url,
                 sourcePrState: normalizeSourcePrState(snapInitialPR.state),
-                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.bodyText),
+                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.body),
               }
             : {}),
         };
@@ -603,7 +641,7 @@ export function NewWorktreeDialog({
                   notify({
                     type: "warning",
                     title: "Couldn't undo assignment",
-                    message: `${formatErrorMessage(err, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                    message: `${formatErrorMessage(err, "Couldn't unassign issue")} — you can unassign manually on ${forgeName}`,
                   });
                 });
             };
@@ -620,16 +658,16 @@ export function NewWorktreeDialog({
               },
             });
           } catch (assignErr) {
-            const message = formatErrorMessage(assignErr, "Failed to assign issue");
+            const message = formatErrorMessage(assignErr, "Couldn't assign issue");
             const issueUrl = snapIssue.url;
             notify({
               type: "warning",
-              title: "Could not assign issue",
-              message: `${message} — you can assign it manually on GitHub`,
+              title: "Couldn't assign issue",
+              message: `${message} — you can assign it manually on ${forgeName}`,
               actions: issueUrl
                 ? [
                     {
-                      label: "Assign on GitHub",
+                      label: "Open issue",
                       onClick: () => systemClient.openExternal(issueUrl),
                     },
                   ]
@@ -645,11 +683,11 @@ export function NewWorktreeDialog({
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
             await spawnPanelsFromRecipe({ terminals, worktreeId, cwd: snapWorktreePath });
           } catch (cloneErr) {
-            const message = formatErrorMessage(cloneErr, "Failed to clone layout");
+            const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({
               type: "warning",
-              title: "Could not clone layout",
-              message: `${message} — worktree was created successfully`,
+              title: "Couldn't clone layout",
+              message: `${message} — the worktree itself was created`,
             });
           }
         } else if (snapSelectedRecipe) {
@@ -670,7 +708,7 @@ export function NewWorktreeDialog({
               projectId,
             });
           } catch (recipeErr) {
-            const message = formatErrorMessage(recipeErr, "Failed to run recipe");
+            const message = formatErrorMessage(recipeErr, "Couldn't run recipe");
             const recipeId = snapSelectedRecipe.id;
             const recipePath = snapWorktreePath;
             const recipeWorktreeId = worktreeId;
@@ -682,8 +720,8 @@ export function NewWorktreeDialog({
             };
             notify({
               type: "warning",
-              title: "Could not run recipe",
-              message: `${message} — worktree was created successfully`,
+              title: "Couldn't run recipe",
+              message: `${message} — the worktree itself was created`,
               actions: [
                 {
                   label: "Retry recipe",
@@ -706,7 +744,7 @@ export function NewWorktreeDialog({
         onWorktreeCreated?.(worktreeId);
         useAnnouncerStore.getState().announce(`Created worktree ${fullBranchName}`);
       } catch (err: unknown) {
-        const message = formatErrorMessage(err, "Failed to create worktree");
+        const message = formatErrorMessage(err, "Couldn't create worktree");
         if (placeholderPath) {
           useWorktreeSelectionStore.getState().failPendingCreation(placeholderPath, message);
         } else {
@@ -802,7 +840,7 @@ export function NewWorktreeDialog({
   );
 
   const handleIssueSelectWrapper = useCallback(
-    (issue: GitHubIssue | null) => {
+    (issue: Issue | null) => {
       handleIssueSelect(issue);
       if (issue) markTouched("issue");
       clearErrors();
@@ -927,7 +965,10 @@ export function NewWorktreeDialog({
                   id="from-remote"
                   type="checkbox"
                   checked={fromRemote}
-                  onChange={(e) => setFromRemote(e.target.checked)}
+                  onChange={(e) => {
+                    baseBranchTouchedRef.current = true;
+                    setFromRemote(e.target.checked);
+                  }}
                   className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
                 />
                 <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">
@@ -965,7 +1006,7 @@ export function NewWorktreeDialog({
                 <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
                 <p className="text-sm text-status-warning">
                   Could not fetch branch{" "}
-                  <span className="font-mono">{initialPR.headRefName ?? "unknown"}</span> from the
+                  <span className="font-mono">{initialPR.headRef ?? "unknown"}</span> from the
                   remote. The worktree will be created from the fallback branch instead. You can try
                   running <span className="font-mono">git fetch origin</span> manually and reopening
                   this dialog.

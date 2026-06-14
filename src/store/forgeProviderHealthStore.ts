@@ -1,10 +1,11 @@
 import { create } from "zustand";
 import type { ForgeRateLimitKind } from "@shared/types";
+import type { ForgeTokenHealthState } from "@shared/types/forge";
 
 /**
  * Renderer source of truth for forge provider health (rate-limit + token
- * health), keyed by canonical `providerId`. GitHub and any additional forge
- * provider get their own slice — state never bleeds across providers.
+ * health), keyed by canonical `providerId`. Every registered forge provider
+ * gets its own slice — state never bleeds across providers.
  *
  * Plain `Record`, not a `Map`: Zustand 5's reference-equality check does not
  * see `Map.set()` (the Map reference is unchanged), so every mutation spreads
@@ -25,6 +26,14 @@ export interface ForgeProviderHealth {
   // User dismissed the token-health banner for the current unhealthy episode.
   // Reset on every health transition so a fresh expiry re-surfaces the banner.
   tokenBannerDismissed: boolean;
+  // Last provider-reported token-health snapshot (carries `reauthUrl` for
+  // banner surfaces). Cleared when the token recovers without a fresh state.
+  tokenHealth: ForgeTokenHealthState | null;
+  // Registration metadata resolved from the forge registry at push time so
+  // store-driven surfaces (banner, priority slot) can render a display name
+  // and gate on the owning plugin's enable state without an IPC round-trip.
+  providerName: string | null;
+  pluginId: string | null;
 }
 
 // Frozen: the selector returns this by reference for an unseen provider, so a
@@ -36,6 +45,9 @@ export const DEFAULT_PROVIDER_HEALTH: ForgeProviderHealth = Object.freeze({
   rateLimitMultiplier: 1,
   tokenUnhealthy: false,
   tokenBannerDismissed: false,
+  tokenHealth: null,
+  providerName: null,
+  pluginId: null,
 });
 
 /** Normalized rate-limit state applied to a provider's slice. */
@@ -46,10 +58,17 @@ export interface ForgeRateLimitState {
   throttleMultiplier?: number;
 }
 
+/** Registration metadata attached to a provider's slice. */
+export interface ForgeProviderMeta {
+  providerName: string | null;
+  pluginId: string | null;
+}
+
 interface ForgeProviderHealthStore {
   providers: Record<string, ForgeProviderHealth>;
   applyRateLimit: (providerId: string, state: ForgeRateLimitState) => void;
-  setTokenUnhealthy: (providerId: string, value: boolean) => void;
+  setTokenUnhealthy: (providerId: string, value: boolean, state?: ForgeTokenHealthState) => void;
+  setProviderMeta: (providerId: string, meta: ForgeProviderMeta) => void;
   dismissTokenBanner: (providerId: string) => void;
 }
 
@@ -92,17 +111,32 @@ export const useForgeProviderHealthStore = create<ForgeProviderHealthStore>((set
       ),
     }));
   },
-  setTokenUnhealthy: (providerId, value) =>
+  setTokenUnhealthy: (providerId, value, state) =>
     set((s) => {
       const prev = s.providers[providerId] ?? DEFAULT_PROVIDER_HEALTH;
       // Clear the dismissed flag on a real transition only. Repeated identical
       // "still unhealthy" pushes must not un-dismiss a banner the user closed,
       // but a fresh expiry (healthy → unhealthy) or recovery resets it.
       const tokenBannerDismissed = value && prev.tokenUnhealthy ? prev.tokenBannerDismissed : false;
+      // Keep the last snapshot while unhealthy (a bare boolean push must not
+      // drop a previously observed reauthUrl); clear it on recovery unless the
+      // recovery push carries its own fresh state.
+      const tokenHealth = state ?? (value ? prev.tokenHealth : null);
       return {
-        providers: mergeProvider(s, providerId, { tokenUnhealthy: value, tokenBannerDismissed }),
+        providers: mergeProvider(s, providerId, {
+          tokenUnhealthy: value,
+          tokenBannerDismissed,
+          tokenHealth,
+        }),
       };
     }),
+  setProviderMeta: (providerId, meta) =>
+    set((s) => ({
+      providers: mergeProvider(s, providerId, {
+        providerName: meta.providerName,
+        pluginId: meta.pluginId,
+      }),
+    })),
   dismissTokenBanner: (providerId) =>
     set((s) => ({
       providers: mergeProvider(s, providerId, { tokenBannerDismissed: true }),

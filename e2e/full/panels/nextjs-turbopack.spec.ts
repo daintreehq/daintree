@@ -4,6 +4,7 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_LONG } from "../../helpers/timeouts";
 
@@ -114,23 +115,16 @@ server.listen(0, '127.0.0.1', () => {
     const { window } = ctx;
 
     // Configure dev server command, then open dev preview via action dispatch
-    await window.evaluate(async () => {
-      const current = await window.electron.project.getCurrent();
-      if (!current?.id) return;
-      const settings = await window.electron.project.getSettings(current.id);
-      await window.electron.project.saveSettings(current.id, {
-        ...settings,
-        devServerCommand: "npm run dev",
-      });
-    });
+    await saveCurrentProjectSettings(window, { devServerCommand: "npm run dev" });
 
     // Open dev preview panel via the exposed E2E action dispatcher
     await window.evaluate(async () => {
       const dispatch = (window as unknown as Record<string, (...args: unknown[]) => unknown>)
         .__daintreeDispatchAction;
-      if (typeof dispatch === "function") {
-        await dispatch("devServer.start", undefined, { source: "user" });
+      if (typeof dispatch !== "function") {
+        throw new Error("Action dispatch hook not available");
       }
+      await dispatch("devServer.start", undefined, { source: "user" });
     });
 
     // Wait for Running status
@@ -145,32 +139,31 @@ server.listen(0, '127.0.0.1', () => {
     // --- Verify --turbopack was injected ---
 
     const consoleToggle = window.locator(SEL.devPreview.consoleToggle).first();
-    if (await consoleToggle.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      await consoleToggle.click();
-      await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
-        timeout: T_SHORT,
-      });
+    await expect(consoleToggle).toBeVisible({ timeout: T_SHORT });
+    await consoleToggle.click();
+    await expect(consoleToggle).toHaveAttribute("aria-expanded", "true", {
+      timeout: T_SHORT,
+    });
 
-      const drawerEl = window.locator('[id^="console-drawer-"]');
-      const drawerId = await drawerEl.getAttribute("id");
-      const terminalId = drawerId?.replace("console-drawer-", "") ?? "";
+    const drawerEl = window.locator('[id^="console-drawer-"]').first();
+    const drawerId = await drawerEl.getAttribute("id");
+    const terminalId = drawerId?.replace("console-drawer-", "") ?? "";
 
-      await expect
-        .poll(
-          async () => {
-            return window.evaluate((id) => {
-              const reader = (window as unknown as Record<string, unknown>)
-                .__daintreeReadTerminalBuffer;
-              if (typeof reader === "function") return reader(id) as string;
-              return "";
-            }, terminalId);
-          },
-          { timeout: T_LONG }
-        )
-        .toContain("--turbopack");
+    await expect
+      .poll(
+        async () => {
+          return window.evaluate((id) => {
+            const reader = (window as unknown as Record<string, unknown>)
+              .__daintreeReadTerminalBuffer;
+            if (typeof reader === "function") return reader(id) as string;
+            return "";
+          }, terminalId);
+        },
+        { timeout: T_LONG }
+      )
+      .toContain("--turbopack");
 
-      await consoleToggle.click();
-    }
+    await consoleToggle.click();
 
     // --- Verify webview renders styled content ---
 

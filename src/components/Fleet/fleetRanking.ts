@@ -23,11 +23,20 @@ function effectiveHistory(scope: FleetSavedScope): number[] {
   return [];
 }
 
+// Precompute frecency once per scope so the sort does O(n) frecency walks
+// instead of O(n log n) inside the comparator.
+function frecencyScores(scopes: readonly FleetSavedScope[], now: number): Map<string, number> {
+  const scores = new Map<string, number>();
+  for (const scope of scopes) {
+    scores.set(scope.id, computeFrecency(effectiveHistory(scope), now));
+  }
+  return scores;
+}
+
 const comparator =
-  (now: number) =>
+  (scores: ReadonlyMap<string, number>) =>
   (a: FleetSavedScope, b: FleetSavedScope): number => {
-    const scoreDiff =
-      computeFrecency(effectiveHistory(b), now) - computeFrecency(effectiveHistory(a), now);
+    const scoreDiff = (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0);
     if (scoreDiff !== 0) return scoreDiff;
     const lastUsedDiff = (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0);
     if (lastUsedDiff !== 0) return lastUsedDiff;
@@ -67,8 +76,7 @@ export function rankSavedFleets(
       usable.push(scope);
     }
   }
-  const cmp = comparator(now);
-  usable.sort(cmp);
+  usable.sort(comparator(frecencyScores(usable, now)));
   // Stale sub-group falls back to lastUsedAt desc (frecency is meaningless
   // for fleets with no eligible terminals; the user came to delete, not recall).
   stale.sort((a, b) => {
@@ -88,5 +96,5 @@ export function rankPredicateFleets(
   scopes: readonly FleetSavedScope[],
   now: number
 ): FleetSavedScope[] {
-  return [...scopes].sort(comparator(now));
+  return [...scopes].sort(comparator(frecencyScores(scopes, now)));
 }

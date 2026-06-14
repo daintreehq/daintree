@@ -166,7 +166,7 @@ export function ForgeAuditLogViewer({
           onChange={(e) => setMethodFilter(e.target.value)}
           placeholder="Filter by method or provider"
           aria-label="Filter audit by method or provider"
-          className="flex-1 min-w-[180px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="flex-1 min-w-[180px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         />
         <input
           type="text"
@@ -174,7 +174,7 @@ export function ForgeAuditLogViewer({
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search arguments"
           aria-label="Search audit arguments"
-          className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         />
         <select
           value={resultFilter}

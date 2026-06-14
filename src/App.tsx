@@ -35,6 +35,7 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
+import { stashViewFileRequest } from "./components/FileViewer/pendingViewFileRequest";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
@@ -48,11 +49,14 @@ import {
   usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
   useCloudSyncWarning,
+  useRosettaWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
   useOrchestrationMilestones,
   useAgentWaitingNudge,
+  useForgeEnableRecommendation,
   useFocusOnActivateIntent,
+  useBackgroundWindowResize,
   usePluginDeepLink,
   useNotificationHistoryPruning,
   useUnloadCleanup,
@@ -73,15 +77,62 @@ import { PanelTransitionOverlay } from "./components/Panel";
 
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
+import {
+  buildResumeCommand,
+  buildResumeLatestCommand,
+  reconcileBypassFlags,
+  resolveEffectiveBypass,
+} from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
+
+// Module-scope loaders: raw import() expressions inside component effects bail
+// React Compiler memoization for AppInner; hoisting keeps the specifiers
+// static for chunking while letting the component compile.
+const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor");
+const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
+const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
+const preloadFileViewerModal = () => import("@/components/FileViewer/FileViewerModal");
+
+// Reconciles a resumed session's persisted launch flags against the current
+// global skip-permissions setting (#10432, the "resume trap"): the snapshot may
+// have been captured while the global switch was in a different state, so strip
+// the agent's canonical bypass flag and re-add it only if it currently resolves.
+function reconcileResumeLaunchFlags(session: {
+  agentId: string;
+  agentLaunchFlags?: string[];
+}): string[] | undefined {
+  const settings = useAgentSettingsStore.getState().settings;
+  const entry = settings?.agents?.[session.agentId] ?? {};
+  const effectiveBypass = resolveEffectiveBypass(
+    entry,
+    session.agentId,
+    settings?.globalSkipPermissions
+  );
+  // Pass [] when no flags were captured so global-on still injects the bypass
+  // token for a supported agent (reconcileBypassFlags no-ops for others).
+  return reconcileBypassFlags(
+    session.agentLaunchFlags ?? [],
+    session.agentId,
+    effectiveBypass,
+    entry.dangerousArgs as string | undefined
+  );
+}
+
+// Direct file import (not the Project barrel) so the lazy chunk doesn't pull
+// in barrel siblings. Renders only when no project is open, so it stays off
+// the returning-user first-paint path.
+function preloadWelcomeScreen() {
+  return import("./components/Project/WelcomeScreen");
+}
+const LazyWelcomeScreen = lazy(() =>
+  preloadWelcomeScreen().then((m) => ({ default: m.WelcomeScreen }))
+);
 
 function preloadSettingsDialog() {
   return import("./components/Settings/SettingsDialog");
@@ -320,7 +371,6 @@ import {
   usePerformanceModeStore,
 } from "./store";
 import { usePerfMetricsStore } from "./store/perfMetricsStore";
-import { useGitHubConfigStore } from "@github-renderer/stores/githubConfigStore";
 import { useRecipeConflictStore } from "./store/recipeConflictStore";
 import { useGitPushConfirmStore } from "./store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "./store/gitPullRebaseConfirmStore";
@@ -329,11 +379,12 @@ import { useMcpConfirmStore } from "./store/mcpConfirmStore";
 import { usePluginConfirmStore } from "./store/pluginConfirmStore";
 import { usePluginMcpConfirmStore } from "./store/pluginMcpConfirmStore";
 import { useDiagnosticsReviewStore } from "./store/diagnosticsReviewStore";
-// Eager side-effect import: registers the GitHub plugin's builtin view slots
-// (bulkCreateWorktreeDialog, issueSelector) at module-eval time, before first
-// render. Must stay static — a deferred/idle import races the user, so
-// getBuiltinView returns null and the bulk-create dialog silently never opens.
-import "@github-renderer/index";
+import { useAgentSettingsStore } from "./store/agentSettingsStore";
+// Eager side-effect import: auto-discovers every built-in plugin renderer and
+// registers its builtin view slots at module-eval time, before first render.
+// Must stay static — a deferred/idle import races the user, so getBuiltinView
+// returns null and plugin-contributed dialogs silently never open.
+import "@/registry/builtinPluginRenderers";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
@@ -343,6 +394,16 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
 import { SidebarContent, preloadNewWorktreeDialog, E2EFaultInjector } from "./components/Sidebar";
+import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard";
+
+// Kick the hydration-bootstrap IPC pair (keybinding overrides + user-agent
+// registry) at module-eval time so the round-trips overlap App's first render
+// instead of starting in the post-commit hydration effect. The guard memoizes,
+// so the await inside hydrateAppState stays the synchronization point. The
+// `.catch` is required: the guard resets its memo and RETHROWS on failure, so
+// a bare void call would surface an unhandled rejection — the swallowed early
+// failure is retried by hydrateAppState's own await.
+void ensureHydrationBootstrap().catch(() => {});
 
 const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);
 
@@ -379,11 +440,6 @@ function AppInner() {
       window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
         useErrorStore.getState().reset();
       };
-      // Refreshes the GitHub config store from the main process. Used by
-      // fault-mode tests to pick up a token seeded via __daintreeSeedGitHubToken
-      // so the no-token empty state doesn't short-circuit IPC fault paths.
-      window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__ = () =>
-        useGitHubConfigStore.getState().refresh();
       // Parks a synthetic in-repo recipe stale-write conflict so E2E can exercise
       // the RecipeConflictDialog without racing a real on-disk file mutation. The
       // returned promise resolves with the user's choice; tests don't await it —
@@ -419,7 +475,7 @@ function AppInner() {
       // stays out of the production first-paint chunk. Fire-and-forget: the helper
       // side in e2e/helpers/notifications.ts waits for __daintreeNotificationsE2E
       // before use, so the async resolve doesn't need to block the effect.
-      void import("./lib/e2eNotificationBackdoor")
+      void loadE2ENotificationBackdoor()
         .then(({ installE2ENotificationBackdoor }) => {
           installE2ENotificationBackdoor();
         })
@@ -430,7 +486,6 @@ function AppInner() {
       delete window.__DAINTREE_E2E_ERROR_STORE__;
       delete window.__DAINTREE_E2E_ADD_ERROR__;
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
-      delete window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
       delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
       delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
       delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
@@ -636,7 +691,12 @@ function AppInner() {
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
   useEffect(() => {
     const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
-    const onViewFile = () => setFileViewerResetKey((k) => k + 1);
+    const onViewFile = (e: Event) => {
+      // Stash for FileViewerModalHost's mount replay — the host's own listener
+      // lives in a lazy chunk and may not be registered yet.
+      stashViewFileRequest(e);
+      setFileViewerResetKey((k) => k + 1);
+    };
     window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
     window.addEventListener("daintree:view-file", onViewFile);
     return () => {
@@ -650,6 +710,9 @@ function AppInner() {
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
+  // Background window-resize receiver — keeps PTY geometry tracking the
+  // window while this project view is detached (#10415).
+  useBackgroundWindowResize();
   // `daintree://` deep-link receiver (#9559). Surfaces the intent once hydration
   // settles; the effect below opens the Plugin Manager, which consumes it.
   const pluginDeepLink = usePluginDeepLink(isStateLoaded);
@@ -678,12 +741,21 @@ function AppInner() {
     });
     return () => unsubscribe?.();
   }, []);
-  useShortcutHints(isStateLoaded);
+  // Defers the post-hydration housekeeping IPC reads (shortcut-hint counts,
+  // milestones, forge-recommendation plugin/remotes probes) out of the
+  // synchronous isStateLoaded effect flush: their sends would otherwise land
+  // on main ahead of the loaded-frame paint and compete with the
+  // deferred-services drain. The flag flips from the background-priority task
+  // below, so the gated hooks hydrate at idle; each reconciles current store
+  // state on attach, so nothing observable is lost in the gap.
+  const [idleHousekeepingReady, setIdleHousekeepingReady] = useState(false);
+  useShortcutHints(isStateLoaded && idleHousekeepingReady);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
   useUpdateListener(onboardingOverlayActive);
-  useOrchestrationMilestones(isStateLoaded);
+  useOrchestrationMilestones(isStateLoaded && idleHousekeepingReady);
   useAgentWaitingNudge(isStateLoaded);
+  useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
 
   useEffect(() => {
@@ -693,6 +765,7 @@ function AppInner() {
 
     const execute = () => {
       if (controller.signal.aborted) return;
+      setIdleHousekeepingReady(true);
       void preloadSettingsDialog();
       void preloadNewWorktreeDialog();
       void preloadActionPalette();
@@ -705,13 +778,16 @@ function AppInner() {
       void preloadQuickCreatePalette();
       void preloadLogLevelPalette();
       void preloadPluginManagerView();
-      import("@fontsource/jetbrains-mono/latin-500.css").catch(() => {});
-      import("@fontsource/jetbrains-mono/latin-600.css").catch(() => {});
+      void preloadWorktreeOverviewModal();
+      void preloadShortcutReferenceDialog();
+      void preloadCrossWorktreeDiff();
+      loadJetbrainsMono500().catch(() => {});
+      loadJetbrainsMono600().catch(() => {});
       // Warm the FileViewerModal/DiffViewer chunk split out of the eager
       // closure (#8626). It is reached through a lazy boundary in
       // `Worktree/FileDiffModal.tsx`, so an explicit post-paint prefetch keeps
       // it snappy on first use.
-      import("@/components/FileViewer/FileViewerModal").catch(() => {});
+      preloadFileViewerModal().catch(() => {});
     };
 
     if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
@@ -820,6 +896,7 @@ function AppInner() {
   usePanelStoreBootstrap(bootResult?.terminalConfig ?? null);
   useSemanticWorkerLifecycle();
   useCloudSyncWarning(homeDir);
+  useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
 
   useEffect(() => {
@@ -933,7 +1010,9 @@ function AppInner() {
                         defaultCwd={defaultTerminalCwd}
                         emptyContent={
                           currentProject === null ? (
-                            <WelcomeScreen gettingStarted={gettingStarted} />
+                            <Suspense fallback={null}>
+                              <LazyWelcomeScreen gettingStarted={gettingStarted} />
+                            </Suspense>
                           ) : undefined
                         }
                       />
@@ -1073,12 +1152,10 @@ function AppInner() {
                       if (result.resumeSession) {
                         const session = result.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
+                        const resumeFlags = reconcileResumeLaunchFlags(session);
                         const command =
-                          buildResumeCommand(
-                            session.agentId,
-                            session.sessionId,
-                            session.agentLaunchFlags
-                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
+                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
+                          buildResumeLatestCommand(session.agentId, resumeFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",
@@ -1111,12 +1188,10 @@ function AppInner() {
                       if (selected.resumeSession) {
                         const session = selected.resumeSession;
                         const agentConfig = getEffectiveAgentConfig(session.agentId);
+                        const resumeFlags = reconcileResumeLaunchFlags(session);
                         const command =
-                          buildResumeCommand(
-                            session.agentId,
-                            session.sessionId,
-                            session.agentLaunchFlags
-                          ) ?? buildResumeLatestCommand(session.agentId, session.agentLaunchFlags);
+                          buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
+                          buildResumeLatestCommand(session.agentId, resumeFlags);
                         if (command && agentConfig) {
                           addPanel({
                             kind: "terminal",

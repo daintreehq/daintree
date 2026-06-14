@@ -1,6 +1,6 @@
 import { BRANCH_TYPES, BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
 import type { BranchType } from "@shared/config/branchPrefixes";
-import type { GitHubIssue } from "@shared/types/github";
+import type { Issue } from "@shared/types/forge";
 
 export interface ParsedBranchInput {
   prefix: string;
@@ -110,10 +110,12 @@ export function suggestPrefixes(query: string): PrefixSuggestion[] {
 }
 
 /**
- * Auto-detects appropriate prefix from GitHub issue context.
+ * Auto-detects appropriate prefix from forge issue context.
  * Uses hybrid approach: labels first, then conservative title keyword matching.
  */
-export function detectPrefixFromIssue(issue: GitHubIssue | null): string | null {
+export function detectPrefixFromIssue(
+  issue: (Pick<Issue, "title"> & Partial<Pick<Issue, "labels">>) | null
+): string | null {
   if (!issue) return null;
 
   // Strategy 1: Label-based detection (most reliable)

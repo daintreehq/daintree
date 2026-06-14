@@ -34,6 +34,11 @@ export interface XtermAdapterProps {
 
 const MIN_CONTAINER_SIZE = 50;
 
+const MODIFIER_KEYS = new Set(["Meta", "Control", "Alt", "Shift"]);
+
+// TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
+const TUI_KEYBINDS = new Set(["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"]);
+
 export function XtermAdapter({
   terminalId,
   launchAgentId,
@@ -277,7 +282,7 @@ export function XtermAdapter({
 
         // Get normalized key for modifier-only detection
         const normalizedKey = keybindingService.normalizeKeyForBinding(event);
-        const isModifierOnly = ["Meta", "Control", "Alt", "Shift"].includes(normalizedKey);
+        const isModifierOnly = MODIFIER_KEYS.has(normalizedKey);
 
         // Don't process modifier-only keypresses
         if (isModifierOnly) {
@@ -345,11 +350,8 @@ export function XtermAdapter({
           return false;
         }
 
-        // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
-        const TUI_KEYBINDS = ["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"];
-
         // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts
-        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.includes(event.key)) {
+        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
           return true;
         }
 
@@ -401,7 +403,7 @@ export function XtermAdapter({
         }
 
         // Allow critical Ctrl+<key> bindings to reach the TUI
-        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.includes(event.key)) {
+        if (event.ctrlKey && !event.shiftKey && TUI_KEYBINDS.has(event.key)) {
           return true;
         }
 

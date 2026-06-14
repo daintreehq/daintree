@@ -1,6 +1,6 @@
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 import type { PlannedWorktree } from "./bulkCreatePrequery";
 
 export type { PlannedWorktree };
@@ -73,11 +73,11 @@ export function nextBackoffDelay(prevDelay: number, cap: number = BACKOFF_CAP_MS
 }
 
 export function planIssueWorktrees(
-  issues: GitHubIssue[],
+  issues: Issue[],
   existingIssueNumbers: Set<number>
 ): PlannedWorktree[] {
   return issues.map((issue) => {
-    if (issue.state !== "OPEN") {
+    if (issue.state !== "open") {
       return {
         item: issue,
         mode: "issue",
@@ -107,22 +107,19 @@ export function planIssueWorktrees(
   });
 }
 
-export function planPRWorktrees(
-  prs: GitHubPR[],
-  existingPRNumbers: Set<number>
-): PlannedWorktree[] {
+export function planPRWorktrees(prs: PR[], existingPRNumbers: Set<number>): PlannedWorktree[] {
   return prs.map((pr) => {
-    if (pr.state !== "OPEN") {
+    if (pr.state !== "open") {
       return {
         item: pr,
         mode: "pr",
         branchName: "",
         prefix: "",
         skipped: true,
-        skipReason: pr.state === "MERGED" ? "Merged" : "Closed",
+        skipReason: pr.state === "merged" ? "Merged" : "Closed",
       };
     }
-    if (!pr.headRefName) {
+    if (!pr.headRef) {
       return {
         item: pr,
         mode: "pr",
@@ -146,10 +143,10 @@ export function planPRWorktrees(
     return {
       item: pr,
       mode: "pr",
-      branchName: pr.headRefName,
+      branchName: pr.headRef,
       prefix: "",
       skipped: false,
-      headRefName: pr.headRefName,
+      headRefName: pr.headRef,
     };
   });
 }

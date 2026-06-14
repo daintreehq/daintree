@@ -7,6 +7,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { isValidLogOverrideLevel } from "../../utils/logger.js";
 import { type ProcessEntry, sendToEntryWindows } from "./types.js";
 import type { WorkspaceClientConfig } from "../../../shared/types/workspace-host.js";
+import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.js";
 import { projectStore } from "../ProjectStore.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
@@ -80,6 +81,17 @@ export class WorkspaceHostPool {
   /** Last GitHub fetch-throttle multiplier relayed from main — seeded into
    * hosts created after the rate-limit state last changed. */
   private fetchThrottleMultiplierCache = 1;
+
+  /** Last forge provider-matcher table relayed from main — seeded into hosts
+   * created after the registry last changed. `null` until the first relay. */
+  private forgeProviderMatchersCache: ForgeProviderMatcher[] | null = null;
+
+  /** Merged monitor config (profile polling, fetch cadence, watcher cap) —
+   * seeded into hosts created after the last push so a project opened while
+   * a non-balanced profile is active doesn't run the in-host defaults. */
+  private monitorConfigCache:
+    | import("../../../shared/types/workspace-host.js").MonitorConfig
+    | null = null;
 
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
@@ -155,6 +167,26 @@ export class WorkspaceHostPool {
 
   // ── Process lifecycle ──
 
+  private makeInitPromise(host: WorkspaceHostProcess, normalizedPath: string): Promise<void> {
+    return (async () => {
+      const [, forgeSettings] = await Promise.all([
+        host.waitForReady(),
+        readForgeSettingsForProject(normalizedPath),
+      ]);
+      const requestId = host.generateRequestId();
+      await host.sendWithResponse({
+        type: "load-project",
+        requestId,
+        rootPath: normalizedPath,
+        globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
+        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
+        forgeProviderOverride: forgeSettings.forgeProviderOverride,
+        forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
+        forgeRemote: forgeSettings.forgeRemote,
+      });
+    })();
+  }
+
   async loadProject(rootPath: string, windowId: number): Promise<void> {
     const normalizedPath = this.normalizeProjectPath(rootPath);
     const oldProjectPath = this.windowToProject.get(windowId);
@@ -194,22 +226,14 @@ export class WorkspaceHostPool {
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    if (this.forgeProviderMatchersCache !== null) {
+      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
+    }
+    if (this.monitorConfigCache !== null) {
+      host.updateMonitorConfig(this.monitorConfigCache);
+    }
 
-    const initPromise = (async () => {
-      await host.waitForReady();
-      const requestId = host.generateRequestId();
-      const forgeSettings = await readForgeSettingsForProject(normalizedPath);
-      await host.sendWithResponse({
-        type: "load-project",
-        requestId,
-        rootPath: normalizedPath,
-        globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
-        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
-        forgeProviderOverride: forgeSettings.forgeProviderOverride,
-        forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
-        forgeRemote: forgeSettings.forgeRemote,
-      });
-    })();
+    const initPromise = this.makeInitPromise(host, normalizedPath);
 
     const newEntry: ProcessEntry = {
       host,
@@ -253,22 +277,14 @@ export class WorkspaceHostPool {
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    if (this.forgeProviderMatchersCache !== null) {
+      host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
+    }
+    if (this.monitorConfigCache !== null) {
+      host.updateMonitorConfig(this.monitorConfigCache);
+    }
 
-    const initPromise = (async () => {
-      await host.waitForReady();
-      const requestId = host.generateRequestId();
-      const forgeSettings = await readForgeSettingsForProject(normalizedPath);
-      await host.sendWithResponse({
-        type: "load-project",
-        requestId,
-        rootPath: normalizedPath,
-        globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
-        wslGitByWorktree: store.get("wslGitByWorktree") ?? {},
-        forgeProviderOverride: forgeSettings.forgeProviderOverride,
-        forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
-        forgeRemote: forgeSettings.forgeRemote,
-      });
-    })();
+    const initPromise = this.makeInitPromise(host, normalizedPath);
 
     const entry: ProcessEntry = {
       host,
@@ -436,10 +452,12 @@ export class WorkspaceHostPool {
 
   private async reloadProjectAfterRestart(entry: ProcessEntry): Promise<void> {
     const host = entry.host;
-    await host.waitForReady();
+    const [, forgeSettings] = await Promise.all([
+      host.waitForReady(),
+      readForgeSettingsForProject(entry.projectPath),
+    ]);
 
     const requestId = host.generateRequestId();
-    const forgeSettings = await readForgeSettingsForProject(entry.projectPath);
     await host.sendWithResponse({
       type: "load-project",
       requestId,
@@ -525,6 +543,26 @@ export class WorkspaceHostPool {
     this.fetchThrottleMultiplierCache = multiplier;
     for (const entry of this.entries.values()) {
       entry.host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
+    }
+  }
+
+  // ── Monitor config ──
+
+  updateMonitorConfig(
+    config: import("../../../shared/types/workspace-host.js").MonitorConfig
+  ): void {
+    this.monitorConfigCache = { ...this.monitorConfigCache, ...config };
+    for (const entry of this.entries.values()) {
+      entry.host.updateMonitorConfig(config);
+    }
+  }
+
+  // ── Forge provider matchers ──
+
+  relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeProviderMatchersCache = matchers;
+    for (const entry of this.entries.values()) {
+      entry.host.relayForgeProviderMatchers(this.forgeProviderMatchersCache);
     }
   }
 

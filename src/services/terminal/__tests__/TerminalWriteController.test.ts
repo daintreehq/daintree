@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalWriteController, WriteControllerDeps } from "../TerminalWriteController";
 import type { ManagedTerminal } from "../types";
 
@@ -111,7 +111,7 @@ describe("TerminalWriteController.write", () => {
     managed.isHibernated = true;
     controller.write("t1", "hello");
 
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
     // Hibernated output is dropped, never replayed, so the IPC ledger must be
     // drained here. ASCII "hello" is 5 UTF-8 bytes == 5 UTF-16 code units.
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
@@ -125,8 +125,8 @@ describe("TerminalWriteController.write", () => {
     controller.write("t1", new Uint8Array([0x61, 0x62]));
 
     expect(managed.deferredOutput).toEqual(["abc", new Uint8Array([0x61, 0x62])]);
-    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(1, "t1", 3);
-    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(2, "t1", 2);
+    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(1, "t1", 3, 1);
+    expect(deps.acknowledgePortData).toHaveBeenNthCalledWith(2, "t1", 2, 1);
     // Deferred chunks are replayed through the normal path once restore
     // finishes, which acks the IPC ledger then — acking here too would
     // double-drain the host ledger.
@@ -140,7 +140,7 @@ describe("TerminalWriteController.write", () => {
     const term = managed.terminal as unknown as MockTerminal;
     expect(term.write).toHaveBeenCalledWith("hello", expect.any(Function));
     expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false);
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
   });
@@ -155,7 +155,7 @@ describe("TerminalWriteController.write", () => {
       expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 9);
       // The renderer-side ingest ledger (acknowledgePortData / notifyWriteComplete)
       // stays in UTF-16 code units to match how inFlightBytes was incremented.
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
     });
 
@@ -164,7 +164,7 @@ describe("TerminalWriteController.write", () => {
       controller.write("t1", "😀");
 
       expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 4);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 1);
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 2);
     });
 
@@ -173,7 +173,7 @@ describe("TerminalWriteController.write", () => {
       // would spuriously drain the host's IPC ledger.
       controller.write("t1", new Uint8Array([0xe2, 0x94, 0x82]));
 
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
     });
@@ -183,14 +183,14 @@ describe("TerminalWriteController.write", () => {
       controller.write("t1", "│");
 
       expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 3);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1, 1);
     });
 
     it("hibernated path: does not send an IPC ack for port-delivered Uint8Array chunks", () => {
       managed.isHibernated = true;
       controller.write("t1", new Uint8Array([0xe2, 0x94, 0x82]));
 
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
     });
 
@@ -201,25 +201,97 @@ describe("TerminalWriteController.write", () => {
       managed.isSerializedRestoreInProgress = true;
       controller.write("t1", "│");
 
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 1, 1);
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
     });
   });
 
-  it("registers a new lastActivityMarker on each write in the normal buffer", () => {
-    const oldMarker = { dispose: vi.fn() };
-    managed.lastActivityMarker = oldMarker as unknown as ManagedTerminal["lastActivityMarker"];
+  describe("coalesced-batch chunk accounting", () => {
+    it("settles all merged port-ack FIFO entries for a coalesced write", () => {
+      controller.write("t1", new Uint8Array([1, 2, 3, 4]), 3);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 4, 3);
+      expect(deps.acknowledgeData).not.toHaveBeenCalled();
+    });
 
-    controller.write("t1", "x");
+    it("hibernated path: forwards the chunk count of dropped coalesced batches", () => {
+      managed.isHibernated = true;
+      controller.write("t1", new Uint8Array([1, 2]), 2);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
+    });
 
-    expect(oldMarker.dispose).toHaveBeenCalled();
-    expect((managed.terminal as unknown as MockTerminal).registerMarker).toHaveBeenCalledWith(0);
+    it("deferred-restore path: forwards the chunk count when acking held batches", () => {
+      managed.isSerializedRestoreInProgress = true;
+      controller.write("t1", new Uint8Array([1, 2]), 2);
+      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 2, 2);
+    });
   });
 
-  it("does not register a marker while alt-buffer is active", () => {
-    managed.isAltBuffer = true;
-    controller.write("t1", "x");
-    expect((managed.terminal as unknown as MockTerminal).registerMarker).not.toHaveBeenCalled();
+  describe("lastActivityMarker refresh (rAF-coalesced)", () => {
+    let rafCallbacks: FrameRequestCallback[];
+
+    beforeEach(() => {
+      rafCallbacks = [];
+      vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+        rafCallbacks.push(cb);
+        return rafCallbacks.length;
+      });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    const flushFrame = () => {
+      const cbs = rafCallbacks;
+      rafCallbacks = [];
+      for (const cb of cbs) cb(0);
+    };
+
+    it("registers a new lastActivityMarker on the next frame after a write", () => {
+      const oldMarker = { dispose: vi.fn() };
+      managed.lastActivityMarker = oldMarker as unknown as ManagedTerminal["lastActivityMarker"];
+
+      controller.write("t1", "x");
+      expect((managed.terminal as unknown as MockTerminal).registerMarker).not.toHaveBeenCalled();
+
+      flushFrame();
+      expect(oldMarker.dispose).toHaveBeenCalled();
+      expect((managed.terminal as unknown as MockTerminal).registerMarker).toHaveBeenCalledWith(0);
+    });
+
+    it("coalesces a burst of writes into a single marker refresh per frame", () => {
+      for (let i = 0; i < 25; i++) controller.write("t1", "x");
+      flushFrame();
+
+      const term = managed.terminal as unknown as MockTerminal;
+      expect(term.registerMarker).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not register a marker while alt-buffer is active", () => {
+      managed.isAltBuffer = true;
+      controller.write("t1", "x");
+      flushFrame();
+      expect((managed.terminal as unknown as MockTerminal).registerMarker).not.toHaveBeenCalled();
+    });
+
+    it("skips the refresh when the instance was replaced before the frame", () => {
+      controller.write("t1", "x");
+      const replacement = makeManaged();
+      store.set("t1", replacement);
+      flushFrame();
+
+      expect((managed.terminal as unknown as MockTerminal).registerMarker).not.toHaveBeenCalled();
+      expect(
+        (replacement.terminal as unknown as MockTerminal).registerMarker
+      ).not.toHaveBeenCalled();
+    });
+
+    it("skips the refresh when the terminal hibernated before the frame", () => {
+      controller.write("t1", "x");
+      managed.isHibernated = true;
+      flushFrame();
+      expect((managed.terminal as unknown as MockTerminal).registerMarker).not.toHaveBeenCalled();
+    });
   });
 
   it("identity-guards the write callback against a replaced managed instance", () => {
@@ -277,7 +349,7 @@ describe("TerminalWriteController.write", () => {
 
     expect(managed.pendingWrites).toBe(0);
     expect(managed.lastWriteAt).toBeTypeOf("number");
-    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3);
+    expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 3, 1);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 3);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
   });

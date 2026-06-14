@@ -3,12 +3,13 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import {
   writeCcrConfig,
   removeCcrConfig,
   waitForCcrPresets,
   getPresetRowByName,
+  getSelectedPresetLabel,
 } from "../../helpers/presets";
 
 let ctx: AppContext;
@@ -65,16 +66,23 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
 
     await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_MEDIUM });
 
-    const select = ctx.window.locator(SEL.preset.selectorTrigger);
-    await expect(select).toBeVisible({ timeout: T_SHORT });
+    // First select the CCR preset so the trigger shows a non-default label.
+    await getPresetRowByName(ctx.window, "Default Test");
+    expect(await getSelectedPresetLabel(ctx.window)).toContain("Default Test");
 
-    const options = select.locator("option");
-    const defaultOption = options.locator(SEL.preset.defaultOption);
-    if ((await defaultOption.count()) > 0) {
-      await select.selectOption({ value: "" });
-      await ctx.window.waitForTimeout(T_SETTLE);
-      await expect(select).toHaveValue("", { timeout: T_SHORT });
-    }
+    // Open the popover listbox and pick the default (blank) option.
+    const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
+    await trigger.click({ force: true, noWaitAfter: true });
+    const listbox = ctx.window.locator(SEL.preset.selectorListbox);
+    await expect(listbox).toBeVisible({ timeout: T_SHORT });
+    const defaultOption = listbox.locator(SEL.preset.defaultOption);
+    await expect(defaultOption).toBeVisible({ timeout: T_SHORT });
+    await defaultOption.click({ force: true, noWaitAfter: true });
+    await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
+
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Default");
   });
 
   test("66. Preset with 3 env vars shows all keys in row", async () => {
@@ -102,23 +110,25 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
 
     await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_MEDIUM });
 
-    const select = ctx.window.locator(SEL.preset.selectorTrigger);
-    await expect(select).toBeVisible({ timeout: T_SHORT });
+    // Select the named preset via the popover listbox.
+    await getPresetRowByName(ctx.window, "Select A");
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Select A");
 
-    const options = select.locator("option");
-    const allTexts = await options.allTextContents();
-    const presetLabel = allTexts.find((t) => t.includes("Select A"));
-    if (presetLabel) {
-      await select.selectOption({ label: presetLabel });
-      await ctx.window.waitForTimeout(T_SETTLE);
+    // Switch back to the default (blank) option and verify the override clears.
+    const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
+    await trigger.click({ force: true, noWaitAfter: true });
+    const listbox = ctx.window.locator(SEL.preset.selectorListbox);
+    await expect(listbox).toBeVisible({ timeout: T_SHORT });
+    const defaultOption = listbox.locator(SEL.preset.defaultOption);
+    await expect(defaultOption).toBeVisible({ timeout: T_SHORT });
+    await defaultOption.click({ force: true, noWaitAfter: true });
+    await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
 
-      const val = await select.inputValue();
-      expect(val).toBeTruthy();
-
-      await select.selectOption({ value: "" });
-      await ctx.window.waitForTimeout(T_SETTLE);
-      await expect(select).toHaveValue("", { timeout: T_SHORT });
-    }
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Default");
   });
 
   test("68. Env var display uses font-mono truncated text in preset row", async () => {
@@ -135,15 +145,10 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
     const row = await getPresetRowByName(ctx.window, "Mono Env");
     await expect(row).toBeVisible({ timeout: T_MEDIUM });
 
-    const envText = row.locator("span.font-mono, code.font-mono");
-    if ((await envText.count()) > 0) {
-      const text = await envText.first().textContent();
-      expect(text).toBeTruthy();
-      expect(text!.length).toBeGreaterThan(0);
-    } else {
-      const rowText = await row.textContent();
-      expect(rowText).toContain("ANTHROPIC_MODEL");
-    }
+    // Env vars must render in a monospace element, not just as plain row text.
+    const envMono = row.locator(".font-mono", { hasText: "ANTHROPIC_MODEL" });
+    await expect(envMono.first()).toBeVisible({ timeout: T_SHORT });
+    await expect(envMono.first()).toContainText("ANTHROPIC_MODEL");
   });
 
   test("69. Two presets with same env key — select each and verify", async () => {
@@ -157,6 +162,9 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
     const row1 = await getPresetRowByName(ctx.window, "Dup First");
     await expect(row1).toBeVisible({ timeout: T_MEDIUM });
     await expect(row1.getByText("ANTHROPIC_MODEL")).toBeVisible({ timeout: T_SHORT });
+    await expect
+      .poll(() => getSelectedPresetLabel(ctx.window), { timeout: T_MEDIUM })
+      .toContain("Dup First");
 
     // Select second preset and check its env key
     const row2 = await getPresetRowByName(ctx.window, "Dup Second");
@@ -164,7 +172,6 @@ test.describe.serial("Presets: Launch Env Overrides (63–70)", () => {
     await expect(row2.getByText("ANTHROPIC_MODEL")).toBeVisible({ timeout: T_SHORT });
 
     // Verify second is now the selected preset via the trigger label.
-    const { getSelectedPresetLabel } = await import("../../helpers/presets");
     const label = await getSelectedPresetLabel(ctx.window);
     expect(label).toContain("Dup Second");
   });

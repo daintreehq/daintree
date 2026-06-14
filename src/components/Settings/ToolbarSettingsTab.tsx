@@ -92,15 +92,20 @@ function ToolbarButtonCard({
         isOverlay && "shadow-md bg-daintree-bg cursor-grabbing"
       )}
     >
+      {/* When draggable, gripProps carries dnd-kit's role/tabIndex/describedby —
+          the grip must stay in the accessibility tree (aria-hidden on a
+          focusable element is an axe violation) and needs an accessible name. */}
       <div
         {...(draggable && gripProps ? gripProps : {})}
         className={cn(
           draggable ? "cursor-grab active:cursor-grabbing" : "cursor-default",
           "shrink-0"
         )}
-        aria-hidden="true"
+        aria-hidden={draggable && gripProps ? undefined : true}
+        aria-label={draggable && gripProps ? `Reorder ${metadata.label}` : undefined}
       >
         <GripVertical
+          aria-hidden="true"
           className={cn("h-4 w-4", draggable ? "text-daintree-text/50" : "text-daintree-text/20")}
         />
       </div>

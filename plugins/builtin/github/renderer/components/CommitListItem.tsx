@@ -3,7 +3,7 @@ import type { MouseEvent } from "react";
 import { GitCommitHorizontal, Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import type { GitCommit } from "@shared/types/github";
+import type { GitCommit } from "@shared/types/git";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { parseConventionalCommit } from "./commitListUtils";
 import { logError } from "@/utils/logger";

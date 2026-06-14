@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PanelInstance } from "@shared/types/panel";
 
 const fullWakeMock = vi.fn();
+const repaintForRevealMock = vi.fn();
+const revealTerminalMock = vi.fn();
 const isFocusedMock = vi.fn();
 const logWarnMock = vi.fn();
 const notifyWarmReactivationCompleteMock = vi.fn();
@@ -9,6 +11,8 @@ const notifyWarmReactivationCompleteMock = vi.fn();
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     fullWakeForVisibilityRestore: fullWakeMock,
+    repaintForReveal: repaintForRevealMock,
+    revealTerminal: revealTerminalMock,
     isFocused: isFocusedMock,
   },
 }));
@@ -44,7 +48,8 @@ vi.mock("@/store/helpPanelStore", () => ({
   },
 }));
 
-const { wakeActiveWorktreeTerminals } = await import("@/store/wakeActiveWorktreeTerminals");
+const { wakeActiveWorktreeTerminals, repaintActiveWorktreeTerminals } =
+  await import("@/store/wakeActiveWorktreeTerminals");
 
 function panel(id: string, overrides: Partial<PanelInstance> = {}): PanelInstance {
   return {
@@ -59,6 +64,10 @@ function panel(id: string, overrides: Partial<PanelInstance> = {}): PanelInstanc
 beforeEach(() => {
   fullWakeMock.mockReset();
   fullWakeMock.mockResolvedValue(undefined);
+  repaintForRevealMock.mockReset();
+  revealTerminalMock.mockReset();
+  // Default: terminals are paintable on the first attempt.
+  revealTerminalMock.mockResolvedValue(true);
   isFocusedMock.mockReset();
   isFocusedMock.mockReturnValue(false);
   logWarnMock.mockReset();
@@ -426,5 +435,123 @@ describe("wakeActiveWorktreeTerminals", () => {
 
     expect(fullWakeMock).toHaveBeenCalledTimes(1);
     expect(fullWakeMock).toHaveBeenCalledWith("assistant");
+  });
+});
+
+describe("repaintActiveWorktreeTerminals (#10362)", () => {
+  // Unique ids passed to revealTerminal, preserving first-seen order — the sweep
+  // paints each paintable pane more than once (the confirm pass), so behavioural
+  // assertions key off the set/ordering, not raw call counts.
+  function revealedIds(): string[] {
+    const seen: string[] = [];
+    for (const call of revealTerminalMock.mock.calls) {
+      const id = String(call[0]);
+      if (!seen.includes(id)) seen.push(id);
+    }
+    return seen;
+  }
+
+  it("reveals every visible terminal in the active worktree", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b"];
+    mockPanelsById = { a, b };
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(revealedIds().sort()).toEqual(["a", "b"]);
+  });
+
+  it("targets the same set as wake — folds in the assistant, excludes dock/other-worktree", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const assistant = panel("assistant", { worktreeId: "wt-1", location: "dock" });
+    const otherDock = panel("other-dock", { worktreeId: "wt-1", location: "dock" });
+    const otherWt = panel("z", { worktreeId: "wt-2" });
+    mockPanelIds = ["a", "assistant", "other-dock", "z"];
+    mockPanelsById = { a, assistant, "other-dock": otherDock, z: otherWt };
+    mockHelpTerminalId = "assistant";
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(revealedIds().sort()).toEqual(["a", "assistant"]);
+    expect(revealTerminalMock).not.toHaveBeenCalledWith("other-dock");
+    expect(revealTerminalMock).not.toHaveBeenCalledWith("z");
+  });
+
+  it("reveals the focused pane first", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    const c = panel("c", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b", "c"];
+    mockPanelsById = { a, b, c };
+    isFocusedMock.mockImplementation((id: string) => id === "c");
+
+    const callOrder: string[] = [];
+    revealTerminalMock.mockImplementation((id: string) => {
+      callOrder.push(id);
+      return Promise.resolve(true);
+    });
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(callOrder[0]).toBe("c");
+    expect(revealedIds().sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("retries a terminal that isn't paintable yet, then settles once it is", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    mockPanelIds = ["a"];
+    mockPanelsById = { a };
+
+    // Not paintable for the first two frames (layout still settling), then yes.
+    revealTerminalMock
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+
+    await repaintActiveWorktreeTerminals();
+
+    // Two not-paintable attempts + the confirm pass means it kept trying past
+    // the first paintable frame rather than giving up on the initial `false`.
+    expect(revealTerminalMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(revealedIds()).toEqual(["a"]);
+  });
+
+  it("isolates a per-terminal reveal rejection so the sweep continues", async () => {
+    mockActiveWorktreeId = "wt-1";
+    const a = panel("a", { worktreeId: "wt-1" });
+    const b = panel("b", { worktreeId: "wt-1" });
+    const c = panel("c", { worktreeId: "wt-1" });
+    mockPanelIds = ["a", "b", "c"];
+    mockPanelsById = { a, b, c };
+
+    revealTerminalMock.mockImplementation((id: string) =>
+      id === "b" ? Promise.reject(new Error("broken xterm")) : Promise.resolve(true)
+    );
+
+    await expect(repaintActiveWorktreeTerminals()).resolves.toBeUndefined();
+
+    expect(revealedIds().sort()).toEqual(["a", "b", "c"]);
+    expect(logWarnMock).toHaveBeenCalledWith(
+      "[repaintActiveWorktreeTerminals] reveal failed",
+      expect.objectContaining({ id: "b" })
+    );
+  });
+
+  it("no-ops with zero targets and never touches the warm gate", async () => {
+    mockActiveWorktreeId = "wt-1";
+    mockPanelIds = [];
+    mockPanelsById = {};
+
+    await repaintActiveWorktreeTerminals();
+
+    expect(revealTerminalMock).not.toHaveBeenCalled();
+    // Reveal is a pure render pass — it must not re-fire the warm reactivation
+    // gate (that's the wake fan-out's job).
+    expect(notifyWarmReactivationCompleteMock).not.toHaveBeenCalled();
   });
 });

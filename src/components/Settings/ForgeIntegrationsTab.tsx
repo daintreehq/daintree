@@ -5,7 +5,7 @@ import type {
   ForgeProviderResolutionVia,
   ResolvedForgeProvider,
 } from "@shared/types";
-import type { RemoteInfo } from "@shared/types/ipc/github";
+import type { RemoteInfo } from "@shared/types/ipc/forge";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -256,7 +256,7 @@ export function ForgeIntegrationsTab() {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <SettingsSection
         icon={GitBranch}
         title="Default forge provider"

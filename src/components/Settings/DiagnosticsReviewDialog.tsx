@@ -220,7 +220,7 @@ export function DiagnosticsReviewDialog({
                   checked={enabledSections[key]}
                   onCheckedChange={() => toggleSection(key)}
                   className={cn(
-                    "flex shrink-0 w-3.5 h-3.5 rounded border transition-colors",
+                    "flex shrink-0 w-3.5 h-3.5 rounded-sm border transition-colors",
                     "bg-daintree-bg border-border-strong",
                     "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
@@ -248,7 +248,7 @@ export function DiagnosticsReviewDialog({
             }}
             aria-label="Log time window"
             className={cn(
-              "h-8 text-xs w-full px-2 rounded border border-daintree-border bg-daintree-bg",
+              "h-8 text-xs w-full px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
               "text-daintree-text focus:outline-hidden focus:border-daintree-accent"
             )}
           >
@@ -280,7 +280,7 @@ export function DiagnosticsReviewDialog({
                   checked={prebuiltIds.has(preset.id)}
                   onCheckedChange={() => togglePrebuilt(preset.id)}
                   className={cn(
-                    "flex shrink-0 w-3.5 h-3.5 rounded border transition-colors",
+                    "flex shrink-0 w-3.5 h-3.5 rounded-sm border transition-colors",
                     "bg-daintree-bg border-border-strong",
                     "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
@@ -315,8 +315,8 @@ export function DiagnosticsReviewDialog({
                   onChange={(e) => updateReplacement(i, "find", e.target.value)}
                   placeholder="Find text"
                   className={cn(
-                    "h-7 text-xs flex-1 px-2 rounded border border-daintree-border bg-daintree-bg",
-                    "text-daintree-text placeholder:text-daintree-text/30",
+                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
+                    "text-daintree-text placeholder:text-text-placeholder",
                     "focus:outline-hidden focus:border-daintree-accent"
                   )}
                 />
@@ -327,8 +327,8 @@ export function DiagnosticsReviewDialog({
                   onChange={(e) => updateReplacement(i, "replace", e.target.value)}
                   placeholder="Replace with"
                   className={cn(
-                    "h-7 text-xs flex-1 px-2 rounded border border-daintree-border bg-daintree-bg",
-                    "text-daintree-text placeholder:text-daintree-text/30",
+                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
+                    "text-daintree-text placeholder:text-text-placeholder",
                     "focus:outline-hidden focus:border-daintree-accent"
                   )}
                 />
@@ -367,7 +367,7 @@ export function DiagnosticsReviewDialog({
 
       <AppDialog.Footer
         primaryAction={{
-          label: isSaving ? "Saving..." : "Save Bundle",
+          label: isSaving ? "Saving…" : "Save Bundle",
           onClick: handleSave,
           disabled: isSaving,
           loading: isSaving,

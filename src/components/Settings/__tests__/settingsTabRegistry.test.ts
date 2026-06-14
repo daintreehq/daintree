@@ -13,6 +13,7 @@ import {
   type LazySettingsTabEntry,
   type SettingsTab,
 } from "../settingsTabRegistry";
+import { GLOBAL_SETTINGS_TAB_IDS, PROJECT_SETTINGS_TAB_IDS } from "../settingsTabIds";
 
 const allEntries: readonly AnySettingsTabEntry[] = SETTINGS_REGISTRY;
 const globalEntries = allEntries.filter((e) => e.scope === "global");
@@ -249,6 +250,16 @@ describe("getSettingsNavGroups", () => {
       "project:code-forge",
     ];
     expect(groups[0]!.entries.map((e) => e.id)).toEqual(expectedOrder);
+  });
+});
+
+describe("settingsTabIds drift guard", () => {
+  it("GLOBAL_SETTINGS_TAB_IDS matches the registry's global entries", () => {
+    expect([...GLOBAL_SETTINGS_TAB_IDS].sort()).toEqual(globalEntries.map((e) => e.id).sort());
+  });
+
+  it("PROJECT_SETTINGS_TAB_IDS matches the registry's project entries", () => {
+    expect([...PROJECT_SETTINGS_TAB_IDS].sort()).toEqual(projectEntries.map((e) => e.id).sort());
   });
 });
 

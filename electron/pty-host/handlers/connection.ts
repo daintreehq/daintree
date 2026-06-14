@@ -3,6 +3,7 @@ import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
 import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
+import { createWakeExecutor } from "./wakeExecutor.js";
 
 function batchDataToString(data: Uint8Array): string {
   return Buffer.from(data).toString("utf8");
@@ -18,6 +19,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     createPortQueueManager,
     sendEvent,
   } = ctx;
+  const executeWake = createWakeExecutor(ctx);
 
   return {
     "connect-port": (msg, ports) => {
@@ -57,12 +59,22 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       const perWindowBatcher = new PortBatcher({
         portQueueManager: perWindowQueueManager,
         postMessage: (id, data, bytes) => {
-          // Transfer the backing ArrayBuffer to the renderer instead of
-          // structured-cloning. The batcher allocates `data` fresh per
-          // flush, so it is safe to detach here.
-          receivedPort.postMessage({ type: "data", id, data, bytes }, [data.buffer as ArrayBuffer]);
+          // Structured-clone the chunk — no transfer list. This port is
+          // Electron's utility-process MessagePortMain, whose postMessage
+          // transfer array accepts MessagePortMain entries only: passing an
+          // ArrayBuffer throws "Port at index 0 is not a valid port", and the
+          // onError fallback then tears down the healthy port, severing the
+          // window's terminal stream. The zero-copy transfer attempt was
+          // never exercised before terminals carried a resolved projectId
+          // (the project filter kept this path dormant), so the clone here
+          // is the proven behaviour.
+          receivedPort.postMessage({ type: "data", id, data, bytes });
         },
-        onError: (_error: unknown, failedBatches: PortBatcherFailedBatch[]) => {
+        onError: (error: unknown, failedBatches: PortBatcherFailedBatch[]) => {
+          console.warn(
+            `[PtyHost] Port postMessage failed for window ${windowId}; falling back to IPC and disconnecting the port:`,
+            error
+          );
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
             sendEvent({ type: "data", id: batch.id, data: batchDataToString(batch.data) });
@@ -104,6 +116,37 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           ) {
             perWindowQueueManager.removeBytes(portMsg.id, portMsg.bytes);
             perWindowQueueManager.tryResume(portMsg.id);
+          } else if (
+            portMsg.type === "wake" &&
+            typeof portMsg.id === "string" &&
+            typeof portMsg.requestId === "string"
+          ) {
+            const wakeId: string = portMsg.id;
+            const requestId: string = portMsg.requestId;
+            executeWake(
+              wakeId,
+              (outcome) => {
+                // Flush this window's pending batch for the terminal before
+                // the snapshot so every chunk the snapshot already contains is
+                // FIFO-ordered ahead of it on the port.
+                perWindowBatcher.flushTerminal(wakeId);
+                try {
+                  receivedPort.postMessage({
+                    type: "wake-result",
+                    requestId,
+                    id: wakeId,
+                    state: outcome.state,
+                    warnings: outcome.warnings,
+                    noChange: outcome.noChange,
+                  });
+                } catch {
+                  // Port closing — the renderer's timeout falls back to the IPC wake.
+                }
+              },
+              { windowId, canSkipUnchanged: portMsg.canSkipUnchanged === true }
+            ).catch((error) => {
+              console.error(`[PtyHost] Port wake failed for ${wakeId}:`, error);
+            });
           } else {
             console.warn("[PtyHost] Unknown or invalid MessagePort message type:", portMsg.type);
           }
@@ -180,7 +223,17 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       windowProjectMap.set(msg.windowId, msg.projectId);
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
+      if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
+        // The boot-time homedir warm was deferred for a project restore that
+        // fell through (e.g. the saved project no longer exists) — run it now
+        // at the pool's default cwd (still homedir).
+        ctx.initialPoolWarmDeferred = false;
+        pool.warmPool().catch((err) => {
+          console.error("[PtyHost] Deferred pool warm failed:", err);
+        });
+      }
       if (msg.projectPath && pool) {
+        ctx.initialPoolWarmDeferred = false;
         // Bound the warm set to what the pool can hold alongside the root entry
         // without LRU-evicting the entries we just warmed. The root drain/refill
         // takes poolSize slots; each panel cwd takes up to poolSize more. Cap
@@ -224,7 +277,16 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       windowProjectMap.set(msg.windowId, msg.projectId);
       recomputeActivityTiers();
       const pool = ctx.ptyPool;
+      if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
+        // Restart replay can carry a switch context with no recorded path —
+        // consume the deferral so the pool doesn't stay cold indefinitely.
+        ctx.initialPoolWarmDeferred = false;
+        pool.warmPool().catch((err) => {
+          console.error("[PtyHost] Deferred pool warm failed:", err);
+        });
+      }
       if (msg.projectPath && pool) {
+        ctx.initialPoolWarmDeferred = false;
         pool.drainAndRefill(msg.projectPath).catch((err) => {
           console.error("[PtyHost] drainAndRefill failed:", err);
         });

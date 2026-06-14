@@ -49,9 +49,9 @@ jobs:
           elif [ "$PLATFORM" = "linux" ]; then
             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" = "windows" ]; then
-            echo 'matrix={"include":[{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"},{"os":"windows-2022","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   check:
@@ -80,13 +80,13 @@ jobs:
           sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Check (typecheck + lint + format)
@@ -118,13 +118,13 @@ jobs:
           sudo apt-get install -y libarchive-tools
 
       - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Test
@@ -185,13 +185,13 @@ jobs:
         run: fc-cache -fv
 
       - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
         env:
           npm_config_msvs_version: "2022"
 
       - name: Install dependencies
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
       - name: Stamp nightly version
@@ -241,7 +241,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Smoke test (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: npm run test:smoke
         env:
           NODE_ENV: production
@@ -296,7 +296,7 @@ jobs:
         env:
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
         run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ "${{ matrix.os }}" = "windows-2022" ]; then
             npx electron-builder --config electron-builder.config.cjs --publish never
           else
             npx electron-builder --config electron-builder.config.cjs --publish always
@@ -348,7 +348,7 @@ jobs:
           node scripts/ci/validate-update-metadata.mjs release/latest-linux.yml
 
       - name: Upload build artifacts
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-2022'
         uses: actions/upload-artifact@v7
         with:
           name: nightly-${{ matrix.os }}

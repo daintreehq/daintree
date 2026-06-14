@@ -4,7 +4,8 @@ import type {
   AppThemeTokenKey,
   AppThemeValidationWarning,
 } from "./types.js";
-import type { ThemePalette } from "./palette.js";
+import type { ThemePalette, ThemeStrategy } from "./palette.js";
+import type { ExtensionKey } from "./types.js";
 import { getThemeContrastWarnings } from "./contrast.js";
 import { BUILT_IN_THEME_SOURCES, type BuiltInThemeSource } from "./builtInThemeSources.js";
 
@@ -259,6 +260,9 @@ export function createDaintreeTokens(
       tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : withAlpha(overlayBase, 0.36)),
     "scrim-strong":
       tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : withAlpha(overlayBase, 0.55)),
+    // Defaults match the previously hardcoded backdrop-blur-md / -sm consumers.
+    "scrim-blur": tokens["scrim-blur"] ?? "12px",
+    "scrim-blur-palette": tokens["scrim-blur-palette"] ?? "4px",
     "shadow-color": tokens["shadow-color"] ?? (dark ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.12)"),
     "shadow-ambient": shadowAmbient,
     "shadow-floating": shadowFloating,
@@ -339,6 +343,9 @@ export function createDaintreeTokens(
     "panel-state-edge-radius": tokens["panel-state-edge-radius"] ?? "2px",
     "focus-ring-offset": tokens["focus-ring-offset"] ?? "2px",
     "chrome-noise-texture": tokens["chrome-noise-texture"] ?? "none",
+    // Defaults match the previously hardcoded .bg-noise::before declarations.
+    "grain-opacity": tokens["grain-opacity"] ?? "0.02",
+    "grain-blend": tokens["grain-blend"] ?? "overlay",
     "knob-base": tokens["knob-base"] ?? (dark ? "oklch(0.98 0.003 90)" : "oklch(0.18 0.01 240)"),
     "state-modified":
       tokens["state-modified"] ?? `color-mix(in oklab, ${tokens["status-info"]} 90%, ${tint})`,
@@ -456,6 +463,54 @@ export function resolveChromeNoiseTexture(
   return `radial-gradient(circle at 20% 20%, rgb(${ink} / ${noiseOpacity}), transparent 55%)`;
 }
 
+function grainSvgDataUri(svg: string): string {
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+// Curated tiling grain textures for strategy.grainCharacter. SVG feTurbulence
+// tiles (stitchTiles keeps the repeat seamless at 1x/2x DPR); coarse ≈
+// granular sand/basalt/salt, paper ≈ washi/fiber mottle.
+const GRAIN_CHARACTER_IMAGES = {
+  coarse: grainSvgDataUri(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><filter id='g'><feTurbulence type='turbulence' baseFrequency='0.42' numOctaves='2' seed='7' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='128' height='128' filter='url(#g)'/></svg>"
+  ),
+  paper: grainSvgDataUri(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='1' seed='11' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='128' height='128' filter='url(#g)'/></svg>"
+  ),
+} as const;
+
+/**
+ * Resolve strategy.grainCharacter into the conditionally-emitted `grain-image`
+ * extension value. Unset/"fine" returns undefined so NO var is emitted and the
+ * CSS fallback keeps the bundled noise.png — a relative url() inside a :root
+ * custom property resolves against the document, not the stylesheet, so the
+ * asset reference must stay in src/index.css. "none" disables the layer.
+ */
+export function resolveGrainImage(
+  grainCharacter: ThemeStrategy["grainCharacter"]
+): string | undefined {
+  switch (grainCharacter) {
+    case "coarse":
+      return GRAIN_CHARACTER_IMAGES.coarse;
+    case "paper":
+      return GRAIN_CHARACTER_IMAGES.paper;
+    case "none":
+      return "none";
+    default:
+      return undefined;
+  }
+}
+
+function resolveStrategyExtensions(
+  palette: ThemePalette | undefined,
+  explicit: Partial<Record<ExtensionKey, string>> | undefined
+): Partial<Record<ExtensionKey, string>> | undefined {
+  const grainImage = resolveGrainImage(palette?.strategy?.grainCharacter);
+  if (grainImage === undefined) return explicit;
+  // An explicitly authored grain-image extension wins over the strategy field.
+  return { "grain-image": grainImage, ...explicit };
+}
+
 function withAlpha(color: string, alpha: number): string {
   if (color.startsWith("#")) {
     return `rgba(${hexToRgbTriplet(color)}, ${alpha})`;
@@ -533,6 +588,7 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   const tokens = source.tokens
     ? normalizeAppThemeTokens(source.tokens, compiledTokens)
     : compiledTokens;
+  const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
   return {
     id: source.id,
@@ -541,7 +597,7 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
     builtin: source.builtin,
     tokens,
     palette: source.palette,
-    ...(source.extensions ? { extensions: source.extensions } : {}),
+    ...(extensions ? { extensions } : {}),
     ...(source.location ? { location: source.location } : {}),
     ...(source.heroImage ? { heroImage: source.heroImage } : {}),
   };
@@ -673,7 +729,10 @@ export function getAppThemeById(
   id: string,
   customSchemes: AppColorScheme[] = []
 ): AppColorScheme | undefined {
-  return [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((scheme) => scheme.id === id);
+  return (
+    BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === id) ??
+    customSchemes.find((scheme) => scheme.id === id)
+  );
 }
 
 export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {
@@ -948,6 +1007,7 @@ export function normalizeAppColorScheme(
         `color-mix(in oklab, ${normalizedTokens["status-info"]} 90%, ${tint})`;
     }
   }
+  const normalizedExtensions = resolveStrategyExtensions(palette, maybeScheme.extensions);
   const result: AppColorScheme = {
     id:
       typeof maybeScheme.id === "string" && maybeScheme.id.trim() ? maybeScheme.id : baseScheme.id,
@@ -959,7 +1019,7 @@ export function normalizeAppColorScheme(
     builtin: false,
     tokens: normalizedTokens,
     ...(palette ? { palette } : {}),
-    ...(maybeScheme.extensions ? { extensions: maybeScheme.extensions } : {}),
+    ...(normalizedExtensions ? { extensions: normalizedExtensions } : {}),
   };
   if (typeof maybeScheme.location === "string") result.location = maybeScheme.location;
   if (typeof maybeScheme.heroImage === "string") result.heroImage = maybeScheme.heroImage;

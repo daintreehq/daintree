@@ -100,6 +100,10 @@ export function Sidebar({
     };
   }, []);
 
+  const handleResetWidth = useCallback(() => {
+    onResize(DEFAULT_SIDEBAR_WIDTH);
+  }, [onResize]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
@@ -108,14 +112,13 @@ export function Sidebar({
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         onResize(width + RESIZE_STEP);
+      } else if (e.key === "Enter" || e.key === " " || e.key === "Home") {
+        e.preventDefault();
+        handleResetWidth();
       }
     },
-    [width, onResize]
+    [width, onResize, handleResetWidth]
   );
-
-  const handleResetWidth = useCallback(() => {
-    onResize(DEFAULT_SIDEBAR_WIDTH);
-  }, [onResize]);
 
   const resize = useCallback(
     (e: MouseEvent) => {
@@ -174,7 +177,7 @@ export function Sidebar({
 
           <div
             role="separator"
-            aria-label="Resize sidebar"
+            aria-label="Resize sidebar (double-click to reset)"
             aria-orientation="vertical"
             aria-valuenow={width}
             aria-valuemin={200}
@@ -205,7 +208,7 @@ export function Sidebar({
       <ContextMenuContent>
         <ContextMenuActionItem actionId="worktree.createDialog.open">
           <GitBranchPlus className={ICON_CLASS} />
-          New Worktree...
+          New Worktree…
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="worktree.refresh">
           <RefreshCw className={ICON_CLASS} />
@@ -222,7 +225,7 @@ export function Sidebar({
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="project.settings.open" disabled={!currentProject}>
           <Settings className={ICON_CLASS} />
-          Project Settings...
+          Project Settings…
         </ContextMenuActionItem>
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="ui.sidebar.resetWidth">
@@ -231,7 +234,7 @@ export function Sidebar({
         </ContextMenuActionItem>
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "worktree" }}>
           <SlidersHorizontal className={ICON_CLASS} />
-          Worktree Settings...
+          Worktree Settings…
         </ContextMenuActionItem>
       </ContextMenuContent>
     </ContextMenu>

@@ -23,11 +23,14 @@ test.describe.serial("Core: Panel Tab Groups", () => {
     fixtureCleanup = cleanup;
     ctx = await launchApp();
 
-    // Disable two-pane split mode before the project loads. The 1→2 panel
-    // transition from "Duplicate as new tab" triggers a race condition where
-    // the split layout briefly activates during the intermediate state (two
-    // single-panel groups) and crashes the app. Seeding localStorage before
-    // the zustand store hydrates avoids this.
+    // Disable two-pane split mode for this suite's isolation. The crash this
+    // workaround originally guarded against (issue #10438 — split layout
+    // briefly activating during the 1→2 "Duplicate as new tab" transition) is
+    // now fixed by the allGroupsAreVirtual predicate guard, and the dedicated
+    // regression block below exercises the fix with split mode left enabled.
+    // We keep split mode disabled here so the suite's many duplicate/tab
+    // assertions don't have to account for the split layout. Seeding
+    // localStorage before the zustand store hydrates avoids it.
     await ctx.window.evaluate(() => {
       localStorage.setItem(
         "daintree-two-pane-split",
@@ -147,8 +150,10 @@ test.describe.serial("Core: Panel Tab Groups", () => {
 
       // Close the second tab (index 1) via its close button
       const secondTab = tabs.nth(1);
+      await secondTab.hover();
       const closeBtn = secondTab.locator('button[aria-label^="Close"]');
-      await closeBtn.click({ force: true });
+      await expect(closeBtn).toBeVisible({ timeout: T_SHORT });
+      await closeBtn.click();
 
       // Tab list should disappear (only 1 tab remaining)
       await expect(tabList).not.toBeVisible({ timeout: T_MEDIUM });
@@ -267,5 +272,89 @@ test.describe.serial("Core: Panel Tab Groups", () => {
         // Best-effort cleanup
       }
     });
+  });
+});
+
+// Regression for issue #10438: "Duplicate as new tab" must not crash the app
+// when two-pane split mode is enabled (the default). The 1→2 panel transition
+// briefly produced two single-panel groups — one explicit, one virtual — which
+// satisfied the old useTwoPaneSplitMode predicate and activated the split
+// layout against a panel already in an explicit group, crashing the renderer.
+// This block leaves split mode at its default (enabled) — no localStorage seed.
+test.describe.serial("Split-mode crash regression (issue #10438)", () => {
+  let splitCtx: AppContext;
+  let splitFixtureDir: string;
+  let splitFixtureCleanup: (() => void) | undefined;
+
+  test.beforeAll(async () => {
+    const { dir, cleanup } = createFixtureRepo({
+      name: "tab-groups-split",
+      withMultipleFiles: true,
+    });
+    splitFixtureDir = dir;
+    splitFixtureCleanup = cleanup;
+    splitCtx = await launchApp();
+    splitCtx.window = await openAndOnboardProject(
+      splitCtx.app,
+      splitCtx.window,
+      splitFixtureDir,
+      "Tab Groups Split Test"
+    );
+  });
+
+  test.afterAll(async () => {
+    if (splitCtx?.app) await closeApp(splitCtx.app);
+    splitFixtureCleanup?.();
+  });
+
+  // The two-pane split layout container; present only while split mode is
+  // active (TwoPaneSplitLayout renders `data-split-mode="true"`).
+  const splitLayout = '[data-split-mode="true"]';
+
+  test("split mode activates for two independent panels but duplicate-as-tab does not crash", async () => {
+    const { window } = splitCtx;
+    const split = window.locator(splitLayout);
+
+    // Precondition + legitimate-path guard: two independent ungrouped panels
+    // (two virtual singleton groups) must activate the split layout. This both
+    // proves split mode is genuinely enabled in this context (so the duplicate
+    // assertion below isn't vacuously passing with split mode off) and guards
+    // the legitimate split path against regression from the new
+    // allGroupsAreVirtual predicate term.
+    await openTerminal(window);
+    await openTerminal(window);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(2);
+    await expect(split).toBeVisible({ timeout: T_MEDIUM });
+
+    // Reduce back to a single panel so the duplicate flow starts from the
+    // one-panel state that triggered the crash.
+    await window.locator(SEL.panel.gridPanel).last().locator(SEL.panel.close).first().click({
+      force: true,
+    });
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
+    await expect(split).toBeHidden({ timeout: T_MEDIUM });
+
+    // The actual regression: duplicate-as-tab on the solo panel. The old
+    // predicate matched the transient explicit+virtual group pair and activated
+    // the split layout against an already-grouped panel, crashing the renderer.
+    const panel = getFirstGridPanel(window);
+    // The + button has opacity-0 on single panels, use force:true
+    const duplicateBtn = panel.locator(SEL.panel.duplicate).first();
+    await duplicateBtn.click({ force: true, timeout: T_MEDIUM });
+
+    // If the renderer crashed, every locator call below would reject with
+    // "Target closed". Reaching a visible tab list with two tabs proves the
+    // panel survived and the new panel was folded into the same tab group
+    // rather than spilling into the split layout.
+    const tabList = panel.locator(SEL.panel.tabList);
+    await expect(tabList).toBeVisible({ timeout: T_MEDIUM });
+
+    const tabs = tabList.locator(SEL.panel.tab);
+    await expect(tabs).toHaveCount(2, { timeout: T_MEDIUM });
+
+    // The two tabs stay within a single grid panel — a tab group, never the
+    // split layout.
+    expect(await getGridPanelCount(window)).toBe(1);
+    await expect(split).toBeHidden({ timeout: T_SHORT });
   });
 });

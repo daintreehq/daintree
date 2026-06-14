@@ -1,25 +1,42 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { injectFault, clearAllFaults } from "../../helpers/ipcFaults";
+import {
+  seedGitHubToken,
+  clearGitHubToken,
+  refreshGitHubConfig,
+  stubRepoStats,
+  restoreRepoStats,
+  E2E_GITHUB_TOKEN,
+} from "../../helpers/githubHelpers";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 
 import { openSettings, openTerminal } from "../../helpers/panels";
 let ctx: AppContext;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
+let githubTokenSeeded = false;
 
 test.describe.serial("Core: Silent IPC Failure Detection", () => {
   test.beforeAll(async () => {
-    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({ name: "silent-failures" }));
+    ({ dir: fixtureDir, cleanup: fixtureCleanup } = createFixtureRepo({
+      name: "silent-failures",
+      withGitHubRemote: true,
+    }));
     ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Silent Failures");
   });
 
   test.afterEach(async () => {
     await clearAllFaults(ctx.app);
+    if (githubTokenSeeded) {
+      await restoreRepoStats(ctx.app);
+      await clearGitHubToken(ctx.app);
+      githubTokenSeeded = false;
+    }
   });
 
   test.afterAll(async () => {
@@ -28,32 +45,17 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   });
 
   test("GitHub issues dropdown shows error state on IPC fault", async () => {
-    // Seed a fake GitHub token in the main process so the renderer's no-token
-    // empty state ("Add GitHub token") doesn't short-circuit the IPC path the
-    // injected fault is meant to exercise. The token is never validated against
-    // GitHub — the seeding hook pre-populates cached user info to mirror the
-    // post-validate state.
-    await ctx.app.evaluate((_modules, token) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
-      const seed = (globalThis as any).__daintreeSeedGitHubToken as
-        | ((t: string) => void)
-        | undefined;
-      if (!seed)
-        throw new Error(
-          "GitHub token seed hook not available — launch with DAINTREE_E2E_FAULT_MODE=1"
-        );
-      seed(token);
-    }, "ghp_e2e_fault_test_0000000000000000000000");
+    // Seed a fake GitHub token so the renderer's no-token empty state
+    // ("Add GitHub token") doesn't short-circuit the IPC path under test.
+    await seedGitHubToken(ctx.app, E2E_GITHUB_TOKEN);
+    githubTokenSeeded = true;
+    await refreshGitHubConfig(ctx.window);
 
-    // Refresh the renderer's GitHub config store so it picks up the seeded
-    // token's `hasToken: true` and skips rendering the no-token empty state.
-    await ctx.window.evaluate(async () => {
-      const refresh = window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
-      if (!refresh) throw new Error("E2E GitHub config refresh hook not available");
-      await refresh();
-    });
+    // Pin toolbar stats to healthy counts so the issues pill stays in its
+    // normal "open issues" state rather than routing clicks to Settings.
+    await stubRepoStats(ctx.app, { issueCount: 2, prCount: 1, commitCount: 5 }, ctx.window);
 
-    await injectFault(ctx.app, "github:list-issues", "E2E_INJECTED_ERROR");
+    await injectFault(ctx.app, "forge:list-issues", "E2E_INJECTED_ERROR");
 
     const issuesButton = ctx.window.locator('button[aria-label*="open issues"]');
     await expect(issuesButton).toBeVisible({ timeout: T_MEDIUM });
@@ -65,13 +67,6 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
     await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
 
     await ctx.window.keyboard.press("Escape");
-
-    // Clean up seeded token so subsequent tests start from a clean state.
-    await ctx.app.evaluate(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E hook
-      const clear = (globalThis as any).__daintreeClearGitHubToken as (() => void) | undefined;
-      if (clear) clear();
-    });
   });
 
   test("diagnostics dock continues working when persistence fails", async () => {
@@ -87,11 +82,13 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
     await resizeHandle.focus();
     await ctx.window.keyboard.press("ArrowUp");
 
-    await ctx.window.waitForTimeout(T_SETTLE);
-
-    await expect(dock).toBeVisible();
-    await expect(ctx.window.getByRole("toolbar", { name: "Main toolbar" })).toBeVisible();
-    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
+    await expect(dock).toBeVisible({ timeout: T_SHORT });
+    await expect(ctx.window.getByRole("toolbar", { name: "Main toolbar" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible({
+      timeout: T_SHORT,
+    });
 
     await clearAllFaults(ctx.app);
 
@@ -111,13 +108,21 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
     await devModeToggle.scrollIntoViewIfNeeded();
     await expect(devModeToggle).toBeVisible({ timeout: T_MEDIUM });
 
+    const initialChecked = await devModeToggle.getAttribute("aria-checked");
+
     await injectFault(ctx.app, "app:set-state", "E2E_INJECTED_ERROR");
 
     await devModeToggle.click();
-    await ctx.window.waitForTimeout(T_SETTLE);
 
-    await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible();
-    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
+    // The UI optimistically updates the toggle state even when persistence fails.
+    const expectedAfter = initialChecked === "true" ? "false" : "true";
+    await expect(devModeToggle).toHaveAttribute("aria-checked", expectedAfter, {
+      timeout: T_SHORT,
+    });
+    await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_SHORT });
+    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible({
+      timeout: T_SHORT,
+    });
 
     await clearAllFaults(ctx.app);
 
@@ -126,16 +131,30 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   });
 
   test("app survives terminal spawn fault without crashing", async () => {
+    const panelsBefore = await ctx.window.locator(SEL.panel.gridPanel).count();
+
     await injectFault(ctx.app, "terminal:spawn", "E2E_INJECTED_ERROR");
 
     await openTerminal(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
 
-    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
+    // A panel is created optimistically before the spawn IPC call resolves.
+    await expect(ctx.window.locator(SEL.panel.gridPanel)).toHaveCount(panelsBefore + 1, {
+      timeout: T_MEDIUM,
+    });
+
+    // SpawnErrorBanner appears once the IPC fault propagates back to the store.
+    const spawnBanner = ctx.window.locator('[role="alert"]').filter({
+      has: ctx.window.locator('[aria-label="Retry starting terminal"]'),
+    });
+    await expect(spawnBanner).toBeVisible({ timeout: T_MEDIUM });
+
+    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    await clearAllFaults(ctx.app);
 
     await openSettings(ctx.window);
     await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
-
-    await clearAllFaults(ctx.app);
   });
 });

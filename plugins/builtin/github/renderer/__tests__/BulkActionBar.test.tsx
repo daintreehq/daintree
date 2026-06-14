@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 
 const openBulkCreateDialog = vi.fn();
 const openBulkCreateDialogForPRs = vi.fn();
@@ -15,25 +15,37 @@ vi.mock("@/store/worktreeStore", () => ({
 
 import { BulkActionBar } from "../components/BulkActionBar";
 
-const makeIssue = (n: number): GitHubIssue => ({
+const makeIssue = (n: number): Issue => ({
   number: n,
   title: `Issue #${n}`,
+  body: "",
   url: `https://github.com/test/repo/issues/${n}`,
-  state: "OPEN",
-  updatedAt: "2026-01-01",
-  author: { login: "user", avatarUrl: "" },
+  state: "open",
+  rawState: "OPEN",
+  author: { login: "user", avatarUrl: "", rawData: null },
   assignees: [],
+  labels: [],
   commentCount: 0,
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
 });
 
-const makePR = (n: number): GitHubPR => ({
+const makePR = (n: number): PR => ({
   number: n,
   title: `PR #${n}`,
+  body: "",
   url: `https://github.com/test/repo/pull/${n}`,
-  state: "OPEN",
+  state: "open",
+  rawState: "OPEN",
   isDraft: false,
-  updatedAt: "2026-01-02",
-  author: { login: "user", avatarUrl: "" },
+  merged: false,
+  author: { login: "user", avatarUrl: "", rawData: null },
+  baseRef: "main",
+  headRef: `feature/pr-${n}`,
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
 });
 
 beforeEach(() => {

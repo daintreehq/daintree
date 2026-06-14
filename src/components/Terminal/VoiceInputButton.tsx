@@ -63,7 +63,6 @@ export function VoiceInputButton({
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const lastError = useVoiceRecordingStore((state) => state.lastError);
   const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
-  const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
 
   const isRecording = activePanelId === panelId && status === "recording";
   const isConnecting = activePanelId === panelId && status === "connecting";
@@ -83,11 +82,6 @@ export function VoiceInputButton({
   const trackRef = useRef<HTMLSpanElement>(null);
   const iconRef = useRef<HTMLSpanElement>(null);
   const rafRef = useRef<number>(0);
-  const audioLevelRef = useRef(0);
-
-  useEffect(() => {
-    audioLevelRef.current = audioLevel;
-  }, [audioLevel]);
 
   useEffect(() => {
     if (!showOrbit) return;
@@ -135,8 +129,10 @@ export function VoiceInputButton({
       const dt = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      // During finishing, force level to 0 so it winds down gracefully
-      const rawLevel = isFinishing ? 0 : audioLevelRef.current;
+      // During finishing, force level to 0 so it winds down gracefully.
+      // Imperative store read: audioLevel updates ~60Hz during recording, so a
+      // React subscription would re-render every mounted voice button per frame.
+      const rawLevel = isFinishing ? 0 : useVoiceRecordingStore.getState().audioLevel;
 
       // Low-pass + perceptual curve
       smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;

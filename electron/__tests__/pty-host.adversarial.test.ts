@@ -629,14 +629,17 @@ function terminalStatusPayloads(parentPort: MockParentPort): Array<Record<string
     );
 }
 
-function dataPayloads(parentPort: MockParentPort): Array<Record<string, unknown>> {
+function dataPayloads(
+  parentPort: MockParentPort,
+  type: "data" | "data-mirror" = "data"
+): Array<Record<string, unknown>> {
   return parentPort.postMessage.mock.calls
     .map((call: unknown[]) => call[0])
     .filter(
       (payload: unknown): payload is Record<string, unknown> =>
         typeof payload === "object" &&
         payload !== null &&
-        (payload as { type?: string }).type === "data"
+        (payload as { type?: string }).type === type
     );
 }
 
@@ -890,13 +893,52 @@ describe("pty-host adversarial", () => {
     (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "http://localhost:4173\n");
     await flushMicrotasks();
 
-    expect(dataPayloads(parentPort)).toEqual([
+    // Mirror copies travel as Main-process-only "data-mirror" events — a
+    // plain "data" event here would be re-broadcast to every renderer view.
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+    expect(dataPayloads(parentPort, "data-mirror")).toEqual([
       expect.objectContaining({
-        type: "data",
+        type: "data-mirror",
         id: "t1",
         data: "http://localhost:4173\n",
       }),
     ]);
+  });
+
+  it("BACKGROUND_TRANSITION_CLEARS_PORT_AND_IPC_QUEUE_HOLDS", async () => {
+    // A terminal backgrounded while under port/IPC backpressure receives no
+    // further renderer acks (the ingest holds chunks without writing while
+    // backgrounded), so without the clear it would stay paused until the 10s
+    // safety timeout — starving the headless terminal.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    await flushMicrotasks();
+
+    parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "background" });
+    await flushMicrotasks();
+
+    expect(hostState.ipcQueueManagers[0].clearQueue).toHaveBeenCalledWith("t1");
+    expect(hostState.portQueueManagers[0].clearQueue).toHaveBeenCalledWith("t1");
+  });
+
+  it("ACTIVE_TRANSITION_DOES_NOT_CLEAR_QUEUE_HOLDS", async () => {
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    await flushMicrotasks();
+
+    parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "active" });
+    await flushMicrotasks();
+
+    expect(hostState.ipcQueueManagers[0].clearQueue).not.toHaveBeenCalled();
+    expect(hostState.portQueueManagers[0].clearQueue).not.toHaveBeenCalled();
   });
 
   it("LATE_ACK_AFTER_TIMEOUT_IS_IGNORED", async () => {
@@ -1655,11 +1697,10 @@ describe("pty-host adversarial", () => {
     });
   });
 
-  it("FAN_OUT_IPC_MIRRORED_TERMINAL_GETS_NO_PULSE", async () => {
-    // IPC-mirrored terminals (dev-preview consoles) broadcast every chunk via the
-    // IPC data mirror whenever visualWritten is true, so a saturated window still
-    // receives the data over IPC. Emitting a data-loss pulse there would mark a
-    // discontinuity that never happened.
+  it("FAN_OUT_IPC_MIRRORED_TERMINAL_GETS_PULSE", async () => {
+    // The IPC data mirror is Main-process-only ("data-mirror" is never
+    // re-broadcast to renderers), so a saturated window genuinely loses the
+    // chunk and must get the same per-port data-loss pulse as any terminal.
     const parentPort = await loadHost();
     hostState.terminals.set("t1", createTerminal("t1"));
 
@@ -1680,14 +1721,15 @@ describe("pty-host adversarial", () => {
     (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "a".repeat(18));
     await flushMicrotasks();
 
-    // No per-port pulse, no drop accounting — the IPC mirror covers the window.
-    expect(portStatusMessages(portB)).toHaveLength(0);
+    // The starved window gets its pulse and the drop is accounted.
+    expect(portStatusMessages(portB)).toHaveLength(1);
     expect(hostState.resourceGovernorDeps?.getDropSnapshot()).toEqual({
-      droppedBytesDelta: 0,
-      dataLossCountDelta: 0,
+      droppedBytesDelta: 18,
+      dataLossCountDelta: 1,
     });
-    // The mirror broadcast did fire (the data reaches every window via IPC).
-    expect(dataPayloads(parentPort)).toHaveLength(1);
+    // The Main-side mirror still fired, but no renderer-bound "data" event did.
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(1);
+    expect(dataPayloads(parentPort)).toHaveLength(0);
   });
 
   it("FAN_OUT_PULSE_RESPECTS_PROJECT_FILTER", async () => {

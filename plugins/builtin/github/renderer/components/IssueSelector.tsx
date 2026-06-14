@@ -2,20 +2,17 @@ import { useState, useEffect, useRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Check, ChevronsUpDown, Search, CircleDot, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { githubClient } from "@/clients/githubClient";
-import type { GitHubIssue } from "@shared/types/github";
+import { forgeClient } from "@/clients/forgeClient";
+import type { Issue } from "@shared/types/forge";
+import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GitHubResourceRowsSkeleton } from "./GitHubDropdownSkeletons";
 import { logError } from "@/utils/logger";
 
-export interface IssueSelectorProps {
-  projectPath: string;
-  selectedIssue: GitHubIssue | null;
-  onSelect: (issue: GitHubIssue | null) => void;
-  disabled?: boolean;
-}
+/** Conforms to the host's issue-selector slot contract (forge-normalized shapes). */
+export type IssueSelectorProps = ForgeIssueSelectorProps;
 
 export function IssueSelector({
   projectPath,
@@ -25,7 +22,7 @@ export function IssueSelector({
 }: IssueSelectorProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [issues, setIssues] = useState<GitHubIssue[]>([]);
+  const [issues, setIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(false);
   const debouncedQuery = useDebounce(query, 300);
   const requestGenRef = useRef(0);
@@ -41,9 +38,8 @@ export function IssueSelector({
     const abortController = new AbortController();
     const gen = ++requestGenRef.current;
     setLoading(true);
-    githubClient
-      .listIssues({
-        cwd: projectPath,
+    forgeClient
+      .listIssues(projectPath, {
         state: "open",
         search: debouncedQuery || undefined,
       })

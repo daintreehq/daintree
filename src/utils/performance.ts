@@ -16,6 +16,12 @@ declare global {
 
 export const RENDERER_T0 = typeof performance !== "undefined" ? performance.now() : Date.now();
 
+// Steady-state marks (echo-latency samples, memory samples, CLS deltas) land
+// in the window buffer for the whole session; without a cap a capture run
+// left open for hours grows it unboundedly. Oldest entries drop first — the
+// periodic flush below normally drains long before the cap matters.
+const MAX_BUFFERED_PERF_MARKS = 2000;
+
 export function isRendererPerfCaptureEnabled(): boolean {
   return isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE");
 }
@@ -47,8 +53,24 @@ export function markRendererPerformance(
   }
 
   window.__DAINTREE_PERF_MARKS__.push(payload);
+  if (window.__DAINTREE_PERF_MARKS__.length > MAX_BUFFERED_PERF_MARKS) {
+    window.__DAINTREE_PERF_MARKS__.splice(
+      0,
+      window.__DAINTREE_PERF_MARKS__.length - MAX_BUFFERED_PERF_MARKS
+    );
+  }
 
   if (captureEnabled) {
+    // Land the mark on the DevTools Performance timeline (User Timing track)
+    // so capture-run events line up against frames and long tasks instead of
+    // living only in the window buffer.
+    if (typeof performance !== "undefined" && typeof performance.mark === "function") {
+      try {
+        performance.mark(String(mark), meta ? { detail: meta } : undefined);
+      } catch {
+        // Non-cloneable meta — the buffer entry above still records it.
+      }
+    }
     // DevTools-only perf trail for `DAINTREE_PERF_CAPTURE`; intentionally
     // bypasses the IPC logger to keep the breadcrumb visible in-page.
     // eslint-disable-next-line no-console
@@ -82,6 +104,26 @@ export function flushPendingPerfMarks(): void {
     rendererT0: RENDERER_T0,
   });
   window.__DAINTREE_PERF_MARKS__ = [];
+}
+
+/**
+ * Keep draining the perf buffer after first-interactive. Without this, the
+ * boundary flushes (HYDRATE_COMPLETE, first-interactive) are the last drain
+ * of the session — steady-state marks emitted afterwards never reach the
+ * NDJSON capture and just accumulate in the window buffer. No-op unless
+ * `DAINTREE_PERF_CAPTURE` is set; empty intervals skip the IPC round trip.
+ */
+export function startSteadyStatePerfFlush(intervalMs = 15000): () => void {
+  if (typeof window === "undefined" || !isRendererPerfCaptureEnabled()) {
+    return () => {};
+  }
+  const timer = window.setInterval(() => {
+    if ((window.__DAINTREE_PERF_MARKS__?.length ?? 0) === 0) return;
+    flushPendingPerfMarks();
+  }, intervalMs);
+  return () => {
+    window.clearInterval(timer);
+  };
 }
 
 export function startRendererSpan(

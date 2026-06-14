@@ -138,7 +138,10 @@ describe("ImagePathProbe", () => {
       expect(readlinkMock.calls).toHaveLength(1);
     });
 
-    it("triggers a background refresh past soft-stale but keeps the cached value", async () => {
+    it("returns the cached basename permanently for a live PID without re-probing", async () => {
+      // A running process's executable image is immutable, so a successful
+      // probe result holds for the PID's lifetime — no staleness window, no
+      // background re-probe per detection pass.
       vi.useFakeTimers();
       try {
         const probe = new ImagePathProbe();
@@ -146,31 +149,28 @@ describe("ImagePathProbe", () => {
         readlinkMock.queue[0]!.resolve("/opt/homebrew/bin/claude");
         await flush();
 
-        vi.advanceTimersByTime(600); // past 500ms soft-stale, within 1500ms hard-max
+        vi.advanceTimersByTime(60_000);
 
         expect(probe.readBasename(123)).toBe("claude");
-        expect(readlinkMock.calls).toHaveLength(2);
+        expect(readlinkMock.calls).toHaveLength(1);
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it("returns null past the hard-max age and schedules a refresh", async () => {
-      vi.useFakeTimers();
-      try {
-        const probe = new ImagePathProbe();
-        probe.readBasename(123);
-        readlinkMock.queue[0]!.resolve("/opt/homebrew/bin/claude");
-        await flush();
+    it("retries a failed probe until one succeeds", async () => {
+      const probe = new ImagePathProbe();
+      probe.readBasename(123);
+      readlinkMock.queue[0]!.reject(new Error("EACCES"));
+      await flush();
 
-        expect(probe.readBasename(123)).toBe("claude");
+      // Failure cached as null — the next read schedules another attempt.
+      expect(probe.readBasename(123)).toBeNull();
+      readlinkMock.queue[1]!.resolve("/opt/homebrew/bin/claude");
+      await flush();
 
-        vi.advanceTimersByTime(5100); // past 5000ms hard-max
-        expect(probe.readBasename(123)).toBeNull();
-        expect(readlinkMock.calls).toHaveLength(2);
-      } finally {
-        vi.useRealTimers();
-      }
+      expect(probe.readBasename(123)).toBe("claude");
+      expect(readlinkMock.calls).toHaveLength(2);
     });
 
     it("survives a 1500ms poll-interval tick without blanking the basename", async () => {

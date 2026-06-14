@@ -142,9 +142,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [onClose]
   );
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    // Stop propagation to prevent panel drag handle from capturing tab interactions
-    // This keeps tab clicks/drags separate from panel drags
+  const handleClosePointerDown = useCallback((e: React.PointerEvent) => {
+    // Keep the close button from bubbling into the panel drag handle. The close
+    // button is not a sortable activator, so this stays a pure stopPropagation —
+    // it must NOT route through the tab's sortable pointer listener.
     e.stopPropagation();
   }, []);
 
@@ -254,14 +255,45 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     onClick();
   }, [isEditing, onClick]);
 
+  // dnd-kit's KeyboardSensor activator arrives via sortableListeners.onKeyDown
+  // and would otherwise clobber tab activation (both want Space/Enter). Split
+  // it out and compose: Space/Enter on an inactive tab activates it (APG
+  // manual activation); on the already-active tab they fall through to the
+  // sensor so the focused tab can be picked up and reordered without a mouse.
+  const { onKeyDown: sortableKeyDownListener, ...sortablePointerListeners } =
+    sortableListeners ?? {};
+  const sortableKeyDown = sortableKeyDownListener as ((e: React.KeyboardEvent) => void) | undefined;
+  const sortablePointerDown = sortablePointerListeners.onPointerDown as
+    | ((e: React.PointerEvent) => void)
+    | undefined;
+
+  // Composes the guard with dnd-kit's sortable activator. Spreading
+  // `sortablePointerListeners` would clobber a plain onPointerDown prop, so the
+  // tab div renders this AFTER the spread to win the prop race: stopPropagation
+  // keeps the pointerdown from leaking to ancestors, then we hand off to the
+  // sortable sensor so tab reorder still picks up. (The outer panel-move drag is
+  // already blocked by [data-no-dnd] on the tab strip, which gates its
+  // mousedown-based sensor; this guards the pointer path too.)
+  const handleTabPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.stopPropagation();
+      sortablePointerDown?.(e);
+    },
+    [sortablePointerDown]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
+        if (isActive && sortableKeyDown) {
+          sortableKeyDown(e);
+          return;
+        }
         e.preventDefault();
         onClick();
       }
     },
-    [onClick]
+    [isActive, onClick, sortableKeyDown]
   );
 
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
@@ -277,7 +309,6 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           tabIndex={isActive ? 0 : -1}
           onClick={handleClick}
           onKeyDown={handleKeyDown}
-          onPointerDown={handlePointerDown}
           className={cn(
             "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
             "border-r border-divider transition-colors",
@@ -288,7 +319,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           )}
           data-tab-id={id}
           {...mergedAttributes}
-          {...sortableListeners}
+          {...sortablePointerListeners}
+          onPointerDown={handleTabPointerDown}
         >
           {isActive && (
             <m.div
@@ -422,6 +454,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               <button
                 onClick={handleClose}
                 onKeyDown={handleCloseKeyDown}
+                onPointerDown={handleClosePointerDown}
                 className={cn(
                   "shrink-0 p-0.5 -mr-1 rounded transition-[opacity,color,background-color,border-color]",
                   "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",

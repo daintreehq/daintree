@@ -29,6 +29,9 @@ import type {
   RepoMetadata,
   ListOptions,
   ForgeUser,
+  ReviewThread,
+  ForgeTokenHealthState,
+  RateLimitDetails,
 } from "../forge.js";
 import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
@@ -111,21 +114,16 @@ import type {
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
 import type {
-  RepositoryStats,
-  ProjectHealthData,
-  GitHubCliStatus,
-  GitHubTokenConfig,
-  GitHubTokenValidation,
-  GitHubRateLimitDetails,
-  GitHubTokenHealthPayload,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
-  GitHubFirstPageCachePayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
-} from "./github.js";
+  ForgeRepositoryStats,
+  ForgeRepoStatsAndPagePayload,
+  ForgeRepoCountsUpdatedPayload,
+  ForgeFirstPageCachePayload,
+  ForgeProjectHealthPayload,
+} from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
@@ -217,7 +215,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     restartService(): Promise<void>;
     retryProjectLoad(): Promise<void>;
     retryAuthFetch(): Promise<void>;
-    onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
@@ -250,6 +247,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
     searchSemanticBuffers(query: string, isRegex: boolean): Promise<SemanticSearchMatch[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
+    reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
     getSerializedState(terminalId: string): Promise<string | null>;
     getSerializedStates(terminalIds: string[]): Promise<Record<string, string | null>>;
@@ -352,7 +350,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setConfig(payload: import("../editor.js").EditorSetConfigPayload): Promise<void>;
     discover(): Promise<import("../editor.js").DiscoveredEditor[]>;
   };
-  system: {
+  // getResourceProfile comes from GeneratedElectronAPI; the rest are legacy
+  // typedHandle registrations plus event listeners.
+  system: GeneratedElectronAPI["system"] & {
     openExternal(url: string): Promise<void>;
     openPath(path: string): Promise<void>;
     openInEditor(payload: SystemOpenInEditorPayload & { projectId?: string }): Promise<void>;
@@ -383,6 +383,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getHeapStats(): Promise<import("./system.js").HeapStats>;
     getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
     getReportEnrichment(): Promise<import("./system.js").ReportIssueEnrichment>;
+    startRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStartResult>;
+    stopRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStopResult>;
     installAgent(payload: {
       agentId: string;
       methodIndex?: number;
@@ -404,6 +406,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     resetAndRelaunch(): Promise<void>;
+    /** Persist the permanent dismissal of the Rosetta translation warning banner. */
+    dismissRosettaWarning(): Promise<void>;
     /**
      * Clear a single panel's quarantine entry from the suspect ledger so it
      * hydrates normally on the next launch. Returns `{ cleared: true }` if the
@@ -412,12 +416,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * re-hydrate the panel in the current session.
      */
     clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
+    /** Fire-and-forget skeleton-parsed reveal signal sent before module-graph eval. */
+    skeletonParsed(): void;
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
     notifyWarmViewPainted(): Promise<void>;
     onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
+    /**
+     * Subscribe to the post-reveal repaint signal (#10362). Main fires this
+     * after it detaches the warm anti-flash bridge and focuses the cached view,
+     * i.e. once the view is the composited foreground surface. The renderer
+     * re-runs its terminal redraw then, since the wake fan-out driven by
+     * visibilitychange/resume ran while the view was still occluded.
+     */
+    onViewRevealed(callback: () => void): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {
@@ -492,6 +506,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
     onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
+    onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
@@ -502,7 +517,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * owner/repo for remotes whose URL looks like a forge repo. Provider-
      * agnostic replacement for the legacy `github.listRemotes` (#8456).
      */
-    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
+    listRemotes(cwd: string): Promise<import("./forge.js").RemoteInfo[]>;
     /**
      * Close/background a project.
      * @param projectId - Project ID to close
@@ -675,6 +690,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentSettings: {
     get(): Promise<AgentSettings>;
     set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
+    /**
+     * Set the global skip-permissions override (#10432). Persisted as a
+     * dot-path leaf so per-agent records aren't rewritten with defaults.
+     */
+    setGlobal(value: boolean): Promise<AgentSettings>;
     reset(agentId?: AgentId): Promise<AgentSettings>;
     /**
      * Mark the persisted store with the given schema version. Only called by
@@ -698,74 +718,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   agentHelp: {
     get(request: AgentHelpRequest): Promise<AgentHelpResult>;
   };
-  github: {
-    getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
-    getFirstPageCache(cwd: string): Promise<GitHubFirstPageCachePayload | null>;
-    getProjectHealth(cwd: string, bypassCache?: boolean): Promise<ProjectHealthData>;
-    openIssues(cwd: string, query?: string, state?: string): Promise<void>;
-    openPRs(cwd: string, query?: string, state?: string): Promise<void>;
-    openCommits(cwd: string, branch?: string): Promise<void>;
-    openIssue(cwd: string, issueNumber: number): Promise<void>;
-    openPR(prUrl: string): Promise<void>;
-    checkCli(): Promise<GitHubCliStatus>;
-    getConfig(): Promise<GitHubTokenConfig>;
-    setToken(token: string): Promise<GitHubTokenValidation>;
-    clearToken(): Promise<void>;
-    validateToken(token: string): Promise<GitHubTokenValidation>;
-    listIssues(options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: import("../github.js").GitHubSortOrder;
-    }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>>;
-    listPullRequests(options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "merged" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: import("../github.js").GitHubSortOrder;
-    }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
-    assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
-    unassignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
-    getIssueTooltip(
-      cwd: string,
-      issueNumber: number
-    ): Promise<import("../github.js").IssueTooltipData | null>;
-    getPRTooltip(
-      cwd: string,
-      prNumber: number
-    ): Promise<import("../github.js").PRTooltipData | null>;
-    getIssueUrl(cwd: string, issueNumber: number): Promise<string | null>;
-    getIssueByNumber(
-      cwd: string,
-      issueNumber: number
-    ): Promise<import("../github.js").GitHubIssue | null>;
-    getPRByNumber(cwd: string, prNumber: number): Promise<import("../github.js").GitHubPR | null>;
-    getIssuesByNumbers(
-      cwd: string,
-      numbers: number[]
-    ): Promise<Array<import("../github.js").GitHubIssue | null>>;
-    getPRsByNumbers(
-      cwd: string,
-      numbers: number[]
-    ): Promise<Array<import("../github.js").GitHubPR | null>>;
-    getPRReviewThreads(cwd: string, prNumber: number): Promise<Record<string, number>>;
-    /** @deprecated Use `project.listRemotes` instead (#8456). */
-    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
-    resolveAuthorAvatar(email: string): Promise<string | null>;
-    onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
-    onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
-    onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
-    onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
-    getRateLimitDetails(): Promise<GitHubRateLimitDetails | null>;
-    onTokenHealthChanged(callback: (data: GitHubTokenHealthPayload) => void): () => void;
-    onRepoStatsAndPageUpdated(callback: (data: RepoStatsAndPagePayload) => void): () => void;
-    onRepoCountsUpdated(callback: (data: RepoCountsUpdatedPayload) => void): () => void;
-    getTokenHealth(): Promise<GitHubTokenHealthPayload>;
-  };
   // getState comes from GeneratedElectronAPI; onServiceChanged is a renderer-only subscription.
   connectivity: GeneratedElectronAPI["connectivity"] & {
     onServiceChanged(
@@ -779,7 +731,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
   git: {
-    getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
+    getFileDiff(
+      cwd: string,
+      filePath: string,
+      status: GitStatus,
+      ignoreWhitespace?: boolean
+    ): Promise<string>;
     getProjectPulse(options: {
       worktreeId: string;
       rangeDays: import("../pulse.js").PulseRangeDays;
@@ -793,7 +750,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch?: string;
       skip?: number;
       limit?: number;
-    }): Promise<import("../github.js").GitCommitListResponse>;
+    }): Promise<import("../git.js").GitCommitListResponse>;
     stageFile(cwd: string, filePath: string): Promise<void>;
     unstageFile(cwd: string, filePath: string): Promise<void>;
     stageFiles(cwd: string, filePaths: string[]): Promise<void>;
@@ -823,7 +780,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch1: string,
       branch2: string,
       filePath?: string,
-      useMergeBase?: boolean
+      useMergeBase?: boolean,
+      ignoreWhitespace?: boolean
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
@@ -1394,6 +1352,77 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string;
       stderr: string;
     }): Promise<{ providerId: string; classification: PushErrorClassification | null } | null>;
+    /**
+     * Provider-agnostic repository stats roll-up (toolbar counts badge).
+     * Blends the host-computed local commit count with the resolved
+     * provider's forge counts. Throws when the provider doesn't implement
+     * the `repoStats` capability.
+     */
+    getRepoStats(payload: { cwd: string; bypassCache?: boolean }): Promise<ForgeRepositoryStats>;
+    /**
+     * Disk-persisted first page for cold-start toolbar hydration. `null`
+     * when the provider has no cache, doesn't implement the capability, or
+     * no provider resolves for `cwd` — never throws.
+     */
+    getFirstPageCache(payload: { cwd: string }): Promise<ForgeFirstPageCachePayload | null>;
+    /**
+     * Project-health roll-up for the project pulse card. Errors surface in
+     * the returned payload's `error` field, never as a rejection.
+     */
+    getProjectHealth(payload: {
+      cwd: string;
+      bypassCache?: boolean;
+    }): Promise<ForgeProjectHealthPayload>;
+    /** Hover-tooltip projection of an issue. Best-effort — `null` on any failure. */
+    getIssueTooltip(payload: {
+      cwd: string;
+      issueNumber: number;
+    }): Promise<import("../forge.js").IssueTooltipData | null>;
+    /** Hover-tooltip projection of a PR. Best-effort — `null` on any failure. */
+    getPRTooltip(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<import("../forge.js").PRTooltipData | null>;
+    /**
+     * Batch-fetch issues by number via the provider's `batchLookups`
+     * capability. Returns the found issues in input order; numbers that
+     * don't resolve are omitted. `[]` when the capability is absent.
+     */
+    getIssuesByNumbers(payload: { cwd: string; numbers: number[] }): Promise<Issue[]>;
+    /** Batch-fetch PRs by number. See {@link getIssuesByNumbers}. */
+    getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PR[]>;
+    /**
+     * Opaque review threads for a PR via the provider's `reviews`
+     * capability. `[]` when the capability is absent. Note this is the
+     * normalized contract shape ({@link ReviewThread}[]), not the legacy
+     * `github.getPRReviewThreads` per-path count record.
+     */
+    getPRReviewThreads(payload: { cwd: string; prNumber: number }): Promise<ReviewThread[]>;
+    /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
+    resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
+    /**
+     * Replay the current token-health state for a provider (canonical
+     * `{pluginId}.{contributionId}` id) so late-mounting windows can render
+     * the banner without waiting for the next push. `null` when the provider
+     * isn't activated or doesn't implement `healthEvents`.
+     */
+    getTokenHealth(payload: { providerId: string }): Promise<ForgeTokenHealthState | null>;
+    /** Detailed per-bucket rate-limit snapshot for diagnostics UI; `null` when not inspectable. */
+    getRateLimitDetails(payload: { cwd: string }): Promise<RateLimitDetails | null>;
+    /** Open a single PR in the system browser via the resolved forge provider. */
+    openPR(payload: { cwd: string; prNumber: number }): Promise<void>;
+    /** Provider-keyed stats + first-page push after a fresh network poll. */
+    onRepoStatsAndPageUpdated(callback: (data: ForgeRepoStatsAndPagePayload) => void): () => void;
+    /** Provider-keyed count-only stats push (cheap background poll path). */
+    onRepoCountsUpdated(callback: (data: ForgeRepoCountsUpdatedPayload) => void): () => void;
+    /** Branch→PR detection push from the worktree monitor. */
+    onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
+    /** PR association cleared for a worktree. */
+    onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
+    /** Branch→issue detection push from the worktree monitor. */
+    onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
+    /** The forge confirmed an associated issue doesn't exist on the repo. */
+    onIssueNotFound(callback: (data: IssueNotFoundPayload) => void): () => void;
   };
   // forgeAudit comes from GeneratedElectronAPI
   voiceInput: {

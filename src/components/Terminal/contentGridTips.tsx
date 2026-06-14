@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import { Kbd } from "@/components/ui/Kbd";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
+import { keybindingService } from "@/services/KeybindingService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
@@ -20,6 +21,8 @@ export interface TipEntry {
   shortcutActionId?: ActionId;
   actionLabel?: string;
   requiredAgents?: BuiltInAgentId[];
+  /** The fallback message hardcodes a key combo — skip the tip when the binding is gone. */
+  requiresShortcut?: boolean;
 }
 
 export const TIPS: TipEntry[] = [
@@ -37,6 +40,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "nav.quickSwitcher",
     actionLabel: "Open Quick Switcher",
+    requiresShortcut: true,
   },
   {
     id: "new-terminal",
@@ -52,6 +56,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "terminal.new",
     actionLabel: "New Terminal",
+    requiresShortcut: true,
   },
   {
     id: "panel-palette",
@@ -68,6 +73,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "panel.palette",
     actionLabel: "Open Panel Palette",
+    requiresShortcut: true,
   },
   {
     id: "launch-claude",
@@ -83,6 +89,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "agent.terminal",
     actionLabel: "Launch Agent",
+    requiresShortcut: true,
     requiredAgents: ["claude"],
   },
   {
@@ -99,6 +106,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "agent.terminal",
     actionLabel: "Launch Agent",
+    requiresShortcut: true,
     requiredAgents: ["gemini"],
   },
   {
@@ -115,21 +123,23 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "terminal.inject",
     actionLabel: "Inject Context",
+    requiresShortcut: true,
   },
   {
     id: "action-palette",
     message: (
       <>
-        Press <Kbd>⌘⇧P</Kbd> to open the action palette and search all available commands
+        Press <Kbd>⌘⇧P</Kbd> to open the command palette and search all available commands
       </>
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the action palette and search all available commands
+        Press <Kbd>{shortcut}</Kbd> to open the command palette and search all available commands
       </>
     ),
     actionId: "action.palette.open",
-    actionLabel: "Open Action Palette",
+    actionLabel: "Open Command Palette",
+    requiresShortcut: true,
   },
   {
     id: "worktree-palette",
@@ -145,6 +155,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "worktree.openPalette",
     actionLabel: "Open Worktree Palette",
+    requiresShortcut: true,
   },
   {
     id: "worktree-overview",
@@ -161,6 +172,7 @@ export const TIPS: TipEntry[] = [
     actionId: "worktree.overview.open",
     shortcutActionId: "worktree.overview",
     actionLabel: "Open Worktrees Overview",
+    requiresShortcut: true,
   },
   {
     id: "agent-switcher",
@@ -176,6 +188,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "agent.palette",
     actionLabel: "Open Agent Switcher",
+    requiresShortcut: true,
   },
   {
     id: "recipes",
@@ -217,7 +230,12 @@ export function RotatingTip() {
     () =>
       TIPS.filter(
         (tip) =>
-          !tip.requiredAgents || tip.requiredAgents.some((a) => isAgentLaunchable(availability[a]))
+          (!tip.requiredAgents ||
+            tip.requiredAgents.some((a) => isAgentLaunchable(availability[a]))) &&
+          // Mirrors WelcomeScreen's SHORTCUT_TIPS filter: never teach a combo
+          // the user has unbound or rebound away.
+          (!tip.requiresShortcut ||
+            Boolean(keybindingService.getDisplayCombo(tip.shortcutActionId ?? tip.actionId ?? "")))
       ),
     [availability]
   );

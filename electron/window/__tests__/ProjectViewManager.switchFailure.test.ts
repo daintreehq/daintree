@@ -10,6 +10,7 @@ interface MockWc {
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  invalidate: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   reload: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
@@ -33,6 +34,7 @@ function createMockWebContents(opts?: { autoFinishLoad?: boolean }): MockWc {
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
+    invalidate: vi.fn(),
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
@@ -88,6 +90,8 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterWebContents: vi.fn(),
   registerProjectView: vi.fn(),
   unregisterProjectView: vi.fn(),
+  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -127,6 +131,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   INSTANCE_ROLE_ARG: "--daintree-instance-role",
   resolveInstanceRole: vi.fn(() => "attended"),
+  resolveE2EPreloadArgs: vi.fn(() => []),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));

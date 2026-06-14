@@ -14,29 +14,35 @@ import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
 import {
   repoStatsCache,
+  repoStatsAndPageSnapshotCache,
+  restCountsCache,
+  bumpETagCacheVersion,
   prListCache,
   prTooltipCache,
   prTooltipWrittenAt,
   reviewThreadsCache,
   prRequiredStatusCache,
   truncateBody,
+  isoToEpochMs,
+  getRepoListEpoch,
   MAX_REVIEW_THREAD_PAGES,
   REVIEW_THREADS_PER_PAGE,
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import {
   deriveRequiredCIStatus,
   deriveGlobalCIStatus,
   normalizeRawState,
 } from "./prRequiredCIStatus.js";
 import type { RollupContextNode, GlobalCIDeriveInput } from "./prRequiredCIStatus.js";
+import type { GitHubPR, GitHubListOptions, GitHubListResponse } from "../shared/types.js";
 import type {
-  GitHubPR,
-  GitHubListOptions,
-  GitHubListResponse,
+  ForgeLabel,
+  ForgeUser,
+  NormalizedPRState,
   PRTooltipData,
-} from "../../../../shared/types/github.js";
+} from "../../../../shared/types/forge.js";
 import type { RepoContext, RepoStats } from "./types.js";
 
 export function buildListCacheKey(
@@ -52,16 +58,23 @@ export function buildListCacheKey(
 }
 
 export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", count: number): void {
+  const now = Date.now();
   const cached = repoStatsCache.get(cacheKey);
+  // Stamp only the updated kind's refreshed-at: a PR list write-back says
+  // nothing about the issue count, and a shared stamp would make a stale
+  // issue count look freshly read — outranking a real issue-list observation
+  // in the renderer arbitration and suppressing its dropdown-open refresh.
   if (cached) {
     const updated: RepoStats = {
       ...cached,
-      lastUpdated: Date.now(),
+      lastUpdated: now,
     };
     if (type === "issue") {
       updated.issueCount = count;
+      updated.issueCountRefreshedAt = now;
     } else {
       updated.prCount = count;
+      updated.prCountRefreshedAt = now;
     }
     repoStatsCache.set(cacheKey, updated);
   } else {
@@ -71,9 +84,49 @@ export function updateRepoStatsCount(cacheKey: string, type: "issue" | "pr", cou
     const newStats: RepoStats = {
       issueCount: type === "issue" ? count : (diskCached?.issueCount ?? 0),
       prCount: type === "pr" ? count : (diskCached?.prCount ?? 0),
-      lastUpdated: Date.now(),
+      lastUpdated: now,
     };
+    if (type === "issue") {
+      newStats.issueCountRefreshedAt = now;
+    } else {
+      newStats.prCountRefreshedAt = now;
+    }
     repoStatsCache.set(cacheKey, newStats);
+  }
+
+  // A list query's `totalCount` is a direct GitHub observation. The background
+  // poll keeps re-serving `repoStatsAndPageSnapshotCache` (10 min TTL) and
+  // `restCountsCache` (1 h TTL) for as long as the `/events` probe reports no
+  // change, so a disagreeing entry must drop here — otherwise the next poll
+  // resurrects the stale count (rolling the toolbar badge back) until the
+  // entry's own TTL expires. A disagreeing snapshot's first-page items are
+  // stale by the same evidence, so the whole entry goes, and dropping the
+  // REST entry discards its ETag baselines, forcing the next count poll to an
+  // unconditional re-read instead of a 304 replay of the stale value.
+  let droppedBaseline = false;
+  const snapshot = repoStatsAndPageSnapshotCache.get(cacheKey);
+  if (snapshot) {
+    const snapshotCount = type === "issue" ? snapshot.stats.issueCount : snapshot.stats.prCount;
+    if (snapshotCount !== count) {
+      repoStatsAndPageSnapshotCache.invalidate(cacheKey);
+      droppedBaseline = true;
+    }
+  }
+  const restCounts = restCountsCache.get(cacheKey);
+  if (restCounts) {
+    const restCount =
+      type === "issue" ? restCounts.combinedCount - restCounts.prCount : restCounts.prCount;
+    if (restCount !== count) {
+      restCountsCache.invalidate(cacheKey);
+      droppedBaseline = true;
+    }
+  }
+  // Defend the invalidation against in-flight conditional fetches: a
+  // `fetchRestCounts` that read its baseline before the drop would otherwise
+  // 304-recommit the stale counts. The version bump makes its pre-commit
+  // check discard the result, so the next poll re-reads unconditionally.
+  if (droppedBaseline) {
+    bumpETagCacheVersion();
   }
 }
 
@@ -172,93 +225,109 @@ export function mapPRStates(state?: string): string[] {
 
 const inFlightPRTooltips = new Map<string, Promise<PRTooltipData | null>>();
 
-export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
+/** GraphQL `{ login, avatarUrl }` actor node → forge {@link ForgeUser} tooltip projection. */
+function toTooltipUser(node: { login?: string; avatarUrl?: string } | null | undefined): ForgeUser {
+  return { login: node?.login ?? "unknown", avatarUrl: node?.avatarUrl ?? "", rawData: null };
+}
+
+function toTooltipLabels(
+  nodes: Array<{ name?: string; color?: string }> | undefined
+): ForgeLabel[] {
+  return (nodes ?? []).filter(Boolean).map((l) => ({ name: l.name ?? "", color: l.color ?? "" }));
+}
+
+function normalizeTooltipPRState(rawState: string, merged: boolean): NormalizedPRState {
+  if (merged) return "merged";
+  const upper = rawState.toUpperCase();
+  if (upper === "CLOSED") return "closed";
+  if (upper === "MERGED") return "merged";
+  return "open";
+}
+
+/**
+ * Context-variant core of {@link getPRTooltip}. Network errors propagate so
+ * the cwd wrapper's repo-context retry can classify them; capability callers
+ * (forge `tooltips`) catch and return `null` themselves.
+ */
+export async function getPRTooltipForContext(
+  context: RepoContext,
+  prNumber: number
+): Promise<PRTooltipData | null> {
   const client = GitHubAuth.createClient();
   if (!client) {
     return null;
   }
 
+  const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
+  const cached = prTooltipCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const inFlight = inFlightPRTooltips.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const requestedAt = Date.now();
+  const promise = (async () => {
+    const response = (await client(GET_PR_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: prNumber,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
+
+    const pr = response?.repository?.pullRequest;
+    if (!pr) {
+      return null;
+    }
+
+    const author = pr.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = pr.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const merged = (pr.merged as boolean) ?? false;
+    const rawState = (pr.state as string) ?? "OPEN";
+
+    const tooltipData: PRTooltipData = {
+      number: pr.number as number,
+      title: pr.title as string,
+      bodyExcerpt: truncateBody(pr.bodyText as string | null),
+      state: normalizeTooltipPRState(rawState, merged),
+      rawState,
+      isDraft: (pr.isDraft as boolean) ?? false,
+      createdAt: isoToEpochMs(pr.createdAt),
+      author: toTooltipUser(author),
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map(toTooltipUser),
+      labels: toTooltipLabels(labelsData?.nodes),
+    };
+
+    const existing = prTooltipWrittenAt.get(cacheKey);
+    if (existing === undefined || requestedAt >= existing) {
+      prTooltipCache.set(cacheKey, tooltipData);
+      prTooltipWrittenAt.set(cacheKey, requestedAt);
+    }
+    return tooltipData;
+  })();
+
+  inFlightPRTooltips.set(cacheKey, promise);
+  promise.then(
+    () => {
+      inFlightPRTooltips.delete(cacheKey);
+    },
+    () => {
+      inFlightPRTooltips.delete(cacheKey);
+    }
+  );
+
+  return promise;
+}
+
+export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRTooltipData | null> {
   try {
-    return await withRepoContextRetry(cwd, async (context) => {
-      const cacheKey = `${context.owner}/${context.repo}:${prNumber}`;
-      const cached = prTooltipCache.get(cacheKey);
-      if (cached) {
-        return cached;
-      }
-
-      const inFlight = inFlightPRTooltips.get(cacheKey);
-      if (inFlight) return inFlight;
-
-      const requestedAt = Date.now();
-      const promise = (async () => {
-        const response = (await client(GET_PR_QUERY, {
-          owner: context.owner,
-          repo: context.repo,
-          number: prNumber,
-          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-        })) as GraphQlQueryResponseData;
-
-        gitHubRateLimitService.updateFromGraphQL(response, "GET_PR_QUERY");
-
-        const pr = response?.repository?.pullRequest;
-        if (!pr) {
-          return null;
-        }
-
-        const author = pr.author as { login?: string; avatarUrl?: string } | null;
-        const assigneesData = pr.assignees as {
-          nodes?: Array<{ login?: string; avatarUrl?: string }>;
-        };
-        const labelsData = pr.labels as { nodes?: Array<{ name?: string; color?: string }> };
-        const merged = pr.merged as boolean;
-        const rawState = pr.state as string;
-
-        let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-        if (merged) {
-          state = "MERGED";
-        }
-
-        const tooltipData: PRTooltipData = {
-          number: pr.number as number,
-          title: pr.title as string,
-          bodyExcerpt: truncateBody(pr.bodyText as string | null),
-          state,
-          isDraft: (pr.isDraft as boolean) ?? false,
-          createdAt: pr.createdAt as string,
-          author: {
-            login: author?.login ?? "unknown",
-            avatarUrl: author?.avatarUrl ?? "",
-          },
-          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-            login: a.login ?? "unknown",
-            avatarUrl: a.avatarUrl ?? "",
-          })),
-          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-            name: l.name ?? "",
-            color: l.color ?? "",
-          })),
-        };
-
-        const existing = prTooltipWrittenAt.get(cacheKey);
-        if (existing === undefined || requestedAt >= existing) {
-          prTooltipCache.set(cacheKey, tooltipData);
-          prTooltipWrittenAt.set(cacheKey, requestedAt);
-        }
-        return tooltipData;
-      })();
-
-      inFlightPRTooltips.set(cacheKey, promise);
-      promise.then(
-        () => {
-          inFlightPRTooltips.delete(cacheKey);
-        },
-        () => {
-          inFlightPRTooltips.delete(cacheKey);
-        }
-      );
-
-      return promise;
-    });
+    return await withRepoContextRetry(cwd, (context) => getPRTooltipForContext(context, prNumber));
   } catch {
     return null;
   }
@@ -373,29 +442,19 @@ function prewarmPRTooltips(
       nodes?: Array<{ login?: string; avatarUrl?: string }>;
     };
     const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
-    const merged = node.merged as boolean;
-    const rawState = node.state as string;
-    let state: "OPEN" | "CLOSED" | "MERGED" = rawState as "OPEN" | "CLOSED" | "MERGED";
-    if (merged) state = "MERGED";
+    const merged = (node.merged as boolean) ?? false;
+    const rawState = (node.state as string) ?? "OPEN";
     prTooltipCache.set(cacheKey, {
       number: num,
       title: node.title as string,
       bodyExcerpt: truncateBody(node.bodyText as string | null),
-      state,
+      state: normalizeTooltipPRState(rawState, merged),
+      rawState,
       isDraft: (node.isDraft as boolean) ?? false,
-      createdAt: node.createdAt as string,
-      author: {
-        login: author?.login ?? "unknown",
-        avatarUrl: author?.avatarUrl ?? "",
-      },
-      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-        login: a.login ?? "unknown",
-        avatarUrl: a.avatarUrl ?? "",
-      })),
-      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-        name: l.name ?? "",
-        color: l.color ?? "",
-      })),
+      createdAt: isoToEpochMs(node.createdAt),
+      author: toTooltipUser(author),
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map(toTooltipUser),
+      labels: toTooltipLabels(labelsData?.nodes),
     });
     prTooltipWrittenAt.set(cacheKey, requestedAt);
   }
@@ -430,6 +489,11 @@ export async function listPullRequests(
       const cached = prListCache.get(cacheKey);
       if (cached) return cached;
     }
+
+    // Captured before the network call: if the count-as-cache-buster bumps
+    // the epoch mid-flight, this page predates the observed change and must
+    // not repopulate the just-busted cache.
+    const epochAtStart = getRepoListEpoch("pr", context.owner, context.repo);
 
     try {
       let result: GitHubListResponse<GitHubPR>;
@@ -517,27 +581,34 @@ export async function listPullRequests(
           totalCount,
         };
 
-        prListCache.set(cacheKey, result);
+        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
+        // updates sit behind the same guard: a response too old to repopulate
+        // the list cache is also too old to roll `repoStatsCache` (or the
+        // disk stats) back to its pre-change total under a fresh
+        // `lastUpdated`.
+        if (getRepoListEpoch("pr", context.owner, context.repo) === epochAtStart) {
+          prListCache.set(cacheKey, result);
 
-        if (
-          (!options.state || options.state === "open") &&
-          !options.cursor &&
-          totalCount !== undefined
-        ) {
-          const statsCacheKey = `${context.owner}/${context.repo}`;
-          updateRepoStatsCount(statsCacheKey, "pr", totalCount);
+          if (
+            (!options.state || options.state === "open") &&
+            !options.cursor &&
+            totalCount !== undefined
+          ) {
+            const statsCacheKey = `${context.owner}/${context.repo}`;
+            updateRepoStatsCount(statsCacheKey, "pr", totalCount);
 
-          const memoryStats = repoStatsCache.get(statsCacheKey);
-          if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-            const persistentCache = GitHubStatsCache.getInstance();
-            persistentCache.set(
-              statsCacheKey,
-              {
-                issueCount: memoryStats.issueCount,
-                prCount: memoryStats.prCount,
-              },
-              options.cwd
-            );
+            const memoryStats = repoStatsCache.get(statsCacheKey);
+            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+              const persistentCache = GitHubStatsCache.getInstance();
+              persistentCache.set(
+                statsCacheKey,
+                {
+                  issueCount: memoryStats.issueCount,
+                  prCount: memoryStats.prCount,
+                },
+                options.cwd
+              );
+            }
           }
         }
       }
@@ -585,6 +656,47 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
   }
 }
 
+/**
+ * Context-variant core of {@link getPRsByNumbers}. Results align with the
+ * positive-integer-filtered input order; errors propagate so the cwd wrapper's
+ * repo-context retry and error classification stay in charge.
+ */
+export async function getPRsByNumbersForContext(
+  context: RepoContext,
+  numbers: number[]
+): Promise<Array<GitHubPR | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  const results: Array<GitHubPR | null> = [];
+
+  for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+    const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+    const query = buildBatchPRsQuery(context.owner, context.repo, chunk);
+    if (!query) continue;
+
+    const response = (await client(query, {
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(response);
+
+    const repo = response?.repository as Record<string, unknown> | undefined;
+    for (const num of chunk) {
+      const alias = `p${num}`;
+      const node = repo?.[alias] as Record<string, unknown> | null;
+      results.push(node ? parsePRNode(node) : null);
+    }
+  }
+
+  return results;
+}
+
 export async function getPRsByNumbers(
   cwd: string,
   numbers: number[]
@@ -598,30 +710,9 @@ export async function getPRsByNumbers(
   if (valid.length === 0) return [];
 
   try {
-    return await withRepoContextRetry(cwd, async (context) => {
-      const results: Array<GitHubPR | null> = [];
-
-      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
-        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
-        const query = buildBatchPRsQuery(context.owner, context.repo, chunk);
-        if (!query) continue;
-
-        const response = (await client(query, {
-          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-        })) as GraphQlQueryResponseData;
-
-        gitHubRateLimitService.updateFromGraphQL(response);
-
-        const repo = response?.repository as Record<string, unknown> | undefined;
-        for (const num of chunk) {
-          const alias = `p${num}`;
-          const node = repo?.[alias] as Record<string, unknown> | null;
-          results.push(node ? parsePRNode(node) : null);
-        }
-      }
-
-      return results;
-    });
+    return await withRepoContextRetry(cwd, (context) =>
+      getPRsByNumbersForContext(context, numbers)
+    );
   } catch (error) {
     const message = (error as Error).message || "";
     if (message === "Not a GitHub repository") {

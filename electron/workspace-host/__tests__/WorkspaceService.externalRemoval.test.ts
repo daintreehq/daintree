@@ -65,6 +65,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
   getGitCommonDir: mockGetGitCommonDir,
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
 vi.mock("../../services/worktree/mood.js", () => ({
@@ -95,12 +96,6 @@ vi.mock("../../services/worktree/index.js", () => ({
   NoteFileReader: vi.fn(function () {
     return { read: vi.fn().mockResolvedValue({}) };
   }),
-}));
-
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
 }));
 
 vi.mock("../../services/PullRequestService.js", () => ({
@@ -217,20 +212,40 @@ describe("WorkspaceService external worktree removal", () => {
     return monitor;
   }
 
-  describe("discoverAndSyncWorktrees() prune-before-list (#6669)", () => {
-    it("prunes before listing so externally-deleted worktrees clear from the sidebar", async () => {
+  describe("discoverAndSyncWorktrees() conditional prune (#6669)", () => {
+    it("prunes and re-lists when the list carries a prunable entry, clearing externally-deleted worktrees", async () => {
       createAndRegisterMonitor();
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
 
       const callOrder: string[] = [];
+      let pruned = false;
       mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
         callOrder.push(args.join(" "));
+        if (args[0] === "worktree" && args[1] === "prune") {
+          pruned = true;
+          return undefined;
+        }
         if (args[0] === "worktree" && args[1] === "list") {
-          // Post-prune list: phantom worktree is gone, only main remains.
+          if (pruned) {
+            // Post-prune list: phantom worktree is gone, only main remains.
+            return [
+              "worktree /test/root",
+              "HEAD aaaaaaaaaaaaaaaaaaaa",
+              "branch refs/heads/main",
+              "",
+            ].join("\n");
+          }
+          // Pre-prune list: Git 2.31+ keeps the externally-deleted worktree
+          // in the porcelain output with a `prunable` marker.
           return [
             "worktree /test/root",
             "HEAD aaaaaaaaaaaaaaaaaaaa",
             "branch refs/heads/main",
+            "",
+            `worktree ${TEST_WORKTREE_PATH}`,
+            "HEAD bbbbbbbbbbbbbbbbbbbb",
+            "branch refs/heads/feature",
+            "prunable gitdir file points to non-existent location",
             "",
           ].join("\n");
         }
@@ -243,11 +258,16 @@ describe("WorkspaceService external worktree removal", () => {
 
       await service["discoverAndSyncWorktrees"]();
 
+      // List-first, prune only on a prunable marker, then re-list so the
+      // sync sees the cleaned topology.
+      const firstListIdx = callOrder.findIndex((c) => c.startsWith("worktree list"));
       const pruneIdx = callOrder.findIndex((c) => c.startsWith("worktree prune"));
-      const listIdx = callOrder.findIndex((c) => c.startsWith("worktree list"));
-      expect(pruneIdx).toBeGreaterThanOrEqual(0);
-      expect(listIdx).toBeGreaterThanOrEqual(0);
-      expect(pruneIdx).toBeLessThan(listIdx);
+      const secondListIdx = callOrder.findIndex(
+        (c, i) => i > pruneIdx && c.startsWith("worktree list")
+      );
+      expect(firstListIdx).toBeGreaterThanOrEqual(0);
+      expect(pruneIdx).toBeGreaterThan(firstListIdx);
+      expect(secondListIdx).toBeGreaterThan(pruneIdx);
 
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
       expect(mockSendEvent).toHaveBeenCalledWith(
@@ -256,6 +276,28 @@ describe("WorkspaceService external worktree removal", () => {
           worktreeId: TEST_WORKTREE_PATH,
         })
       );
+    });
+
+    it("skips the prune spawn entirely on a quiet cycle with nothing prunable", async () => {
+      const callOrder: string[] = [];
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        callOrder.push(args.join(" "));
+        if (args[0] === "worktree" && args[1] === "list") {
+          return [
+            "worktree /test/root",
+            "HEAD aaaaaaaaaaaaaaaaaaaa",
+            "branch refs/heads/main",
+            "",
+          ].join("\n");
+        }
+        return undefined;
+      });
+
+      service["listService"].invalidateCache();
+      await service["discoverAndSyncWorktrees"]();
+
+      expect(callOrder.some((c) => c.startsWith("worktree list"))).toBe(true);
+      expect(callOrder.some((c) => c.startsWith("worktree prune"))).toBe(false);
     });
   });
 

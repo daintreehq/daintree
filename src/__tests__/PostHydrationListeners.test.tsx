@@ -26,11 +26,11 @@ vi.mock("@/hooks/useIdleTerminalNotifications", () => ({
 vi.mock("@/hooks/useDiskSpaceWarnings", () => ({
   useDiskSpaceWarnings: () => diskSpace(),
 }));
-vi.mock("@/hooks/useGitHubTokenHealth", () => ({
-  useGitHubTokenHealth: () => tokenHealth(),
+vi.mock("@/hooks/useForgeTokenHealth", () => ({
+  useForgeTokenHealth: () => tokenHealth(),
 }));
-vi.mock("@/hooks/useGitHubRateLimit", () => ({
-  useGitHubRateLimit: () => rateLimit(),
+vi.mock("@/hooks/useForgeRateLimit", () => ({
+  useForgeRateLimit: () => rateLimit(),
 }));
 vi.mock("@/hooks/useSoundPlaybackListener", () => ({
   useSoundPlaybackListener: () => soundPlayback(),

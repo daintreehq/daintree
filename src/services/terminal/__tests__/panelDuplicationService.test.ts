@@ -12,15 +12,19 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@shared/types", () => ({
-  generateAgentCommand: vi.fn(
-    (_cmd: string, _entry: unknown, agentId: string) => `generated-${agentId}-command`
-  ),
-  buildAgentLaunchFlags: vi.fn((_entry: unknown, _agentId: string, options?: unknown) => {
-    const presetArgs = (options as { presetArgs?: string[] } | undefined)?.presetArgs ?? [];
-    return [...presetArgs];
-  }),
-}));
+vi.mock("@shared/types", async () => {
+  const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+  return {
+    ...actual,
+    generateAgentCommand: vi.fn(
+      (_cmd: string, _entry: unknown, agentId: string) => `generated-${agentId}-command`
+    ),
+    buildAgentLaunchFlags: vi.fn((_entry: unknown, _agentId: string, options?: unknown) => {
+      const presetArgs = (options as { presetArgs?: string[] } | undefined)?.presetArgs ?? [];
+      return [...presetArgs];
+    }),
+  };
+});
 
 const getMergedPresetMock = vi.hoisted(() => vi.fn());
 

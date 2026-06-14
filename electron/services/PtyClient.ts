@@ -196,11 +196,17 @@ export class PtyClient extends EventEmitter {
     { projectId: string | null; projectPath?: string; mode: "active" | "switch" }
   >();
   private shouldResyncProjectContext = false;
+  private deferInitialPoolWarm = false;
   private hostStartRequested = false;
   private pendingMessagePorts = new Map<number, MessagePortMain>();
   private terminalPids: Map<string, number> = new Map();
   private resourceMonitoringEnabled = false;
   private sessionPersistSuppressed = false;
+  // Cached for replay in respawnPending(): both sends are fire-and-forget, so
+  // a restarted host would otherwise boot on balanced governor thresholds and
+  // the ProcessTreeCache constructor default until the next profile change.
+  private lastResourceProfile: ResourceProfile | null = null;
+  private lastProcessTreePollIntervalMs: number | null = null;
 
   /**
    * Cap on pendingSpawns to prevent restart-storm amplification. If the host
@@ -263,6 +269,7 @@ export class PtyClient extends EventEmitter {
       {
         memoryLimitMb: this.config.memoryLimitMb,
         electronDir,
+        deferInitialPoolWarm: () => this.deferInitialPoolWarm,
       },
       {
         onMessage: (event) => this.handleHostEvent(event),
@@ -347,6 +354,18 @@ export class PtyClient extends EventEmitter {
   /** Whether {@link PtyClient.start} has forked (or requested) the host yet. */
   isHostStarted(): boolean {
     return this.hostStartRequested;
+  }
+
+  /**
+   * Mark the host fork as a project-restoring boot: the host skips its
+   * boot-time homedir pool warm because the set-active-project sent right
+   * after ready drains the pool to the project path anyway (#10393). The
+   * host falls back to a homedir warm if the restore falls through, and the
+   * flag is re-read on every restart fork — context replay re-warms the pool
+   * either way. Call before {@link start}.
+   */
+  setDeferInitialPoolWarm(defer: boolean): void {
+    this.deferInitialPoolWarm = defer;
   }
 
   /** Wait for the host to be ready */
@@ -448,6 +467,17 @@ export class PtyClient extends EventEmitter {
     // Replay session persistence suppression if disk space was critical
     if (this.sessionPersistSuppressed) {
       this.send({ type: "set-session-persist-suppressed", suppressed: true });
+    }
+
+    // Replay the resource profile so the new host's governor and process-tree
+    // cadence match what main believes is applied — ResourceProfileService only
+    // re-sends on transitions. The explicit poll interval (focus throttle)
+    // replays after the profile since it was the later writer when both are set.
+    if (this.lastResourceProfile !== null) {
+      this.send({ type: "set-resource-profile", profile: this.lastResourceProfile });
+    }
+    if (this.lastProcessTreePollIntervalMs !== null) {
+      this.send({ type: "set-process-tree-poll-interval", ms: this.lastProcessTreePollIntervalMs });
     }
   }
 
@@ -743,6 +773,16 @@ export class PtyClient extends EventEmitter {
     return this.pendingSpawns.has(id);
   }
 
+  /**
+   * Owning project of a terminal, from the locally tracked spawn options
+   * (spawn() resolves a missing projectId from the active project context).
+   * Null for unknown terminals — callers fall back to unscoped delivery.
+   */
+  getTerminalProjectId(id: string): string | null {
+    const projectId = this.pendingSpawns.get(id)?.projectId;
+    return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
+  }
+
   trash(id: string): void {
     void getTrashedPidTracker()
       .persistTrashed(id, this.terminalPids.get(id))
@@ -770,10 +810,15 @@ export class PtyClient extends EventEmitter {
   }
 
   setResourceProfile(profile: ResourceProfile): void {
+    this.lastResourceProfile = profile;
+    // The profile resets the host's process-tree cadence to its baseline; a
+    // stale explicit interval must not be replayed over it after a restart.
+    this.lastProcessTreePollIntervalMs = null;
     this.send({ type: "set-resource-profile", profile });
   }
 
   setProcessTreePollInterval(ms: number): void {
+    this.lastProcessTreePollIntervalMs = ms;
     this.send({ type: "set-process-tree-poll-interval", ms });
   }
 

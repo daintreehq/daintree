@@ -9,11 +9,13 @@ import type {
   PluginInstallError,
 } from "@shared/types/plugin";
 
-/** Enabled plugins first, then alphabetically by display name. */
+/**
+ * Alphabetical by display name, regardless of enabled state. Disabled plugins
+ * are conveyed in place (dimmed row + badge) rather than re-sorted, so a toggle
+ * never teleports the row out from under the pointer.
+ */
 function sortPlugins(list: readonly LoadedPluginInfo[]): LoadedPluginInfo[] {
   return [...list].sort((a, b) => {
-    const byEnabled = Number(a.disabled ?? false) - Number(b.disabled ?? false);
-    if (byEnabled !== 0) return byEnabled;
     const aName = a.manifest.displayName ?? a.manifest.name;
     const bName = b.manifest.displayName ?? b.manifest.name;
     return aName.localeCompare(bName);

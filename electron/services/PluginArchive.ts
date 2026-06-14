@@ -2,13 +2,12 @@ import { createHash } from "crypto";
 import fs from "fs/promises";
 import { createWriteStream } from "fs";
 import path from "path";
-import { ZipArchive } from "archiver";
 import yauzl from "yauzl";
 import { getPluginManifestSchema } from "../schemas/plugin.js";
+import { MAX_DNTR_BYTES } from "../utils/pluginArchiveConstants.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
-export const MAX_DNTR_BYTES = 30 * 1024 * 1024;
 // Cap on total zip entries. A plugin is a handful of compiled files plus
 // assets; thousands of entries means an archive padded with tiny/empty members
 // to force unbounded filesystem ops during extraction (zip-bomb-by-count).
@@ -144,6 +143,7 @@ export async function packPluginArchiveFromFiles(
   outputPath: string,
   files: readonly string[]
 ): Promise<string> {
+  const { ZipArchive } = await import("archiver");
   const sorted = sortEntries([...files]);
 
   if (!sorted.includes("plugin.json")) {

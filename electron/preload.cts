@@ -59,6 +59,7 @@ import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.prel
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
+import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
@@ -72,7 +73,6 @@ import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayou
 import { buildTerminalConfigPreloadBindings } from "./ipc/handlers/terminalConfig.preload.js";
 
 import type {
-  WorktreeState,
   Project,
   ProjectSettings,
   TerminalSpawnOptions,
@@ -97,9 +97,6 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
-  GitHubTokenHealthPayload,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
   ServiceConnectivityPayload,
   GitStatus,
   KeyAction,
@@ -153,6 +150,15 @@ import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
 
 export type { ElectronAPI };
+
+// The preload uses only these four of PERF_MARKS' ~90 entries; local consts
+// avoid repeated property lookups in the flush path at preload bottom.
+const {
+  PRELOAD_EVAL_START,
+  PRELOAD_EVAL_END,
+  PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
+  PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
+} = PERF_MARKS;
 
 // Anchor for the per-view preload evaluation span (#9770). This is the first
 // executable statement in the bundled preload entry (esbuild hoists the import
@@ -211,6 +217,22 @@ const rawInstanceRole =
   process.argv.find((a) => a.startsWith(INSTANCE_ROLE_ARG))?.slice(INSTANCE_ROLE_ARG.length) ??
   process.env.DAINTREE_INSTANCE_ROLE;
 const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "worker" : "attended";
+
+const E2E_MODE_ARG = "--daintree-e2e-mode";
+const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
+const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+// E2E flags are threaded into renderer argv via webPreferences.additionalArguments
+// only after the main process validates the matching DAINTREE_E2E_* env values.
+// Rely on those argv switches here: sandboxed renderer preload contexts do not
+// consistently inherit the launch env on every platform/Electron build.
+const isE2EMode = !isPackagedBuild && process.argv.includes(E2E_MODE_ARG);
+const isE2ESkipFirstRunDialogs =
+  !isPackagedBuild && process.argv.includes(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+const isE2EFaultMode = !isPackagedBuild && process.argv.includes(E2E_FAULT_MODE_ARG);
+
+function e2eGlobalKey(name: string): string {
+  return ["__", "DAINTREE", "_", "E2E", "_", name, "__"].join("");
+}
 
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
@@ -786,1291 +808,1222 @@ function _eventBusOn<K extends keyof IpcEventBusMap>(
   };
 }
 
-const api: ElectronAPI = {
-  // Worktree API
-  worktree: {
-    getAll: () => _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL),
+// Multiplexer for the shared terminal:data channel, mirroring _eventBusOn:
+// one ipcRenderer listener dispatching by terminal id, instead of one
+// filtering listener per terminal (O(N) handler invocations per chunk and a
+// MaxListenersExceededWarning at 10+ terminals).
+type TerminalDataSubscriber = (data: string | Uint8Array) => void;
+const _terminalDataSubscribers = new Map<string, Set<TerminalDataSubscriber>>();
+let _terminalDataWired = false;
 
-    refresh: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.WORKTREE_REFRESH, worktreeId),
+function _ensureTerminalDataWired(): void {
+  if (_terminalDataWired) return;
+  _terminalDataWired = true;
+  ipcRenderer.on(CHANNELS.TERMINAL_DATA, (_event, terminalId: unknown, data: unknown) => {
+    if (typeof terminalId !== "string") return;
+    const subs = _terminalDataSubscribers.get(terminalId);
+    if (!subs || subs.size === 0) return;
+    // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
+    if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
+      // Iterate the live Set directly — unlike the events:push dispatcher
+      // above, terminal data subscribers don't unsubscribe during dispatch,
+      // and this path runs per chunk, so the snapshot allocation matters.
+      for (const cb of subs) {
+        cb(data);
+      }
+    }
+  });
+}
 
-    refreshPullRequests: () => _unwrappingInvoke(CHANNELS.WORKTREE_PR_REFRESH),
+function _terminalDataOn(id: string, callback: TerminalDataSubscriber): () => void {
+  _ensureTerminalDataWired();
+  let subs = _terminalDataSubscribers.get(id);
+  if (!subs) {
+    subs = new Set();
+    _terminalDataSubscribers.set(id, subs);
+  }
+  // Fresh wrapper per subscription so the same callback can subscribe twice
+  // and each cleanup removes only its own subscription.
+  const wrapped: TerminalDataSubscriber = (data) => callback(data);
+  subs.add(wrapped);
+  return () => {
+    const current = _terminalDataSubscribers.get(id);
+    if (!current) return;
+    current.delete(wrapped);
+    if (current.size === 0) _terminalDataSubscribers.delete(id);
+  };
+}
 
-    getPRStatus: () => _unwrappingInvoke(CHANNELS.WORKTREE_PR_STATUS),
+// Recovery API (used by recovery.html). Hoisted out of buildElectronApi so the
+// recovery page exposes these four methods without constructing the full
+// ~490-closure surface.
+const recoveryApi: ElectronAPI["recovery"] = {
+  reloadApp: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RELOAD_APP),
+  resetAndReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RESET_AND_RELOAD),
+  exportDiagnostics: (): Promise<boolean> =>
+    _unwrappingInvoke(CHANNELS.RECOVERY_EXPORT_DIAGNOSTICS),
+  openLogs: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_OPEN_LOGS),
+};
 
-    setActive: (worktreeId: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
+function buildElectronApi(): ElectronAPI {
+  return {
+    // Worktree API
+    worktree: {
+      getAll: () => _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL),
 
-    create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
+      refresh: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.WORKTREE_REFRESH, worktreeId),
 
-    listBranches: (rootPath: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
+      refreshPullRequests: () => _unwrappingInvoke(CHANNELS.WORKTREE_PR_REFRESH),
 
-    fetchPRBranch: (rootPath: string, prNumber: number, headRefName: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_FETCH_PR_BRANCH, { rootPath, prNumber, headRefName }),
+      getPRStatus: () => _unwrappingInvoke(CHANNELS.WORKTREE_PR_STATUS),
 
-    getRecentBranches: (rootPath: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, { rootPath }),
+      setActive: (worktreeId: string) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 
-    getDefaultPath: (rootPath: string, branchName: string): Promise<string> =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_GET_DEFAULT_PATH, { rootPath, branchName }),
+      create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
 
-    getAvailableBranch: (rootPath: string, branchName: string): Promise<string> =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, { rootPath, branchName }),
+      listBranches: (rootPath: string) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
 
-    delete: (worktreeId: string, force?: boolean, deleteBranch?: boolean) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_DELETE, { worktreeId, force, deleteBranch }),
+      fetchPRBranch: (rootPath: string, prNumber: number, headRefName: string) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_FETCH_PR_BRANCH, { rootPath, prNumber, headRefName }),
 
-    attachIssue: (payload: AttachIssuePayload) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_ATTACH_ISSUE, payload),
+      getRecentBranches: (rootPath: string) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, { rootPath }),
 
-    detachIssue: (worktreeId: string) =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_DETACH_ISSUE, { worktreeId }),
+      getDefaultPath: (rootPath: string, branchName: string): Promise<string> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_GET_DEFAULT_PATH, { rootPath, branchName }),
 
-    getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> =>
-      _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS),
+      getAvailableBranch: (rootPath: string, branchName: string): Promise<string> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, { rootPath, branchName }),
 
-    restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RESTART_SERVICE),
+      delete: (worktreeId: string, force?: boolean, deleteBranch?: boolean) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_DELETE, { worktreeId, force, deleteBranch }),
 
-    retryProjectLoad: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD),
+      attachIssue: (payload: AttachIssuePayload) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_ATTACH_ISSUE, payload),
 
-    retryAuthFetch: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_AUTH_FETCH),
+      detachIssue: (worktreeId: string) =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_DETACH_ISSUE, { worktreeId }),
 
-    onUpdate: (callback: (state: WorktreeState) => void) =>
-      _eventBusOn("worktree:update", (payload) => callback(payload.worktree)),
+      getAllIssueAssociations: (): Promise<Record<string, IssueAssociation>> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS),
 
-    onRemove: (callback: (data: { worktreeId: string }) => void) =>
-      _typedOn(CHANNELS.WORKTREE_REMOVE, callback),
+      restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RESTART_SERVICE),
 
-    onActivated: (callback: (data: { worktreeId: string }) => void) =>
-      _typedOn(CHANNELS.WORKTREE_ACTIVATED, callback),
-  },
+      retryProjectLoad: (): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD),
 
-  // Worktree Port API (Phase 1 — dedicated MessagePort with request/response)
-  worktreePort: {
-    request: <K extends WorktreePortAction>(
-      action: K,
-      ...args: WorktreePortRequestArgs<K>
-    ): Promise<WorktreePortResult<K>> =>
-      worktreePortClient.request<K>(action, args[0] as WorktreePortPayload<K> | undefined),
+      retryAuthFetch: (): Promise<void> => _unwrappingInvoke(CHANNELS.WORKTREE_RETRY_AUTH_FETCH),
 
-    onEvent: (type: string, callback: (data: unknown) => void): (() => void) =>
-      worktreePortClient.onEvent(type, callback),
+      onRemove: (callback: (data: { worktreeId: string }) => void) =>
+        _typedOn(CHANNELS.WORKTREE_REMOVE, callback),
 
-    isReady: (): boolean => worktreePortClient.isReady(),
-
-    onReady: (callback: () => void): (() => void) => worktreePortClient.onReady(callback),
-
-    onDisconnected: (callback: () => void): (() => void) =>
-      worktreePortClient.onDisconnected(callback),
-
-    onFatalDisconnect: (callback: () => void): (() => void) =>
-      worktreePortClient.onFatalDisconnect(callback),
-  },
-
-  // Terminal API
-  terminal: {
-    spawn: (options: TerminalSpawnOptions) => _unwrappingInvoke(CHANNELS.TERMINAL_SPAWN, options),
-
-    write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
-
-    submit: (id: string, text: string) => _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text),
-
-    resize: (id: string, cols: number, rows: number) =>
-      ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
-
-    kill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
-    gracefulKill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
-
-    // Tuple payload [id, data] requires per-terminal filtering
-    // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)
-    onData: (id: string, callback: (data: string | Uint8Array) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, terminalId: unknown, data: unknown) => {
-        if (typeof terminalId !== "string" || terminalId !== id) {
-          return;
-        }
-        // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-        if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
-          callback(data);
-        }
-      };
-      ipcRenderer.on(CHANNELS.TERMINAL_DATA, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_DATA, handler);
+      onActivated: (callback: (data: { worktreeId: string }) => void) =>
+        _typedOn(CHANNELS.WORKTREE_ACTIVATED, callback),
     },
 
-    onExit: (callback: (id: string, exitCode: number) => void) =>
-      _eventBusOn("terminal:exit", (payload) => {
-        if (!Array.isArray(payload)) return;
-        const [id, exitCode] = payload;
-        if (typeof id === "string" && typeof exitCode === "number") {
-          callback(id, exitCode);
-        }
-      }),
+    // Worktree Port API (Phase 1 — dedicated MessagePort with request/response)
+    worktreePort: {
+      request: <K extends WorktreePortAction>(
+        action: K,
+        ...args: WorktreePortRequestArgs<K>
+      ): Promise<WorktreePortResult<K>> =>
+        worktreePortClient.request<K>(action, args[0] as WorktreePortPayload<K> | undefined),
 
-    onAgentStateChanged: (callback: (data: AgentStateChangePayload) => void) =>
-      _eventBusOn("agent:state-changed", callback),
+      onEvent: (type: string, callback: (data: unknown) => void): (() => void) =>
+        worktreePortClient.onEvent(type, callback),
 
-    onAgentDetected: (callback: (data: AgentDetectedPayload) => void) =>
-      _eventBusOn("agent:detected", callback),
+      isReady: (): boolean => worktreePortClient.isReady(),
 
-    onAgentExited: (callback: (data: AgentExitedPayload) => void) =>
-      _eventBusOn("agent:exited", callback),
+      onReady: (callback: () => void): (() => void) => worktreePortClient.onReady(callback),
 
-    onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void) =>
-      _eventBusOn("agent:fallback-triggered", callback),
+      onDisconnected: (callback: () => void): (() => void) =>
+        worktreePortClient.onDisconnected(callback),
 
-    onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
-      _eventBusOn("agent:all-clear", callback),
-
-    onActivity: (callback: (data: TerminalActivityPayload) => void) =>
-      _typedOn(CHANNELS.TERMINAL_ACTIVITY, callback),
-
-    trash: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_TRASH, id),
-
-    restore: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RESTORE, id),
-
-    onTrashed: (callback: (data: { id: string; expiresAt: number }) => void) =>
-      _typedOn(CHANNELS.TERMINAL_TRASHED, callback),
-
-    onRestored: (callback: (data: { id: string }) => void) =>
-      _typedOn(CHANNELS.TERMINAL_RESTORED, callback),
-
-    setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
-      ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
-
-    wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_WAKE, id),
-
-    acknowledgeData: (id: string, length: number) =>
-      ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
-
-    getForProject: (projectId: string) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_GET_FOR_PROJECT, projectId),
-
-    getAvailableTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_AVAILABLE),
-
-    getTerminalsByState: (state: string) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_GET_BY_STATE, state),
-
-    getAllTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_ALL),
-
-    searchSemanticBuffers: (query: string, isRegex: boolean) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex),
-
-    reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
-
-    replayHistory: (terminalId: string, maxLines?: number) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
-
-    getSerializedState: (terminalId: string) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
-
-    getSerializedStates: (terminalIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, terminalIds),
-
-    getInfo: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GET_INFO, id),
-
-    getSharedBuffers: (): Promise<{
-      visualBuffers: SharedArrayBuffer[];
-      signalBuffer: SharedArrayBuffer | null;
-    }> => _unwrappingInvoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
-
-    getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
-
-    forceResume: (id: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
-
-    onStatus: (callback: (data: TerminalStatusPayload) => void) =>
-      _typedOn(CHANNELS.TERMINAL_STATUS, callback),
-
-    onReliabilityMetric: (
-      callback: (data: TerminalReliabilityMetricPayload) => void
-    ): (() => void) => _eventBusOn("terminal:reliability-metric", callback),
-
-    onResourceMetrics: (
-      callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
-    ) => _typedOn(CHANNELS.TERMINAL_RESOURCE_METRICS, callback),
-
-    onFdLeakWarning: (callback: (data: FdLeakWarningPayload) => void) =>
-      _typedOn(CHANNELS.TERMINAL_FD_LEAK_WARNING, callback),
-
-    onBackendCrashed: (
-      callback: (data: {
-        crashType: string;
-        code: number | null;
-        signal: string | null;
-        timestamp: number;
-      }) => void
-    ): (() => void) => _eventBusOn("terminal:backend-crashed", callback),
-
-    onBackendRecovering: (
-      callback: (data: {
-        crashType: string;
-        code: number | null;
-        signal: string | null;
-        timestamp: number;
-      }) => void
-    ): (() => void) => _eventBusOn("terminal:backend-recovering", callback),
-
-    onBackendReady: (callback: () => void): (() => void) =>
-      _eventBusOn("terminal:backend-ready", () => callback()),
-
-    sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
-
-    batchDoubleEscape: (ids: string[]) =>
-      ipcRenderer.send(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ids),
-
-    broadcastWrite: (ids: string[], data: string) =>
-      ipcRenderer.send(CHANNELS.TERMINAL_BROADCAST_WRITE, ids, data),
-
-    onBroadcastWriteResult: (callback: (data: BroadcastWriteResultPayload) => void) =>
-      _typedOn(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, callback),
-
-    reportTitleState: (id: string, state: "working" | "waiting") =>
-      ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),
-
-    updateObservedTitle: (id: string, title: string) =>
-      ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id, title }),
-
-    onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
-      _eventBusOn("terminal:spawn-result", (payload) => {
-        if (!Array.isArray(payload)) return;
-        const [id, result] = payload;
-        if (typeof id === "string" && typeof result === "object" && result !== null) {
-          callback(id, result as SpawnResultPayload);
-        }
-      }),
-
-    onReduceScrollback: (
-      callback: (data: { terminalIds: string[]; targetLines: number }) => void
-    ) => _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
-
-    onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
-      _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
-
-    restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.TERMINAL_RESTART_SERVICE),
-
-    onReclaimMemory: (callback: () => void) =>
-      _eventBusOn("window:reclaim-memory", () => callback()),
-
-    onAccelerateHibernation: (callback: (data: { level: 1 | 2 }) => void) =>
-      _eventBusOn("window:accelerate-hibernation", callback),
-  },
-
-  // Files API
-  files: {
-    search: (payload) => _unwrappingInvoke(CHANNELS.FILES_SEARCH, payload),
-    read: (payload) => _unwrappingInvoke(CHANNELS.FILES_READ, payload),
-  },
-
-  // Watchdog API — surfaces the main-process deadlock detector's disabled
-  // state to the renderer and exposes a manual restart path.
-  watchdog: {
-    restart: (): Promise<void> => _unwrappingInvoke(CHANNELS.WATCHDOG_RESTART),
-
-    onDisabled: (
-      callback: (data: {
-        attemptCount: number;
-        lastExitCode: number | null;
-        timestamp: number;
-      }) => void
-    ): (() => void) => _eventBusOn("watchdog:disabled", callback),
-
-    onActive: (callback: () => void): (() => void) =>
-      _eventBusOn("watchdog:active", () => callback()),
-  },
-
-  // Slash Commands API
-  slashCommands: buildSlashCommandsPreloadBindings(_unwrappingInvoke),
-
-  // Artifact API
-  artifact: {
-    onDetected: (callback: (data: ArtifactDetectedPayload) => void) =>
-      _typedOn(CHANNELS.ARTIFACT_DETECTED, callback),
-
-    saveToFile: (options: SaveArtifactOptions) =>
-      _unwrappingInvoke(CHANNELS.ARTIFACT_SAVE_TO_FILE, options),
-
-    applyPatch: (options: ApplyPatchOptions) =>
-      _unwrappingInvoke(CHANNELS.ARTIFACT_APPLY_PATCH, options),
-  },
-
-  // CopyTree API
-  copyTree: {
-    generate: (worktreeId: string, options?: CopyTreeOptions) =>
-      _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options }),
-
-    generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions) =>
-      _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId, options }),
-
-    injectToTerminal: (
-      terminalId: string,
-      worktreeId: string,
-      options?: CopyTreeOptions,
-      injectionId?: string
-    ) =>
-      _unwrappingInvoke(CHANNELS.COPYTREE_INJECT, { terminalId, worktreeId, options, injectionId }),
-
-    isAvailable: () => _unwrappingInvoke(CHANNELS.COPYTREE_AVAILABLE),
-
-    cancel: (injectionId?: string) => _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
-
-    getFileTree: (worktreeId: string, dirPath?: string) =>
-      _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
-
-    testConfig: (worktreeId: string, options?: CopyTreeTestConfigOptions) =>
-      _unwrappingInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),
-
-    onProgress: (callback: (progress: CopyTreeProgress) => void) =>
-      _typedOn(CHANNELS.COPYTREE_PROGRESS, callback),
-  },
-
-  // Editor API
-  editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
-
-  // System API
-  system: {
-    openExternal: (url: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_EXTERNAL, { url }),
-
-    openPath: (path: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
-
-    openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
-
-    checkCommand: (command: string) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_COMMAND, command),
-
-    checkDirectory: (path: string) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_DIRECTORY, path),
-
-    getHomeDir: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HOME_DIR),
-
-    getTmpDir: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_TMP_DIR),
-
-    getCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY),
-
-    refreshCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY),
-
-    getAgentCliDetails: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS),
-
-    getAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSIONS),
-
-    getAgentVersion: (agentId: string, refresh?: boolean) =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSION, agentId, refresh),
-
-    refreshAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS),
-
-    getAgentUpdateSettings: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS),
-
-    setAgentUpdateSettings: (settings: {
-      autoCheck: boolean;
-      checkFrequencyHours: number;
-      lastAutoCheck: number | null;
-    }) => _unwrappingInvoke(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, settings),
-
-    startAgentUpdate: (payload: { agentId: string; method?: string }) =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
-
-    healthCheck: (agentIds?: string[]) => _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
-
-    getHealthCheckSpecs: (agentIds?: string[]) =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, agentIds),
-
-    checkTool: (spec: {
-      tool: string;
-      label: string;
-      command?: string;
-      versionArgs: string[];
-      severity: string;
-      minVersion?: string;
-      installUrl?: string;
-      installBlocks?: Record<string, unknown>;
-    }) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_TOOL, spec),
-
-    downloadDiagnostics: () => _unwrappingInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
-
-    collectDiagnosticsForReview: () =>
-      _unwrappingInvoke(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW),
-
-    saveDiagnosticsBundle: (
-      payload: import("../shared/types/ipc/system.js").DiagnosticsBundleSavePayload
-    ) => _unwrappingInvoke(CHANNELS.SYSTEM_SAVE_DIAGNOSTICS_BUNDLE, payload),
-
-    getAppMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_APP_METRICS),
-
-    getHardwareInfo: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HARDWARE_INFO),
-
-    getProcessMetrics: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS),
-
-    getHeapStats: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS),
-
-    getDiagnosticsInfo: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_INFO),
-
-    getReportEnrichment: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT),
-
-    onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
-      return _eventBusOn("system:wake", callback);
+      onFatalDisconnect: (callback: () => void): (() => void) =>
+        worktreePortClient.onFatalDisconnect(callback),
     },
 
-    installAgent: (payload: { agentId: string; methodIndex?: number; jobId: string }) =>
-      _unwrappingInvoke(CHANNELS.SETUP_AGENT_INSTALL, payload),
+    // Terminal API
+    terminal: {
+      spawn: (options: TerminalSpawnOptions) => _unwrappingInvoke(CHANNELS.TERMINAL_SPAWN, options),
 
-    onAgentInstallProgress: (
-      callback: (event: { jobId: string; chunk: string; stream: "stdout" | "stderr" }) => void
-    ) => _typedOn(CHANNELS.SETUP_AGENT_INSTALL_PROGRESS, callback),
+      write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
 
-    onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) =>
-      _eventBusOn("resource:profile-changed", callback),
-  },
+      submit: (id: string, text: string) => _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text),
 
-  // App State API
-  app: {
-    getState: () => _unwrappingInvoke(CHANNELS.APP_GET_STATE),
+      resize: (id: string, cols: number, rows: number) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
 
-    setState: (partialState: Partial<AppState>) =>
-      _unwrappingInvoke(CHANNELS.APP_SET_STATE, partialState),
+      kill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
+      gracefulKill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
 
-    getVersion: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION),
+      // Tuple payload [id, data] dispatched via the shared multiplexer above
+      // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)
+      onData: (id: string, callback: (data: string | Uint8Array) => void) =>
+        _terminalDataOn(id, callback),
 
-    ...buildAppVersionInfoPreloadBindings(_unwrappingInvoke),
+      onExit: (callback: (id: string, exitCode: number) => void) =>
+        _eventBusOn("terminal:exit", (payload) => {
+          if (!Array.isArray(payload)) return;
+          const [id, exitCode] = payload;
+          if (typeof id === "string" && typeof exitCode === "number") {
+            callback(id, exitCode);
+          }
+        }),
 
-    hydrate: () => _unwrappingInvoke(CHANNELS.APP_HYDRATE),
+      onAgentStateChanged: (callback: (data: AgentStateChangePayload) => void) =>
+        _eventBusOn("agent:state-changed", callback),
 
-    boot: () => _unwrappingInvoke(CHANNELS.APP_BOOT),
+      onAgentDetected: (callback: (data: AgentDetectedPayload) => void) =>
+        _eventBusOn("agent:detected", callback),
 
-    quit: () => _unwrappingInvoke(CHANNELS.APP_QUIT),
+      onAgentExited: (callback: (data: AgentExitedPayload) => void) =>
+        _eventBusOn("agent:exited", callback),
 
-    forceQuit: () => _unwrappingInvoke(CHANNELS.APP_FORCE_QUIT),
+      onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void) =>
+        _eventBusOn("agent:fallback-triggered", callback),
 
-    resetAndRelaunch: () => _unwrappingInvoke(CHANNELS.APP_RESET_AND_RELAUNCH),
+      onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
+        _eventBusOn("agent:all-clear", callback),
 
-    clearQuarantinedPanel: (panelId: string) =>
-      _unwrappingInvoke(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, panelId),
+      onActivity: (callback: (data: TerminalActivityPayload) => void) =>
+        _typedOn(CHANNELS.TERMINAL_ACTIVITY, callback),
 
-    notifyFirstInteractive: () => _unwrappingInvoke(CHANNELS.APP_FIRST_INTERACTIVE),
+      trash: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_TRASH, id),
 
-    notifyViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_PAINTED),
+      restore: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RESTORE, id),
 
-    notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
+      onTrashed: (callback: (data: { id: string; expiresAt: number }) => void) =>
+        _typedOn(CHANNELS.TERMINAL_TRASHED, callback),
 
-    onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
-      _typedOn(CHANNELS.MENU_ACTION, callback),
+      onRestored: (callback: (data: { id: string }) => void) =>
+        _typedOn(CHANNELS.TERMINAL_RESTORED, callback),
 
-    reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
+      setActivityTier: (id: string, tier: "active" | "background", pollingIntervalMs?: number) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_SET_ACTIVITY_TIER, { id, tier, pollingIntervalMs }),
 
-    onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
-  },
+      wake: (id: string): Promise<{ state: string | null; warnings?: string[] }> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_WAKE, id),
 
-  menu: buildMenuPreloadBindings(_unwrappingInvoke),
+      acknowledgeData: (id: string, length: number) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
 
-  // Logs API
-  logs: {
-    getAll: (filters?: LogFilterOptions) => _unwrappingInvoke(CHANNELS.LOGS_GET_ALL, filters),
+      getForProject: (projectId: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_FOR_PROJECT, projectId),
 
-    getSources: () => _unwrappingInvoke(CHANNELS.LOGS_GET_SOURCES),
+      getAvailableTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_AVAILABLE),
 
-    clear: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR),
+      getTerminalsByState: (state: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_BY_STATE, state),
 
-    openFile: () => _unwrappingInvoke(CHANNELS.LOGS_OPEN_FILE),
+      getAllTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_ALL),
 
-    setVerbose: (enabled: boolean) => _unwrappingInvoke(CHANNELS.LOGS_SET_VERBOSE, enabled),
+      searchSemanticBuffers: (query: string, isRegex: boolean) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS, query, isRegex),
 
-    getVerbose: () => _unwrappingInvoke(CHANNELS.LOGS_GET_VERBOSE),
+      reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 
-    onEntry: (callback: (entry: LogEntry) => void) => {
-      const offEntry = _typedOn(CHANNELS.LOGS_ENTRY, callback);
-      const offBatch = _typedOn(CHANNELS.LOGS_BATCH, (entries) => {
-        for (const entry of entries) callback(entry);
-      });
-      return () => {
-        offEntry();
-        offBatch();
-      };
+      reconnectBulk: (terminalIds: string[]) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT_BULK, terminalIds),
+
+      replayHistory: (terminalId: string, maxLines?: number) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
+
+      getSerializedState: (terminalId: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
+
+      getSerializedStates: (terminalIds: string[]) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATES, terminalIds),
+
+      getInfo: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GET_INFO, id),
+
+      getSharedBuffers: (): Promise<{
+        visualBuffers: SharedArrayBuffer[];
+        signalBuffer: SharedArrayBuffer | null;
+      }> => _unwrappingInvoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
+
+      getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
+
+      forceResume: (id: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
+
+      onStatus: (callback: (data: TerminalStatusPayload) => void) =>
+        _typedOn(CHANNELS.TERMINAL_STATUS, callback),
+
+      onReliabilityMetric: (
+        callback: (data: TerminalReliabilityMetricPayload) => void
+      ): (() => void) => _eventBusOn("terminal:reliability-metric", callback),
+
+      onResourceMetrics: (
+        callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
+      ) => _typedOn(CHANNELS.TERMINAL_RESOURCE_METRICS, callback),
+
+      onFdLeakWarning: (callback: (data: FdLeakWarningPayload) => void) =>
+        _typedOn(CHANNELS.TERMINAL_FD_LEAK_WARNING, callback),
+
+      onBackendCrashed: (
+        callback: (data: {
+          crashType: string;
+          code: number | null;
+          signal: string | null;
+          timestamp: number;
+        }) => void
+      ): (() => void) => _eventBusOn("terminal:backend-crashed", callback),
+
+      onBackendRecovering: (
+        callback: (data: {
+          crashType: string;
+          code: number | null;
+          signal: string | null;
+          timestamp: number;
+        }) => void
+      ): (() => void) => _eventBusOn("terminal:backend-recovering", callback),
+
+      onBackendReady: (callback: () => void): (() => void) =>
+        _eventBusOn("terminal:backend-ready", () => callback()),
+
+      sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
+
+      batchDoubleEscape: (ids: string[]) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ids),
+
+      broadcastWrite: (ids: string[], data: string) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_BROADCAST_WRITE, ids, data),
+
+      onBroadcastWriteResult: (callback: (data: BroadcastWriteResultPayload) => void) =>
+        _typedOn(CHANNELS.TERMINAL_BROADCAST_WRITE_RESULT, callback),
+
+      reportTitleState: (id: string, state: "working" | "waiting") =>
+        ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),
+
+      updateObservedTitle: (id: string, title: string) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id, title }),
+
+      onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
+        _eventBusOn("terminal:spawn-result", (payload) => {
+          if (!Array.isArray(payload)) return;
+          const [id, result] = payload;
+          if (typeof id === "string" && typeof result === "object" && result !== null) {
+            callback(id, result as SpawnResultPayload);
+          }
+        }),
+
+      onReduceScrollback: (
+        callback: (data: { terminalIds: string[]; targetLines: number }) => void
+      ) => _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
+
+      onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
+        _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
+
+      restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.TERMINAL_RESTART_SERVICE),
+
+      onReclaimMemory: (callback: () => void) =>
+        _eventBusOn("window:reclaim-memory", () => callback()),
+
+      onAccelerateHibernation: (callback: (data: { level: 1 | 2 }) => void) =>
+        _eventBusOn("window:accelerate-hibernation", callback),
     },
 
-    onBatch: (callback: (entries: LogEntry[]) => void) => _typedOn(CHANNELS.LOGS_BATCH, callback),
-
-    write: (
-      level: "debug" | "info" | "warn" | "error",
-      message: string,
-      context?: Record<string, unknown>
-    ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE, { level, message, context }),
-
-    getLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES),
-
-    setLevelOverrides: (overrides: Record<string, string>) =>
-      _unwrappingInvoke(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, overrides),
-
-    clearLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES),
-
-    getRegistry: () => _unwrappingInvoke(CHANNELS.LOGS_GET_REGISTRY),
-  },
-
-  // Error API
-  errors: {
-    onError: (callback: (error: ErrorRecord) => void) => _typedOn(CHANNELS.ERROR_NOTIFY, callback),
-
-    retry: (errorId: string, action: RetryAction, args?: Record<string, unknown>) =>
-      _unwrappingInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
-
-    cancelRetry: (errorId: string) => ipcRenderer.send(CHANNELS.ERROR_RETRY_CANCEL, errorId),
-
-    onRetryProgress: (callback: (payload: RetryProgressPayload) => void) =>
-      _typedOn(CHANNELS.ERROR_RETRY_PROGRESS, callback),
-
-    openLogs: () => _unwrappingInvoke(CHANNELS.ERROR_OPEN_LOGS),
-
-    getPending: () => _unwrappingInvoke(CHANNELS.ERROR_GET_PENDING),
-  },
-
-  // Event Inspector API
-  eventInspector: {
-    ...buildEventInspectorPreloadBindings(_unwrappingInvoke),
-
-    subscribe: () => ipcRenderer.send(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE),
-
-    unsubscribe: () => ipcRenderer.send(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE),
-
-    onEventBatch: (callback: (events: EventRecord[]) => void) =>
-      _typedOn(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, callback),
-  },
-
-  events: {
-    emit: (eventType: string, payload: unknown) =>
-      _unwrappingInvoke(CHANNELS.EVENTS_EMIT, eventType, payload),
-
-    on: <K extends keyof IpcEventBusMap>(
-      name: K,
-      callback: (payload: IpcEventBusMap[K]) => void
-    ): (() => void) => _eventBusOn(name, callback),
-  },
-
-  // Project API
-  project: {
-    getAll: () => _unwrappingInvoke(CHANNELS.PROJECT_GET_ALL),
-
-    getCurrent: () => _unwrappingInvoke(CHANNELS.PROJECT_GET_CURRENT),
-
-    add: (path: string) => _unwrappingInvoke(CHANNELS.PROJECT_ADD, path),
-
-    remove: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_REMOVE, projectId),
-
-    update: (projectId: string, updates: Partial<Project>) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_UPDATE, projectId, updates),
-
-    switch: (
-      projectId: string,
-      outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
-      options?: { focusIntent?: "focus-next-waiting" }
-    ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
-
-    prefetchHydrate: (projectId: string) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_PREFETCH_HYDRATE, projectId),
-
-    openDialog: () => _unwrappingInvoke(CHANNELS.PROJECT_OPEN_DIALOG),
-
-    onSwitch: (
-      callback: (payload: {
-        project: Project;
-        switchId: string;
-        worktreeLoadError?: string;
-        hydrateResult?: import("../shared/types/ipc/app.js").HydrateResult;
-      }) => void
-    ) => _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
-
-    onWorktreeLoadStatus: (
-      callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
-    ) => _typedOn(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, callback),
-
-    onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
-      _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
-
-    onUpdated: (callback: (project: Project) => void) =>
-      _typedOn(CHANNELS.PROJECT_UPDATED, callback),
-
-    onRemoved: (callback: (projectId: string) => void) =>
-      _typedOn(CHANNELS.PROJECT_REMOVED, callback),
-
-    getSettings: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_SETTINGS, projectId),
-
-    saveSettings: (projectId: string, settings: ProjectSettings) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SAVE_SETTINGS, { projectId, settings }),
-
-    detectRunners: (projectId: string) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_DETECT_RUNNERS, projectId),
-
-    listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.PROJECT_LIST_REMOTES, cwd),
-
-    close: (projectId: string, options?: { killTerminals?: boolean }) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
-
-    reopen: (
-      projectId: string,
-      outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState
-    ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState),
-
-    getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
-
-    getBulkStats: (projectIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_BULK_STATS, projectIds),
-
-    getNotificationOverrides: (projectIds: string[]) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_NOTIFICATION_OVERRIDES, projectIds),
-
-    onStatsUpdated: (
-      callback: (stats: import("../shared/types/ipc/project.js").ProjectStatusMap) => void
-    ) => _typedOn(CHANNELS.PROJECT_STATS_UPDATED, callback),
-
-    createFolder: (parentPath: string, folderName: string): Promise<string> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
-
-    initGit: (directoryPath: string) => _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
-
-    initGitGuided: (options: import("../shared/types/ipc/gitInit.js").GitInitOptions) =>
-      _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT_GUIDED, options),
-
-    onInitGitProgress: (
-      callback: (event: import("../shared/types/ipc/gitInit.js").GitInitProgressEvent) => void
-    ) => {
-      const listener = (
-        _event: unknown,
-        data: import("../shared/types/ipc/gitInit.js").GitInitProgressEvent
-      ) => callback(data);
-      ipcRenderer.on(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
-      return () => ipcRenderer.removeListener(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
+    // Files API
+    files: {
+      search: (payload) => _unwrappingInvoke(CHANNELS.FILES_SEARCH, payload),
+      read: (payload) => _unwrappingInvoke(CHANNELS.FILES_READ, payload),
     },
 
-    cloneRepo: (
-      options: import("../shared/types/ipc/gitClone.js").CloneRepoOptions
-    ): Promise<import("../shared/types/ipc/gitClone.js").CloneRepoResult> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_CLONE_REPO, options),
+    // Watchdog API — surfaces the main-process deadlock detector's disabled
+    // state to the renderer and exposes a manual restart path.
+    watchdog: {
+      restart: (): Promise<void> => _unwrappingInvoke(CHANNELS.WATCHDOG_RESTART),
 
-    onCloneProgress: (
-      callback: (event: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent) => void
-    ) => {
-      const listener = (
-        _event: unknown,
-        data: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent
-      ) => callback(data);
-      ipcRenderer.on(CHANNELS.PROJECT_CLONE_PROGRESS, listener);
-      return () => ipcRenderer.removeListener(CHANNELS.PROJECT_CLONE_PROGRESS, listener);
+      onDisabled: (
+        callback: (data: {
+          attemptCount: number;
+          lastExitCode: number | null;
+          timestamp: number;
+        }) => void
+      ): (() => void) => _eventBusOn("watchdog:disabled", callback),
+
+      onActive: (callback: () => void): (() => void) =>
+        _eventBusOn("watchdog:active", () => callback()),
     },
 
-    cancelClone: (): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL),
-
-    getRecipes: (
-      projectId: string
-    ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),
+    // Slash Commands API
+    slashCommands: buildSlashCommandsPreloadBindings(_unwrappingInvoke),
 
-    saveRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SAVE_RECIPES, { projectId, recipes }),
+    // Artifact API
+    artifact: {
+      onDetected: (callback: (data: ArtifactDetectedPayload) => void) =>
+        _typedOn(CHANNELS.ARTIFACT_DETECTED, callback),
 
-    addRecipe: (projectId: string, recipe: TerminalRecipe): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_ADD_RECIPE, { projectId, recipe }),
+      saveToFile: (options: SaveArtifactOptions) =>
+        _unwrappingInvoke(CHANNELS.ARTIFACT_SAVE_TO_FILE, options),
 
-    updateRecipe: (
-      projectId: string,
-      recipeId: string,
-      updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
-    ): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_UPDATE_RECIPE, { projectId, recipeId, updates }),
+      applyPatch: (options: ApplyPatchOptions) =>
+        _unwrappingInvoke(CHANNELS.ARTIFACT_APPLY_PATCH, options),
+    },
 
-    deleteRecipe: (projectId: string, recipeId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_DELETE_RECIPE, { projectId, recipeId }),
+    // CopyTree API
+    copyTree: {
+      generate: (worktreeId: string, options?: CopyTreeOptions) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options }),
 
-    exportRecipeToFile: (name: string, json: string): Promise<boolean> =>
-      _unwrappingInvoke(CHANNELS.RECIPE_EXPORT_FILE, { name, json }),
+      generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId, options }),
 
-    importRecipeFromFile: (): Promise<string | null> =>
-      _unwrappingInvoke(CHANNELS.RECIPE_IMPORT_FILE),
+      injectToTerminal: (
+        terminalId: string,
+        worktreeId: string,
+        options?: CopyTreeOptions,
+        injectionId?: string
+      ) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_INJECT, {
+          terminalId,
+          worktreeId,
+          options,
+          injectionId,
+        }),
 
-    getInRepoRecipes: (
-      projectId: string
-    ): Promise<import("../shared/types/index.js").TerminalRecipe[]> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_RECIPES, projectId),
+      isAvailable: () => _unwrappingInvoke(CHANNELS.COPYTREE_AVAILABLE),
 
-    syncInRepoRecipes: (
-      projectId: string,
-      recipes: import("../shared/types/index.js").TerminalRecipe[]
-    ): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_SYNC_INREPO_RECIPES, { projectId, recipes }),
+      cancel: (injectionId?: string) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
 
-    updateInRepoRecipe: (
-      projectId: string,
-      recipe: import("../shared/types/index.js").TerminalRecipe,
-      previousName?: string,
-      options?: { force?: boolean }
-    ): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE, {
-        projectId,
-        recipe,
-        previousName,
-        force: options?.force === true ? true : undefined,
-      }),
+      getFileTree: (worktreeId: string, dirPath?: string) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, { worktreeId, dirPath }),
 
-    deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_DELETE_INREPO_RECIPE, { projectId, recipeName }),
+      testConfig: (worktreeId: string, options?: CopyTreeTestConfigOptions) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_TEST_CONFIG, { worktreeId, options }),
 
-    getInRepoPresets: (
-      projectId: string
-    ): Promise<Record<string, import("../shared/config/agentRegistry.js").AgentPreset[]>> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_PRESETS, projectId),
+      onProgress: (callback: (progress: CopyTreeProgress) => void) =>
+        _typedOn(CHANNELS.COPYTREE_PROGRESS, callback),
+    },
 
-    ...buildTerminalLayoutPreloadBindings(_unwrappingInvoke),
+    // Editor API
+    editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
 
-    readClaudeMd: (projectId: string): Promise<string | null> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_READ_CLAUDE_MD, projectId),
+    // System API
+    system: {
+      openExternal: (url: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_EXTERNAL, { url }),
 
-    writeClaudeMd: (projectId: string, content: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_WRITE_CLAUDE_MD, { projectId, content }),
+      openPath: (path: string) => _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_PATH, { path }),
 
-    enableInRepoSettings: (projectId: string): Promise<Project> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, projectId),
+      openInEditor: (payload: { path: string; line?: number; col?: number; projectId?: string }) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, payload),
 
-    disableInRepoSettings: (projectId: string): Promise<Project> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
+      checkCommand: (command: string) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_COMMAND, command),
 
-    checkMissing: (): Promise<string[]> => _unwrappingInvoke(CHANNELS.PROJECT_CHECK_MISSING),
+      checkDirectory: (path: string) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_DIRECTORY, path),
 
-    locate: (projectId: string): Promise<Project | null> =>
-      _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
-  },
+      getHomeDir: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HOME_DIR),
 
-  // Scratch (one-off agent workspace) API
-  scratch: {
-    ...buildScratchPreloadBindings(_unwrappingInvoke),
+      getTmpDir: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_TMP_DIR),
 
-    onUpdated: (callback: (scratch: import("../shared/types/scratch.js").Scratch) => void) =>
-      _typedOn(CHANNELS.SCRATCH_UPDATED, callback),
+      getCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY),
 
-    onRemoved: (callback: (scratchId: string) => void) =>
-      _typedOn(CHANNELS.SCRATCH_REMOVED, callback),
+      refreshCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY),
 
-    onSwitch: (
-      callback: (payload: import("../shared/types/ipc/scratch.js").ScratchSwitchPayload) => void
-    ) => _typedOn(CHANNELS.SCRATCH_ON_SWITCH, callback),
-  },
+      getAgentCliDetails: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS),
 
-  // Global Recipes API
-  globalRecipes: buildGlobalRecipesPreloadBindings(_unwrappingInvoke),
+      getAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSIONS),
 
-  // Global Environment Variables API
-  globalEnv: buildGlobalEnvPreloadBindings(_unwrappingInvoke),
+      getAgentVersion: (agentId: string, refresh?: boolean) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSION, agentId, refresh),
 
-  // Agent Settings API
-  agentSettings: {
-    get: () => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_GET),
+      refreshAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS),
 
-    set: (agentId: string, settings: Partial<AgentSettingsEntry>) =>
-      _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
+      getAgentUpdateSettings: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_UPDATE_SETTINGS),
 
-    reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
+      setAgentUpdateSettings: (settings: {
+        autoCheck: boolean;
+        checkFrequencyHours: number;
+        lastAutoCheck: number | null;
+      }) => _unwrappingInvoke(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS, settings),
 
-    stampVersion: (version: number) =>
-      _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_STAMP_VERSION, version),
-  },
+      startAgentUpdate: (payload: { agentId: string; method?: string }) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
 
-  userAgentRegistry: {
-    get: () => _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_GET),
+      healthCheck: (agentIds?: string[]) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
 
-    add: (config: import("../shared/types/index.js").UserAgentConfig) =>
-      _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_ADD, config),
+      getHealthCheckSpecs: (agentIds?: string[]) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, agentIds),
 
-    update: (id: string, config: import("../shared/types/index.js").UserAgentConfig) =>
-      _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_UPDATE, { id, config }),
+      checkTool: (spec: {
+        tool: string;
+        label: string;
+        command?: string;
+        versionArgs: string[];
+        severity: string;
+        minVersion?: string;
+        installUrl?: string;
+        installBlocks?: Record<string, unknown>;
+      }) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_TOOL, spec),
 
-    remove: (id: string) => _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_REMOVE, id),
-  },
+      downloadDiagnostics: () => _unwrappingInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
 
-  agentHelp: {
-    get: (request: import("../shared/types/ipc/agent.js").AgentHelpRequest) =>
-      _unwrappingInvoke(CHANNELS.AGENT_HELP_GET, request),
-  },
+      collectDiagnosticsForReview: () =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW),
 
-  // GitHub API
-  github: {
-    getRepoStats: (cwd: string, bypassCache?: boolean) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
+      saveDiagnosticsBundle: (
+        payload: import("../shared/types/ipc/system.js").DiagnosticsBundleSavePayload
+      ) => _unwrappingInvoke(CHANNELS.SYSTEM_SAVE_DIAGNOSTICS_BUNDLE, payload),
 
-    getFirstPageCache: (cwd: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_FIRST_PAGE_CACHE, cwd),
+      getAppMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_APP_METRICS),
 
-    getProjectHealth: (cwd: string, bypassCache?: boolean) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PROJECT_HEALTH, cwd, bypassCache),
+      getHardwareInfo: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HARDWARE_INFO),
 
-    openIssues: (cwd: string, query?: string, state?: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
+      getProcessMetrics: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS),
 
-    openPRs: (cwd: string, query?: string, state?: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd, query, state),
+      getHeapStats: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS),
 
-    openCommits: (cwd: string, branch?: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd, branch),
+      getDiagnosticsInfo: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_INFO),
 
-    openIssue: (cwd: string, issueNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_ISSUE, { cwd, issueNumber }),
+      getReportEnrichment: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_REPORT_ENRICHMENT),
 
-    openPR: (prUrl: string) => _unwrappingInvoke(CHANNELS.GITHUB_OPEN_PR, prUrl),
+      startRendererCpuProfile: () => _unwrappingInvoke(CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_START),
 
-    checkCli: () => _unwrappingInvoke(CHANNELS.GITHUB_CHECK_CLI),
+      stopRendererCpuProfile: () => _unwrappingInvoke(CHANNELS.SYSTEM_RENDERER_CPU_PROFILE_STOP),
 
-    getConfig: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_CONFIG),
+      onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
+        return _eventBusOn("system:wake", callback);
+      },
 
-    setToken: (token: string) => _unwrappingInvoke(CHANNELS.GITHUB_SET_TOKEN, token),
+      installAgent: (payload: { agentId: string; methodIndex?: number; jobId: string }) =>
+        _unwrappingInvoke(CHANNELS.SETUP_AGENT_INSTALL, payload),
 
-    clearToken: () => _unwrappingInvoke(CHANNELS.GITHUB_CLEAR_TOKEN),
+      onAgentInstallProgress: (
+        callback: (event: { jobId: string; chunk: string; stream: "stdout" | "stderr" }) => void
+      ) => _typedOn(CHANNELS.SETUP_AGENT_INSTALL_PROGRESS, callback),
 
-    validateToken: (token: string) => _unwrappingInvoke(CHANNELS.GITHUB_VALIDATE_TOKEN, token),
+      onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) =>
+        _eventBusOn("resource:profile-changed", callback),
 
-    listIssues: (options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: "created" | "updated";
-    }) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_ISSUES, options),
+      ...buildResourceProfilePreloadBindings(_unwrappingInvoke),
+    },
 
-    listPullRequests: (options: {
-      cwd: string;
-      search?: string;
-      state?: "open" | "closed" | "merged" | "all";
-      cursor?: string;
-      bypassCache?: boolean;
-      sortOrder?: "created" | "updated";
-    }) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_PRS, options),
+    // App State API
+    app: {
+      getState: () => _unwrappingInvoke(CHANNELS.APP_GET_STATE),
 
-    assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
+      setState: (partialState: Partial<AppState>) =>
+        _unwrappingInvoke(CHANNELS.APP_SET_STATE, partialState),
 
-    unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.GITHUB_UNASSIGN_ISSUE, { cwd, issueNumber, username }),
+      getVersion: () => _unwrappingInvoke(CHANNELS.APP_GET_VERSION),
 
-    getIssueTooltip: (cwd: string, issueNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
+      ...buildAppVersionInfoPreloadBindings(_unwrappingInvoke),
 
-    getPRTooltip: (cwd: string, prNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_TOOLTIP, { cwd, prNumber }),
+      hydrate: () => _unwrappingInvoke(CHANNELS.APP_HYDRATE),
 
-    getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_URL, { cwd, issueNumber }),
+      boot: () => _unwrappingInvoke(CHANNELS.APP_BOOT),
 
-    getIssueByNumber: (cwd: string, issueNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, { cwd, issueNumber }),
+      quit: () => _unwrappingInvoke(CHANNELS.APP_QUIT),
 
-    getPRByNumber: (cwd: string, prNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
+      forceQuit: () => _unwrappingInvoke(CHANNELS.APP_FORCE_QUIT),
 
-    getIssuesByNumbers: (cwd: string, numbers: number[]) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUES_BY_NUMBERS, { cwd, numbers }),
+      dismissRosettaWarning: () => _unwrappingInvoke(CHANNELS.APP_DISMISS_ROSETTA_WARNING),
 
-    getPRsByNumbers: (cwd: string, numbers: number[]) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PRS_BY_NUMBERS, { cwd, numbers }),
+      resetAndRelaunch: () => _unwrappingInvoke(CHANNELS.APP_RESET_AND_RELAUNCH),
 
-    getPRReviewThreads: (cwd: string, prNumber: number) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_REVIEW_THREADS, { cwd, prNumber }),
+      clearQuarantinedPanel: (panelId: string) =>
+        _unwrappingInvoke(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, panelId),
 
-    listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_REMOTES, cwd),
+      skeletonParsed: () => ipcRenderer.send(CHANNELS.APP_SKELETON_PARSED),
 
-    resolveAuthorAvatar: (email: string) =>
-      _unwrappingInvoke(CHANNELS.GITHUB_RESOLVE_AUTHOR_AVATAR, email),
+      notifyFirstInteractive: () => _unwrappingInvoke(CHANNELS.APP_FIRST_INTERACTIVE),
 
-    onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
-      _typedOn(CHANNELS.PR_DETECTED, callback),
+      notifyViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_PAINTED),
 
-    onPRCleared: (callback: (data: PRClearedPayload) => void) =>
-      _typedOn(CHANNELS.PR_CLEARED, callback),
+      notifyWarmViewPainted: () => _unwrappingInvoke(CHANNELS.APP_VIEW_WARM_PAINTED),
 
-    onIssueDetected: (callback: (data: IssueDetectedPayload) => void) =>
-      _typedOn(CHANNELS.ISSUE_DETECTED, callback),
+      onMenuAction: (callback: (payload: { actionId: string; args?: unknown }) => void) =>
+        _typedOn(CHANNELS.MENU_ACTION, callback),
 
-    onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
-      _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
+      reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
 
-    getRateLimitDetails: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_RATE_LIMIT_DETAILS),
+      onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
-    onTokenHealthChanged: (callback: (data: GitHubTokenHealthPayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_TOKEN_HEALTH_CHANGED, callback),
+      onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
+    },
 
-    onRepoStatsAndPageUpdated: (callback: (data: RepoStatsAndPagePayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_REPO_STATS_AND_PAGE_UPDATED, callback),
+    menu: buildMenuPreloadBindings(_unwrappingInvoke),
 
-    onRepoCountsUpdated: (callback: (data: RepoCountsUpdatedPayload) => void) =>
-      _typedOn(CHANNELS.GITHUB_REPO_COUNTS_UPDATED, callback),
+    // Logs API
+    logs: {
+      getAll: (filters?: LogFilterOptions) => _unwrappingInvoke(CHANNELS.LOGS_GET_ALL, filters),
 
-    getTokenHealth: () => _unwrappingInvoke(CHANNELS.GITHUB_GET_TOKEN_HEALTH),
-  },
+      getSources: () => _unwrappingInvoke(CHANNELS.LOGS_GET_SOURCES),
 
-  // Per-service connectivity API
-  connectivity: {
-    ...buildConnectivityPreloadBindings(_unwrappingInvoke),
+      clear: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR),
 
-    onServiceChanged: (callback: (payload: ServiceConnectivityPayload) => void) =>
-      _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
-  },
+      openFile: () => _unwrappingInvoke(CHANNELS.LOGS_OPEN_FILE),
 
-  // Dev Preview API
-  devPreview: {
-    ...buildDevPreviewPreloadBindings(_unwrappingInvoke),
+      setVerbose: (enabled: boolean) => _unwrappingInvoke(CHANNELS.LOGS_SET_VERBOSE, enabled),
 
-    onStateChanged: (callback: (payload: DevPreviewStateChangedPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_STATE_CHANGED, callback),
+      getVerbose: () => _unwrappingInvoke(CHANNELS.LOGS_GET_VERBOSE),
 
-    onAllSessionsChanged: (callback: (payload: DevPreviewAllSessionsPayload) => void) =>
-      _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
-  },
+      onEntry: (callback: (entry: LogEntry) => void) => {
+        const offEntry = _typedOn(CHANNELS.LOGS_ENTRY, callback);
+        const offBatch = _typedOn(CHANNELS.LOGS_BATCH, (entries) => {
+          for (const entry of entries) callback(entry);
+        });
+        return () => {
+          offEntry();
+          offBatch();
+        };
+      },
 
-  // Git API
-  git: {
-    getFileDiff: (cwd: string, filePath: string, status: GitStatus) =>
-      _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, { cwd, filePath, status }),
+      onBatch: (callback: (entries: LogEntry[]) => void) => _typedOn(CHANNELS.LOGS_BATCH, callback),
 
-    getProjectPulse: (options: {
-      worktreeId: string;
-      rangeDays: 60 | 120 | 180;
-      includeDelta?: boolean;
-      includeRecentCommits?: boolean;
-      forceRefresh?: boolean;
-    }) => _unwrappingInvoke(CHANNELS.GIT_GET_PROJECT_PULSE, options),
+      write: (
+        level: "debug" | "info" | "warn" | "error",
+        message: string,
+        context?: Record<string, unknown>
+      ) => _unwrappingInvoke(CHANNELS.LOGS_WRITE, { level, message, context }),
 
-    listCommits: (options: {
-      cwd: string;
-      search?: string;
-      branch?: string;
-      skip?: number;
-      limit?: number;
-    }) => _unwrappingInvoke(CHANNELS.GIT_LIST_COMMITS, options),
+      getLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_GET_LEVEL_OVERRIDES),
 
-    stageFile: (cwd: string, filePath: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_STAGE_FILE, { cwd, filePath }),
+      setLevelOverrides: (overrides: Record<string, string>) =>
+        _unwrappingInvoke(CHANNELS.LOGS_SET_LEVEL_OVERRIDES, overrides),
 
-    unstageFile: (cwd: string, filePath: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_FILE, { cwd, filePath }),
+      clearLevelOverrides: () => _unwrappingInvoke(CHANNELS.LOGS_CLEAR_LEVEL_OVERRIDES),
 
-    stageFiles: (cwd: string, filePaths: string[]) =>
-      _unwrappingInvoke(CHANNELS.GIT_STAGE_FILES, { cwd, filePaths }),
+      getRegistry: () => _unwrappingInvoke(CHANNELS.LOGS_GET_REGISTRY),
+    },
 
-    unstageFiles: (cwd: string, filePaths: string[]) =>
-      _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_FILES, { cwd, filePaths }),
+    // Error API
+    errors: {
+      onError: (callback: (error: ErrorRecord) => void) =>
+        _typedOn(CHANNELS.ERROR_NOTIFY, callback),
 
-    stageAll: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_STAGE_ALL, cwd),
+      retry: (errorId: string, action: RetryAction, args?: Record<string, unknown>) =>
+        _unwrappingInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
 
-    unstageAll: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_ALL, cwd),
+      cancelRetry: (errorId: string) => ipcRenderer.send(CHANNELS.ERROR_RETRY_CANCEL, errorId),
 
-    commit: (cwd: string, message: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
+      onRetryProgress: (callback: (payload: RetryProgressPayload) => void) =>
+        _typedOn(CHANNELS.ERROR_RETRY_PROGRESS, callback),
 
-    push: (cwd: string, setUpstream?: boolean) =>
-      _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
+      openLogs: () => _unwrappingInvoke(CHANNELS.ERROR_OPEN_LOGS),
 
-    pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
+      getPending: () => _unwrappingInvoke(CHANNELS.ERROR_GET_PENDING),
+    },
 
-    forcePushWithLease: (cwd: string, branchName: string, leaseSha: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, { cwd, branchName, leaseSha }),
+    // Event Inspector API
+    eventInspector: {
+      ...buildEventInspectorPreloadBindings(_unwrappingInvoke),
 
-    listRemoteCommits: (cwd: string, branchName: string, limit?: number) =>
-      _unwrappingInvoke(CHANNELS.GIT_LIST_REMOTE_COMMITS, { cwd, branchName, limit }),
+      subscribe: () => ipcRenderer.send(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE),
 
-    onPushProgress: (callback: (event: PushProgressEvent) => void) =>
-      _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),
+      unsubscribe: () => ipcRenderer.send(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE),
 
-    getStagingStatus: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
+      onEventBatch: (callback: (events: EventRecord[]) => void) =>
+        _typedOn(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, callback),
+    },
 
-    abortRepositoryOperation: (cwd: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd),
+    events: {
+      emit: (eventType: string, payload: unknown) =>
+        _unwrappingInvoke(CHANNELS.EVENTS_EMIT, eventType, payload),
 
-    continueRepositoryOperation: (cwd: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd),
+      on: <K extends keyof IpcEventBusMap>(
+        name: K,
+        callback: (payload: IpcEventBusMap[K]) => void
+      ): (() => void) => _eventBusOn(name, callback),
+    },
 
-    scanConflictMarkers: (cwd: string, filePaths: string[]) =>
-      _unwrappingInvoke(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, { cwd, filePaths }),
+    // Project API
+    project: {
+      getAll: () => _unwrappingInvoke(CHANNELS.PROJECT_GET_ALL),
 
-    checkoutOursTheirs: (cwd: string, filePath: string, side: "ours" | "theirs") =>
-      _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { cwd, filePath, side }),
+      getCurrent: () => _unwrappingInvoke(CHANNELS.PROJECT_GET_CURRENT),
 
-    compareWorktrees: (
-      cwd: string,
-      branch1: string,
-      branch2: string,
-      filePath?: string,
-      useMergeBase?: boolean
-    ) =>
-      _unwrappingInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
-        cwd,
-        branch1,
-        branch2,
-        filePath,
-        useMergeBase,
-      }),
+      add: (path: string) => _unwrappingInvoke(CHANNELS.PROJECT_ADD, path),
 
-    getUsername: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
+      remove: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_REMOVE, projectId),
 
-    getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
-      _unwrappingInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
+      update: (projectId: string, updates: Partial<Project>) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_UPDATE, projectId, updates),
 
-    snapshotGet: (worktreeId: string) => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_GET, worktreeId),
+      switch: (
+        projectId: string,
+        outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
+        options?: { focusIntent?: "focus-next-waiting" }
+      ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
-    snapshotList: () => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_LIST),
+      prefetchHydrate: (projectId: string) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_PREFETCH_HYDRATE, projectId),
 
-    snapshotRevert: (worktreeId: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_REVERT, worktreeId),
-
-    snapshotDelete: (worktreeId: string) =>
-      _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_DELETE, worktreeId),
-
-    markSafeDirectory: (path: string) => _unwrappingInvoke(CHANNELS.GIT_MARK_SAFE_DIRECTORY, path),
-  },
-
-  // Terminal Config API
-  terminalConfig: {
-    ...buildTerminalConfigPreloadBindings(_unwrappingInvoke),
-
-    importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
-  },
-
-  // Accessibility API
-  accessibility: {
-    ...buildAccessibilityPreloadBindings(_unwrappingInvoke),
-
-    onSupportChanged: (callback: (data: { enabled: boolean }) => void) =>
-      _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
-  },
-
-  // Portal API
-  portal: {
-    ...buildPortalPreloadBindings(_unwrappingInvoke),
-
-    onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
-      _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
-
-    onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
-
-    onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
-
-    onNewTabMenuAction: (callback: (action: PortalNewTabMenuAction) => void) =>
-      _typedOn(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, callback),
-
-    onTabEvicted: (callback: (data: { tabId: string }) => void) =>
-      _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
-    onTabsEvicted: (callback: (payload: { tabIds: string[] }) => void) =>
-      _typedOn(CHANNELS.PORTAL_TABS_EVICTED, callback),
-  },
-
-  // Webview API
-  webview: {
-    setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
-    registerPanel: (webContentsId: number, panelId: string, kind?: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId, kind }),
-    respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
-    onDialogRequest: (
-      callback: (payload: {
-        dialogId: string;
-        panelId: string;
-        type: "alert" | "confirm" | "prompt";
-        message: string;
-        defaultValue: string;
-      }) => void
-    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
-    onDialogDismiss: (callback: (payload: { panelId: string }) => void): (() => void) =>
-      _typedOn(CHANNELS.WEBVIEW_DIALOG_DISMISS, callback),
-    onFindShortcut: (
-      callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
-    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
-    onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
-      _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
-    onNavigationBlocked: (
-      callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
-    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),
-    onUnresponsive: (callback: (payload: { panelId: string }) => void): (() => void) =>
-      _typedOn(CHANNELS.WEBVIEW_UNRESPONSIVE, callback),
-    onResponsive: (callback: (payload: { panelId: string }) => void): (() => void) =>
-      _typedOn(CHANNELS.WEBVIEW_RESPONSIVE, callback),
-    startOAuthLoopback: (
-      authUrl: string,
-      panelId: string,
-      webContentsId: number,
-      sessionStorageSnapshot?: Array<[string, string]>
-    ): Promise<
-      | {
-          success: true;
-          callbackUrl: string;
-          loopbackRedirectUri: string;
-          originalRedirectUri: string;
-        }
-      | {
-          success: false;
-          cause: "cancelled" | "timed-out" | "server-error" | "open-external-failed";
-        }
-    > =>
-      _unwrappingInvoke(
-        CHANNELS.WEBVIEW_OAUTH_LOOPBACK,
-        authUrl,
-        panelId,
-        webContentsId,
-        sessionStorageSnapshot
-      ),
-    cancelOAuthLoopback: (panelId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_CANCEL_OAUTH_LOOPBACK, { panelId }),
-    onOAuthLoopbackStatus: (
-      callback: (payload: {
-        panelId: string;
-        phase: "token-exchange-intercepted" | "completed" | "timed-out" | "error";
-        message?: string;
-      }) => void
-    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, callback),
-    startConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, webContentsId, paneId),
-    stopConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
-    clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
-    getConsoleProperties: (webContentsId: number, objectId: string) =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
-    onConsoleMessage: (
-      callback: (row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow) => void
-    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
-    onConsoleContextCleared: (
-      callback: (payload: { paneId: string; navigationGeneration: number }) => void
-    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
-    reloadIgnoringCache: (webContentsId: number, panelId: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, webContentsId, panelId),
-    getScrollPosition: (webContentsId: number): Promise<number> =>
-      _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
-    ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
-  },
-
-  // Hibernation API
-  hibernation: {
-    ...buildHibernationPreloadBindings(_unwrappingInvoke),
-
-    onProjectHibernated: (
-      callback: (payload: {
-        projectId: string;
-        projectName: string;
-        reason: "scheduled" | "memory-pressure";
-        terminalsKilled: number;
-        timestamp: number;
-      }) => void
-    ): (() => void) => _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
-  },
-
-  // Idle Terminal Notification API
-  idleTerminals: {
-    ...buildIdleTerminalPreloadBindings(_unwrappingInvoke),
-
-    onNotify: (
-      callback: (payload: {
-        projects: Array<{
+      openDialog: () => _unwrappingInvoke(CHANNELS.PROJECT_OPEN_DIALOG),
+
+      onSwitch: (
+        callback: (payload: {
+          project: Project;
+          switchId: string;
+          worktreeLoadError?: string;
+          hydrateResult?: import("../shared/types/ipc/app.js").HydrateResult;
+        }) => void
+      ) => _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
+
+      onWorktreeLoadStatus: (
+        callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
+      ) => _typedOn(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, callback),
+
+      onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
+        _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
+
+      onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
+        _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
+
+      onUpdated: (callback: (project: Project) => void) =>
+        _typedOn(CHANNELS.PROJECT_UPDATED, callback),
+
+      onRemoved: (callback: (projectId: string) => void) =>
+        _typedOn(CHANNELS.PROJECT_REMOVED, callback),
+
+      getSettings: (projectId: string) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_GET_SETTINGS, projectId),
+
+      saveSettings: (projectId: string, settings: ProjectSettings) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_SAVE_SETTINGS, { projectId, settings }),
+
+      detectRunners: (projectId: string) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_DETECT_RUNNERS, projectId),
+
+      listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.PROJECT_LIST_REMOTES, cwd),
+
+      close: (projectId: string, options?: { killTerminals?: boolean }) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
+
+      reopen: (
+        projectId: string,
+        outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState
+      ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState),
+
+      getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
+
+      getBulkStats: (projectIds: string[]) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_GET_BULK_STATS, projectIds),
+
+      getNotificationOverrides: (projectIds: string[]) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_GET_NOTIFICATION_OVERRIDES, projectIds),
+
+      onStatsUpdated: (
+        callback: (stats: import("../shared/types/ipc/project.js").ProjectStatusMap) => void
+      ) => _typedOn(CHANNELS.PROJECT_STATS_UPDATED, callback),
+
+      createFolder: (parentPath: string, folderName: string): Promise<string> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
+
+      initGit: (directoryPath: string) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
+
+      initGitGuided: (options: import("../shared/types/ipc/gitInit.js").GitInitOptions) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT_GUIDED, options),
+
+      onInitGitProgress: (
+        callback: (event: import("../shared/types/ipc/gitInit.js").GitInitProgressEvent) => void
+      ) => _typedOn(CHANNELS.PROJECT_INIT_GIT_PROGRESS, callback),
+
+      cloneRepo: (
+        options: import("../shared/types/ipc/gitClone.js").CloneRepoOptions
+      ): Promise<import("../shared/types/ipc/gitClone.js").CloneRepoResult> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_CLONE_REPO, options),
+
+      onCloneProgress: (
+        callback: (event: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent) => void
+      ) => _typedOn(CHANNELS.PROJECT_CLONE_PROGRESS, callback),
+
+      cancelClone: (): Promise<void> => _unwrappingInvoke(CHANNELS.PROJECT_CLONE_CANCEL),
+
+      getRecipes: (
+        projectId: string
+      ): Promise<{ recipes: TerminalRecipe[]; collisions: RecipeNameCollision[] }> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),
+
+      saveRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_SAVE_RECIPES, { projectId, recipes }),
+
+      addRecipe: (projectId: string, recipe: TerminalRecipe): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_ADD_RECIPE, { projectId, recipe }),
+
+      updateRecipe: (
+        projectId: string,
+        recipeId: string,
+        updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
+      ): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_UPDATE_RECIPE, { projectId, recipeId, updates }),
+
+      deleteRecipe: (projectId: string, recipeId: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_DELETE_RECIPE, { projectId, recipeId }),
+
+      exportRecipeToFile: (name: string, json: string): Promise<boolean> =>
+        _unwrappingInvoke(CHANNELS.RECIPE_EXPORT_FILE, { name, json }),
+
+      importRecipeFromFile: (): Promise<string | null> =>
+        _unwrappingInvoke(CHANNELS.RECIPE_IMPORT_FILE),
+
+      getInRepoRecipes: (
+        projectId: string
+      ): Promise<import("../shared/types/index.js").TerminalRecipe[]> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_RECIPES, projectId),
+
+      syncInRepoRecipes: (
+        projectId: string,
+        recipes: import("../shared/types/index.js").TerminalRecipe[]
+      ): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_SYNC_INREPO_RECIPES, { projectId, recipes }),
+
+      updateInRepoRecipe: (
+        projectId: string,
+        recipe: import("../shared/types/index.js").TerminalRecipe,
+        previousName?: string,
+        options?: { force?: boolean }
+      ): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE, {
+          projectId,
+          recipe,
+          previousName,
+          force: options?.force === true ? true : undefined,
+        }),
+
+      deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_DELETE_INREPO_RECIPE, { projectId, recipeName }),
+
+      getInRepoPresets: (
+        projectId: string
+      ): Promise<Record<string, import("../shared/config/agentRegistry.js").AgentPreset[]>> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_PRESETS, projectId),
+
+      ...buildTerminalLayoutPreloadBindings(_unwrappingInvoke),
+
+      readClaudeMd: (projectId: string): Promise<string | null> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_READ_CLAUDE_MD, projectId),
+
+      writeClaudeMd: (projectId: string, content: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_WRITE_CLAUDE_MD, { projectId, content }),
+
+      enableInRepoSettings: (projectId: string): Promise<Project> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, projectId),
+
+      disableInRepoSettings: (projectId: string): Promise<Project> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
+
+      checkMissing: (): Promise<string[]> => _unwrappingInvoke(CHANNELS.PROJECT_CHECK_MISSING),
+
+      locate: (projectId: string): Promise<Project | null> =>
+        _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
+    },
+
+    // Scratch (one-off agent workspace) API
+    scratch: {
+      ...buildScratchPreloadBindings(_unwrappingInvoke),
+
+      onUpdated: (callback: (scratch: import("../shared/types/scratch.js").Scratch) => void) =>
+        _typedOn(CHANNELS.SCRATCH_UPDATED, callback),
+
+      onRemoved: (callback: (scratchId: string) => void) =>
+        _typedOn(CHANNELS.SCRATCH_REMOVED, callback),
+
+      onSwitch: (
+        callback: (payload: import("../shared/types/ipc/scratch.js").ScratchSwitchPayload) => void
+      ) => _typedOn(CHANNELS.SCRATCH_ON_SWITCH, callback),
+    },
+
+    // Global Recipes API
+    globalRecipes: buildGlobalRecipesPreloadBindings(_unwrappingInvoke),
+
+    // Global Environment Variables API
+    globalEnv: buildGlobalEnvPreloadBindings(_unwrappingInvoke),
+
+    // Agent Settings API
+    agentSettings: {
+      get: () => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_GET),
+
+      set: (agentId: string, settings: Partial<AgentSettingsEntry>) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET, { agentType: agentId, settings }),
+
+      setGlobal: (value: boolean) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_SET_GLOBAL, value),
+
+      reset: (agentType?: string) => _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_RESET, agentType),
+
+      stampVersion: (version: number) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SETTINGS_STAMP_VERSION, version),
+    },
+
+    userAgentRegistry: {
+      get: () => _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_GET),
+
+      add: (config: import("../shared/types/index.js").UserAgentConfig) =>
+        _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_ADD, config),
+
+      update: (id: string, config: import("../shared/types/index.js").UserAgentConfig) =>
+        _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_UPDATE, { id, config }),
+
+      remove: (id: string) => _unwrappingInvoke(CHANNELS.USER_AGENT_REGISTRY_REMOVE, id),
+    },
+
+    agentHelp: {
+      get: (request: import("../shared/types/ipc/agent.js").AgentHelpRequest) =>
+        _unwrappingInvoke(CHANNELS.AGENT_HELP_GET, request),
+    },
+
+    // Per-service connectivity API
+    connectivity: {
+      ...buildConnectivityPreloadBindings(_unwrappingInvoke),
+
+      onServiceChanged: (callback: (payload: ServiceConnectivityPayload) => void) =>
+        _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
+    },
+
+    // Dev Preview API
+    devPreview: {
+      ...buildDevPreviewPreloadBindings(_unwrappingInvoke),
+
+      onStateChanged: (callback: (payload: DevPreviewStateChangedPayload) => void) =>
+        _typedOn(CHANNELS.DEV_PREVIEW_STATE_CHANGED, callback),
+
+      onAllSessionsChanged: (callback: (payload: DevPreviewAllSessionsPayload) => void) =>
+        _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
+    },
+
+    // Git API
+    git: {
+      getFileDiff: (cwd: string, filePath: string, status: GitStatus, ignoreWhitespace?: boolean) =>
+        _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, { cwd, filePath, status, ignoreWhitespace }),
+
+      getProjectPulse: (options: {
+        worktreeId: string;
+        rangeDays: 60 | 120 | 180;
+        includeDelta?: boolean;
+        includeRecentCommits?: boolean;
+        forceRefresh?: boolean;
+      }) => _unwrappingInvoke(CHANNELS.GIT_GET_PROJECT_PULSE, options),
+
+      listCommits: (options: {
+        cwd: string;
+        search?: string;
+        branch?: string;
+        skip?: number;
+        limit?: number;
+      }) => _unwrappingInvoke(CHANNELS.GIT_LIST_COMMITS, options),
+
+      stageFile: (cwd: string, filePath: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_STAGE_FILE, { cwd, filePath }),
+
+      unstageFile: (cwd: string, filePath: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_FILE, { cwd, filePath }),
+
+      stageFiles: (cwd: string, filePaths: string[]) =>
+        _unwrappingInvoke(CHANNELS.GIT_STAGE_FILES, { cwd, filePaths }),
+
+      unstageFiles: (cwd: string, filePaths: string[]) =>
+        _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_FILES, { cwd, filePaths }),
+
+      stageAll: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_STAGE_ALL, cwd),
+
+      unstageAll: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_UNSTAGE_ALL, cwd),
+
+      commit: (cwd: string, message: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
+
+      push: (cwd: string, setUpstream?: boolean) =>
+        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
+
+      pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
+
+      forcePushWithLease: (cwd: string, branchName: string, leaseSha: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, { cwd, branchName, leaseSha }),
+
+      listRemoteCommits: (cwd: string, branchName: string, limit?: number) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_REMOTE_COMMITS, { cwd, branchName, limit }),
+
+      onPushProgress: (callback: (event: PushProgressEvent) => void) =>
+        _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),
+
+      getStagingStatus: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
+
+      abortRepositoryOperation: (cwd: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd),
+
+      continueRepositoryOperation: (cwd: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd),
+
+      scanConflictMarkers: (cwd: string, filePaths: string[]) =>
+        _unwrappingInvoke(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, { cwd, filePaths }),
+
+      checkoutOursTheirs: (cwd: string, filePath: string, side: "ours" | "theirs") =>
+        _unwrappingInvoke(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, { cwd, filePath, side }),
+
+      compareWorktrees: (
+        cwd: string,
+        branch1: string,
+        branch2: string,
+        filePath?: string,
+        useMergeBase?: boolean,
+        ignoreWhitespace?: boolean
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
+          cwd,
+          branch1,
+          branch2,
+          filePath,
+          useMergeBase,
+          ignoreWhitespace,
+        }),
+
+      getUsername: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
+
+      getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
+        _unwrappingInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
+
+      snapshotGet: (worktreeId: string) => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_GET, worktreeId),
+
+      snapshotList: () => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_LIST),
+
+      snapshotRevert: (worktreeId: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_REVERT, worktreeId),
+
+      snapshotDelete: (worktreeId: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_DELETE, worktreeId),
+
+      markSafeDirectory: (path: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_MARK_SAFE_DIRECTORY, path),
+    },
+
+    // Terminal Config API
+    terminalConfig: {
+      ...buildTerminalConfigPreloadBindings(_unwrappingInvoke),
+
+      importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
+    },
+
+    // Accessibility API
+    accessibility: {
+      ...buildAccessibilityPreloadBindings(_unwrappingInvoke),
+
+      onSupportChanged: (callback: (data: { enabled: boolean }) => void) =>
+        _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
+    },
+
+    // Portal API
+    portal: {
+      ...buildPortalPreloadBindings(_unwrappingInvoke),
+
+      onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
+        _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
+
+      onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
+
+      onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
+
+      onNewTabMenuAction: (callback: (action: PortalNewTabMenuAction) => void) =>
+        _typedOn(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, callback),
+
+      onTabEvicted: (callback: (data: { tabId: string }) => void) =>
+        _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
+      onTabsEvicted: (callback: (payload: { tabIds: string[] }) => void) =>
+        _typedOn(CHANNELS.PORTAL_TABS_EVICTED, callback),
+    },
+
+    // Webview API
+    webview: {
+      setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
+      registerPanel: (webContentsId: number, panelId: string, kind?: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId, kind }),
+      respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
+      onDialogRequest: (
+        callback: (payload: {
+          dialogId: string;
+          panelId: string;
+          type: "alert" | "confirm" | "prompt";
+          message: string;
+          defaultValue: string;
+        }) => void
+      ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
+      onDialogDismiss: (callback: (payload: { panelId: string }) => void): (() => void) =>
+        _typedOn(CHANNELS.WEBVIEW_DIALOG_DISMISS, callback),
+      onFindShortcut: (
+        callback: (payload: {
+          panelId: string;
+          shortcut: "find" | "next" | "prev" | "close";
+        }) => void
+      ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
+      onReloadShortcut: (callback: (payload: { panelId: string }) => void): (() => void) =>
+        _typedOn(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, callback),
+      onNavigationBlocked: (
+        callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
+      ): (() => void) => _typedOn(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, callback),
+      onUnresponsive: (callback: (payload: { panelId: string }) => void): (() => void) =>
+        _typedOn(CHANNELS.WEBVIEW_UNRESPONSIVE, callback),
+      onResponsive: (callback: (payload: { panelId: string }) => void): (() => void) =>
+        _typedOn(CHANNELS.WEBVIEW_RESPONSIVE, callback),
+      startOAuthLoopback: (
+        authUrl: string,
+        panelId: string,
+        webContentsId: number,
+        sessionStorageSnapshot?: Array<[string, string]>
+      ): Promise<
+        | {
+            success: true;
+            callbackUrl: string;
+            loopbackRedirectUri: string;
+            originalRedirectUri: string;
+          }
+        | {
+            success: false;
+            cause: "cancelled" | "timed-out" | "server-error" | "open-external-failed";
+          }
+      > =>
+        _unwrappingInvoke(
+          CHANNELS.WEBVIEW_OAUTH_LOOPBACK,
+          authUrl,
+          panelId,
+          webContentsId,
+          sessionStorageSnapshot
+        ),
+      cancelOAuthLoopback: (panelId: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_CANCEL_OAUTH_LOOPBACK, { panelId }),
+      onOAuthLoopbackStatus: (
+        callback: (payload: {
+          panelId: string;
+          phase: "token-exchange-intercepted" | "completed" | "timed-out" | "error";
+          message?: string;
+        }) => void
+      ): (() => void) => _typedOn(CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, callback),
+      startConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, webContentsId, paneId),
+      stopConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
+      clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
+      getConsoleProperties: (webContentsId: number, objectId: string) =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
+      onConsoleMessage: (
+        callback: (
+          row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow
+        ) => void
+      ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
+      onConsoleContextCleared: (
+        callback: (payload: { paneId: string; navigationGeneration: number }) => void
+      ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
+      reloadIgnoringCache: (webContentsId: number, panelId: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_RELOAD_IGNORING_CACHE, webContentsId, panelId),
+      getScrollPosition: (webContentsId: number): Promise<number> =>
+        _unwrappingInvoke(CHANNELS.WEBVIEW_GET_SCROLL_POSITION, webContentsId),
+      ...buildWebviewNavigationPreloadBindings(_unwrappingInvoke),
+    },
+
+    // Hibernation API
+    hibernation: {
+      ...buildHibernationPreloadBindings(_unwrappingInvoke),
+
+      onProjectHibernated: (
+        callback: (payload: {
           projectId: string;
           projectName: string;
-          terminalCount: number;
-          idleMinutes: number;
-        }>;
-        timestamp: number;
-      }) => void
-    ): (() => void) => _typedOn(CHANNELS.IDLE_TERMINAL_NOTIFY, callback),
-  },
+          reason: "scheduled" | "memory-pressure";
+          terminalsKilled: number;
+          timestamp: number;
+        }) => void
+      ): (() => void) => _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
+    },
 
-  // System Sleep API
-  systemSleep: {
-    ...buildSystemSleepPreloadBindings(_unwrappingInvoke),
+    // Idle Terminal Notification API
+    idleTerminals: {
+      ...buildIdleTerminalPreloadBindings(_unwrappingInvoke),
 
-    onSuspend: (callback: () => void) => _typedOn(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND, callback),
+      onNotify: (
+        callback: (payload: {
+          projects: Array<{
+            projectId: string;
+            projectName: string;
+            terminalCount: number;
+            idleMinutes: number;
+          }>;
+          timestamp: number;
+        }) => void
+      ): (() => void) => _typedOn(CHANNELS.IDLE_TERMINAL_NOTIFY, callback),
+    },
 
-    onWake: (callback: (sleepDurationMs: number) => void) =>
-      _typedOn(CHANNELS.SYSTEM_SLEEP_ON_WAKE, callback),
-  },
+    // System Sleep API
+    systemSleep: {
+      ...buildSystemSleepPreloadBindings(_unwrappingInvoke),
 
-  // OS Do-Not-Disturb / Focus state. Read-only signal — never used to gate
-  // in-app toasts (the OS already silences its native banners).
-  osDnd: {
-    ...buildOsDndPreloadBindings(_unwrappingInvoke),
+      onSuspend: (callback: () => void) => _typedOn(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND, callback),
 
-    onStateChanged: (callback: (payload: { osDndActive: boolean | undefined }) => void) =>
-      _typedOn(CHANNELS.OS_DND_STATE_CHANGED, callback),
-  },
+      onWake: (callback: (sleepDurationMs: number) => void) =>
+        _typedOn(CHANNELS.SYSTEM_SLEEP_ON_WAKE, callback),
+    },
 
-  // Keybinding API
-  keybinding: {
-    getOverrides: () => _unwrappingInvoke(CHANNELS.KEYBINDING_GET_OVERRIDES),
+    // OS Do-Not-Disturb / Focus state. Read-only signal — never used to gate
+    // in-app toasts (the OS already silences its native banners).
+    osDnd: {
+      ...buildOsDndPreloadBindings(_unwrappingInvoke),
 
-    setOverride: (actionId: KeyAction, combo: string[]) =>
-      _unwrappingInvoke(CHANNELS.KEYBINDING_SET_OVERRIDE, { actionId, combo }),
+      onStateChanged: (callback: (payload: { osDndActive: boolean | undefined }) => void) =>
+        _typedOn(CHANNELS.OS_DND_STATE_CHANGED, callback),
+    },
 
-    removeOverride: (actionId: KeyAction) =>
-      _unwrappingInvoke(CHANNELS.KEYBINDING_REMOVE_OVERRIDE, actionId),
+    // Keybinding API
+    keybinding: {
+      getOverrides: () => _unwrappingInvoke(CHANNELS.KEYBINDING_GET_OVERRIDES),
 
-    resetAll: () => _unwrappingInvoke(CHANNELS.KEYBINDING_RESET_ALL),
+      setOverride: (actionId: KeyAction, combo: string[]) =>
+        _unwrappingInvoke(CHANNELS.KEYBINDING_SET_OVERRIDE, { actionId, combo }),
 
-    exportProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
+      removeOverride: (actionId: KeyAction) =>
+        _unwrappingInvoke(CHANNELS.KEYBINDING_REMOVE_OVERRIDE, actionId),
 
-    importProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
-  },
+      resetAll: () => _unwrappingInvoke(CHANNELS.KEYBINDING_RESET_ALL),
 
-  // Worktree Config API
-  worktreeConfig: buildWorktreeConfigPreloadBindings(_unwrappingInvoke),
+      exportProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
 
-  // Window API
-  window: {
-    onFullscreenChange: (callback: (isFullscreen: boolean) => void) =>
-      _eventBusOn("window:fullscreen-change", callback),
-    toggleFullscreen: (): Promise<boolean> => _unwrappingInvoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
-    reload: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_RELOAD),
-    forceReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_FORCE_RELOAD),
-    toggleDevTools: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_TOGGLE_DEVTOOLS),
-    zoomIn: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_IN),
-    zoomOut: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_OUT),
-    zoomReset: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_RESET),
-    getZoomFactor: (): number => webFrame.getZoomFactor(),
-    close: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_CLOSE),
-    openNew: (projectPath?: string): Promise<void> =>
-      _unwrappingInvoke(CHANNELS.WINDOW_NEW, projectPath),
-    onDestroyHiddenWebviews: (callback: (payload: { tier: 1 | 2 }) => void) =>
-      _eventBusOn("window:destroy-hidden-webviews", callback),
-    onDiskSpaceStatus: (
-      callback: (payload: {
-        status: "normal" | "warning" | "critical";
-        availableMb: number;
-        writesSuppressed: boolean;
-      }) => void
-    ) => _eventBusOn("window:disk-space-status", callback),
-  },
+      importProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
+    },
 
-  // Recovery API (used by recovery.html)
-  recovery: {
-    reloadApp: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RELOAD_APP),
-    resetAndReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RESET_AND_RELOAD),
-    exportDiagnostics: (): Promise<boolean> =>
-      _unwrappingInvoke(CHANNELS.RECOVERY_EXPORT_DIAGNOSTICS),
-    openLogs: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_OPEN_LOGS),
-  },
+    // Worktree Config API
+    worktreeConfig: buildWorktreeConfigPreloadBindings(_unwrappingInvoke),
 
-  // Notification API
-  notification: {
-    updateBadge: (state: { waitingCount: number }) =>
-      ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
-    getSettings: (): Promise<{
-      enabled: boolean;
-      completedEnabled: boolean;
-      waitingEnabled: boolean;
-      soundEnabled: boolean;
-      completedSoundFile: string;
-      waitingSoundFile: string;
-      escalationSoundFile: string;
-      waitingEscalationEnabled: boolean;
-      waitingEscalationDelayMs: number;
-      workingPulseEnabled: boolean;
-      workingPulseSoundFile: string;
-      uiFeedbackSoundEnabled: boolean;
-      quietHoursEnabled: boolean;
-      quietHoursStartMin: number;
-      quietHoursEndMin: number;
-      quietHoursWeekdays: number[];
-    }> => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
-    setSettings: (
-      settings: Partial<{
+    // Window API
+    window: {
+      onFullscreenChange: (callback: (isFullscreen: boolean) => void) =>
+        _eventBusOn("window:fullscreen-change", callback),
+      toggleFullscreen: (): Promise<boolean> =>
+        _unwrappingInvoke(CHANNELS.WINDOW_TOGGLE_FULLSCREEN),
+      reload: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_RELOAD),
+      forceReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_FORCE_RELOAD),
+      toggleDevTools: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_TOGGLE_DEVTOOLS),
+      zoomIn: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_IN),
+      zoomOut: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_OUT),
+      zoomReset: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_RESET),
+      getZoomFactor: (): number => webFrame.getZoomFactor(),
+      close: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_CLOSE),
+      openNew: (projectPath?: string): Promise<void> =>
+        _unwrappingInvoke(CHANNELS.WINDOW_NEW, projectPath),
+      onDestroyHiddenWebviews: (callback: (payload: { tier: 1 | 2 }) => void) =>
+        _eventBusOn("window:destroy-hidden-webviews", callback),
+      onDiskSpaceStatus: (
+        callback: (payload: {
+          status: "normal" | "warning" | "critical";
+          availableMb: number;
+          writesSuppressed: boolean;
+        }) => void
+      ) => _eventBusOn("window:disk-space-status", callback),
+    },
+
+    // Recovery API (used by recovery.html)
+    recovery: recoveryApi,
+
+    // Notification API
+    notification: {
+      updateBadge: (state: { waitingCount: number }) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
+      getSettings: (): Promise<{
         enabled: boolean;
         completedEnabled: boolean;
         waitingEnabled: boolean;
@@ -2087,674 +2040,728 @@ const api: ElectronAPI = {
         quietHoursStartMin: number;
         quietHoursEndMin: number;
         quietHoursWeekdays: number[];
-      }>
-    ) => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
-    setSessionMuteUntil: (timestampMs: number) =>
-      ipcRenderer.send(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, { timestampMs }),
-    playSound: (soundFile: string) =>
-      _unwrappingInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
-    playUiEvent: (soundId: string) => _unwrappingInvoke(CHANNELS.SOUND_PLAY_UI_EVENT, soundId),
-    showNative: (payload: { title: string; body: string }) =>
-      ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_NATIVE, payload),
-    showWatchNotification: (payload: {
-      title: string;
-      body: string;
-      panelId: string;
-      panelTitle: string;
-      worktreeId?: string;
-    }) => ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_WATCH, payload),
-    onWatchNavigate: (
-      callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
-    ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
-    syncWatchedPanels: (panelIds: string[]) =>
-      ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
-    acknowledgeWaiting: (terminalId: string) =>
-      ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
-    acknowledgeWorkingPulse: (terminalId: string) =>
-      ipcRenderer.send(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, { terminalId }),
-    onShowToast: (
-      callback: (payload: {
-        type: "success" | "error" | "info" | "warning";
-        title?: string;
-        message: string;
-        duration?: number;
-        rateLimitKey?: string;
-        action?: { label: string; ipcChannel: string; data?: string };
-      }) => void
-    ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
-  },
+      }> => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
+      setSettings: (
+        settings: Partial<{
+          enabled: boolean;
+          completedEnabled: boolean;
+          waitingEnabled: boolean;
+          soundEnabled: boolean;
+          completedSoundFile: string;
+          waitingSoundFile: string;
+          escalationSoundFile: string;
+          waitingEscalationEnabled: boolean;
+          waitingEscalationDelayMs: number;
+          workingPulseEnabled: boolean;
+          workingPulseSoundFile: string;
+          uiFeedbackSoundEnabled: boolean;
+          quietHoursEnabled: boolean;
+          quietHoursStartMin: number;
+          quietHoursEndMin: number;
+          quietHoursWeekdays: number[];
+        }>
+      ) => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
+      setSessionMuteUntil: (timestampMs: number) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_SESSION_MUTE_SET, { timestampMs }),
+      playSound: (soundFile: string) =>
+        _unwrappingInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
+      playUiEvent: (soundId: string) => _unwrappingInvoke(CHANNELS.SOUND_PLAY_UI_EVENT, soundId),
+      showNative: (payload: { title: string; body: string }) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_NATIVE, payload),
+      showWatchNotification: (payload: {
+        title: string;
+        body: string;
+        panelId: string;
+        panelTitle: string;
+        worktreeId?: string;
+      }) => ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_WATCH, payload),
+      onWatchNavigate: (
+        callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
+      ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
+      syncWatchedPanels: (panelIds: string[]) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
+      acknowledgeWaiting: (terminalId: string) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
+      acknowledgeWorkingPulse: (terminalId: string) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, { terminalId }),
+      onShowToast: (
+        callback: (payload: {
+          type: "success" | "error" | "info" | "warning";
+          title?: string;
+          message: string;
+          duration?: number;
+          rateLimitKey?: string;
+          action?: { label: string; ipcChannel: string; data?: string };
+        }) => void
+      ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
+    },
 
-  // Sound API (Web Audio playback via main → renderer push)
-  sound: {
-    onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
-      _typedOn(CHANNELS.SOUND_TRIGGER, callback),
-    onCancel: (callback: () => void) => _eventBusOn("sound:cancel", () => callback()),
-    getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
-  },
+    // Sound API (Web Audio playback via main → renderer push)
+    sound: {
+      onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
+        _typedOn(CHANNELS.SOUND_TRIGGER, callback),
+      onCancel: (callback: () => void) => _eventBusOn("sound:cancel", () => callback()),
+      getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
+    },
 
-  // Auto-Update API
-  update: {
-    onUpdateAvailable: (callback: (info: { version: string }) => void) =>
-      _typedOn(CHANNELS.UPDATE_AVAILABLE, callback),
+    // Auto-Update API
+    update: {
+      onUpdateAvailable: (callback: (info: { version: string }) => void) =>
+        _typedOn(CHANNELS.UPDATE_AVAILABLE, callback),
 
-    onDownloadProgress: (callback: (info: { percent: number }) => void) =>
-      _typedOn(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, callback),
+      onDownloadProgress: (callback: (info: { percent: number }) => void) =>
+        _typedOn(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, callback),
 
-    onUpdateDownloaded: (callback: (info: { version: string }) => void) =>
-      _typedOn(CHANNELS.UPDATE_DOWNLOADED, callback),
+      onUpdateDownloaded: (callback: (info: { version: string }) => void) =>
+        _typedOn(CHANNELS.UPDATE_DOWNLOADED, callback),
 
-    quitAndInstall: () => _unwrappingInvoke(CHANNELS.UPDATE_QUIT_AND_INSTALL),
+      quitAndInstall: () => _unwrappingInvoke(CHANNELS.UPDATE_QUIT_AND_INSTALL),
 
-    checkForUpdates: () => _unwrappingInvoke(CHANNELS.UPDATE_CHECK_FOR_UPDATES),
+      checkForUpdates: () => _unwrappingInvoke(CHANNELS.UPDATE_CHECK_FOR_UPDATES),
 
-    getChannel: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_CHANNEL),
+      getChannel: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_CHANNEL),
 
-    setChannel: (channel: "stable" | "nightly") =>
-      _unwrappingInvoke(CHANNELS.UPDATE_SET_CHANNEL, channel),
+      setChannel: (channel: "stable" | "nightly") =>
+        _unwrappingInvoke(CHANNELS.UPDATE_SET_CHANNEL, channel),
 
-    notifyDismiss: (version: string) => _unwrappingInvoke(CHANNELS.UPDATE_DISMISS_TOAST, version),
+      notifyDismiss: (version: string) => _unwrappingInvoke(CHANNELS.UPDATE_DISMISS_TOAST, version),
 
-    getLastCheck: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_LAST_CHECK),
-  },
+      getLastCheck: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_LAST_CHECK),
+    },
 
-  // Windows Store update-notification API (parallel to `update`; only active
-  // on MSIX/AppX builds where electron-updater is suppressed).
-  storeUpdate: {
-    onUpdateAvailable: (callback: (info: { version: string; storeUrl: string }) => void) =>
-      _typedOn(CHANNELS.STORE_UPDATE_AVAILABLE, callback),
+    // Windows Store update-notification API (parallel to `update`; only active
+    // on MSIX/AppX builds where electron-updater is suppressed).
+    storeUpdate: {
+      onUpdateAvailable: (callback: (info: { version: string; storeUrl: string }) => void) =>
+        _typedOn(CHANNELS.STORE_UPDATE_AVAILABLE, callback),
 
-    getLatest: () => _unwrappingInvoke(CHANNELS.STORE_UPDATE_GET_LATEST),
+      getLatest: () => _unwrappingInvoke(CHANNELS.STORE_UPDATE_GET_LATEST),
 
-    dismiss: (version: string) => _unwrappingInvoke(CHANNELS.STORE_UPDATE_DISMISS, version),
+      dismiss: (version: string) => _unwrappingInvoke(CHANNELS.STORE_UPDATE_DISMISS, version),
 
-    getSettings: () => _unwrappingInvoke(CHANNELS.STORE_UPDATE_GET_SETTINGS),
+      getSettings: () => _unwrappingInvoke(CHANNELS.STORE_UPDATE_GET_SETTINGS),
 
-    setSettings: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.STORE_UPDATE_SET_SETTINGS, enabled),
-  },
+      setSettings: (enabled: boolean) =>
+        _unwrappingInvoke(CHANNELS.STORE_UPDATE_SET_SETTINGS, enabled),
+    },
 
-  // Gemini API
-  gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
+    // Gemini API
+    gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
 
-  // Daintree CLI install API
-  cli: buildCliPreloadBindings(_unwrappingInvoke),
+    // Daintree CLI install API
+    cli: buildCliPreloadBindings(_unwrappingInvoke),
 
-  // Commands API
-  commands: buildCommandsPreloadBindings(_unwrappingInvoke),
+    // Commands API
+    commands: buildCommandsPreloadBindings(_unwrappingInvoke),
 
-  // App Agent API - Configuration and API key management
-  appAgent: {
-    getConfig: () => _unwrappingInvoke(CHANNELS.APP_AGENT_GET_CONFIG),
+    // App Agent API - Configuration and API key management
+    appAgent: {
+      getConfig: () => _unwrappingInvoke(CHANNELS.APP_AGENT_GET_CONFIG),
 
-    setConfig: (config: { provider?: string; model?: string; apiKey?: string; baseUrl?: string }) =>
-      _unwrappingInvoke(CHANNELS.APP_AGENT_SET_CONFIG, config),
+      setConfig: (config: {
+        provider?: string;
+        model?: string;
+        apiKey?: string;
+        baseUrl?: string;
+      }) => _unwrappingInvoke(CHANNELS.APP_AGENT_SET_CONFIG, config),
 
-    hasApiKey: () => _unwrappingInvoke(CHANNELS.APP_AGENT_HAS_API_KEY),
+      hasApiKey: () => _unwrappingInvoke(CHANNELS.APP_AGENT_HAS_API_KEY),
 
-    testApiKey: (apiKey: string) => _unwrappingInvoke(CHANNELS.APP_AGENT_TEST_API_KEY, apiKey),
+      testApiKey: (apiKey: string) => _unwrappingInvoke(CHANNELS.APP_AGENT_TEST_API_KEY, apiKey),
 
-    testModel: (model: string) => _unwrappingInvoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
+      testModel: (model: string) => _unwrappingInvoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
 
-    // Listen for action dispatch requests from main process
-    onDispatchActionRequest: (
-      callback: (payload: {
+      // Listen for action dispatch requests from main process
+      onDispatchActionRequest: (
+        callback: (payload: {
+          requestId: string;
+          actionId: string;
+          args?: Record<string, unknown>;
+          context: {
+            projectId?: string;
+            activeWorktreeId?: string;
+            focusedWorktreeId?: string;
+            focusedTerminalId?: string;
+          };
+          confirmed?: boolean;
+        }) => void
+      ) => _eventBusOn("app-agent:dispatch-action-request", callback),
+
+      // Send action dispatch response back to main process
+      sendDispatchActionResponse: (payload: {
         requestId: string;
-        actionId: string;
-        args?: Record<string, unknown>;
-        context: {
-          projectId?: string;
-          activeWorktreeId?: string;
-          focusedWorktreeId?: string;
-          focusedTerminalId?: string;
-        };
-        confirmed?: boolean;
-      }) => void
-    ) => _eventBusOn("app-agent:dispatch-action-request", callback),
+        result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
+      }) => ipcRenderer.send(CHANNELS.APP_AGENT_DISPATCH_ACTION_RESPONSE, payload),
 
-    // Send action dispatch response back to main process
-    sendDispatchActionResponse: (payload: {
-      requestId: string;
-      result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
-    }) => ipcRenderer.send(CHANNELS.APP_AGENT_DISPATCH_ACTION_RESPONSE, payload),
+      // Listen for action confirmation requests from main process
+      onConfirmationRequest: (
+        callback: (payload: {
+          requestId: string;
+          actionId: string;
+          actionName?: string;
+          args?: Record<string, unknown>;
+          danger: "safe" | "confirm" | "restricted";
+        }) => void
+      ) => _eventBusOn("app-agent:confirmation-request", callback),
 
-    // Listen for action confirmation requests from main process
-    onConfirmationRequest: (
-      callback: (payload: {
-        requestId: string;
-        actionId: string;
-        actionName?: string;
-        args?: Record<string, unknown>;
-        danger: "safe" | "confirm" | "restricted";
-      }) => void
-    ) => _eventBusOn("app-agent:confirmation-request", callback),
+      // Send confirmation response back to main process
+      sendConfirmationResponse: (payload: { requestId: string; approved: boolean }) =>
+        ipcRenderer.send(CHANNELS.APP_AGENT_CONFIRMATION_RESPONSE, payload),
+    },
 
-    // Send confirmation response back to main process
-    sendConfirmationResponse: (payload: { requestId: string; approved: boolean }) =>
-      ipcRenderer.send(CHANNELS.APP_AGENT_CONFIRMATION_RESPONSE, payload),
-  },
+    // Agent Capabilities API
+    agentCapabilities: {
+      ...buildAgentCapabilitiesPreloadBindings(_unwrappingInvoke),
 
-  // Agent Capabilities API
-  agentCapabilities: {
-    ...buildAgentCapabilitiesPreloadBindings(_unwrappingInvoke),
+      onPresetsUpdated: (
+        callback: (payload: {
+          agentId: string;
+          presets: Array<{
+            id: string;
+            name: string;
+            description?: string;
+            env?: Record<string, string>;
+            args?: string[];
+          }>;
+        }) => void
+      ) => _typedOn(CHANNELS.AGENT_PRESETS_UPDATED, callback),
+    },
 
-    onPresetsUpdated: (
-      callback: (payload: {
-        agentId: string;
-        presets: Array<{
-          id: string;
-          name: string;
-          description?: string;
-          env?: Record<string, string>;
-          args?: string[];
-        }>;
-      }) => void
-    ) => _typedOn(CHANNELS.AGENT_PRESETS_UPDATED, callback),
-  },
+    // Agent Session History API
+    agentSessionHistory: {
+      list: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId }),
+      clear: (worktreeId?: string) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
+    },
 
-  // Agent Session History API
-  agentSessionHistory: {
-    list: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId }),
-    clear: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
-  },
+    // Clipboard API — bindings built from the preload-safe channel map in
+    // `./ipc/handlers/clipboard.preload.ts`. The handler module is main-only
+    // because it imports `node:*` built-ins that aren't available in sandboxed
+    // preloads. See #5691.
+    clipboard: buildClipboardPreloadBindings(_unwrappingInvoke),
 
-  // Clipboard API — bindings built from the preload-safe channel map in
-  // `./ipc/handlers/clipboard.preload.ts`. The handler module is main-only
-  // because it imports `node:*` built-ins that aren't available in sandboxed
-  // preloads. See #5691.
-  clipboard: buildClipboardPreloadBindings(_unwrappingInvoke),
+    // Web Utils API
+    webUtils: {
+      getPathForFile: (file: File) => webUtils.getPathForFile(file),
+    },
 
-  // Web Utils API
-  webUtils: {
-    getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  },
+    appTheme: {
+      get: () => _unwrappingInvoke(CHANNELS.APP_THEME_GET),
 
-  appTheme: {
-    get: () => _unwrappingInvoke(CHANNELS.APP_THEME_GET),
+      setColorScheme: (schemeId: string) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_COLOR_SCHEME, schemeId),
 
-    setColorScheme: (schemeId: string) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_COLOR_SCHEME, schemeId),
+      setCustomSchemes: (schemes: unknown) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemes),
 
-    setCustomSchemes: (schemes: unknown) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemes),
+      importTheme: () => _unwrappingInvoke(CHANNELS.APP_THEME_IMPORT),
 
-    importTheme: () => _unwrappingInvoke(CHANNELS.APP_THEME_IMPORT),
+      exportTheme: (scheme: AppColorScheme) => _unwrappingInvoke(CHANNELS.APP_THEME_EXPORT, scheme),
 
-    exportTheme: (scheme: AppColorScheme) => _unwrappingInvoke(CHANNELS.APP_THEME_EXPORT, scheme),
+      setColorVisionMode: (mode: ColorVisionMode) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
 
-    setColorVisionMode: (mode: ColorVisionMode) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
+      setFollowSystem: (enabled: boolean) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, enabled),
 
-    setFollowSystem: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, enabled),
+      setPreferredDarkScheme: (schemeId: string) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, schemeId),
 
-    setPreferredDarkScheme: (schemeId: string) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, schemeId),
+      setPreferredLightScheme: (schemeId: string) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, schemeId),
 
-    setPreferredLightScheme: (schemeId: string) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, schemeId),
+      setRecentSchemeIds: (ids: string[]) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, ids),
 
-    setRecentSchemeIds: (ids: string[]) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, ids),
+      setAccentColorOverride: (color: string | null) =>
+        _unwrappingInvoke(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, color),
 
-    setAccentColorOverride: (color: string | null) =>
-      _unwrappingInvoke(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, color),
+      onSystemAppearanceChanged: (
+        callback: (payload: { isDark: boolean; schemeId: string }) => void
+      ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
+    },
 
-    onSystemAppearanceChanged: (
-      callback: (payload: { isDark: boolean; schemeId: string }) => void
-    ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
-  },
+    telemetry: (() => {
+      const flat = buildTelemetryPreloadBindings(_unwrappingInvoke);
+      return {
+        get: flat.get,
+        setEnabled: flat.setEnabled,
+        markPromptShown: flat.markPromptShown,
+        track: flat.track,
+        preview: {
+          getState: flat.previewGetState,
+          toggle: flat.previewToggle,
+          subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
+          unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
+          onEventBatch: (
+            callback: (
+              events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
+            ) => void
+          ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
+          onStateChanged: (
+            callback: (
+              state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
+            ) => void
+          ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
+        },
+      };
+    })(),
 
-  telemetry: (() => {
-    const flat = buildTelemetryPreloadBindings(_unwrappingInvoke);
-    return {
-      get: flat.get,
-      setEnabled: flat.setEnabled,
-      markPromptShown: flat.markPromptShown,
-      track: flat.track,
-      preview: {
-        getState: flat.previewGetState,
-        toggle: flat.previewToggle,
-        subscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE),
-        unsubscribe: () => ipcRenderer.send(CHANNELS.TELEMETRY_PREVIEW_UNSUBSCRIBE),
-        onEventBatch: (
-          callback: (
-            events: import("../shared/types/ipc/telemetryPreview.js").SanitizedTelemetryEvent[]
-          ) => void
-        ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_EVENT_BATCH, callback),
-        onStateChanged: (
-          callback: (
-            state: import("../shared/types/ipc/telemetryPreview.js").TelemetryPreviewState
-          ) => void
-        ) => _typedOn(CHANNELS.TELEMETRY_PREVIEW_STATE_CHANGED, callback),
+    gpu: {
+      getStatus: () => _unwrappingInvoke(CHANNELS.GPU_GET_STATUS),
+      setHardwareAcceleration: (enabled: boolean) =>
+        _unwrappingInvoke(CHANNELS.GPU_SET_HARDWARE_ACCELERATION, enabled),
+    },
+
+    privacy: {
+      ...buildPrivacyPreloadBindings(_unwrappingInvoke),
+
+      onTelemetryConsentChanged: (
+        callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
+      ) => _typedOn(CHANNELS.PRIVACY_TELEMETRY_CONSENT_CHANGED, callback),
+    },
+
+    sentry: buildSentryPreloadBindings(_unwrappingInvoke),
+
+    onboarding: {
+      ...buildOnboardingPreloadBindings(_unwrappingInvoke),
+
+      onChecklistPush: (
+        callback: (state: IpcEventMap["onboarding:checklist-push"]) => void
+      ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
+    },
+
+    milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
+
+    shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
+
+    forge: {
+      getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),
+      setDefaultProvider: (providerId: string | null) =>
+        _unwrappingInvoke(CHANNELS.FORGE_SET_DEFAULT_PROVIDER, providerId),
+      getProviders: () => _unwrappingInvoke(CHANNELS.FORGE_GET_PROVIDERS),
+      resolveProvider: (projectId: string, remoteUrl?: string) =>
+        _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_PROVIDER, projectId, remoteUrl),
+      openIssues: (cwd: string, query?: string, state?: string) =>
+        _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUES, cwd, query, state),
+      openPRs: (cwd: string, query?: string, state?: string) =>
+        _unwrappingInvoke(CHANNELS.FORGE_OPEN_PRS, cwd, query, state),
+      openCommits: (cwd: string, branch?: string) =>
+        _unwrappingInvoke(CHANNELS.FORGE_OPEN_COMMITS, cwd, branch),
+      openIssue: (payload: { cwd: string; issueNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
+      getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
+      assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
+      unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
+      validateToken: (payload: { providerId: string; token: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
+      setCredential: (providerId: string, credentials: Record<string, string>) =>
+        _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),
+      getCredentialStatus: (providerId: string) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_CREDENTIAL_STATUS, providerId),
+      clearCredential: (providerId: string) =>
+        _unwrappingInvoke(CHANNELS.FORGE_CLEAR_CREDENTIAL, providerId),
+      listIssues: (payload: { cwd: string; opts?: unknown }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUES, payload),
+      listPRs: (payload: { cwd: string; opts?: unknown }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_LIST_PRS, payload),
+      getIssue: (payload: { cwd: string; issueNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE, payload),
+      getPR: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
+      getRepoMetadata: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_METADATA, payload),
+      getCurrentUser: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_CURRENT_USER, payload),
+      onRateLimitChanged: (
+        callback: (
+          data: import("../shared/types/ipc/forge.js").ForgeRateLimitChangedPayload
+        ) => void
+      ) => _typedOn(CHANNELS.FORGE_RATE_LIMIT_CHANGED, callback),
+      onTokenHealthChanged: (
+        callback: (
+          data: import("../shared/types/ipc/forge.js").ForgeTokenHealthChangedPayload
+        ) => void
+      ) => _typedOn(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, callback),
+      classifyPushError: (payload: { cwd: string; stderr: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
+      getRepoStats: (payload: { cwd: string; bypassCache?: boolean }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_STATS, payload),
+      getFirstPageCache: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, payload),
+      getProjectHealth: (payload: { cwd: string; bypassCache?: boolean }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_PROJECT_HEALTH, payload),
+      getIssueTooltip: (payload: { cwd: string; issueNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, payload),
+      getPRTooltip: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_PR_TOOLTIP, payload),
+      getIssuesByNumbers: (payload: { cwd: string; numbers: number[] }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, payload),
+      getPRsByNumbers: (payload: { cwd: string; numbers: number[] }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, payload),
+      getPRReviewThreads: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
+      resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
+      getTokenHealth: (payload: { providerId: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_TOKEN_HEALTH, payload),
+      getRateLimitDetails: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_RATE_LIMIT_DETAILS, payload),
+      openPR: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_OPEN_PR, payload),
+      onRepoStatsAndPageUpdated: (
+        callback: (
+          data: import("../shared/types/ipc/forge.js").ForgeRepoStatsAndPagePayload
+        ) => void
+      ) => _typedOn(CHANNELS.FORGE_REPO_STATS_AND_PAGE_UPDATED, callback),
+      onRepoCountsUpdated: (
+        callback: (
+          data: import("../shared/types/ipc/forge.js").ForgeRepoCountsUpdatedPayload
+        ) => void
+      ) => _typedOn(CHANNELS.FORGE_REPO_COUNTS_UPDATED, callback),
+      onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
+        _typedOn(CHANNELS.PR_DETECTED, callback),
+      onPRCleared: (callback: (data: PRClearedPayload) => void) =>
+        _typedOn(CHANNELS.PR_CLEARED, callback),
+      onIssueDetected: (callback: (data: IssueDetectedPayload) => void) =>
+        _typedOn(CHANNELS.ISSUE_DETECTED, callback),
+      onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
+        _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
+    },
+
+    forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
+
+    runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
+
+    // Voice Input API
+    voiceInput: {
+      getSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
+      setSettings: (
+        patch: Partial<{
+          enabled: boolean;
+          openaiApiKey: string;
+          deepgramApiKey: string;
+          language: string;
+          customDictionary: string[];
+          transcriptionProvider: "openai" | "deepgram";
+          transcriptionModel: "gpt-realtime-whisper";
+          correctionEnabled: boolean;
+          correctionModel: "gpt-5-nano" | "gpt-5-mini";
+          correctionCustomInstructions: string;
+          paragraphingStrategy: "spoken-command" | "manual";
+          resolveFileLinks: boolean;
+          deviceId: string;
+          recordingMode: "toggle" | "push-to-talk";
+        }>
+      ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
+      start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
+      stop: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_STOP),
+      flushParagraph: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
+      sendAudioChunk: (chunk: ArrayBuffer) =>
+        ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
+      onTranscriptionDelta: (callback: (delta: string) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
+      onTranscriptionComplete: (
+        callback: (payload: { text: string; willCorrect: boolean }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+      onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
+      onError: (callback: (error: VoiceInputError) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
+      onStatus: (callback: (status: VoiceInputStatus) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
+      checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
+      requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
+      openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
+      validateApiKey: (apiKey: string) =>
+        _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
+      correct: (request: { rawText: string; recentContext?: string[] }) =>
+        _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
+      onFileTokenResolved: (
+        callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+      ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
+    },
+
+    mcpServer: {
+      ...buildMcpServerPreloadBindings(_unwrappingInvoke),
+
+      onRuntimeStateChanged: (callback: (snapshot: McpRuntimeSnapshot) => void) =>
+        _typedOn(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, callback),
+      onTierNotPermitted: (
+        callback: (payload: {
+          sessionId: string;
+          toolId: string;
+          tier: string;
+          targetTier: "workbench" | "action" | "system" | null;
+        }) => void
+      ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
+      onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
+        _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
+      onSessionRevoked: (callback: (payload: { sessionId: string; denialKind: string }) => void) =>
+        _typedOn(CHANNELS.MCP_SESSION_REVOKED, callback),
+      onToolCallStarted: (callback: (payload: McpToolCallStartedPayload) => void) =>
+        _typedOn(CHANNELS.MCP_TOOL_CALL_STARTED, callback),
+      onToolCallSettled: (callback: (payload: McpToolCallSettledPayload) => void) =>
+        _typedOn(CHANNELS.MCP_TOOL_CALL_SETTLED, callback),
+      onDisplayImage: (callback: (payload: McpHelpDisplayImagePayload) => void) =>
+        _typedOn(CHANNELS.MCP_HELP_DISPLAY_IMAGE, callback),
+      onTurnOutcomeAlert: (callback: (payload: McpTurnOutcomeAlertPayload) => void) =>
+        _typedOn(CHANNELS.MCP_TURN_OUTCOME_ALERT, callback),
+    },
+
+    helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
+
+    mcpBridge: {
+      onGetManifestRequest: (callback: (requestId: string) => void) =>
+        _typedOn(CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST, (payload) =>
+          callback(payload.requestId)
+        ),
+
+      sendGetManifestResponse: (requestId: string, manifest: unknown) => {
+        ipcRenderer.send(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, { requestId, manifest });
       },
-    };
-  })(),
 
-  gpu: {
-    getStatus: () => _unwrappingInvoke(CHANNELS.GPU_GET_STATUS),
-    setHardwareAcceleration: (enabled: boolean) =>
-      _unwrappingInvoke(CHANNELS.GPU_SET_HARDWARE_ACCELERATION, enabled),
-  },
-
-  privacy: {
-    ...buildPrivacyPreloadBindings(_unwrappingInvoke),
-
-    onTelemetryConsentChanged: (
-      callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
-    ) => _typedOn(CHANNELS.PRIVACY_TELEMETRY_CONSENT_CHANGED, callback),
-  },
-
-  sentry: buildSentryPreloadBindings(_unwrappingInvoke),
-
-  onboarding: {
-    ...buildOnboardingPreloadBindings(_unwrappingInvoke),
-
-    onChecklistPush: (
-      callback: (state: IpcEventMap["onboarding:checklist-push"]) => void
-    ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
-  },
-
-  milestones: buildMilestonesPreloadBindings(_unwrappingInvoke),
-
-  shortcutHints: buildShortcutHintsPreloadBindings(_unwrappingInvoke),
-
-  forge: {
-    getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),
-    setDefaultProvider: (providerId: string | null) =>
-      _unwrappingInvoke(CHANNELS.FORGE_SET_DEFAULT_PROVIDER, providerId),
-    getProviders: () => _unwrappingInvoke(CHANNELS.FORGE_GET_PROVIDERS),
-    resolveProvider: (projectId: string, remoteUrl?: string) =>
-      _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_PROVIDER, projectId, remoteUrl),
-    openIssues: (cwd: string, query?: string, state?: string) =>
-      _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUES, cwd, query, state),
-    openPRs: (cwd: string, query?: string, state?: string) =>
-      _unwrappingInvoke(CHANNELS.FORGE_OPEN_PRS, cwd, query, state),
-    openCommits: (cwd: string, branch?: string) =>
-      _unwrappingInvoke(CHANNELS.FORGE_OPEN_COMMITS, cwd, branch),
-    openIssue: (payload: { cwd: string; issueNumber: number }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
-    getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
-    assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
-    unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_UNASSIGN_ISSUE, payload),
-    validateToken: (payload: { providerId: string; token: string }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_VALIDATE_TOKEN, payload),
-    setCredential: (providerId: string, credentials: Record<string, string>) =>
-      _unwrappingInvoke(CHANNELS.FORGE_SET_CREDENTIAL, providerId, credentials),
-    getCredentialStatus: (providerId: string) =>
-      _unwrappingInvoke(CHANNELS.FORGE_GET_CREDENTIAL_STATUS, providerId),
-    clearCredential: (providerId: string) =>
-      _unwrappingInvoke(CHANNELS.FORGE_CLEAR_CREDENTIAL, providerId),
-    listIssues: (payload: { cwd: string; opts?: unknown }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUES, payload),
-    listPRs: (payload: { cwd: string; opts?: unknown }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_LIST_PRS, payload),
-    getIssue: (payload: { cwd: string; issueNumber: number }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE, payload),
-    getPR: (payload: { cwd: string; prNumber: number }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
-    getRepoMetadata: (payload: { cwd: string }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_METADATA, payload),
-    getCurrentUser: (payload: { cwd: string }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_GET_CURRENT_USER, payload),
-    onRateLimitChanged: (
-      callback: (data: import("../shared/types/ipc/forge.js").ForgeRateLimitChangedPayload) => void
-    ) => _typedOn(CHANNELS.FORGE_RATE_LIMIT_CHANGED, callback),
-    onTokenHealthChanged: (
-      callback: (
-        data: import("../shared/types/ipc/forge.js").ForgeTokenHealthChangedPayload
-      ) => void
-    ) => _typedOn(CHANNELS.FORGE_TOKEN_HEALTH_CHANGED, callback),
-    classifyPushError: (payload: { cwd: string; stderr: string }) =>
-      _unwrappingInvoke(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR, payload),
-  },
-
-  forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
-
-  runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
-
-  // Voice Input API
-  voiceInput: {
-    getSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
-    setSettings: (
-      patch: Partial<{
-        enabled: boolean;
-        openaiApiKey: string;
-        deepgramApiKey: string;
-        language: string;
-        customDictionary: string[];
-        transcriptionProvider: "openai" | "deepgram";
-        transcriptionModel: "gpt-realtime-whisper";
-        correctionEnabled: boolean;
-        correctionModel: "gpt-5-nano" | "gpt-5-mini";
-        correctionCustomInstructions: string;
-        paragraphingStrategy: "spoken-command" | "manual";
-        resolveFileLinks: boolean;
-        deviceId: string;
-        recordingMode: "toggle" | "push-to-talk";
-      }>
-    ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
-    start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
-    stop: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_STOP),
-    flushParagraph: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
-    sendAudioChunk: (chunk: ArrayBuffer) =>
-      ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
-    onTranscriptionDelta: (callback: (delta: string) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
-    onTranscriptionComplete: (
-      callback: (payload: { text: string; willCorrect: boolean }) => void
-    ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
-    onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
-    onError: (callback: (error: VoiceInputError) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
-    onStatus: (callback: (status: VoiceInputStatus) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
-    checkMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
-    requestMicPermission: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
-    openMicSettings: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
-    validateApiKey: (apiKey: string) =>
-      _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
-    correct: (request: { rawText: string; recentContext?: string[] }) =>
-      _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
-    onFileTokenResolved: (
-      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
-    ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
-  },
-
-  mcpServer: {
-    ...buildMcpServerPreloadBindings(_unwrappingInvoke),
-
-    onRuntimeStateChanged: (callback: (snapshot: McpRuntimeSnapshot) => void) =>
-      _typedOn(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, callback),
-    onTierNotPermitted: (
-      callback: (payload: {
-        sessionId: string;
-        toolId: string;
-        tier: string;
-        targetTier: "workbench" | "action" | "system" | null;
-      }) => void
-    ) => _typedOn(CHANNELS.MCP_TIER_NOT_PERMITTED, callback),
-    onGrantLifecycle: (callback: (payload: McpGrantLifecyclePayload) => void) =>
-      _typedOn(CHANNELS.MCP_GRANT_LIFECYCLE, callback),
-    onSessionRevoked: (callback: (payload: { sessionId: string; denialKind: string }) => void) =>
-      _typedOn(CHANNELS.MCP_SESSION_REVOKED, callback),
-    onToolCallStarted: (callback: (payload: McpToolCallStartedPayload) => void) =>
-      _typedOn(CHANNELS.MCP_TOOL_CALL_STARTED, callback),
-    onToolCallSettled: (callback: (payload: McpToolCallSettledPayload) => void) =>
-      _typedOn(CHANNELS.MCP_TOOL_CALL_SETTLED, callback),
-    onDisplayImage: (callback: (payload: McpHelpDisplayImagePayload) => void) =>
-      _typedOn(CHANNELS.MCP_HELP_DISPLAY_IMAGE, callback),
-    onTurnOutcomeAlert: (callback: (payload: McpTurnOutcomeAlertPayload) => void) =>
-      _typedOn(CHANNELS.MCP_TURN_OUTCOME_ALERT, callback),
-  },
-
-  helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
-
-  mcpBridge: {
-    onGetManifestRequest: (callback: (requestId: string) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { requestId: string }) =>
-        callback(payload.requestId);
-      ipcRenderer.on(CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST, handler);
-    },
-
-    sendGetManifestResponse: (requestId: string, manifest: unknown) => {
-      ipcRenderer.send(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, { requestId, manifest });
-    },
-
-    onDispatchActionRequest: (
-      callback: (payload: {
-        requestId: string;
-        actionId: string;
-        args?: unknown;
-        confirmed?: boolean;
-        context?: ActionContext;
-        callerInfo?: McpBearerIdentity;
-      }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: {
+      onDispatchActionRequest: (
+        callback: (payload: {
           requestId: string;
           actionId: string;
           args?: unknown;
           confirmed?: boolean;
           context?: ActionContext;
           callerInfo?: McpBearerIdentity;
+        }) => void
+      ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
+
+      sendDispatchActionResponse: (payload: {
+        requestId: string;
+        result: unknown;
+        confirmationDecision?: "approved" | "rejected" | "timeout";
+      }) => {
+        ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
+      },
+    },
+
+    pluginBridge: {
+      onDispatchActionRequest: (
+        callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
+      ) => _typedOn(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, callback),
+
+      sendDispatchActionResponse: (payload: {
+        requestId: string;
+        result: ActionDispatchResult;
+      }) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
+      },
+    },
+
+    plugin: {
+      ...buildPluginPreloadBindings(_unwrappingInvoke),
+
+      // Plugin-scoped bridge to the native filesystem path of a dropped File.
+      // `webUtils.getPathForFile` must run in the preload (Electron 32 removed
+      // `File.path`). Confined to the plugin namespace — deliberately NOT a
+      // global `window.electron` method — so arbitrary native-path recovery
+      // stays bounded to the plugin install surface (#9295). Returns `""` for
+      // synthetic/non-disk File objects; the renderer treats empty as an error.
+      getDroppedFilePath: (file: File): string => webUtils.getPathForFile(file),
+
+      // plugin:invoke uses raw ipcMain.handle with variadic args — its signature
+      // can't be expressed through IpcInvokeMap, so it stays inline.
+      invoke: (pluginId: string, channel: string, ...args: unknown[]) =>
+        _unwrappingInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
+
+      on: (pluginId: string, channel: string, callback: (payload: unknown) => void) => {
+        const fullChannel = `plugin:${pluginId}:${channel}`;
+        const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+        ipcRenderer.on(fullChannel, handler);
+        return () => {
+          ipcRenderer.removeListener(fullChannel, handler);
+        };
+      },
+
+      onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
+        _eventBusOn("plugin:actions-changed", callback),
+      onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
+        _eventBusOn("plugin:provenance-changed", callback),
+      onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
+        _eventBusOn("plugin:panel-kinds-changed", callback),
+      onAgentsChanged: (
+        callback: (payload: {
+          agents: Record<string, import("../shared/config/agentRegistry.js").AgentConfig>;
+          complete: boolean;
+        }) => void
+      ) => _eventBusOn("plugin:agents-changed", callback),
+      onToolbarButtonsChanged: (
+        callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
+      ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
+      onMenuItemsChanged: (
+        callback: (payload: {
+          items: Array<{ pluginId: string; item: MenuItemContribution }>;
+          complete: boolean;
+        }) => void
+      ) => _eventBusOn("plugin:menu-items-changed", callback),
+      onKeybindingsChanged: (
+        callback: (payload: {
+          keybindings: PluginKeybindingDescriptor[];
+          complete: boolean;
+        }) => void
+      ) => _eventBusOn("plugin:keybindings-changed", callback),
+      onContextMenuItemsChanged: (
+        callback: (payload: {
+          items: Array<{ pluginId: string; item: ContextMenuContribution }>;
+          complete: boolean;
+        }) => void
+      ) => _eventBusOn("plugin:context-menu-items-changed", callback),
+      onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
+        _eventBusOn("plugin:decorations-changed", callback),
+      onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
+        _eventBusOn("plugin:deep-link", callback),
+    },
+
+    pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),
+
+    crashRecovery: {
+      getPending: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
+      resolve: (action: { kind: "restore"; panelIds: string[] } | { kind: "fresh" }) =>
+        _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
+      getConfig: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
+      setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
+        _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
+    },
+
+    // Help workspace API
+    help: buildHelpPreloadBindings(_unwrappingInvoke),
+
+    perf: {
+      flushMarks: (payload: {
+        marks: Array<{
+          mark: string;
+          timestamp: string;
+          elapsedMs: number;
+          meta?: Record<string, unknown>;
+        }>;
+        rendererTimeOrigin: number;
+        rendererT0: number;
+      }) => ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, payload),
+    },
+
+    // Demo API — channel constants live in `./ipc/handlers/demo.preload.ts` and
+    // back the main-side `defineIpcNamespace`, but the renderer-facing shape
+    // takes positional args (moveTo(x, y, durationMs)) while channels carry a
+    // single payload object. The translation stays inline so window.electron.demo
+    // matches its declared `ElectronAPI.demo` signature.
+    ...(isDemoMode
+      ? {
+          demo: {
+            moveTo: (x: number, y: number, durationMs?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO, { x, y, durationMs }),
+            moveToSelector: (
+              selector: string,
+              durationMs?: number,
+              offsetX?: number,
+              offsetY?: number
+            ) =>
+              _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO_SELECTOR, {
+                selector,
+                durationMs,
+                offsetX,
+                offsetY,
+              }),
+            click: () => _unwrappingInvoke(CHANNELS.DEMO_CLICK),
+            type: (selector: string, text: string, cps?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_TYPE, { selector, text, cps }),
+            screenshot: () => _unwrappingInvoke(CHANNELS.DEMO_SCREENSHOT),
+            waitForSelector: (selector: string, timeoutMs?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
+            pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
+            resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
+            sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
+            startCapture: (payload: {
+              fps?: number;
+              outputPath: string;
+              videoBitsPerSecond?: number;
+              width?: number;
+              height?: number;
+            }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+            sendCaptureChunk: (captureId: string, data: Uint8Array) => {
+              ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
+            },
+            sendCaptureStop: (captureId: string, chunkCount: number, error?: string) => {
+              ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, chunkCount, error });
+            },
+            stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
+            getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
+            scroll: (selector: string) => _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
+            drag: (fromSelector: string, toSelector: string, durationMs?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_DRAG, { fromSelector, toSelector, durationMs }),
+            pressKey: (
+              key: string,
+              code?: string,
+              modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
+              selector?: string
+            ) => _unwrappingInvoke(CHANNELS.DEMO_PRESS_KEY, { key, code, modifiers, selector }),
+            typeInTerminal: (selector: string, text: string, cps?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_TYPE_IN_TERMINAL, { selector, text, cps }),
+            sendKeyToTerminal: (selector: string, key: string) =>
+              _unwrappingInvoke(CHANNELS.DEMO_SEND_KEY_TO_TERMINAL, { selector, key }),
+            spotlight: (selector: string, padding?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_SPOTLIGHT, { selector, padding }),
+            dismissSpotlight: () => _unwrappingInvoke(CHANNELS.DEMO_DISMISS_SPOTLIGHT),
+            annotate: (
+              selector: string,
+              text: string,
+              position?:
+                | "top"
+                | "bottom"
+                | "left"
+                | "right"
+                | "screen-top"
+                | "screen-bottom"
+                | "screen-center"
+                | "lower-third-left"
+                | "lower-third-right"
+                | "top-left"
+                | "top-right"
+                | "bottom-left"
+                | "bottom-right"
+                | "above-cursor"
+                | "below-cursor",
+              size?: "sm" | "md" | "lg" | "xl",
+              id?: string
+            ) =>
+              _unwrappingInvoke(CHANNELS.DEMO_ANNOTATE, {
+                selector,
+                text,
+                position,
+                size,
+                id,
+              }),
+            dismissAnnotation: (id?: string) =>
+              _unwrappingInvoke(CHANNELS.DEMO_DISMISS_ANNOTATION, { id }),
+            waitForIdle: (settleMs?: number, timeoutMs?: number) =>
+              _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_IDLE, { settleMs, timeoutMs }),
+            onExecCommand: (
+              channel: string,
+              callback: (payload: Record<string, unknown>) => void
+            ): (() => void) => {
+              const handler = (
+                _event: Electron.IpcRendererEvent,
+                payload: Record<string, unknown>
+              ) => callback(payload);
+              ipcRenderer.on(channel, handler);
+              return () => ipcRenderer.removeListener(channel, handler);
+            },
+            sendCommandDone: (requestId: string, error?: string) => {
+              ipcRenderer.send(CHANNELS.DEMO_COMMAND_DONE, { requestId, error });
+            },
+          },
         }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, handler);
-    },
-
-    sendDispatchActionResponse: (payload: {
-      requestId: string;
-      result: unknown;
-      confirmationDecision?: "approved" | "rejected" | "timeout";
-    }) => {
-      ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
-    },
-  },
-
-  pluginBridge: {
-    onDispatchActionRequest: (
-      callback: (payload: { requestId: string; actionId: string; args?: unknown }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: { requestId: string; actionId: string; args?: unknown }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, handler);
-    },
-
-    sendDispatchActionResponse: (payload: { requestId: string; result: ActionDispatchResult }) => {
-      ipcRenderer.send(CHANNELS.PLUGIN_DISPATCH_ACTION_RESPONSE, payload);
-    },
-  },
-
-  plugin: {
-    ...buildPluginPreloadBindings(_unwrappingInvoke),
-
-    // Plugin-scoped bridge to the native filesystem path of a dropped File.
-    // `webUtils.getPathForFile` must run in the preload (Electron 32 removed
-    // `File.path`). Confined to the plugin namespace — deliberately NOT a
-    // global `window.electron` method — so arbitrary native-path recovery
-    // stays bounded to the plugin install surface (#9295). Returns `""` for
-    // synthetic/non-disk File objects; the renderer treats empty as an error.
-    getDroppedFilePath: (file: File): string => webUtils.getPathForFile(file),
-
-    // plugin:invoke uses raw ipcMain.handle with variadic args — its signature
-    // can't be expressed through IpcInvokeMap, so it stays inline.
-    invoke: (pluginId: string, channel: string, ...args: unknown[]) =>
-      _unwrappingInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
-
-    on: (pluginId: string, channel: string, callback: (payload: unknown) => void) => {
-      const fullChannel = `plugin:${pluginId}:${channel}`;
-      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
-      ipcRenderer.on(fullChannel, handler);
-      return () => {
-        ipcRenderer.removeListener(fullChannel, handler);
-      };
-    },
-
-    onActionsChanged: (callback: (payload: { actions: PluginActionDescriptor[] }) => void) =>
-      _eventBusOn("plugin:actions-changed", callback),
-    onProvenanceChanged: (callback: (payload: Record<string, never>) => void) =>
-      _eventBusOn("plugin:provenance-changed", callback),
-    onPanelKindsChanged: (callback: (payload: { kinds: PanelKindConfig[] }) => void) =>
-      _eventBusOn("plugin:panel-kinds-changed", callback),
-    onAgentsChanged: (
-      callback: (payload: {
-        agents: Record<string, import("../shared/config/agentRegistry.js").AgentConfig>;
-        complete: boolean;
-      }) => void
-    ) => _eventBusOn("plugin:agents-changed", callback),
-    onToolbarButtonsChanged: (
-      callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
-    ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
-    onMenuItemsChanged: (
-      callback: (payload: {
-        items: Array<{ pluginId: string; item: MenuItemContribution }>;
-        complete: boolean;
-      }) => void
-    ) => _eventBusOn("plugin:menu-items-changed", callback),
-    onKeybindingsChanged: (
-      callback: (payload: { keybindings: PluginKeybindingDescriptor[]; complete: boolean }) => void
-    ) => _eventBusOn("plugin:keybindings-changed", callback),
-    onContextMenuItemsChanged: (
-      callback: (payload: {
-        items: Array<{ pluginId: string; item: ContextMenuContribution }>;
-        complete: boolean;
-      }) => void
-    ) => _eventBusOn("plugin:context-menu-items-changed", callback),
-    onDecorationsChanged: (callback: (payload: { scope: string; paths?: string[] }) => void) =>
-      _eventBusOn("plugin:decorations-changed", callback),
-    onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
-      _eventBusOn("plugin:deep-link", callback),
-  },
-
-  pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),
-
-  crashRecovery: {
-    getPending: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
-    resolve: (action: { kind: "restore"; panelIds: string[] } | { kind: "fresh" }) =>
-      _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
-    getConfig: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
-    setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
-      _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
-  },
-
-  // Help workspace API
-  help: buildHelpPreloadBindings(_unwrappingInvoke),
-
-  perf: {
-    flushMarks: (payload: {
-      marks: Array<{
-        mark: string;
-        timestamp: string;
-        elapsedMs: number;
-        meta?: Record<string, unknown>;
-      }>;
-      rendererTimeOrigin: number;
-      rendererT0: number;
-    }) => ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, payload),
-  },
-
-  // Demo API — channel constants live in `./ipc/handlers/demo.preload.ts` and
-  // back the main-side `defineIpcNamespace`, but the renderer-facing shape
-  // takes positional args (moveTo(x, y, durationMs)) while channels carry a
-  // single payload object. The translation stays inline so window.electron.demo
-  // matches its declared `ElectronAPI.demo` signature.
-  ...(isDemoMode
-    ? {
-        demo: {
-          moveTo: (x: number, y: number, durationMs?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO, { x, y, durationMs }),
-          moveToSelector: (
-            selector: string,
-            durationMs?: number,
-            offsetX?: number,
-            offsetY?: number
-          ) =>
-            _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO_SELECTOR, {
-              selector,
-              durationMs,
-              offsetX,
-              offsetY,
-            }),
-          click: () => _unwrappingInvoke(CHANNELS.DEMO_CLICK),
-          type: (selector: string, text: string, cps?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_TYPE, { selector, text, cps }),
-          screenshot: () => _unwrappingInvoke(CHANNELS.DEMO_SCREENSHOT),
-          waitForSelector: (selector: string, timeoutMs?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
-          pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
-          resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
-          sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-          startCapture: (payload: {
-            fps?: number;
-            outputPath: string;
-            videoBitsPerSecond?: number;
-            width?: number;
-            height?: number;
-          }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
-          sendCaptureChunk: (captureId: string, data: Uint8Array) => {
-            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
-          },
-          sendCaptureStop: (captureId: string, chunkCount: number, error?: string) => {
-            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, chunkCount, error });
-          },
-          stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
-          getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
-          scroll: (selector: string) => _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
-          drag: (fromSelector: string, toSelector: string, durationMs?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_DRAG, { fromSelector, toSelector, durationMs }),
-          pressKey: (
-            key: string,
-            code?: string,
-            modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
-            selector?: string
-          ) => _unwrappingInvoke(CHANNELS.DEMO_PRESS_KEY, { key, code, modifiers, selector }),
-          typeInTerminal: (selector: string, text: string, cps?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_TYPE_IN_TERMINAL, { selector, text, cps }),
-          sendKeyToTerminal: (selector: string, key: string) =>
-            _unwrappingInvoke(CHANNELS.DEMO_SEND_KEY_TO_TERMINAL, { selector, key }),
-          spotlight: (selector: string, padding?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_SPOTLIGHT, { selector, padding }),
-          dismissSpotlight: () => _unwrappingInvoke(CHANNELS.DEMO_DISMISS_SPOTLIGHT),
-          annotate: (
-            selector: string,
-            text: string,
-            position?:
-              | "top"
-              | "bottom"
-              | "left"
-              | "right"
-              | "screen-top"
-              | "screen-bottom"
-              | "screen-center"
-              | "lower-third-left"
-              | "lower-third-right"
-              | "top-left"
-              | "top-right"
-              | "bottom-left"
-              | "bottom-right"
-              | "above-cursor"
-              | "below-cursor",
-            size?: "sm" | "md" | "lg" | "xl",
-            id?: string
-          ) =>
-            _unwrappingInvoke(CHANNELS.DEMO_ANNOTATE, {
-              selector,
-              text,
-              position,
-              size,
-              id,
-            }),
-          dismissAnnotation: (id?: string) =>
-            _unwrappingInvoke(CHANNELS.DEMO_DISMISS_ANNOTATION, { id }),
-          waitForIdle: (settleMs?: number, timeoutMs?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_IDLE, { settleMs, timeoutMs }),
-          onExecCommand: (
-            channel: string,
-            callback: (payload: Record<string, unknown>) => void
-          ): (() => void) => {
-            const handler = (_event: Electron.IpcRendererEvent, payload: Record<string, unknown>) =>
-              callback(payload);
-            ipcRenderer.on(channel, handler);
-            return () => ipcRenderer.removeListener(channel, handler);
-          },
-          sendCommandDone: (requestId: string, error?: string) => {
-            ipcRenderer.send(CHANNELS.DEMO_COMMAND_DONE, { requestId, error });
-          },
-        },
-      }
-    : {}),
-};
+      : {}),
+  };
+}
 
 // Expose the API to the renderer process only for trusted origins in the main frame.
 // The recovery page (recovery.html) is a static crash-recovery surface whose sole
@@ -2773,11 +2780,14 @@ let exposeEndMs = exposeStartMs;
 if (window.top === window && isTrustedRendererUrl(rendererUrl)) {
   if (isRecoveryPageUrl(rendererUrl)) {
     exposeStartMs = perfNowMs();
-    contextBridge.exposeInMainWorld("electron", { recovery: api.recovery });
+    contextBridge.exposeInMainWorld("electron", { recovery: recoveryApi });
     exposeEndMs = perfNowMs();
     // __SENTRY_IPC__ is intentionally withheld here: recovery.html has no Sentry
     // renderer SDK and exposing the transport would needlessly widen its surface.
   } else {
+    // Built here — not at module scope — so recovery and untrusted frames
+    // never pay for the ~490-closure full surface they don't expose.
+    const api = buildElectronApi();
     exposeStartMs = perfNowMs();
     contextBridge.exposeInMainWorld("electron", api);
     exposeEndMs = perfNowMs();
@@ -2911,8 +2921,8 @@ _eventBusOn("window:sample-renderer-elu", ({ requestId }) => {
 
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
 // Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
-if (process.env.DAINTREE_E2E_FAULT_MODE === "1" && !isPackagedBuild) {
-  contextBridge.exposeInMainWorld("__DAINTREE_E2E_IPC__", {
+if (isE2EFaultMode) {
+  contextBridge.exposeInMainWorld(e2eGlobalKey("IPC"), {
     getRendererListenerCount: (channel: string) => ipcRenderer.listenerCount(channel),
   });
 }
@@ -2921,8 +2931,8 @@ if (process.env.DAINTREE_E2E_FAULT_MODE === "1" && !isPackagedBuild) {
 // Used by the renderer to suppress side effects (like the auto-launched
 // primary agent at the end of onboarding) that would otherwise pollute
 // panel-count assertions in tests.
-if (process.env.DAINTREE_E2E_MODE === "1" && !isPackagedBuild) {
-  contextBridge.exposeInMainWorld("__DAINTREE_E2E_MODE__", true);
+if (isE2EMode) {
+  contextBridge.exposeInMainWorld(e2eGlobalKey("MODE"), true);
 }
 
 // E2E test bridge: expose the "skip first-run dialogs" flag to the renderer at
@@ -2931,8 +2941,8 @@ if (process.env.DAINTREE_E2E_MODE === "1" && !isPackagedBuild) {
 // only set when the E2E harness launches Electron. The sandboxed renderer
 // cannot read `process.env` directly, so the preload (which does have a
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
-if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1" && !isPackagedBuild) {
-  contextBridge.exposeInMainWorld("__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
+if (isE2ESkipFirstRunDialogs) {
+  contextBridge.exposeInMainWorld(e2eGlobalKey("SKIP_FIRST_RUN_DIALOGS"), true);
 }
 
 // Surface the persisted color scheme id (seeded via additionalArguments) so the
@@ -2975,23 +2985,23 @@ if (process.env.DAINTREE_PERF_CAPTURE === "1") {
   ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, {
     marks: [
       {
-        mark: PERF_MARKS.PRELOAD_EVAL_START,
+        mark: PRELOAD_EVAL_START,
         timestamp,
         elapsedMs: 0,
       },
       {
-        mark: PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
+        mark: PRELOAD_EXPOSE_IN_MAIN_WORLD_START,
         timestamp,
         elapsedMs: exposeStartMs - preloadEvalStartMs,
       },
       {
-        mark: PERF_MARKS.PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
+        mark: PRELOAD_EXPOSE_IN_MAIN_WORLD_END,
         timestamp,
         elapsedMs: exposeEndMs - preloadEvalStartMs,
         meta: { durationMs: exposeEndMs - exposeStartMs },
       },
       {
-        mark: PERF_MARKS.PRELOAD_EVAL_END,
+        mark: PRELOAD_EVAL_END,
         timestamp,
         elapsedMs: preloadEvalEndMs - preloadEvalStartMs,
         meta: { durationMs: preloadEvalEndMs - preloadEvalStartMs },

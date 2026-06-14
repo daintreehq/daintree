@@ -4,6 +4,19 @@ import {
 } from "../services/pty/types.js";
 import type { PortQueueManager } from "./portQueue.js";
 
+// Throughput-mode flush window, profile-tunable via set-resource-profile
+// (resourceConfig handler). Module-level so the main batcher and every
+// per-window mirror batcher share the cadence without plumbing. Already
+// scheduled timers keep their original delay; the new value applies from the
+// next batch.
+let throughputDelayMs = PORT_BATCH_THROUGHPUT_DELAY_MS;
+
+export function setPortBatchThroughputDelayMs(ms: number): void {
+  if (Number.isFinite(ms) && ms > 0) {
+    throughputDelayMs = ms;
+  }
+}
+
 export interface PortBatcherDeps {
   portQueueManager: PortQueueManager;
   postMessage: (id: string, data: Uint8Array, bytes: number) => void;
@@ -42,10 +55,20 @@ export class PortBatcher {
   // ArrayBuffer to this batcher (no sibling batcher holds the same chunk), so a
   // single-chunk flush can transfer it instead of copying. Defaults to false:
   // the safe assumption is that the chunk is shared and must be copied at flush.
-  write(id: string, data: Uint8Array, byteCount: number, owned = false): boolean {
+  // `interactive` marks output arriving just after renderer input (keystroke
+  // echo): a throughput-mode entry swaps its 16ms timer for an immediate so the
+  // echo isn't held a frame behind the flood it's interleaved with.
+  write(
+    id: string,
+    data: Uint8Array,
+    byteCount: number,
+    owned = false,
+    interactive = false
+  ): boolean {
     if (this.disposed) return false;
 
-    const terminalPending = this.pendingChunks.get(id)?.bytes ?? 0;
+    let entry = this.pendingChunks.get(id);
+    const terminalPending = entry?.bytes ?? 0;
     if (this.deps.portQueueManager.isAtCapacity(id, terminalPending + byteCount)) {
       // Flush any pending data for this terminal before rejecting to prevent
       // split-channel delivery (buffered data on MessagePort + rejected data on SAB/IPC)
@@ -55,7 +78,6 @@ export class PortBatcher {
       return false;
     }
 
-    let entry = this.pendingChunks.get(id);
     if (!entry) {
       entry = {
         chunks: [],
@@ -83,12 +105,24 @@ export class PortBatcher {
     if (entry.mode === "idle") {
       entry.immediateHandle = setImmediate(() => this.flush());
       entry.mode = "latency";
+    } else if (interactive) {
+      // Echo fast-path: flush() drains the full pending map, so earlier queued
+      // output for this terminal still lands ahead of the echo bytes — the
+      // batch is accelerated, never reordered or bypassed. In latency mode the
+      // immediate is already pending; in throughput mode swap the timer for an
+      // immediate (mode stays "throughput" so the ladder won't re-escalate the
+      // pending immediate back onto a 16ms timer).
+      if (entry.timeoutHandle !== null) {
+        clearTimeout(entry.timeoutHandle);
+        entry.timeoutHandle = null;
+        entry.immediateHandle = setImmediate(() => this.flush());
+      }
     } else if (entry.mode === "latency") {
       if (entry.immediateHandle !== null) {
         clearImmediate(entry.immediateHandle);
         entry.immediateHandle = null;
       }
-      entry.timeoutHandle = setTimeout(() => this.flush(), PORT_BATCH_THROUGHPUT_DELAY_MS);
+      entry.timeoutHandle = setTimeout(() => this.flush(), throughputDelayMs);
       entry.mode = "throughput";
     }
     // throughput mode: timer already scheduled, nothing to do
@@ -107,9 +141,11 @@ export class PortBatcher {
       this.cancelEntryTimers(entry);
     }
 
-    const entries = Array.from(snapshot.entries());
-    for (let i = 0; i < entries.length; i++) {
-      const [id, { chunks, bytes, owned }] = entries[i];
+    // Iterate the detached snapshot directly (no intermediate entries array on
+    // the happy path); delete each entry as it's consumed so the catch block can
+    // build failedBatches from the failed entry plus whatever remains.
+    for (const [id, { chunks, bytes, owned }] of snapshot) {
+      snapshot.delete(id);
       let data: Uint8Array = new Uint8Array(0);
       try {
         data = mergeChunks(chunks, bytes, owned);
@@ -121,7 +157,7 @@ export class PortBatcher {
         );
       } catch (error) {
         const failedBatches: PortBatcherFailedBatch[] = [{ id, data, bytes }];
-        for (const [failedId, pending] of entries.slice(i + 1)) {
+        for (const [failedId, pending] of snapshot) {
           failedBatches.push({
             id: failedId,
             data: mergeChunks(pending.chunks, pending.bytes, pending.owned),

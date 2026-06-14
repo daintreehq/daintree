@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ExternalLink, Settings2, ShieldAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
@@ -48,7 +49,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
-import { isPtyPanel } from "@shared/types/panel";
+import { isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
@@ -159,7 +160,26 @@ export function HelpPanel({
     setOpen,
     dismissIntro,
     clearDroppedPreferredAgent,
-  } = useHelpPanelStore();
+  } = useHelpPanelStore(
+    useShallow((s) => ({
+      isOpen: s.isOpen,
+      width: s.width,
+      terminalId: s.terminalId,
+      sessionId: s.sessionId,
+      agentId: s.agentId,
+      preferredAgentId: s.preferredAgentId,
+      droppedPreferredAgentId: s.droppedPreferredAgentId,
+      introDismissed: s.introDismissed,
+      conversationTouched: s.conversationTouched,
+      focusRequest: s.focusRequest,
+      figures: s.figures,
+      markConversationStarted: s.markConversationStarted,
+      setWidth: s.setWidth,
+      setOpen: s.setOpen,
+      dismissIntro: s.dismissIntro,
+      clearDroppedPreferredAgent: s.clearDroppedPreferredAgent,
+    }))
+  );
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -206,18 +226,32 @@ export function HelpPanel({
 
   const focusedWorktreeId = useWorktreeSelectionStore((s) => s.focusedWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
-  const pinnedTerminalPanel = usePanelStore((s) =>
-    pinnedContext?.terminalId ? s.panelsById[pinnedContext.terminalId] : undefined
+  // Tool calls re-resolve their target terminal live at dispatch time, so the
+  // frozen provision-time `pinnedContext.terminalId` going stale doesn't mean
+  // they can't reach anything. Danger only when a pinned session has no live
+  // grid terminal left to dispatch into; warning when the user has since
+  // focused a different worktree than the one the session is bound to. Danger
+  // wins — nowhere to reach is the more urgent mismatch. The dock-hosted
+  // assistant terminal is excluded — it's never a tool-call target.
+  const hasAnyLiveGridPty = usePanelStore((s) =>
+    s.panelIds.some((id) => {
+      const p = s.panelsById[id];
+      return (
+        p != null &&
+        isPtyPanel(p) &&
+        isGridPanelLocation(p.location) &&
+        // `missing-cli`/`failed` gate panels are UI placeholders with no backing
+        // PTY — they can't receive a dispatched command.
+        p.spawnStatus !== "missing-cli" &&
+        p.spawnStatus !== "failed" &&
+        p.hasPty !== false &&
+        p.exitCode === undefined &&
+        p.runtimeStatus !== "exited" &&
+        p.runtimeStatus !== "error"
+      );
+    })
   );
-  // Escalation: danger when the pinned terminal is gone or has exited (its
-  // PTY can no longer receive dispatched commands), warning when the user has
-  // since focused a different worktree than the one the session is bound to.
-  // Danger wins — a dead target is the more urgent mismatch.
-  const pinnedTerminalPanelPty =
-    pinnedTerminalPanel && isPtyPanel(pinnedTerminalPanel) ? pinnedTerminalPanel : undefined;
-  const isPinnedTerminalDead =
-    pinnedContext?.terminalId != null &&
-    (!pinnedTerminalPanel || pinnedTerminalPanelPty?.exitCode !== undefined);
+  const isPinnedTerminalDead = pinnedContext?.terminalId != null && !hasAnyLiveGridPty;
   const isPinnedWorktreeDiverged =
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
@@ -456,6 +490,34 @@ export function HelpPanel({
     }
     return undefined;
   }, [isOpen, isVisible, focusRequest, terminalId, terminal, showHybridInputBar]);
+
+  // Post-reveal repaint for the assistant terminal (#10362). The project-level
+  // reveal sweep folds the assistant into its targets, but it repaints on a
+  // fixed double-rAF tuned to the project grid — and this slide-out panel can
+  // finish laying out a few frames later, so that pass can land before this
+  // container has real geometry and no-op. Re-run the repaint from the panel's
+  // own context, gated on the terminal container actually being sized, so it
+  // fires exactly when the assistant is paintable.
+  useEffect(() => {
+    if (!isOpen || !isVisible || !terminalId) return;
+    if (typeof requestAnimationFrame !== "function") return;
+    const off = window.electron?.app?.onViewRevealed?.(() => {
+      let frames = 0;
+      const tick = (): void => {
+        if (!useHelpPanelStore.getState().isOpen) return;
+        // Wait for the container to have real width before repainting —
+        // repaintForReveal's own size guard would otherwise no-op against a
+        // not-yet-laid-out panel. Give up after a bounded window.
+        if ((contentRef.current?.clientWidth ?? 0) >= HELP_PANEL_MIN_WIDTH / 4) {
+          terminalInstanceService.repaintForReveal(terminalId);
+          return;
+        }
+        if (++frames < 8) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    return off;
+  }, [isOpen, isVisible, terminalId]);
 
   // Resize via mouse drag
   const handleResizeStart = useCallback(
@@ -807,7 +869,7 @@ export function HelpPanel({
                 className={cn(
                   "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
                   "rounded-[var(--radius-md)]",
-                  "bg-status-warning/10 border border-status-warning/40",
+                  "bg-status-warning/10 border border-status-warning/20",
                   "text-xs text-daintree-text/85"
                 )}
                 data-testid="help-dropped-agent-banner"
@@ -901,7 +963,7 @@ export function HelpPanel({
                     "rounded-[var(--radius-sm)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                   )}
-                  title="Switch to the worktree this assistant is pinned to."
+                  title="Switch to the worktree this assistant is pinned to"
                 >
                   <span
                     aria-hidden
@@ -921,7 +983,7 @@ export function HelpPanel({
                   )}
                   title={
                     isPinnedTerminalDead
-                      ? "The terminal this assistant was pinned to has closed — its tool calls can't reach it."
+                      ? "No open terminal can receive this assistant's tool calls."
                       : "Assistant tool calls are pinned to this worktree and terminal."
                   }
                 >
@@ -948,7 +1010,7 @@ export function HelpPanel({
                   "bg-status-danger/10 text-status-danger hover:bg-status-danger/15 transition-colors duration-150",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 )}
-                title="The pinned terminal has closed — start a new session."
+                title="No open terminal to receive tool calls — start a new session"
               >
                 Start new session
               </button>

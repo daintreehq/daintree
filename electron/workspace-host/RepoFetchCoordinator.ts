@@ -5,6 +5,9 @@ import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
 
 const FETCH_ABORT_TIMEOUT_MS = 60_000;
 
+const FETCH_RECENCY_WINDOW_MS = 15_000;
+const FORCE_FETCH_RECENCY_WINDOW_MS = 5_000;
+
 const NETWORK_FAILURE_TTL_MS = 60_000;
 const NETWORK_FAILURE_JITTER_MS = 30_000;
 const REPO_NOT_FOUND_FIRST_FETCH_TTL_MS = 5 * 60_000;
@@ -90,6 +93,11 @@ export interface FetchResult {
  *     after a short window. After at least one prior success, a 404 is more
  *     likely a permission revocation masked as 404 (GitHub does this) — treat
  *     it as auth-failed.
+ *   - Sibling worktrees schedule independent cadence fetches against the same
+ *     origin (and wake/auth-retry paths force one per monitor). A short
+ *     recency window dedups them: when the repo fetched successfully moments
+ *     ago, return that success without spawning git. Refs are shared via the
+ *     commondir, so they are genuinely fresh for every sibling.
  */
 export class RepoFetchCoordinator {
   private readonly states = new Map<string, RepoState>();
@@ -142,6 +150,11 @@ export class RepoFetchCoordinator {
           networkFailed: true,
         };
       }
+    }
+
+    const recent = this.recentSuccessResult(state, opts.force === true);
+    if (recent) {
+      return recent;
     }
 
     const generationAtStart = state.generation;
@@ -213,6 +226,25 @@ export class RepoFetchCoordinator {
     return this.states.get(commonDir)?.lastSuccessfulFetch ?? null;
   }
 
+  /**
+   * Success result reusing the last fetch when it landed within the recency
+   * window — `null` when a real fetch is needed. Never applies over a cached
+   * failure so failure surfacing keeps today's semantics. A negative elapsed
+   * (clock moved backwards) also forces a real fetch.
+   */
+  private recentSuccessResult(state: RepoState, force: boolean): FetchResult | null {
+    if (state.failure || state.lastSuccessfulFetch === null) return null;
+    const window = force ? FORCE_FETCH_RECENCY_WINDOW_MS : FETCH_RECENCY_WINDOW_MS;
+    const elapsed = Date.now() - state.lastSuccessfulFetch;
+    if (elapsed < 0 || elapsed >= window) return null;
+    return {
+      status: "success",
+      lastFetchedAt: state.lastSuccessfulFetch,
+      authFailed: false,
+      networkFailed: false,
+    };
+  }
+
   private getOrCreateState(commonDir: string): RepoState {
     let state = this.states.get(commonDir);
     if (!state) {
@@ -232,11 +264,23 @@ export class RepoFetchCoordinator {
     generationAtStart: number,
     opts: FetchOptions
   ): Promise<FetchResult> {
+    const stateAtStart = this.states.get(commonDir);
+    if (!stateAtStart || stateAtStart.generation !== generationAtStart) {
+      return { status: "skipped", skipReason: "stale-generation" };
+    }
+    // Re-check recency after waiting on the chain — back-to-back sibling
+    // fetches (wake storm, auth retry) all queue before the first completes,
+    // so the dedup has to look at the timestamp the prior link just wrote.
+    const recent = this.recentSuccessResult(stateAtStart, opts.force === true);
+    if (recent) {
+      return recent;
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_ABORT_TIMEOUT_MS);
     let succeeded = false;
     try {
-      const git = createBackgroundFetchGit(opts.worktreePath, {
+      const git = await createBackgroundFetchGit(opts.worktreePath, {
         signal: controller.signal,
       });
       // --no-write-fetch-head: skip writing FETCH_HEAD on background fetches

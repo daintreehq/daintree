@@ -269,6 +269,127 @@ describe("QuickStateFilterBar", () => {
     expect(inactiveClass).toContain("text-daintree-text/60");
   });
 
+  it("fades each empty bucket's icon with its own state color — issue #10353", () => {
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 9, working: 0, waiting: 0, finished: 0 }}
+      />
+    );
+    const fadedBySegment: [RegExp, string][] = [
+      [/Working/, "text-state-working/40"],
+      [/Waiting/, "text-state-waiting/40"],
+      [/Finished/, "text-category-blue/40"],
+    ];
+    for (const [name, fadedClass] of fadedBySegment) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").toContain(fadedClass);
+    }
+  });
+
+  it("keeps icons at their full state color when their count is positive", () => {
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 9, working: 3, waiting: 1, finished: 2 }}
+      />
+    );
+    const colorBySegment: [RegExp, string][] = [
+      [/Working/, "text-state-working"],
+      [/Waiting/, "text-state-waiting"],
+      [/Finished/, "text-category-blue"],
+    ];
+    for (const [name, colorClass] of colorBySegment) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      const svgClass = svg?.getAttribute("class") ?? "";
+      expect(svgClass).toContain(colorClass);
+      expect(svgClass).not.toContain("/40");
+    }
+  });
+
+  it("fades only the segments whose count is zero in a mixed-count bar", () => {
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 2, working: 0, waiting: 2, finished: 0 }}
+      />
+    );
+    const workingClass =
+      screen
+        .getByRole("button", { name: /Working/ })
+        .querySelector("svg")
+        ?.getAttribute("class") ?? "";
+    const waitingClass =
+      screen
+        .getByRole("button", { name: /Waiting/ })
+        .querySelector("svg")
+        ?.getAttribute("class") ?? "";
+    const finishedClass =
+      screen
+        .getByRole("button", { name: /Finished/ })
+        .querySelector("svg")
+        ?.getAttribute("class") ?? "";
+    expect(workingClass).toContain("text-state-working/40");
+    expect(finishedClass).toContain("text-category-blue/40");
+    expect(waitingClass).toContain("text-state-waiting");
+    expect(waitingClass).not.toContain("/40");
+  });
+
+  it("does not fade icons when the counts prop is omitted", () => {
+    renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
+    for (const name of ["Working", "Waiting", "Finished"]) {
+      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("class") ?? "").not.toContain("/40");
+    }
+  });
+
+  it("fades the active segment's icon when its own count is zero", () => {
+    // Active styling lives on the button, the fade lives on the icon — they
+    // must compose rather than conflict.
+    renderBar(
+      <QuickStateFilterBar
+        value="waiting"
+        onChange={() => {}}
+        counts={{ all: 2, working: 1, waiting: 0, finished: 1 }}
+      />
+    );
+    const waiting = screen.getByRole("button", { name: /Waiting/ });
+    expect(waiting.getAttribute("aria-pressed")).toBe("true");
+    expect(waiting.querySelector("svg")?.getAttribute("class") ?? "").toContain(
+      "text-state-waiting/40"
+    );
+    const workingClass =
+      screen
+        .getByRole("button", { name: /Working/ })
+        .querySelector("svg")
+        ?.getAttribute("class") ?? "";
+    expect(workingClass).toContain("animate-spin-slow");
+    expect(workingClass).not.toContain("/40");
+  });
+
+  it("renders the zero-count working icon faded and not spinning", () => {
+    renderBar(
+      <QuickStateFilterBar
+        value="all"
+        onChange={() => {}}
+        counts={{ all: 0, working: 0, waiting: 0, finished: 0 }}
+      />
+    );
+    const svgClass =
+      screen
+        .getByRole("button", { name: /Working/ })
+        .querySelector("svg")
+        ?.getAttribute("class") ?? "";
+    expect(svgClass).toContain("text-state-working/40");
+    expect(svgClass).not.toContain("animate-spin-slow");
+  });
+
   it("renders the optional trailing slot past a divider", () => {
     renderBar(
       <QuickStateFilterBar

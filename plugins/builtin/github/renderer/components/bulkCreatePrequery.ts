@@ -1,11 +1,12 @@
 import PQueue from "p-queue";
-import type { BranchInfo, GitHubIssue, GitHubPR } from "@shared/types";
+import type { BranchInfo } from "@shared/types";
+import type { Issue, PR } from "@shared/types/forge";
 
 const PREQUERY_CONCURRENCY = 10;
 const PREQUERY_TIMEOUT_MS = 5000;
 
 export interface PlannedWorktree {
-  item: GitHubIssue | GitHubPR;
+  item: Issue | PR;
   mode: "issue" | "pr";
   branchName: string;
   prefix?: string;

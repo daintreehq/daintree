@@ -18,6 +18,14 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 
+// Lazy module-level singleton — Intl formatter construction is expensive and
+// the options never vary, so don't rebuild it on every virtualized row mount.
+let absoluteFormatter: Intl.DateTimeFormat | undefined;
+
+function getAbsoluteFormatter(): Intl.DateTimeFormat {
+  return (absoluteFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }));
+}
+
 function formatTimeAgo(diffMs: number): { label: string; fullLabel: string; isAbsolute?: boolean } {
   const seconds = Math.floor(diffMs / 1000);
   const minutes = Math.floor(seconds / 60);
@@ -101,9 +109,7 @@ export function LiveTimeAgo({ timestamp, className, noTooltip }: LiveTimeAgoProp
   const isoDate = new Date(timestamp).toISOString();
 
   if (isAbsolute) {
-    const absoluteLabel = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-      new Date(timestamp)
-    );
+    const absoluteLabel = getAbsoluteFormatter().format(new Date(timestamp));
     const timeEl = (
       <time dateTime={isoDate} className={cn("tabular-nums", className)}>
         {absoluteLabel}

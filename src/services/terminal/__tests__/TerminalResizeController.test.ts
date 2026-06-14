@@ -1087,4 +1087,163 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).not.toHaveBeenCalled();
     });
   });
+
+  describe("resizePtyOnly", () => {
+    function makeController(managed: ReturnType<typeof createManagedTerminal> | undefined) {
+      return new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+        } as any,
+      });
+    }
+
+    it("resizes the PTY without reflowing xterm, even for a visible focused terminal", () => {
+      const managed = createManagedTerminal();
+      managed.isFocused = true;
+      managed.isVisible = true;
+      managed.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+
+      const controller = makeController(managed);
+      const result = controller.resizePtyOnly("term-1", 1600, 800);
+
+      expect(result).toEqual({ cols: 160, rows: 40 });
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+      expect(managed.latestCols).toBe(160);
+      expect(managed.latestRows).toBe(40);
+      expect(managed.lastWidth).toBe(1600);
+      expect(managed.lastHeight).toBe(800);
+    });
+
+    it("returns null for a missing instance", () => {
+      const controller = makeController(undefined);
+      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("respects an active resize lock", () => {
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const controller = makeController(managed);
+      controller.lockResize("term-1", true);
+
+      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
+    it("dedups when pixel dimensions are unchanged", () => {
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const controller = makeController(managed);
+
+      controller.resizePtyOnly("term-1", 1600, 800);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+
+      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("updates pixel cache without re-notifying the PTY when cols/rows are unchanged", () => {
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const controller = makeController(managed);
+
+      controller.resizePtyOnly("term-1", 1600, 800);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+
+      // +5px is under one 10px cell — same cols/rows, but the cache must
+      // track the new pixels so the next delta computes against them.
+      const second = controller.resizePtyOnly("term-1", 1605, 800);
+      expect(second).toBeNull();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(managed.lastWidth).toBe(1605);
+    });
+
+    it("returns null without poisoning the dedup cache when cell dims are unavailable", () => {
+      const managed = createManagedTerminal();
+      const controller = makeController(managed);
+
+      expect(controller.resizePtyOnly("term-1", 1600, 800)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.lastWidth).toBe(800);
+      expect(managed.lastHeight).toBe(600);
+    });
+
+    it("rejects degenerate pixel dimensions without touching state", () => {
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      const controller = makeController(managed);
+
+      expect(controller.resizePtyOnly("term-1", Number.NaN, 800)).toBeNull();
+      expect(controller.resizePtyOnly("term-1", 1600, Number.POSITIVE_INFINITY)).toBeNull();
+      expect(controller.resizePtyOnly("term-1", 0, 800)).toBeNull();
+      expect(controller.resizePtyOnly("term-1", -100, 800)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.lastWidth).toBe(800);
+      expect(managed.latestCols).toBe(80);
+    });
+
+    it("delivers the PTY resize immediately for settled-strategy agents, with no xterm reflow", () => {
+      const managed = createManagedTerminal();
+      managed.launchAgentId = "codex";
+      managed.runtimeAgentId = "codex";
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+
+      const controller = makeController(managed);
+      const result = controller.resizePtyOnly("term-1", 1600, 800);
+
+      expect(result).toEqual({ cols: 160, rows: 40 });
+      // Direct delivery — not deferred behind the settled 500ms timer, which
+      // would also reflow xterm in a hidden (possibly frozen) renderer.
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+
+      vi.advanceTimersByTime(500);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("supersedes a pending settled timer scheduled before backgrounding", () => {
+      const managed = createManagedTerminal();
+      managed.launchAgentId = "codex";
+      managed.runtimeAgentId = "codex";
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } } },
+      });
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+
+      const controller = makeController(managed);
+      // A pre-background resize armed the settled timer with stale geometry.
+      controller.sendPtyResize("term-1", 120, 30);
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      controller.resizePtyOnly("term-1", 1600, 800);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 160, 40);
+
+      vi.advanceTimersByTime(500);
+      // The stale timer must not fire its 120x30 resize or reflow xterm.
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -361,7 +361,9 @@ test.describe.serial("Core: Agent preset icon color", () => {
 
     await test.step("Restart terminal and manual-run Claude — verify color reapplies", async () => {
       await restartTerminal(ctx.window, claude.id, claude.panel);
-      await runTerminalCommand(ctx.window, claude.panel, manualFakeAgentCommand("claude"));
+      await runTerminalCommand(ctx.window, claude.panel, manualFakeAgentCommand("claude"), {
+        readyTimeout: T_LONG,
+      });
       await waitForTerminalText(claude.panel, "FAKE_CLAUDE_MANUAL=1", T_LONG);
       await waitForTerminalText(claude.panel, `FAKE_CLAUDE_COLOR=${CLAUDE_COLOR}`, T_LONG);
       await expectAgentIconColor(claude.panel, "claude", CLAUDE_COLOR);

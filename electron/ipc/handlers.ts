@@ -13,7 +13,6 @@ import { registerGlobalRecipesHandlers } from "./handlers/globalRecipes.js";
 import { registerGlobalEnvHandlers } from "./handlers/globalEnv.js";
 import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
 import { registerProjectInRepoSettingsHandlers } from "./handlers/projectInRepoSettings.js";
-import { registerGithubHandlers } from "./handlers/github.js";
 import { registerAppHandlers } from "./handlers/app.js";
 import { registerPortalHandlers } from "./handlers/portal.js";
 import { registerHibernationHandlers } from "./handlers/hibernation.js";
@@ -48,6 +47,7 @@ import { registerForgeHandlers } from "./handlers/forge.js";
 import { registerForgeDataHandlers } from "./handlers/forgeData.js";
 import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
 import { registerForgeAuditHandlers } from "./handlers/forgeAudit.js";
+import { initForgeHealthRelay, disposeForgeHealthRelay } from "../services/forgeHealthRelay.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
@@ -55,11 +55,13 @@ import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
+import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
 import { registerPerfHandlers } from "./handlers/perf.js";
 
 import { registerAccessibilityHandlers } from "./handlers/accessibility.js";
 import { registerDemoHandlers } from "./handlers/demo.js";
 import { registerRecoveryHandlers } from "./handlers/recovery.js";
+import { registerRosettaHandlers } from "./handlers/rosetta.js";
 import { registerSafeModeHandlers } from "./handlers/safeMode.js";
 import { registerWatchdogHandlers } from "./handlers/watchdog.js";
 import { registerPluginHandlers } from "./handlers/plugin.js";
@@ -125,7 +127,6 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerGlobalEnvHandlers());
     register(() => registerTerminalLayoutHandlers(deps));
     register(() => registerProjectInRepoSettingsHandlers(deps));
-    register(() => registerGithubHandlers(deps));
     register(() => registerAppHandlers(deps));
     register(() => registerPortalHandlers(deps));
     register(() => registerMenuHandlers(deps));
@@ -157,6 +158,10 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerForgeSettingsHandlers());
     register(() => registerForgeHandlers());
     register(() => registerForgeDataHandlers());
+    register(() => {
+      initForgeHealthRelay();
+      return disposeForgeHealthRelay;
+    });
     register(() => registerForgeAuditHandlers());
     register(() => registerRunHistoryHandlers());
     register(() => registerVoiceInputHandlers(deps));
@@ -165,10 +170,12 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWebviewHandlers(deps));
     register(() => registerWebviewNavigationHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
+    register(() => registerResourceProfileHandlers(deps));
 
     register(() => registerAccessibilityHandlers());
     register(() => registerDemoHandlers(deps));
     register(() => registerRecoveryHandlers(deps));
+    register(() => registerRosettaHandlers());
     register(() => registerSafeModeHandlers());
     register(() => registerWatchdogHandlers(deps));
     register(() => registerPluginHandlers());

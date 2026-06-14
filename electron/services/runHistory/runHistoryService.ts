@@ -1,8 +1,9 @@
-// eager-import-allow: reads/writes the runHistory store key via store.get/set inside the persistence callbacks, invoked from runHistory IPC handlers (not at boot)
+// eager-import-allow: reads/writes the run-history ring via the lazy audit-logs store inside the persistence callbacks, invoked from runHistory IPC handlers (not at boot)
 import type { RunHistoryRecord } from "../../../shared/types/ipc/runHistory.js";
+import { RUN_HISTORY_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/runHistory.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
-import { store } from "../../store.js";
+import { auditRingStore } from "../persistence/auditRingStore.js";
 import { RunHistoryLog } from "./runHistoryLog.js";
 
 /**
@@ -10,17 +11,15 @@ import { RunHistoryLog } from "./runHistoryLog.js";
  * window's renderer, so the ring accumulates cross-window — a module-level
  * singleton, never per-window. The pure {@link RunHistoryLog} class lives in
  * `runHistoryLog.ts` (store-free, unit-testable); this thin wrapper wires it to
- * the `runHistory` store key, mirroring `forgeAuditService`.
+ * the audit-logs store (migration023 moved the ring out of config.json),
+ * mirroring `forgeAuditService`.
  */
 function readRecords(): unknown {
-  // Defensive `?? {}`: the store default always supplies `runHistory`, but a
-  // test harness mocking the store may not — readRecords must never throw.
-  const config = (store.get("runHistory") as { records?: unknown } | undefined) ?? {};
-  return config.records;
+  return auditRingStore.readAll("runHistoryRecords");
 }
 
 function saveRecords(records: RunHistoryRecord[]): void {
-  store.set("runHistory", { records });
+  auditRingStore.writeAll("runHistoryRecords", records, RUN_HISTORY_DEFAULT_MAX_RECORDS);
 }
 
 export const runHistoryLog = new RunHistoryLog(saveRecords, readRecords);

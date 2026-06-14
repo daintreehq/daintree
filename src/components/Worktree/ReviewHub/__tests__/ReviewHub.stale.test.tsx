@@ -11,7 +11,6 @@ const {
   onUpdateMock,
   debounceCancelSpy,
   compareWorktreesMock,
-  openPRMock,
   abortRepositoryOperationMock,
   continueRepositoryOperationMock,
   openInEditorMock,
@@ -25,7 +24,6 @@ const {
   onUpdateMock: vi.fn(),
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
-  openPRMock: vi.fn().mockResolvedValue(undefined),
   abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   openInEditorMock: vi.fn().mockResolvedValue(undefined),
@@ -63,10 +61,6 @@ vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
-}));
-
-vi.mock("@/clients/githubClient", () => ({
-  githubClient: { openPR: openPRMock },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -178,8 +172,11 @@ describe("ReviewHub stale visual", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((callback: (state: WorktreeState) => void) => {
-      capturedUpdateCallback = callback;
+    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+      // The component subscribes to the per-view worktree port; tests keep
+      // driving it with a plain WorktreeState by wrapping it in the port
+      // event envelope here.
+      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
       return mockUnsubscribe;
     });
 
@@ -208,7 +205,7 @@ describe("ReviewHub stale visual", () => {
           continueRepositoryOperation: continueRepositoryOperationMock,
         },
         system: { openInEditor: openInEditorMock },
-        worktree: { onUpdate: onUpdateMock },
+        worktreePort: { onEvent: onUpdateMock },
       },
       writable: true,
       configurable: true,

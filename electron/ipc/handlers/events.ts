@@ -32,7 +32,6 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
 
   // Window-scoped events: producers send envelopes directly to the target
   // window's webContents to preserve per-window routing.
-  "worktree:update": "external",
   "window:fullscreen-change": "external",
   "window:reclaim-memory": "external",
   "window:destroy-hidden-webviews": "external",

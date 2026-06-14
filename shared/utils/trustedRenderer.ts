@@ -2,9 +2,31 @@ import { getDevServerOrigins } from "../config/devServer.js";
 
 const PRODUCTION_ORIGINS = ["app://daintree"] as const;
 
+// isTrustedRendererUrl runs on every validated IPC message (per keystroke on
+// terminal:input), so both the trusted-origin list and per-URL verdicts are
+// memoized. The cache is keyed on the env vars the origin list derives from —
+// fixed at runtime in the real app, but mutated between cases in tests.
+const VERDICT_CACHE_MAX = 32;
+const verdictCache = new Map<string, boolean>();
+let cachedEnvKey: string | null = null;
+let cachedTrustedOrigins: readonly string[] = PRODUCTION_ORIGINS;
+
 function getTrustedRendererOrigins(): readonly string[] {
-  const isDev = process.env.NODE_ENV === "development";
-  return isDev ? [...PRODUCTION_ORIGINS, ...getDevServerOrigins()] : PRODUCTION_ORIGINS;
+  const envKey = [
+    process.env.NODE_ENV,
+    process.env.DAINTREE_DEV_SERVER_URL,
+    process.env.DAINTREE_DEV_SERVER_HOST,
+    process.env.DAINTREE_DEV_SERVER_PORT,
+  ].join("\u0000");
+  if (envKey !== cachedEnvKey) {
+    cachedEnvKey = envKey;
+    verdictCache.clear();
+    const isDev = process.env.NODE_ENV === "development";
+    cachedTrustedOrigins = isDev
+      ? [...PRODUCTION_ORIGINS, ...getDevServerOrigins()]
+      : PRODUCTION_ORIGINS;
+  }
+  return cachedTrustedOrigins;
 }
 
 function getRendererOrigin(urlString: string): string | null {
@@ -35,10 +57,20 @@ function getRendererOrigin(urlString: string): string | null {
  * For route-specific narrowing see {@link isRecoveryPageUrl}.
  */
 export function isTrustedRendererUrl(urlString: string): boolean {
-  const origin = getRendererOrigin(urlString);
-  if (!origin) return false;
+  // Refreshes the origin list and clears the verdict cache on env change.
   const trustedOrigins = getTrustedRendererOrigins();
-  return trustedOrigins.includes(origin as any);
+
+  const cached = verdictCache.get(urlString);
+  if (cached !== undefined) return cached;
+
+  const origin = getRendererOrigin(urlString);
+  const verdict = origin !== null && trustedOrigins.includes(origin);
+
+  // Bounded: untrusted frames can present arbitrary URLs, so clear when full.
+  if (verdictCache.size >= VERDICT_CACHE_MAX) verdictCache.clear();
+  verdictCache.set(urlString, verdict);
+
+  return verdict;
 }
 
 export function isRecoveryPageUrl(urlString: string): boolean {

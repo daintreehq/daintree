@@ -3,6 +3,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { T_SETTLE } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let repoPath: string;
@@ -42,13 +43,13 @@ test.describe.serial("Core: Rate Limiting", () => {
     // a non-empty state. Reset before each test so the slot-count assertions
     // start from a clean baseline.
     await resetRateLimits(ctx.app);
-    await ctx.window.waitForTimeout(200);
+    await ctx.window.waitForTimeout(T_SETTLE);
   });
 
   test.afterEach(async () => {
     await resetRateLimits(ctx.app);
     // Brief settle for pending rejections
-    await ctx.window.waitForTimeout(200);
+    await ctx.window.waitForTimeout(T_SETTLE);
   });
 
   test.afterAll(async () => {
@@ -107,43 +108,50 @@ test.describe.serial("Core: Rate Limiting", () => {
   });
 
   test("operations recover after rate limit state is reset", async () => {
-    // Exhaust the 10-slot rate limit
-    const initialIds: string[] = await ctx.window.evaluate(async (cwd) => {
-      const ids: string[] = [];
-      for (let i = 0; i < 10; i++) {
-        const id = await (window as any).electron.terminal.spawn({
+    test.slow();
+
+    // Start two spawns concurrently. The first consumes the immediate
+    // leaky-bucket slot; the second must queue behind the strict 1s interval.
+    // Do not await the first spawn before starting the second: on slow Linux
+    // runners a real PTY can take long enough to open the next bucket slot.
+    const queuedResult = await ctx.window.evaluate(
+      async ({ cwd, raceMs }) => {
+        const firstSpawn = (window as any).electron.terminal.spawn({
           cols: 80,
           rows: 24,
           cwd,
         });
-        ids.push(id);
-      }
-      return ids;
-    }, repoPath);
-
-    expect(initialIds.length).toBe(10);
-
-    // Next spawn would queue (not reject) — verify it doesn't resolve immediately
-    // by racing it against a short timeout.
-    const queuedResult = await ctx.window.evaluate(async (cwd) => {
-      const spawnPromise = (window as any).electron.terminal
-        .spawn({ cols: 80, rows: 24, cwd })
-        .then((id: string) => ({ resolved: true as const, id }));
-      // Prevent unhandled rejection when resetRateLimits drains this promise
-      spawnPromise.catch(() => {});
-      const raceResult = await Promise.race([
-        spawnPromise,
-        new Promise<{ resolved: false }>((resolve) =>
-          setTimeout(() => resolve({ resolved: false }), 500)
-        ),
-      ]);
-      return raceResult;
-    }, repoPath);
+        const queuedSpawn = (window as any).electron.terminal
+          .spawn({ cols: 80, rows: 24, cwd })
+          .then((id: string) => ({ resolved: true as const, id }));
+        // Prevent unhandled rejection when resetRateLimits drains this promise
+        queuedSpawn.catch(() => {});
+        (window as any).__rateLimitRecoveryInitialSpawns = Promise.allSettled([
+          firstSpawn,
+          queuedSpawn,
+        ]);
+        const raceResult = await Promise.race([
+          queuedSpawn,
+          new Promise<{ resolved: false }>((resolve) =>
+            setTimeout(() => resolve({ resolved: false }), raceMs)
+          ),
+        ]);
+        return raceResult;
+      },
+      { cwd: repoPath, raceMs: 250 }
+    );
 
     expect(queuedResult.resolved).toBe(false);
 
     // Reset rate limit state (simulates the 30s window expiring)
     await resetRateLimits(ctx.app);
+
+    const initialIds: string[] = await ctx.window.evaluate(async () => {
+      const results = await (window as any).__rateLimitRecoveryInitialSpawns;
+      return results
+        .filter((r: PromiseSettledResult<string>) => r.status === "fulfilled")
+        .map((r: PromiseFulfilledResult<string>) => r.value);
+    });
 
     // Now a spawn should succeed immediately
     const recoveryId: string = await ctx.window.evaluate(async (cwd) => {
@@ -154,8 +162,7 @@ test.describe.serial("Core: Rate Limiting", () => {
       });
     }, repoPath);
 
-    expect(typeof recoveryId).toBe("string");
-    expect(recoveryId.length).toBeGreaterThan(0);
+    expect(recoveryId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
     // Clean up
     await killTerminals(ctx.window, [...initialIds, recoveryId]);

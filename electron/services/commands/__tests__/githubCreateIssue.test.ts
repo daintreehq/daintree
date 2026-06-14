@@ -1,16 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getGitHubTokenMock, clearGitHubCachesMock, resolveForCwdMock, createIssueMock } =
-  vi.hoisted(() => ({
-    getGitHubTokenMock: vi.fn(),
-    clearGitHubCachesMock: vi.fn(),
-    resolveForCwdMock: vi.fn(),
-    createIssueMock: vi.fn(),
-  }));
-
-vi.mock("../../GitHubService.js", () => ({
-  getGitHubToken: getGitHubTokenMock,
-  clearGitHubCaches: clearGitHubCachesMock,
+const { resolveForCwdMock, createIssueMock } = vi.hoisted(() => ({
+  resolveForCwdMock: vi.fn(),
+  createIssueMock: vi.fn(),
 }));
 
 vi.mock("../../../ipc/handlers/forgeResolution.js", () => ({
@@ -48,7 +40,6 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
 describe("githubCreateIssueCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getGitHubTokenMock.mockReturnValue("token-123");
     createIssueMock.mockResolvedValue(makeIssue());
     resolveForCwdMock.mockResolvedValue({
       namespaceId: "daintree.github:github",
@@ -58,12 +49,18 @@ describe("githubCreateIssueCommand", () => {
     });
   });
 
-  it("returns NO_TOKEN when no GitHub token is configured", async () => {
-    getGitHubTokenMock.mockReturnValue("");
+  it("maps a provider missing-token failure to EXECUTION_ERROR with a settings pointer", async () => {
+    createIssueMock.mockRejectedValue(
+      new Error("GitHub token not configured. Set it in Settings.")
+    );
 
-    await expect(
-      githubCreateIssueCommand.execute({ cwd: "/repo" } as never, { title: "No token" })
-    ).resolves.toMatchObject({ success: false, error: { code: "NO_TOKEN" } });
+    const result = await githubCreateIssueCommand.execute({ cwd: "/repo" } as never, {
+      title: "No token",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe("EXECUTION_ERROR");
+    expect(result.error?.message).toContain("Set it in Settings");
   });
 
   it("returns NO_CWD when no working directory is in context", async () => {
@@ -84,10 +81,9 @@ describe("githubCreateIssueCommand", () => {
       success: false,
       error: { code: "NOT_GIT_REPO" },
     });
-    expect(clearGitHubCachesMock).not.toHaveBeenCalled();
   });
 
-  it("creates an issue via the resolved provider and clears caches on success", async () => {
+  it("creates an issue via the resolved provider", async () => {
     const result = await githubCreateIssueCommand.execute({ cwd: "/repo" } as never, {
       title: "  Improve logging  ",
       body: "  Add structured logs to PTY lifecycle  ",
@@ -100,7 +96,6 @@ describe("githubCreateIssueCommand", () => {
       number: 42,
       title: "Improve logging",
     });
-    expect(clearGitHubCachesMock).toHaveBeenCalledTimes(1);
 
     expect(createIssueMock).toHaveBeenCalledWith(repoRef, {
       title: "Improve logging",
@@ -139,7 +134,6 @@ describe("githubCreateIssueCommand", () => {
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe("TIMEOUT_ERROR");
     expect(result.error?.message).toContain("Timed out");
-    expect(clearGitHubCachesMock).not.toHaveBeenCalled();
   });
 
   it("classifies a provider error with cause.code as NETWORK_ERROR", async () => {

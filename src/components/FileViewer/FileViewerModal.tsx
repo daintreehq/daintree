@@ -13,6 +13,12 @@ import {
   Image as ImageIcon,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  Pilcrow,
+  Search,
+  WrapText,
+  X,
 } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
@@ -24,6 +30,9 @@ import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { createTrustedHTML } from "@/lib/trustedTypesPolicy";
 import { logError } from "@/utils/logger";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import type { DiffViewType } from "@/store/preferencesStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 export interface FileViewerModalProps {
   isOpen: boolean;
@@ -34,6 +43,11 @@ export interface FileViewerModalProps {
   initialCol?: number;
   diff?: string;
   defaultMode?: "view" | "diff";
+  /**
+   * True when the diff's new side is the working-tree file this modal loads
+   * (single-file working-tree diffs). Enables expand-context between hunks.
+   */
+  diffMatchesFile?: boolean;
   onRetryDiff?: () => void;
   onClose: () => void;
   /** Element to focus when the dialog closes and its trigger was unmounted. */
@@ -65,6 +79,102 @@ function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
   return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
 }
 
+interface SegmentedToggleOption<T extends string> {
+  value: T;
+  label: string;
+  disabled?: boolean;
+}
+
+function SegmentedToggle<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: SegmentedToggleOption<T>[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex bg-daintree-sidebar rounded p-0.5 shrink-0">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          disabled={option.disabled}
+          aria-pressed={value === option.value}
+          className={cn(
+            "px-2.5 py-1 text-xs font-medium rounded transition-colors",
+            value === option.value
+              ? "bg-daintree-border text-daintree-text"
+              : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function IconToggle({
+  pressed,
+  label,
+  onToggle,
+  children,
+}: {
+  pressed: boolean;
+  label: string;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={pressed}
+          aria-label={label}
+          className={cn(
+            "p-1.5 rounded transition-colors",
+            pressed
+              ? "bg-daintree-border text-daintree-text"
+              : "text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+          )}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * Horizontal reveal for search matches in the centered split view. Code cells
+ * there are overflow: clip — deliberately unscrollable, so scrollIntoView's
+ * inline axis can't desync one row from the shared offset. The reveal instead
+ * rides the file's scrollbar strip, whose scrollLeft shifts every row in
+ * lockstep. No-op outside centered split (unified/wrap scroll natively).
+ */
+function revealMatchInCenteredSplit(match: HTMLElement): void {
+  const region = match.closest<HTMLElement>(".diff-file-centered");
+  const cell = match.closest<HTMLElement>("td.diff-code");
+  const bar = region?.querySelector<HTMLElement>(".diff-hscrollbar");
+  if (!region || !cell || !bar) return;
+  const cellRect = cell.getBoundingClientRect();
+  const matchRect = match.getBoundingClientRect();
+  if (cellRect.width <= 0) return;
+  const fullyVisible = matchRect.left >= cellRect.left && matchRect.right <= cellRect.right;
+  if (fullyVisible) return;
+  // Column offset of the match within its unshifted line, then aim the shared
+  // offset so the match lands a third of the way into the pane.
+  const columnPx = matchRect.left - cellRect.left + bar.scrollLeft;
+  const target = Math.max(0, columnPx - cellRect.width / 3);
+  bar.scrollLeft = Math.min(target, bar.scrollWidth - bar.clientWidth);
+}
+
 const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
   BINARY_FILE: "Binary file — cannot display",
   FILE_TOO_LARGE: "File too large to display (> 500 KB)",
@@ -84,6 +194,7 @@ export function FileViewerModal({
   initialCol,
   diff,
   defaultMode,
+  diffMatchesFile = false,
   onRetryDiff,
   onClose,
   restoreFocusTo,
@@ -113,6 +224,10 @@ export function FileViewerModal({
   const [displayErrorMessage, setDisplayErrorMessage] = useState<string | null>(null);
   const diffViewType = usePreferencesStore((s) => s.diffViewType);
   const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
+  const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
+  const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
+  const diffIgnoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const setDiffIgnoreWhitespace = usePreferencesStore((s) => s.setDiffIgnoreWhitespace);
   const [diffCopied, setDiffCopied] = useState(false);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -125,6 +240,9 @@ export function FileViewerModal({
   const currentHunkIndexRef = useRef<number>(-1);
   const [activeHunkIndex, setActiveHunkIndex] = useState<number>(-1);
   const [hunkCount, setHunkCount] = useState<number>(0);
+  const [hunkMarkers, setHunkMarkers] = useState<
+    { ratio: number; kind: "insert" | "delete" | "mixed" }[]
+  >([]);
   // Bumped whenever a file's collapse state is toggled inside DiffViewer, so the
   // hunk-counting effect re-scans the DOM whose hunk rows just appeared (expand)
   // or disappeared (collapse). See #10013.
@@ -132,6 +250,21 @@ export function FileViewerModal({
   const hunkRatiosRef = useRef<Map<number, number>>(new Map());
   const observerGenerationRef = useRef(0);
   const observerDisposedRef = useRef(false);
+
+  // In-diff search. Match highlighting happens in DiffViewer's token pass
+  // (.diff-search-match spans); this layer owns the find bar, scans the
+  // rendered DOM for matches, and steps between them. tokensRevision bumps
+  // after every token commit — the signal that the spans are scannable.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const [searchMatchIndex, setSearchMatchIndex] = useState(-1);
+  const [searchMarkers, setSearchMarkers] = useState<number[]>([]);
+  const [tokensRevision, setTokensRevision] = useState(0);
+  const searchMatchIndexRef = useRef(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const lastSearchQueryRef = useRef("");
+  const viewportIndicatorRef = useRef<HTMLDivElement>(null);
 
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
@@ -157,6 +290,8 @@ export function FileViewerModal({
       requestRef.current++;
       hasSwitchedToDiffRef.current = false;
       currentHunkIndexRef.current = -1;
+      setSearchOpen(false);
+      setSearchQuery("");
       const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
       setMode(nextMode);
       return;
@@ -240,6 +375,7 @@ export function FileViewerModal({
     try {
       await navigator.clipboard.writeText(diff);
       if (!isMountedRef.current) return;
+      useAnnouncerStore.getState().announce("Diff copied");
       setDiffCopied(true);
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => {
@@ -262,15 +398,22 @@ export function FileViewerModal({
     return { lineCount, sizeLabel: formatBytes(byteSize) };
   }, [canShowView, content]);
 
-  // Route Cmd+F (daintree:find-in-panel) and Cmd+L to CodeViewer
+  // Route Cmd+F (daintree:find-in-panel) to CodeViewer's search in view mode
+  // and the in-diff find bar in diff mode; Cmd+L (go to line) stays view-only.
   useEffect(() => {
-    if (!isOpen || isImageMode || mode !== "view") return;
+    if (!isOpen || isImageMode) return;
 
     const handleFindInPanel = () => {
-      codeViewerRef.current?.openSearch();
+      if (mode === "view") {
+        codeViewerRef.current?.openSearch();
+      } else if (hasDiff) {
+        setSearchOpen(true);
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (mode !== "view") return;
       if ((e.metaKey || e.ctrlKey) && e.key === "l") {
         const target = e.target as HTMLElement;
         if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
@@ -286,7 +429,7 @@ export function FileViewerModal({
       window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
     };
-  }, [isOpen, isImageMode, mode]);
+  }, [isOpen, isImageMode, mode, hasDiff]);
 
   // Reset hunk index whenever the diff content changes — covers refresh-after-
   // commit and any other in-place diff swap that leaves filePath unchanged.
@@ -294,11 +437,38 @@ export function FileViewerModal({
     currentHunkIndexRef.current = -1;
   }, [diff]);
 
-  // Hunk navigation in diff mode: `n` → next hunk, `p` → previous hunk.
-  // react-diff-view renders each hunk as <tbody class="diff-hunk">; scroll the
-  // hunk into view with native scrollIntoView (CSS scroll-margin-top keeps the
-  // hunk header clear of the sticky dialog chrome). Hunk index lives in a ref
-  // so navigation does not re-render the heavy diff tree on every keystroke.
+  // Hunk navigation in diff mode: `n` → next hunk, `p` → previous hunk, plus
+  // the clickable footer stepper and overview-rail ticks — all funnel through
+  // scrollToHunkIndex. react-diff-view renders each hunk as
+  // <tbody class="diff-hunk">; scroll with native scrollIntoView (CSS
+  // scroll-margin-top keeps the hunk header clear of the sticky chrome). Hunk
+  // index lives in a ref so navigation does not re-render the heavy diff tree
+  // on every keystroke.
+  const scrollToHunkIndex = useCallback((index: number) => {
+    const container = diffViewerRef.current;
+    if (!container) return;
+    const hunks = container.querySelectorAll<HTMLElement>("tbody.diff-hunk");
+    if (hunks.length === 0) return;
+    const next = Math.max(0, Math.min(index, hunks.length - 1));
+    currentHunkIndexRef.current = next;
+    setActiveHunkIndex(next);
+    hunks[next]?.scrollIntoView({
+      block: "start",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+    useAnnouncerStore.getState().announce(`Hunk ${next + 1} of ${hunks.length}`);
+  }, []);
+
+  const stepHunk = useCallback(
+    (delta: -1 | 1) => {
+      const current = currentHunkIndexRef.current;
+      // Stepping from the initial sentinel (-1) lands on the first hunk so
+      // the user gets feedback either way before they've started navigating.
+      scrollToHunkIndex(current < 0 ? 0 : current + delta);
+    },
+    [scrollToHunkIndex]
+  );
+
   useEffect(() => {
     if (!isOpen || mode !== "diff") return;
 
@@ -315,33 +485,15 @@ export function FileViewerModal({
         return;
       }
 
-      const container = diffViewerRef.current;
-      if (!container) return;
-      const hunks = container.querySelectorAll<HTMLElement>("tbody.diff-hunk");
-      if (hunks.length === 0) return;
-
       e.preventDefault();
-
-      const lastIndex = hunks.length - 1;
-      const current = currentHunkIndexRef.current;
-      let next: number;
-      if (e.key === "n") {
-        next = current < 0 ? 0 : Math.min(current + 1, lastIndex);
-      } else {
-        // `p` from the initial sentinel (-1) lands on the first hunk so the
-        // user gets feedback either way before they've started navigating.
-        next = current < 0 ? 0 : Math.max(current - 1, 0);
-      }
-      currentHunkIndexRef.current = next;
-      setActiveHunkIndex(next);
-      hunks[next]?.scrollIntoView({ block: "start", behavior: "smooth" });
+      stepHunk(e.key === "n" ? 1 : -1);
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, mode]);
+  }, [isOpen, mode, stepHunk]);
 
   // File stepping in the worktree change set: `[` → previous file, `]` → next.
   // `n`/`p` are taken by hunk navigation and the arrow keys conflict with split-
@@ -351,10 +503,24 @@ export function FileViewerModal({
   const hasPrevFile = canStepFiles && (currentFileIndex ?? 0) > 0;
   const hasNextFile = canStepFiles && (currentFileIndex ?? 0) < (totalFileCount ?? 0) - 1;
 
+  const fileStepAnnouncePendingRef = useRef(false);
   const navigateFile = useEffectEvent((delta: -1 | 1) => {
+    if (delta === -1 && hasPrevFile) fileStepAnnouncePendingRef.current = true;
+    if (delta === 1 && hasNextFile) fileStepAnnouncePendingRef.current = true;
     if (delta === -1 && hasPrevFile) onNavigateFile?.(-1);
     if (delta === 1 && hasNextFile) onNavigateFile?.(1);
   });
+
+  // Announce the landed-on file after a step swaps the dialog contents —
+  // aria-labelledby title text changes are not announced by AT on their own.
+  useEffect(() => {
+    if (!isOpen || !fileStepAnnouncePendingRef.current) return;
+    fileStepAnnouncePendingRef.current = false;
+    const name = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
+    useAnnouncerStore
+      .getState()
+      .announce(`${name}, file ${(currentFileIndex ?? 0) + 1} of ${totalFileCount ?? 0}`);
+  }, [isOpen, filePath, currentFileIndex, totalFileCount]);
 
   useEffect(() => {
     if (!isOpen || !canStepFiles) return;
@@ -390,6 +556,7 @@ export function FileViewerModal({
     if (!isOpen || mode !== "diff" || !diff) {
       setActiveHunkIndex(-1);
       setHunkCount(0);
+      setHunkMarkers([]);
       return;
     }
 
@@ -397,6 +564,7 @@ export function FileViewerModal({
     if (!container) {
       setActiveHunkIndex(-1);
       setHunkCount(0);
+      setHunkMarkers([]);
       return;
     }
 
@@ -406,12 +574,36 @@ export function FileViewerModal({
     if (!scrollRoot) {
       setActiveHunkIndex(-1);
       setHunkCount(0);
+      setHunkMarkers([]);
       return;
     }
 
     const hunks = container.querySelectorAll<HTMLElement>("tbody.diff-hunk");
     const count = hunks.length;
     setHunkCount(count);
+
+    // Overview rail: one tick per hunk at its proportional scroll position,
+    // colored by the hunk's dominant change kind.
+    if (count > 1 && scrollRoot.scrollHeight > 0) {
+      const rootTop = scrollRoot.getBoundingClientRect().top;
+      const markers = Array.from(hunks).map((hunk) => {
+        const top = hunk.getBoundingClientRect().top - rootTop + scrollRoot.scrollTop;
+        const inserts = hunk.querySelectorAll(".diff-code-insert").length;
+        const deletes = hunk.querySelectorAll(".diff-code-delete").length;
+        return {
+          ratio: Math.min(1, Math.max(0, top / scrollRoot.scrollHeight)),
+          kind:
+            inserts > 0 && deletes > 0
+              ? ("mixed" as const)
+              : deletes > 0
+                ? ("delete" as const)
+                : ("insert" as const),
+        };
+      });
+      setHunkMarkers(markers);
+    } else {
+      setHunkMarkers([]);
+    }
 
     if (count <= 1) {
       setActiveHunkIndex(-1);
@@ -472,17 +664,155 @@ export function FileViewerModal({
       observerDisposedRef.current = true;
       observer.disconnect();
     };
-  }, [isOpen, mode, diff, diffViewType, collapseRevision]);
+  }, [isOpen, mode, diff, diffViewType, diffWrapLines, collapseRevision]);
 
   const handleDiffToggleCollapse = useCallback(() => {
     setCollapseRevision((r) => r + 1);
   }, []);
 
+  const handleTokensRendered = useCallback(() => {
+    setTokensRevision((r) => r + 1);
+  }, []);
+
+  const searchActive = searchOpen && mode === "diff" && hasDiff;
+
+  // Re-scan rendered matches after every token commit. The active index lives
+  // in a ref (stepping must not depend on stale state), mirrored to state for
+  // the count display.
+  useEffect(() => {
+    if (!isOpen || !searchActive || !searchQuery) {
+      searchMatchIndexRef.current = -1;
+      setSearchMatchIndex(-1);
+      setSearchMatchCount(0);
+      setSearchMarkers([]);
+      lastSearchQueryRef.current = searchQuery;
+      return;
+    }
+    if (lastSearchQueryRef.current !== searchQuery) {
+      lastSearchQueryRef.current = searchQuery;
+      searchMatchIndexRef.current = -1;
+      setSearchMatchIndex(-1);
+    }
+    const container = diffViewerRef.current;
+    const scrollRoot = container?.parentElement;
+    if (!container || !scrollRoot) return;
+    const matches = container.querySelectorAll<HTMLElement>(".diff-search-match");
+    setSearchMatchCount(matches.length);
+    if (searchMatchIndexRef.current >= matches.length) {
+      searchMatchIndexRef.current = -1;
+      setSearchMatchIndex(-1);
+    }
+    if (matches.length > 0 && scrollRoot.scrollHeight > 0) {
+      const rootTop = scrollRoot.getBoundingClientRect().top;
+      const ratios: number[] = [];
+      const limit = Math.min(matches.length, 200);
+      for (let k = 0; k < limit; k++) {
+        const el = matches[k];
+        if (!el) break;
+        const top = el.getBoundingClientRect().top - rootTop + scrollRoot.scrollTop;
+        ratios.push(Math.min(1, Math.max(0, top / scrollRoot.scrollHeight)));
+      }
+      setSearchMarkers(ratios);
+    } else {
+      setSearchMarkers([]);
+    }
+  }, [isOpen, searchActive, searchQuery, tokensRevision, collapseRevision, diffViewType]);
+
+  // The current match carries diff-search-current directly on the rendered
+  // span; a token re-commit wipes it, and the tokensRevision dep re-applies.
+  useEffect(() => {
+    const container = diffViewerRef.current;
+    if (!container) return;
+    const matches = container.querySelectorAll<HTMLElement>(".diff-search-match");
+    matches.forEach((el, k) => {
+      el.classList.toggle("diff-search-current", k === searchMatchIndex);
+    });
+  }, [searchMatchIndex, tokensRevision, searchMatchCount]);
+
+  const stepSearchMatch = useCallback((delta: -1 | 1) => {
+    const container = diffViewerRef.current;
+    if (!container) return;
+    const matches = container.querySelectorAll<HTMLElement>(".diff-search-match");
+    if (!matches.length) return;
+    const current = searchMatchIndexRef.current;
+    const next =
+      current < 0
+        ? delta === 1
+          ? 0
+          : matches.length - 1
+        : (current + delta + matches.length) % matches.length;
+    searchMatchIndexRef.current = next;
+    setSearchMatchIndex(next);
+    const match = matches[next];
+    match?.scrollIntoView({
+      block: "center",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+    if (match) revealMatchInCenteredSplit(match);
+    useAnnouncerStore.getState().announce(`Match ${next + 1} of ${matches.length}`);
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+  }, []);
+
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        stepSearchMatch(e.shiftKey ? -1 : 1);
+      } else if (e.key === "Escape") {
+        // Claim the key so the dialog's escape stack doesn't also close the modal.
+        e.preventDefault();
+        e.stopPropagation();
+        closeSearch();
+      }
+    },
+    [stepSearchMatch, closeSearch]
+  );
+
+  // Overview-rail viewport indicator: a pointer-events-free thumb mirroring
+  // the visible region. Written straight to the DOM from scroll events so
+  // scrolling never re-renders the modal tree.
+  useEffect(() => {
+    if (!isOpen || mode !== "diff") return;
+    const container = diffViewerRef.current;
+    const indicator = viewportIndicatorRef.current;
+    const scrollRoot = container?.parentElement;
+    if (!container || !indicator || !scrollRoot) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const { scrollTop, scrollHeight, clientHeight } = scrollRoot;
+      if (scrollHeight <= clientHeight + 1) {
+        indicator.style.opacity = "0";
+        return;
+      }
+      indicator.style.opacity = "1";
+      indicator.style.top = `${(scrollTop / scrollHeight) * 100}%`;
+      indicator.style.height = `${(clientHeight / scrollHeight) * 100}%`;
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    update();
+    scrollRoot.addEventListener("scroll", schedule, { passive: true });
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
+    resizeObserver?.observe(scrollRoot);
+    return () => {
+      scrollRoot.removeEventListener("scroll", schedule);
+      resizeObserver?.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [isOpen, mode, diff, hunkMarkers.length, searchMarkers.length, collapseRevision]);
+
   return (
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
-      size="6xl"
+      size={mode === "diff" && hasDiff && diffViewType === "split" ? "7xl" : "6xl"}
       maxHeight="max-h-[90vh]"
       restoreFocusTo={restoreFocusTo}
       data-testid="file-viewer-dialog"
@@ -502,115 +832,18 @@ export function FileViewerModal({
 
           {/* Show view/diff toggle only when both are potentially available */}
           {hasDiff && !imageFile && (canShowView || loadState !== "loading") && (
-            <div className="flex bg-daintree-sidebar rounded p-0.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setMode("view")}
-                disabled={!canShowView}
-                className={cn(
-                  "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-                  mode === "view"
-                    ? "bg-daintree-border text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-                )}
-              >
-                View
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("diff")}
-                className={cn(
-                  "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-                  mode === "diff"
-                    ? "bg-daintree-border text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text"
-                )}
-              >
-                Diff
-              </button>
-            </div>
+            <SegmentedToggle
+              options={[
+                { value: "view" as ViewMode, label: "View", disabled: !canShowView },
+                { value: "diff" as ViewMode, label: "Diff" },
+              ]}
+              value={mode}
+              onChange={setMode}
+            />
           )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
-          {/* File stepping — previous/next across the worktree change set */}
-          {canStepFiles && (
-            <div className="flex items-center gap-1 shrink-0">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onNavigateFile?.(-1)}
-                    disabled={!hasPrevFile}
-                    aria-label="Previous file"
-                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Previous file ([)</TooltipContent>
-              </Tooltip>
-              <span
-                data-testid="file-position-indicator"
-                className="text-xs text-muted-foreground tabular-nums"
-              >
-                {(currentFileIndex ?? 0) + 1} of {totalFileCount}
-              </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onNavigateFile?.(1)}
-                    disabled={!hasNextFile}
-                    aria-label="Next file"
-                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Next file (])</TooltipContent>
-              </Tooltip>
-            </div>
-          )}
-          {/* Hunk position indicator — visible during free scroll and n/p nav */}
-          {mode === "diff" && hunkCount > 1 && activeHunkIndex >= 0 && (
-            <span
-              data-testid="hunk-position-indicator"
-              className="text-xs text-muted-foreground tabular-nums"
-            >
-              Hunk {activeHunkIndex + 1} of {hunkCount}
-            </span>
-          )}
-          {/* Split/Unified toggle — only visible in diff mode */}
-          {mode === "diff" && hasDiff && (
-            <div className="flex bg-daintree-sidebar rounded p-0.5">
-              <button
-                type="button"
-                onClick={() => setDiffViewType("split")}
-                className={cn(
-                  "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-                  diffViewType === "split"
-                    ? "bg-daintree-border text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text"
-                )}
-              >
-                Split
-              </button>
-              <button
-                type="button"
-                onClick={() => setDiffViewType("unified")}
-                className={cn(
-                  "px-2.5 py-1 text-xs font-medium rounded transition-colors",
-                  diffViewType === "unified"
-                    ? "bg-daintree-border text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text"
-                )}
-              >
-                Unified
-              </button>
-            </div>
-          )}
-
           {/* Copy diff — only visible in diff mode */}
           {mode === "diff" && hasDiff && (
             <Tooltip>
@@ -663,109 +896,348 @@ export function FileViewerModal({
         </div>
       </AppDialog.Header>
 
-      <AppDialog.BodyScroll className="p-0">
-        {isImageMode && (
-          <div className="flex items-center justify-center p-6 min-h-[300px]">
-            {loadState === "image" && (
-              <img
-                key={filePath}
-                src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
-                alt={fileName}
-                className="max-w-full max-h-[70vh] object-contain rounded"
-                draggable={false}
-                onError={handleImageError}
-              />
-            )}
-            {loadState === "svg" && sanitizedSvg && (
-              <div
-                className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
-                dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
-              />
-            )}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <AppDialog.BodyScroll className="p-0 diff-scroll-root">
+          {isImageMode && (
+            <div className="flex items-center justify-center p-6 min-h-[300px]">
+              {loadState === "image" && (
+                <img
+                  key={filePath}
+                  src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
+                  alt={fileName}
+                  className="max-w-full max-h-[70vh] object-contain rounded"
+                  draggable={false}
+                  onError={handleImageError}
+                />
+              )}
+              {loadState === "svg" && sanitizedSvg && (
+                <div
+                  className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
+                  dangerouslySetInnerHTML={{ __html: createTrustedHTML(sanitizedSvg) }}
+                />
+              )}
+            </div>
+          )}
+
+          {!isImageMode && mode === "view" && (
+            <>
+              {loadState === "loading" && (
+                <div className="p-4 space-y-3">
+                  <Skeleton label="Loading file">
+                    <SkeletonBone className="h-5 w-1/3" />
+                    <SkeletonText lines={15} />
+                  </Skeleton>
+                </div>
+              )}
+
+              {loadState === "error" && (displayErrorMessage || errorCode) && (
+                <div className="flex flex-col items-center justify-center h-64 gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    {displayErrorMessage ?? (errorCode ? ERROR_MESSAGES[errorCode] : "")}
+                  </p>
+                  {imageFile ? (
+                    <button
+                      type="button"
+                      onClick={handleOpenInImageViewer}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      Open in image viewer
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleOpenInEditor}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Open in editor
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {loadState === "loaded" && content !== null && (
+                <>
+                  {metadata && (
+                    <div
+                      data-testid="file-viewer-metadata"
+                      className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono"
+                    >
+                      {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                    </div>
+                  )}
+                  <CodeViewer
+                    ref={codeViewerRef}
+                    content={content}
+                    filePath={filePath}
+                    initialLine={initialLine}
+                    className="min-h-[300px]"
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {!isImageMode && mode === "diff" && diff && (
+            <DiffViewer
+              ref={diffViewerRef}
+              diff={diff}
+              viewType={diffViewType}
+              rootPath={rootPath}
+              wrapLines={diffWrapLines}
+              searchQuery={searchActive ? searchQuery : undefined}
+              // Expansion needs the diff's new side to byte-match the loaded
+              // file; an ignore-whitespace diff can show old-side context lines.
+              source={diffMatchesFile && !diffIgnoreWhitespace && canShowView ? content : undefined}
+              onRetry={onRetryDiff}
+              onToggleCollapse={handleDiffToggleCollapse}
+              onTokensRendered={handleTokensRendered}
+            />
+          )}
+
+          {!isImageMode && mode === "diff" && !diff && (
+            <div className="p-4 space-y-3">
+              <Skeleton label="Loading diff">
+                <SkeletonBone className="h-7 w-3/4" />
+                <SkeletonText lines={8} />
+              </Skeleton>
+            </div>
+          )}
+        </AppDialog.BodyScroll>
+
+        {/* In-diff find bar (Cmd+F in diff mode). Floats over the top-right of
+            the diff; Enter / Shift+Enter cycle matches. */}
+        {searchActive && (
+          <div
+            className="absolute top-2 right-7 z-20 flex items-center gap-1 pl-2 pr-1 py-1 rounded-md surface-overlay shadow-[var(--theme-shadow-floating)] focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            data-testid="diff-search-bar"
+          >
+            <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Find in diff"
+              aria-label="Find in diff"
+              className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+            />
+            <span
+              className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-0"
+              data-testid="diff-search-count"
+              aria-live="polite"
+            >
+              {searchQuery
+                ? searchMatchCount === 0
+                  ? "No matches"
+                  : searchMatchIndex >= 0
+                    ? `${searchMatchIndex + 1} of ${searchMatchCount}`
+                    : `${searchMatchCount} ${searchMatchCount === 1 ? "match" : "matches"}`
+                : ""}
+            </span>
+            <button
+              type="button"
+              onClick={() => stepSearchMatch(-1)}
+              disabled={searchMatchCount === 0}
+              aria-label="Previous match"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => stepSearchMatch(1)}
+              disabled={searchMatchCount === 0}
+              aria-label="Next match"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={closeSearch}
+              aria-label="Close search"
+              className="p-1 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-overlay-medium"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 
-        {!isImageMode && mode === "view" && (
-          <>
-            {loadState === "loading" && (
-              <div className="p-4 space-y-3">
-                <Skeleton label="Loading file">
-                  <SkeletonBone className="h-5 w-1/3" />
-                  <SkeletonText lines={15} />
-                </Skeleton>
-              </div>
-            )}
-
-            {loadState === "error" && (displayErrorMessage || errorCode) && (
-              <div className="flex flex-col items-center justify-center h-64 gap-3">
-                <p className="text-sm text-muted-foreground">
-                  {displayErrorMessage ?? (errorCode ? ERROR_MESSAGES[errorCode] : "")}
-                </p>
-                {imageFile ? (
-                  <button
-                    type="button"
-                    onClick={handleOpenInImageViewer}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
-                  >
-                    <ImageIcon className="w-3.5 h-3.5" />
-                    Open in image viewer
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleOpenInEditor}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    Open in editor
-                  </button>
+        {/* Overview rail: one tick per hunk at its proportional position in the
+            scroll run (plus search-match ticks and a viewport thumb); sits left
+            of the body scrollbar. */}
+        {mode === "diff" && (hunkMarkers.length > 1 || searchMarkers.length > 0) && (
+          <div
+            className="absolute right-2.5 top-1 bottom-1 w-2 z-10"
+            data-testid="hunk-overview-rail"
+          >
+            <div
+              ref={viewportIndicatorRef}
+              data-testid="rail-viewport-indicator"
+              className="absolute left-0 right-0 rounded-full bg-tint/10 pointer-events-none"
+            />
+            {hunkMarkers.map((marker, index) => (
+              <button
+                key={index}
+                type="button"
+                aria-label={`Go to hunk ${index + 1} of ${hunkMarkers.length}`}
+                onClick={() => scrollToHunkIndex(index)}
+                style={{ top: `${marker.ratio * 100}%` }}
+                className={cn(
+                  "absolute left-0 right-0 h-[3px] rounded-full transition-colors",
+                  marker.kind === "insert" && "bg-status-success/60 hover:bg-status-success",
+                  marker.kind === "delete" && "bg-status-danger/60 hover:bg-status-danger",
+                  marker.kind === "mixed" &&
+                    "bg-gradient-to-r from-status-success/60 to-status-danger/60",
+                  index === activeHunkIndex && "h-[5px] opacity-100"
                 )}
-              </div>
-            )}
+              />
+            ))}
+            {searchMarkers.map((ratio, index) => (
+              <div
+                key={`search-${index}`}
+                data-testid="rail-search-tick"
+                style={{ top: `${ratio * 100}%` }}
+                className="absolute right-0 w-1 h-[2px] rounded-full bg-text-muted pointer-events-none"
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
-            {loadState === "loaded" && content !== null && (
+      {/* Slim footer toolbar: navigation + diff display controls (Kaleidoscope-
+          style bottom stepper). Rendered whenever there's something to put in
+          it — file stepping in either mode, diff controls in diff mode. */}
+      {(canStepFiles || (mode === "diff" && hasDiff)) && (
+        <div className="flex items-center justify-between gap-3 px-4 py-1.5 border-t border-border-strong bg-surface-panel shrink-0">
+          <div className="flex items-center gap-1 min-w-0">
+            {canStepFiles && (
               <>
-                {metadata && (
-                  <div
-                    data-testid="file-viewer-metadata"
-                    className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono"
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateFile?.(-1)}
+                      disabled={!hasPrevFile}
+                      aria-label="Previous file"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Previous file ([)</TooltipContent>
+                </Tooltip>
+                <span
+                  data-testid="file-position-indicator"
+                  className="text-xs text-muted-foreground tabular-nums"
+                >
+                  {(currentFileIndex ?? 0) + 1} of {totalFileCount}
+                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateFile?.(1)}
+                      disabled={!hasNextFile}
+                      aria-label="Next file"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Next file (])</TooltipContent>
+                </Tooltip>
+              </>
+            )}
+          </div>
+
+          {mode === "diff" && hasDiff && hunkCount > 0 && (
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => stepHunk(-1)}
+                    disabled={hunkCount < 2 || activeHunkIndex === 0}
+                    aria-label="Previous hunk"
+                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
-                    {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
-                  </div>
-                )}
-                <CodeViewer
-                  ref={codeViewerRef}
-                  content={content}
-                  filePath={filePath}
-                  initialLine={initialLine}
-                  className="min-h-[300px]"
+                    <ChevronUp className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Previous hunk (p)</TooltipContent>
+              </Tooltip>
+              <span
+                data-testid="hunk-position-indicator"
+                className="text-xs text-muted-foreground tabular-nums"
+              >
+                {activeHunkIndex >= 0
+                  ? `Hunk ${activeHunkIndex + 1} of ${hunkCount}`
+                  : `${hunkCount} ${hunkCount === 1 ? "hunk" : "hunks"}`}
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => stepHunk(1)}
+                    disabled={hunkCount < 2 || activeHunkIndex >= hunkCount - 1}
+                    aria-label="Next hunk"
+                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Next hunk (n)</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            {mode === "diff" && hasDiff && (
+              <>
+                <IconToggle
+                  pressed={searchOpen}
+                  label="Find in diff"
+                  onToggle={() => {
+                    if (searchOpen) {
+                      closeSearch();
+                    } else {
+                      setSearchOpen(true);
+                      requestAnimationFrame(() => searchInputRef.current?.focus());
+                    }
+                  }}
+                >
+                  <Search className="w-4 h-4" />
+                </IconToggle>
+                <IconToggle
+                  pressed={diffWrapLines}
+                  label="Wrap long lines"
+                  onToggle={() => setDiffWrapLines(!diffWrapLines)}
+                >
+                  <WrapText className="w-4 h-4" />
+                </IconToggle>
+                <IconToggle
+                  pressed={diffIgnoreWhitespace}
+                  label="Ignore whitespace changes"
+                  onToggle={() => setDiffIgnoreWhitespace(!diffIgnoreWhitespace)}
+                >
+                  <Pilcrow className="w-4 h-4" />
+                </IconToggle>
+                <SegmentedToggle
+                  options={[
+                    { value: "split" as DiffViewType, label: "Split" },
+                    { value: "unified" as DiffViewType, label: "Unified" },
+                  ]}
+                  value={diffViewType}
+                  onChange={setDiffViewType}
                 />
               </>
             )}
-          </>
-        )}
-
-        {!isImageMode && mode === "diff" && diff && (
-          <DiffViewer
-            ref={diffViewerRef}
-            diff={diff}
-            filePath={filePath}
-            viewType={diffViewType}
-            rootPath={rootPath}
-            onRetry={onRetryDiff}
-            onToggleCollapse={handleDiffToggleCollapse}
-          />
-        )}
-
-        {!isImageMode && mode === "diff" && !diff && (
-          <div className="p-4 space-y-3">
-            <Skeleton label="Loading diff">
-              <SkeletonBone className="h-7 w-3/4" />
-              <SkeletonText lines={8} />
-            </Skeleton>
           </div>
-        )}
-      </AppDialog.BodyScroll>
+        </div>
+      )}
     </AppDialog>
   );
 }

@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // task-ordering assertions below.
 const registeredTaskNames: string[] = [];
 const registeredTaskRuns = new Map<string, () => unknown>();
-const setMcpRegistry = vi.fn();
+// Hoisted: the HelpSessionService mock factory now runs at import time
+// (globalServicesInit value-imports the singleton statically).
+const setMcpRegistry = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let mockLogRetentionDays: number | undefined = 30;
@@ -27,6 +29,7 @@ const {
     getPluginMcpConsentStore: vi.fn(),
   };
 });
+const registerCommandsMock = vi.hoisted(() => vi.fn());
 const {
   pluginInitialize,
   pluginGetPluginDir,
@@ -85,22 +88,6 @@ vi.mock("../../utils/logger.js", () => ({
 vi.mock("../../services/TelemetryService.js", () => ({
   initializeTelemetry: vi.fn(),
   setOnboardingCompleteTag: vi.fn(),
-}));
-
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: {
-    initializeStorage: vi.fn(),
-    hasToken: vi.fn(() => false),
-    getToken: vi.fn(() => null),
-    getTokenVersion: vi.fn(() => 0),
-    setMemoryToken: vi.fn(),
-    setValidatedUserInfo: vi.fn(),
-    validate: vi.fn(),
-  },
-}));
-
-vi.mock("../../services/github/GitHubTokenHealthService.js", () => ({
-  gitHubTokenHealthService: { start: vi.fn(), dispose: vi.fn() },
 }));
 
 vi.mock("../../services/connectivity/index.js", () => ({
@@ -244,10 +231,26 @@ vi.mock("../../setup/environment.js", () => ({
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     setMcpRegistry,
+    setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
   },
+}));
+
+vi.mock("../../services/PendingHelpHibernationStore.js", () => ({
+  getPendingHelpHibernationStore: vi.fn(() => ({ load: vi.fn(async () => {}) })),
+}));
+
+// globalServicesInit statically imports menu.ts (wireUpdateMenuState) and the
+// commands barrel (registerCommands); both pull electron/service graphs this
+// suite doesn't exercise — mock at the boundary.
+vi.mock("../../menu.js", () => ({
+  wireUpdateMenuState: vi.fn(),
+}));
+
+vi.mock("../../services/commands/index.js", () => ({
+  registerCommands: registerCommandsMock,
 }));
 
 vi.mock("../deferredInitQueue.js", () => ({
@@ -269,7 +272,6 @@ import { initGlobalServices } from "../globalServicesInit.js";
 import { getGlobalServicesInitialized, setGlobalServicesInitialized } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app } from "electron";
-import { GitHubAuth } from "../../services/github/GitHubAuth.js";
 
 describe("initGlobalServices task ordering", () => {
   beforeEach(() => {
@@ -280,11 +282,6 @@ describe("initGlobalServices task ordering", () => {
     setMcpRegistry.mockReset();
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
-    vi.mocked(GitHubAuth.hasToken).mockReturnValue(false);
-    vi.mocked(GitHubAuth.getToken).mockReturnValue(undefined);
-    vi.mocked(GitHubAuth.getTokenVersion).mockReturnValue(0);
-    vi.mocked(GitHubAuth.validate).mockReset();
-    vi.mocked(GitHubAuth.setValidatedUserInfo).mockReset();
     pluginMcpHydrate.mockClear();
     getPluginMcpAuditService.mockClear();
     getPluginMcpConsentService.mockClear();
@@ -294,6 +291,7 @@ describe("initGlobalServices task ordering", () => {
     pluginActivateStartup.mockClear();
     setPluginDirResolver.mockClear();
     activateOpenFileInstaller.mockClear();
+    registerCommandsMock.mockClear();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
@@ -303,6 +301,79 @@ describe("initGlobalServices task ordering", () => {
 
   afterEach(() => {
     setGlobalServicesInitialized(false);
+  });
+
+  it("registers tasks in grouped order: cheap wires, then telemetry, then heavy dynamic-import tasks", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    // Group 1 — cheap synchronous wires.
+    const cheap = [
+      "crash-recovery-backup-timer",
+      "hibernation-service",
+      "system-sleep-service",
+      "os-dnd-service",
+      "database-maintenance",
+      "pre-agent-snapshot-service",
+      "disk-space-monitor",
+      "event-loop-lag-monitor",
+      "app-metrics-monitor",
+      "agent-connectivity",
+      "service-connectivity-registry",
+      "periodic-cleanup",
+    ];
+    // Group 3 — heavy dynamic-import tasks. Telemetry (group 2) sits between
+    // so Sentry is live before any heavy task can fail (trackEvent drops
+    // events while captureEventFn is null).
+    const heavy = [
+      "agent-notification-service",
+      "forge-matcher-relay",
+      "auto-updater",
+      "windows-store-notifier",
+      "ccr-config",
+      "builtin-commands",
+      "idle-terminal-notification-service",
+      "resource-profile-service",
+      "plugin-service",
+      "plugin-cli-server",
+      "plugin-mcp-audit-warm",
+      "mcp-server",
+      "help-session-gc",
+      "help-session-pty",
+      "session-eviction",
+      "prune-old-logs",
+      "trashed-pid-cleanup",
+      "scratch-cleanup",
+      "assistant-scratch-cleanup",
+    ];
+
+    const telemetryIdx = registeredTaskNames.indexOf("telemetry");
+    expect(telemetryIdx).toBeGreaterThanOrEqual(0);
+    for (const name of cheap) {
+      const idx = registeredTaskNames.indexOf(name);
+      expect(idx, `${name} should be registered`).toBeGreaterThanOrEqual(0);
+      expect(idx, `${name} should register before telemetry`).toBeLessThan(telemetryIdx);
+    }
+    for (const name of heavy) {
+      const idx = registeredTaskNames.indexOf(name);
+      expect(idx, `${name} should be registered`).toBeGreaterThanOrEqual(0);
+      expect(idx, `${name} should register after telemetry`).toBeGreaterThan(telemetryIdx);
+    }
+  });
+
+  it("registers builtin-commands as a deferred task that fires registerCommands only when run", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("builtin-commands");
+    expect(run).toBeDefined();
+    // Registration moved out of main-module eval (boot path) into the queue —
+    // the command-chunk imports must not fire before the drain.
+    expect(registerCommandsMock).not.toHaveBeenCalled();
+
+    run!();
+
+    expect(registerCommandsMock).toHaveBeenCalledTimes(1);
   });
 
   it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {
@@ -458,6 +529,10 @@ describe("initGlobalServices task ordering", () => {
 
     expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
     expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+    // activateStartupFinishedPlugins() must also still run: its `finally` is
+    // what settles waitForInit(), which the renderer-facing plugin/forge IPC
+    // gates await — dropping it would hang those handlers forever.
+    expect(pluginActivateStartup).toHaveBeenCalledTimes(1);
   });
 
   it("does not touch plugin-MCP audit/consent services eagerly during initGlobalServices() (#10073)", async () => {
@@ -598,82 +673,6 @@ describe("initGlobalServices task ordering", () => {
     await run?.();
 
     expect(pruneOldLogsAsync).toHaveBeenCalledWith("/tmp/userData", 30);
-  });
-
-  it("github-auth-validate task returns void synchronously so a slow validate can't stall the drain (#10325)", async () => {
-    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
-    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
-    // A validate() that never resolves models a slow/offline network. The task
-    // must not return this promise, otherwise drainNext would await it. The
-    // pending promise has no backing timer/IO, so it won't keep the loop alive.
-    vi.mocked(GitHubAuth.validate).mockReturnValue(
-      new Promise<never>(() => {}) as ReturnType<typeof GitHubAuth.validate>
-    );
-
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    const run = registeredTaskRuns.get("github-auth-validate");
-    expect(run).toBeDefined();
-    // run() must complete (return a non-thenable) even while validate hangs.
-    const result = run?.();
-    expect(result).toBeUndefined();
-  });
-
-  it("github-auth-validate contains a rejected validate() so it can't surface as an unhandled rejection (#10325)", async () => {
-    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
-    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
-    vi.mocked(GitHubAuth.validate).mockRejectedValue(new Error("network down"));
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown): void => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandled);
-
-    try {
-      const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-      await initGlobalServices(fakeRegistry);
-
-      const run = registeredTaskRuns.get("github-auth-validate");
-      expect(run).toBeDefined();
-      expect(run?.()).toBeUndefined();
-
-      // Let the floated IIFE's catch run and any (absent) rejection propagate.
-      await new Promise((resolve) => setImmediate(resolve));
-
-      expect(warnSpy).toHaveBeenCalled();
-      expect(unhandled).toHaveLength(0);
-      expect(GitHubAuth.setValidatedUserInfo).not.toHaveBeenCalled();
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-      warnSpy.mockRestore();
-    }
-  });
-
-  it("github-auth-validate forwards the captured token version so a stale write can be rejected (#10325)", async () => {
-    vi.mocked(GitHubAuth.hasToken).mockReturnValue(true);
-    vi.mocked(GitHubAuth.getToken).mockReturnValue("tok-123");
-    // Version 7 captured at registration; the guard inside setValidatedUserInfo
-    // compares against this. validate resolves valid, so the task tries to cache.
-    vi.mocked(GitHubAuth.getTokenVersion).mockReturnValue(7);
-    vi.mocked(GitHubAuth.validate).mockResolvedValue({
-      valid: true,
-      username: "octocat",
-      avatarUrl: undefined,
-      scopes: ["repo"],
-    } as Awaited<ReturnType<typeof GitHubAuth.validate>>);
-
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    const run = registeredTaskRuns.get("github-auth-validate");
-    expect(run).toBeDefined();
-    run?.();
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // The task forwards the captured version so GitHubAuth can reject a stale write.
-    expect(GitHubAuth.setValidatedUserInfo).toHaveBeenCalledWith("octocat", undefined, ["repo"], 7);
   });
 
   it("returns 'ok' on the happy path", async () => {

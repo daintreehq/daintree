@@ -1,20 +1,20 @@
-import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
 import type { CIStatus } from "@shared/types/forge";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
-import { usePRTooltip } from "@/hooks/useGitHubTooltip";
-import { useGitHubBadgeTooltip } from "./hooks/useGitHubBadgeTooltip";
-import { useGitHubBadgeFreshness } from "./hooks/useGitHubBadgeFreshness";
+import { usePRTooltip } from "@/hooks/useForgeTooltip";
+import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
+import { useColdNumberGap } from "./hooks/useColdNumberGap";
+import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import {
   PRTooltipContent,
   TooltipLoading,
   TokenMissingTooltip,
   FreshnessMetaItem,
   type TooltipFreshness,
-} from "./GitHubTooltipContent";
+} from "./ForgeTooltipContent";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 interface PRBadgeProps {
@@ -50,33 +50,28 @@ export function PRBadge({
   isHeadline,
   prTitle,
 }: PRBadgeProps) {
-  // Mirror IssueBadge: when a freshly-set PR number has no title yet, suppress
-  // the raw "#NNN" fallback for the first 400ms (Doherty) rather than flashing
-  // the number while the title fetch is in-flight.
-  "use no memo";
-
-  const { data, loading, error, missingToken, fetchTooltip, reset } = usePRTooltip(
+  const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } = usePRTooltip(
     worktreePath,
     prNumber
   );
 
-  const prevPrNumber = useRef<number | undefined>(undefined);
-  const isColdTitleGap = isHeadline === true && !prTitle && prNumber !== prevPrNumber.current;
+  // Mirror IssueBadge: when a freshly-set PR number has no title yet, suppress
+  // the raw "#NNN" fallback for the first 400ms (Doherty) rather than flashing
+  // the number while the title fetch is in-flight.
+  const isColdTitleGap = useColdNumberGap(prNumber, prTitle, isHeadline === true);
   const showColdFallback = useDohertyGate(isColdTitleGap);
   const showTooltipLoading = useDohertyGate(loading);
-  useEffect(() => {
-    prevPrNumber.current = prNumber;
-  }, [prNumber]);
 
-  const { isOpen, handleOpenChange, handleClick } = useGitHubBadgeTooltip({
+  const { isOpen, handleOpenChange, handleClick } = useForgeBadgeTooltip({
     fetchTooltip,
     reset,
-    missingToken,
+    missingCredential,
+    providerId,
     isActive: isActive ?? false,
     onOpen,
   });
 
-  const { freshnessCause, rateLimitResetAt, now } = useGitHubBadgeFreshness("pr");
+  const { freshnessCause, rateLimitResetAt, now } = useForgeBadgeFreshness("pr");
 
   const prStateColor =
     prState === "merged"
@@ -98,17 +93,17 @@ export function PRBadge({
     (freshnessCause === "rate-limit" ||
       freshnessCause === "circuit-breaker" ||
       (prDetectionPaused ?? false)) &&
-    !missingToken;
+    !missingCredential;
 
-  const ariaLabel = missingToken
-    ? "Configure GitHub token to see PR details"
+  const ariaLabel = missingCredential
+    ? "Add a forge access token to see PR details"
     : (isHeadline && prTitle
         ? `Open pull request #${prNumber}: ${prTitle}`
         : ciVisual
-          ? `Open ${prStateLabel} pull request #${prNumber} on GitHub — ${ciVisual.ariaLabel}`
-          : `Open ${prStateLabel} pull request #${prNumber} on GitHub`) +
+          ? `Open ${prStateLabel} pull request #${prNumber} — ${ciVisual.ariaLabel}`
+          : `Open ${prStateLabel} pull request #${prNumber}`) +
       (freshnessCause === "rate-limit"
-        ? " — GitHub rate limited"
+        ? " — forge rate limited"
         : freshnessCause === "circuit-breaker" || (prDetectionPaused ?? false)
           ? " — PR detection paused"
           : "");
@@ -133,7 +128,7 @@ export function PRBadge({
             <CornerDownRight
               className={cn(
                 "w-3 h-3 shrink-0",
-                missingToken ? "grayscale opacity-50" : "text-text-muted"
+                missingCredential ? "grayscale opacity-50" : "text-text-muted"
               )}
               aria-hidden="true"
             />
@@ -142,7 +137,7 @@ export function PRBadge({
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingToken ? "grayscale opacity-50" : prStateColor
+              missingCredential ? "grayscale opacity-50" : prStateColor
             )}
             aria-hidden="true"
           />
@@ -151,7 +146,7 @@ export function PRBadge({
               className={cn(
                 "truncate flex-1 min-w-0",
                 underlineOnHover && "hover:underline",
-                missingToken
+                missingCredential
                   ? "text-text-muted"
                   : isActive
                     ? "text-text-primary font-medium"
@@ -161,7 +156,10 @@ export function PRBadge({
               {prTitle ||
                 (isColdTitleGap && !showColdFallback ? null : (
                   <span
-                    className={cn("font-mono", missingToken ? "text-text-muted" : prStateColor)}
+                    className={cn(
+                      "font-mono",
+                      missingCredential ? "text-text-muted" : prStateColor
+                    )}
                   >
                     #{prNumber}
                   </span>
@@ -172,13 +170,13 @@ export function PRBadge({
               className={cn(
                 "font-mono",
                 underlineOnHover && "hover:underline",
-                missingToken ? "text-text-muted" : prStateColor
+                missingCredential ? "text-text-muted" : prStateColor
               )}
             >
               #{prNumber}
             </span>
           )}
-          {ciVisual && !missingToken && (
+          {ciVisual && !missingCredential && (
             <span
               className="inline-flex items-center justify-center w-3 h-3 shrink-0"
               aria-hidden="true"
@@ -196,7 +194,7 @@ export function PRBadge({
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
-        {missingToken ? (
+        {missingCredential ? (
           <TokenMissingTooltip type="pr" />
         ) : showTooltipLoading ? (
           <TooltipLoading />

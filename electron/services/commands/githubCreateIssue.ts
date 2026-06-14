@@ -1,6 +1,6 @@
 import type { DaintreeCommand, CommandResult } from "../../../shared/types/commands.js";
 import type { CreateIssueInput } from "../../../shared/types/forge.js";
-import { getGitHubToken, clearGitHubCaches } from "../GitHubService.js";
+import { hasActivatedForgeProvider } from "../forgeProviderRegistry.js";
 import { resolveForCwd } from "../../ipc/handlers/forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../forge/forgeAuditService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -93,28 +93,17 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
     ],
   },
 
-  isEnabled: () => {
-    return !!getGitHubToken();
-  },
+  // Credential presence is provider-owned and async-only, so the sync gate is
+  // activation alone (mirrors githubWorkIssue); a missing token surfaces from
+  // the provider's createIssue with a settings-pointing message.
+  isEnabled: () => hasActivatedForgeProvider(),
 
-  disabledReason: () => {
-    if (!getGitHubToken()) {
-      return "GitHub token not configured. Set it in Settings.";
-    }
-    return undefined;
-  },
+  disabledReason: () =>
+    hasActivatedForgeProvider()
+      ? undefined
+      : "No forge provider is active. Enable one (e.g. GitHub) in Settings.",
 
   execute: async (context, args): Promise<CommandResult<CreateIssueResult>> => {
-    if (!getGitHubToken()) {
-      return {
-        success: false,
-        error: {
-          code: "NO_TOKEN",
-          message: "GitHub token not configured. Set it in Settings.",
-        },
-      };
-    }
-
     const cwd = context.cwd;
     if (!cwd) {
       return {
@@ -191,9 +180,6 @@ export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIs
         },
         () => resolved.impl.createIssue(resolved.repoRef, input)
       );
-
-      // Clear forge/GitHub caches so the new issue appears in subsequent lists.
-      clearGitHubCaches();
 
       return {
         success: true,

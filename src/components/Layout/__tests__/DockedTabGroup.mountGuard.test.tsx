@@ -22,7 +22,7 @@ const moveTerminalToGridMock = vi.fn();
 const updateTitleMock = vi.fn();
 const reorderPanelsInGroupMock = vi.fn();
 const addPanelMock = vi.fn();
-const addPanelToGroupMock = vi.fn();
+const addPanelToGroupMock = vi.fn(() => true);
 
 let mockActiveDockTerminalId: string | null = null;
 let mockTabGroups = new Map<string, TabGroup>();
@@ -216,6 +216,7 @@ vi.mock("@dnd-kit/core", () => ({
   closestCenter: vi.fn(),
   useSensor: vi.fn(() => ({})),
   useSensors: vi.fn(() => []),
+  KeyboardSensor: class {},
   PointerSensor: class {},
   TouchSensor: class {},
 }));
@@ -223,6 +224,7 @@ vi.mock("@dnd-kit/core", () => ({
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   horizontalListSortingStrategy: vi.fn(),
+  sortableKeyboardCoordinates: vi.fn(),
   arrayMove: <T,>(arr: T[]) => arr,
 }));
 
@@ -246,6 +248,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
 import { DockedTabGroup } from "../DockedTabGroup";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { TerminalRefreshTier } from "@/types";
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -601,6 +604,86 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
     expect(calls.some((c) => c[1] === TerminalRefreshTier.BACKGROUND)).toBe(true);
   });
 
+  it("backgrounds the previous tab and promotes the new one on a tab switch (#10442)", () => {
+    // Group stays open (activeDockTerminalId keeps pointing at a panel in the
+    // group); only the stored active tab changes. The previously-active panel
+    // must drop to BACKGROUND so it stops painting at the visible tier behind
+    // the popover — the new panel goes VISIBLE via the usual RAF.
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-1"));
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    const { rerender } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+
+    act(() => {
+      flushRaf();
+    });
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.VISIBLE
+    );
+    vi.mocked(terminalInstanceService.applyRendererPolicy).mockClear();
+
+    // Switch to tab t-2 while the group remains open.
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    act(() => {
+      rerender(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+    });
+
+    // The previous panel is downgraded synchronously; the new panel's VISIBLE
+    // upgrade is still RAF-gated.
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.BACKGROUND
+    );
+    expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalledWith(
+      "t-2",
+      TerminalRefreshTier.VISIBLE
+    );
+
+    act(() => {
+      flushRaf();
+    });
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-2",
+      TerminalRefreshTier.VISIBLE
+    );
+  });
+
+  it("cancels the previous tab's pending VISIBLE RAF when switching before it fires (#10442)", () => {
+    // Switching tabs faster than a frame: the old panel's VISIBLE upgrade is
+    // still queued. The effect cleanup must cancel it so the now-inactive panel
+    // never reaches VISIBLE, while it is still downgraded to BACKGROUND.
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-1"));
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+
+    const { rerender } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+    // Do NOT flush — t-1's VISIBLE RAF is still pending.
+    expect(rafCallbacks.length).toBe(1);
+
+    mockActiveDockTerminalId = "t-2";
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"], "t-2"));
+    act(() => {
+      rerender(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-2")} panels={panels} />);
+    });
+
+    act(() => {
+      flushRaf();
+    });
+
+    const calls = vi.mocked(terminalInstanceService.applyRendererPolicy).mock.calls;
+    // t-1 was downgraded but never reached VISIBLE (its RAF was cancelled).
+    expect(calls).toContainEqual(["t-1", TerminalRefreshTier.BACKGROUND]);
+    expect(calls).not.toContainEqual(["t-1", TerminalRefreshTier.VISIBLE]);
+    expect(calls).toContainEqual(["t-2", TerminalRefreshTier.VISIBLE]);
+  });
+
   it("double-clicking the chip moves the active panel to the grid and closes the dock", () => {
     mockActiveDockTerminalId = "t-1";
     const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
@@ -641,5 +724,56 @@ describe("DockedTabGroup lifecycle and pop-out (#8160)", () => {
 
     expect(moveTerminalToGridMock).toHaveBeenCalledWith("t-1");
     expect(closeDockTerminalMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("DockedTabGroup add-tab orphan cleanup (#10441)", () => {
+  beforeEach(() => {
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups = new Map();
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2"]));
+    addPanelMock.mockReset();
+    addPanelToGroupMock.mockReset();
+    vi.mocked(buildPanelDuplicateOptions).mockReset();
+  });
+
+  async function clickAddTab() {
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+    const { container } = render(
+      <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+    );
+    const addTabButton = container.querySelector(
+      '[aria-label="Duplicate panel as new tab"]'
+    ) as HTMLElement;
+    expect(addTabButton).not.toBeNull();
+    // Isolate the click's side effects from any mount-time activation.
+    trashPanelMock.mockClear();
+    setActiveTabMock.mockClear();
+    await act(async () => {
+      fireEvent.click(addTabButton);
+    });
+  }
+
+  it("trashes the new panel and skips activation when addPanelToGroup rejects the add", async () => {
+    vi.mocked(buildPanelDuplicateOptions).mockResolvedValue({} as never);
+    addPanelMock.mockResolvedValue("t-new");
+    addPanelToGroupMock.mockReturnValue(false);
+
+    await clickAddTab();
+
+    expect(addPanelToGroupMock).toHaveBeenCalledWith("g-1", "t-new");
+    expect(trashPanelMock).toHaveBeenCalledWith("t-new");
+    expect(setActiveTabMock).not.toHaveBeenCalled();
+  });
+
+  it("activates the new panel and does not trash it when the add succeeds", async () => {
+    vi.mocked(buildPanelDuplicateOptions).mockResolvedValue({} as never);
+    addPanelMock.mockResolvedValue("t-new");
+    addPanelToGroupMock.mockReturnValue(true);
+
+    await clickAddTab();
+
+    expect(trashPanelMock).not.toHaveBeenCalled();
+    expect(setActiveTabMock).toHaveBeenCalledWith("g-1", "t-new");
   });
 });

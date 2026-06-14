@@ -34,10 +34,29 @@ export interface ResourceProfileConfig {
    * will not flap the fleet.
    */
   webglLowerThreshold: number;
+  /**
+   * Ceiling on the agent-terminal scrollback policy (lines). Caps the
+   * AGENT_POLICY maxLines in src/utils/scrollbackConfig.ts — at xterm's
+   * ~1.2KB/line each agent terminal holds up to ~maxLines×1.2KB of buffer
+   * once filled, so constrained hardware (efficiency) trades history depth
+   * for ~3MB per visible agent terminal. Applied live on profile change via
+   * useResourceProfile → restoreScrollbackAllForeground.
+   */
+  agentScrollbackMaxLines: number;
   /** FetchScheduler focused (isCurrent) fetch interval (ms) */
   fetchIntervalActiveMs: number;
   /** FetchScheduler background (non-current) fetch interval (ms) */
   fetchIntervalBackgroundMs: number;
+  /**
+   * PortBatcher throughput-mode flush window (ms) in the pty-host. Each busy
+   * terminal's batched output flushes on this cadence, so it bounds the
+   * steady-state timer-wakeup + MessagePort-post rate under multi-agent
+   * output floods. Stretched under efficiency, where the extra output
+   * latency is an acceptable trade for fewer wakeups on constrained
+   * hardware; the 64KB sync-flush threshold still bounds buffering under
+   * very high aggregate rates.
+   */
+  portBatchThroughputDelayMs: number;
   /** HibernationService memory-pressure inactivity threshold (ms) */
   memoryPressureInactiveMs: number;
   /**
@@ -66,6 +85,21 @@ export interface ResourceProfileConfig {
    * signal path instead of falling through.
    */
   paintGateHardTimeoutMs: number;
+  /**
+   * Warm-reactivation paint-gate SOFT timeout (ms). Bounds the wait for a
+   * cached view's renderer to finish its wake fan-out (atlas repair +
+   * missed-buffer replay across the grid) and emit `APP_VIEW_WARM_PAINTED`.
+   * Crossing it only logs; the bridge view stays attached until the signal
+   * or the hard timeout.
+   */
+  warmPaintGateTimeoutMs: number;
+  /**
+   * Warm-reactivation paint-gate HARD timeout (ms). Ceiling that drops the
+   * bridge view even without a paint signal. Should stay comfortably above
+   * `warmPaintGateTimeoutMs` so slow-but-live wake fan-outs complete via the
+   * signal path instead of revealing a partially repainted grid.
+   */
+  warmPaintGateHardTimeoutMs: number;
 }
 
 export interface ResourceProfilePayload {
@@ -98,10 +132,14 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     webglLowerThreshold: 12,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
     lowMemoryFreeThresholdMb: null,
+    agentScrollbackMaxLines: 5000,
     fetchIntervalActiveMs: 20_000,
     fetchIntervalBackgroundMs: 3 * 60_000,
+    portBatchThroughputDelayMs: 16,
     paintGateTimeoutMs: 1_500,
     paintGateHardTimeoutMs: 4_000,
+    warmPaintGateTimeoutMs: 500,
+    warmPaintGateHardTimeoutMs: 1_500,
   },
   balanced: {
     pollIntervalActive: 2000,
@@ -113,14 +151,20 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     webglLowerThreshold: 10,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
     lowMemoryFreeThresholdMb: 768,
+    agentScrollbackMaxLines: 5000,
     fetchIntervalActiveMs: 30_000,
     fetchIntervalBackgroundMs: 5 * 60_000,
-    // Balanced cold-start paint-gate values must match
-    // `DEFAULT_PAINT_GATE_TIMEOUT_MS` / `DEFAULT_PAINT_GATE_HARD_TIMEOUT_MS` in
+    // Must match PORT_BATCH_THROUGHPUT_DELAY_MS — the pty-host's fallback
+    // until the first set-resource-profile push lands.
+    portBatchThroughputDelayMs: 16,
+    // Balanced paint-gate values (cold and warm) must match the
+    // `DEFAULT_*_PAINT_GATE_*_MS` constants in
     // `electron/window/ProjectViewManager.ts` — those constants are the
     // fallback used until the profile push lands. Keep them in lockstep.
     paintGateTimeoutMs: 1_500,
     paintGateHardTimeoutMs: 4_000,
+    warmPaintGateTimeoutMs: 500,
+    warmPaintGateHardTimeoutMs: 1_500,
   },
   efficiency: {
     pollIntervalActive: 4000,
@@ -134,13 +178,27 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, ResourceProfileCo
     webglLowerThreshold: 6,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min
     lowMemoryFreeThresholdMb: 1024,
+    // Half the agent history ceiling on constrained hardware — ~3MB less
+    // buffer headroom per filled agent terminal, consistent with the
+    // efficiency profile's other fidelity trades.
+    agentScrollbackMaxLines: 2500,
     fetchIntervalActiveMs: 45_000,
     fetchIntervalBackgroundMs: 10 * 60_000,
+    // ~2.5x fewer flush wakeups and MessagePort posts per busy terminal; the
+    // added 24ms worst-case output latency is invisible next to the pressure
+    // (thermal/battery/CPU) that put the app in efficiency.
+    portBatchThroughputDelayMs: 40,
     // Cold starts under memory/thermal/battery pressure routinely run slower
     // than the perf/balanced 1.5s soft bound — keeping efficiency at a 2x
     // headroom preserves the anti-flash hand-off without false-timeout
     // warning spam on degraded hardware.
     paintGateTimeoutMs: 2_500,
     paintGateHardTimeoutMs: 6_000,
+    // The warm gate waits on the full wake fan-out (atlas repair + buffer
+    // replay per terminal at concurrency 2), which routinely outlasts the
+    // perf/balanced 1.5s ceiling on degraded hardware — same headroom
+    // rationale as the cold-gate values above.
+    warmPaintGateTimeoutMs: 800,
+    warmPaintGateHardTimeoutMs: 2_500,
   },
 };

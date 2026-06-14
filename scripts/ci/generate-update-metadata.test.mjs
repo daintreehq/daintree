@@ -66,9 +66,36 @@ describe("generate-update-metadata", () => {
     await mkdir(releaseDir);
     const packagePath = await writePackageJson(dir);
     await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
-    await writeArtifact(releaseDir, "Daintree-1.2.3-mac.zip", "x64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-x64-mac.zip", "x64");
     await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
     await writeArtifact(releaseDir, "Daintree-1.2.3-universal.dmg", "dmg");
+
+    const metadata = await generateUpdateMetadata({
+      platform: "mac",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-mac.yml"),
+      packagePath,
+      releaseDate: "2026-01-02T03:04:05.000Z",
+    });
+
+    expect(metadata.path).toBe("Daintree-1.2.3-x64-mac.zip");
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-1.2.3-x64-mac.zip",
+      "Daintree-1.2.3-arm64-mac.zip",
+      "Daintree-1.2.3-universal-mac.zip",
+    ]);
+  });
+
+  // Back-compat: builds published before the explicit -x64 rename (#10380)
+  // produced a bare -mac.zip for x64; macZipPriority keeps ranking it first.
+  it("ranks a legacy bare -mac.zip before universal when no -x64-mac.zip is present", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-mac.zip", "x64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
 
     const metadata = await generateUpdateMetadata({
       platform: "mac",
@@ -86,14 +113,14 @@ describe("generate-update-metadata", () => {
     ]);
   });
 
-  it("ranks explicit -x64-mac.zip before universal when no bare -mac.zip is present", async () => {
+  it("prefers the explicit -x64-mac.zip over a stale legacy bare -mac.zip", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
     const packagePath = await writePackageJson(dir);
-    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-mac.zip", "stale-x64");
     await writeArtifact(releaseDir, "Daintree-1.2.3-x64-mac.zip", "x64");
-    await writeArtifact(releaseDir, "Daintree-1.2.3-universal-mac.zip", "universal");
+    await writeArtifact(releaseDir, "Daintree-1.2.3-arm64-mac.zip", "arm64");
 
     const metadata = await generateUpdateMetadata({
       platform: "mac",
@@ -106,8 +133,8 @@ describe("generate-update-metadata", () => {
     expect(metadata.path).toBe("Daintree-1.2.3-x64-mac.zip");
     expect(metadata.files.map((file) => file.url)).toEqual([
       "Daintree-1.2.3-x64-mac.zip",
+      "Daintree-1.2.3-mac.zip",
       "Daintree-1.2.3-arm64-mac.zip",
-      "Daintree-1.2.3-universal-mac.zip",
     ]);
   });
 

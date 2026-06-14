@@ -234,9 +234,10 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     }
 
     try {
-      const { execFileSync } = await import("child_process");
+      const { execFile } = await import("child_process");
+      const { promisify } = await import("util");
       const checkCmd = process.platform === "win32" ? "where" : "which";
-      execFileSync(checkCmd, [command], { stdio: "ignore" });
+      await promisify(execFile)(checkCmd, [command], { timeout: 5_000, windowsHide: true });
       return true;
     } catch {
       return false;

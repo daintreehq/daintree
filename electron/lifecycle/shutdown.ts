@@ -22,7 +22,6 @@ import { getHibernationService } from "../services/HibernationService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
-import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
 import {
   agentConnectivityService,
   getServiceConnectivityRegistry,
@@ -307,11 +306,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
               console.warn("[MAIN] OsDndService.dispose failed:", err);
             }
 
-            try {
-              gitHubTokenHealthService.dispose();
-            } catch (err) {
-              console.warn("[MAIN] gitHubTokenHealthService.dispose failed:", err);
-            }
             try {
               agentConnectivityService.dispose();
             } catch (err) {

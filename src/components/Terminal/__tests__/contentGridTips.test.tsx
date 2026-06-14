@@ -19,6 +19,7 @@ vi.mock("../../../../shared/utils/agentAvailability", () => ({
 }));
 
 import { RotatingTip, TIPS } from "../contentGridTips";
+import { keybindingService } from "@/services/KeybindingService";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 
@@ -115,6 +116,28 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
     expect(container.querySelector("button")?.textContent).toBe("Inject Context");
+  });
+
+  it("excludes shortcut-dependent tips whose binding has been removed", () => {
+    // terminal.inject is the unique zero-count tip, so it would win the bias —
+    // but its binding is gone, so it must be filtered from the candidate pool
+    // instead of rendering the hardcoded ⌘-glyph fallback.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const realGetDisplayCombo = keybindingService.getDisplayCombo.bind(keybindingService);
+    vi.spyOn(keybindingService, "getDisplayCombo").mockImplementation((actionId: string) =>
+      actionId === "terminal.inject" ? "" : realGetDisplayCombo(actionId)
+    );
+    const counts: Record<string, number> = {};
+    for (const tip of TIPS) {
+      const key = tip.shortcutActionId ?? tip.actionId;
+      if (key && key !== "terminal.inject") {
+        counts[key] = 999;
+      }
+    }
+    const { container } = render(<RotatingTip />);
+    setHydrated(counts);
+    expect(container.querySelector("button")?.textContent).not.toBe("Inject Context");
+    expect(container.textContent ?? "").not.toContain("⌘⇧I");
   });
 
   it("limits selection to the lowest-count subset (high-count tips never win)", () => {

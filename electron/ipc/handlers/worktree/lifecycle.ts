@@ -9,6 +9,7 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { WorktreeDeletePayload } from "../../../types/index.js";
 import type { WorktreeState } from "../../../../shared/types/worktree.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
+import { gitServiceCache } from "../../../services/GitServiceCache.js";
 import { getSoundService } from "../../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../../services/SoundService.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
@@ -194,6 +195,11 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
         fileSearchService.invalidate(worktree.path);
       } catch (error) {
         console.warn("[worktree.delete] Failed to invalidate file search cache:", error);
+      }
+      try {
+        gitServiceCache.delete(worktree.path);
+      } catch (error) {
+        console.warn("[worktree.delete] Failed to evict git service cache entry:", error);
       }
     }
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {

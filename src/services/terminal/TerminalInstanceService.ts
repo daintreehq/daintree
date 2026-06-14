@@ -109,7 +109,7 @@ function canAutoInitializeTerminalIngest(): boolean {
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer = new TerminalOutputIngestService(
-    (id, data) => this.writeToTerminal(id, data),
+    (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
     (id) => this.instances.get(id)?.getRefreshTier?.() ?? TerminalRefreshTier.FOCUSED,
     // Ack chunks dropped by the background queue cap so the host's port
     // flow-control ledger doesn't leak (#9906). The byte arg is ignored —
@@ -160,7 +160,8 @@ class TerminalInstanceService {
 
     this.writeController = new TerminalWriteController({
       getInstance: (id) => this.instances.get(id),
-      acknowledgePortData: (id, bytes) => terminalClient.acknowledgePortData(id, bytes),
+      acknowledgePortData: (id, bytes, chunkCount) =>
+        terminalClient.acknowledgePortData(id, bytes, chunkCount),
       acknowledgeData: (id, bytes) => terminalClient.acknowledgeData(id, bytes),
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
       incrementUnseen: (id, isScrolledBack) =>
@@ -291,21 +292,24 @@ class TerminalInstanceService {
           this.ensureDeferredAddons(id, managed);
         }
 
-        if (managed.runtimeAgentId) {
-          if (isWebGLEligibleTier(tier)) {
-            this.webGLManager.ensureContext(id, managed);
-          } else if (!managed.isVisible) {
-            // Keep WebGL while visible — releasing here causes a one-frame renderer gap.
-            // Tier demotion is an authoritative signal — cancel any pending
-            // hide-dwell and release immediately.
-            this.cancelWebGLHideTimer(managed);
-            const hadWebGL = this.webGLManager.isActive(id);
-            this.webGLManager.releaseContext(id);
-            // Only refresh for a visible terminal — repainting an offscreen
-            // DOM produces a stale frame that flashes on next show (#6802).
-            if (hadWebGL && managed.isVisible && managed.terminal.rows > 0) {
-              managed.terminal.refresh(0, managed.terminal.rows - 1);
-            }
+        if (this.wantsWebGLAtTier(managed, tier)) {
+          this.webGLManager.ensureContext(id, managed);
+        } else if (!managed.isVisible || !managed.runtimeAgentId) {
+          // Agent terminals keep WebGL while visible — releasing causes a
+          // one-frame renderer gap, and VISIBLE is an eligible tier for them
+          // anyway. Plain terminals release as soon as they stop being
+          // focused (even while visible): the DOM renderer is their
+          // status-quo at VISIBLE, and a lingering want per previously
+          // focused shell would accumulate toward the mode-switch threshold.
+          // Tier demotion is an authoritative signal — cancel any pending
+          // hide-dwell and release immediately.
+          this.cancelWebGLHideTimer(managed);
+          const hadWebGL = this.webGLManager.isActive(id);
+          this.webGLManager.releaseContext(id);
+          // Only refresh for a visible terminal — repainting an offscreen
+          // DOM produces a stale frame that flashes on next show (#6802).
+          if (hadWebGL && managed.isVisible && managed.terminal.rows > 0) {
+            managed.terminal.refresh(0, managed.terminal.rows - 1);
           }
         }
 
@@ -337,6 +341,8 @@ class TerminalInstanceService {
       unhibernate: (id) => this.unhibernate(id),
       forceReflow: (element) => forceXtermReflow(element),
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
+      isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,
+      repairStoreVisibility: (id) => usePanelStore.getState().updateVisibility(id, true),
     });
 
     // If JetBrains Mono loads after the startup timeout already opened terminals
@@ -506,18 +512,40 @@ class TerminalInstanceService {
   }
 
   /**
+   * Whether a terminal wants a WebGL context at the given tier. Agent
+   * terminals are eligible at every WebGL-eligible tier (FOCUSED/BURST/
+   * VISIBLE) — the DOM renderer mangles the block glyphs agent headers use
+   * (see isWebGLEligibleTier in types.ts). Plain terminals are eligible only
+   * while focused: FOCUSED, or a BURST on the focused pane (input bursts and
+   * streaming output must not drop the context mid-use). BURST alone is
+   * write-driven for every terminal, so granting it to unfocused plain shells
+   * would add a want per streaming build/log pane and trip the count-based
+   * mode switch; VISIBLE is excluded for the same budget reason.
+   */
+  private wantsWebGLAtTier(
+    managed: ManagedTerminal,
+    tier: TerminalRefreshTier | undefined
+  ): boolean {
+    if (!isWebGLEligibleTier(tier)) return false;
+    if (managed.runtimeAgentId) return true;
+    return (
+      tier === TerminalRefreshTier.FOCUSED ||
+      (tier === TerminalRefreshTier.BURST && managed.isFocused)
+    );
+  }
+
+  /**
    * Eligibility for visibility-driven WebGL restore. Mirrors the gates in
-   * onTierApplied (agent identity + visible/focused tier) plus liveness
-   * checks (opened, not attaching, not hibernated). Used by the debounced
-   * timer in setVisible() before re-acquiring a context.
+   * onTierApplied (agent identity / focus + tier) plus liveness checks
+   * (opened, not attaching, not hibernated). Used by the debounced timer in
+   * setVisible() before re-acquiring a context.
    */
   private shouldRestoreWebGL(managed: ManagedTerminal): boolean {
-    if (!managed.runtimeAgentId) return false;
     if (!managed.isOpened) return false;
     if (!managed.isVisible) return false;
     if (managed.isAttaching) return false;
     if (managed.isHibernated) return false;
-    return isWebGLEligibleTier(managed.lastAppliedTier ?? managed.getRefreshTier?.());
+    return this.wantsWebGLAtTier(managed, managed.lastAppliedTier ?? managed.getRefreshTier?.());
   }
 
   private onUserInput(id: string, data: string): void {
@@ -645,8 +673,8 @@ class TerminalInstanceService {
    * service for the existing test fixtures that cast the service to a
    * structural type containing this method.
    */
-  private writeToTerminal(id: string, data: string | Uint8Array): void {
-    this.writeController.write(id, data);
+  private writeToTerminal(id: string, data: string | Uint8Array, chunkCount = 1): void {
+    this.writeController.write(id, data, chunkCount);
   }
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
@@ -894,7 +922,26 @@ class TerminalInstanceService {
     // Re-fetch after unhibernate so we operate on the current instance.
     const current = this.instances.get(id);
     if (!current) return;
-    if (!current.isOpened) return;
+    if (!current.isOpened) {
+      // The terminal was hibernated during a long dwell and unhibernate() (or a
+      // prior wake) could not re-open it: behind the warm anti-flash bridge
+      // (#9679) the cached view's host has no measurable layout box, so
+      // unhibernate left isOpened=false deferring to "attach() on next mount" —
+      // but the React tree is never remounted on a warm project-view return, so
+      // attach() never re-fires and nothing re-opens it. Result: a terminal
+      // stuck blank/wonky until the user clicks it.
+      //
+      // This same method is re-run from the foreground reveal pass
+      // (repaintActiveWorktreeTerminals on `app:view-revealed`, via
+      // revealTerminal). By then the view is foreground-presented and the host
+      // has a real layout box, so finish the open here using attach()'s exact
+      // sequence. While still occluded (zero box) we leave it deferred — the
+      // reveal pass retries once layout is valid.
+      if (this.hostHasRenderableDims(current)) {
+        this.ensureOpened(id, current);
+      }
+      if (!current.isOpened) return;
+    }
 
     // Set the deferred-wake flag before the geometry sync so an unexpected
     // throw from applyDeferredResize (e.g. a terminal disposed between the
@@ -981,6 +1028,146 @@ class TerminalInstanceService {
     } else {
       this.dataBuffer.resumeFlush(id);
     }
+  }
+
+  /**
+   * Post-reveal repaint for a visible terminal whose project view has just been
+   * detached from the warm anti-flash bridge and focused as the foreground
+   * surface (#10362).
+   *
+   * `fullWakeForVisibilityRestore` runs the redraw on visibilitychange/resume —
+   * while the cached view is still occluded BEHIND the bridge (#9679). Chromium
+   * culls paints for a non-foreground WebContentsView, so that repair can fail
+   * to stick and agent terminals stay garbled until the user clicks each pane.
+   * This re-runs the render repair once the compositor will actually present
+   * the frame, driven by the `app:view-revealed` signal.
+   *
+   * Self-heals both failure modes a manual click fixes: a WebGL context the
+   * freeze/thaw cycle dropped (VRAM reclaim) is re-attached, then the stale
+   * local glyph model is repaired (or a DOM-renderer pane plain-refreshed) and
+   * the grid re-fit. Unlike a click it does NOT call `terminal.focus()` —
+   * focusing every pane would steal DOM focus and emit focus-reporting
+   * sequences into every agent; exactly one pane owns focus, this is a
+   * fleet-wide repaint. The byte-pull is intentionally skipped: the headless
+   * mirror sync already ran behind the bridge (IPC data is not culled like a
+   * paint is), so only the repaint needs replaying.
+   */
+  repaintForReveal(id: string): boolean {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return false;
+    if (!managed.isOpened || !managed.isVisible) return false;
+
+    const element = managed.terminal.element;
+    if (!element || !element.isConnected) return false;
+
+    // A not-yet-laid-out grid has no model worth repainting — its first real
+    // resize builds it fresh. Mirrors resetRenderer's size guard. Report "not
+    // paintable yet" (false) so the reveal sweep retries on a later frame once
+    // the foreground view has settled its layout, rather than burning its one
+    // shot against a zero box.
+    if (managed.hostElement.clientWidth < 50 || managed.hostElement.clientHeight < 50) {
+      return false;
+    }
+
+    // Re-attach a WebGL context the freeze/thaw cycle may have dropped before
+    // repairing the local model. Same idiom as the post-reparent restore.
+    if (!this.webGLManager.isActive(id) && this.shouldRestoreWebGL(managed)) {
+      this.webGLManager.ensureContext(id, managed);
+    }
+
+    // Drop the stale local glyph model and repaint. repairAtlasForReactivation
+    // returns false for DOM-renderer terminals — fall back to a plain refresh so
+    // the pane still repaints.
+    try {
+      if (!this.webGLManager.repairAtlasForReactivation(id)) {
+        managed.terminal.refresh(0, managed.terminal.rows - 1);
+      }
+    } catch (error) {
+      logWarn(`repaintForReveal repair failed for ${id}`, { error });
+    }
+
+    // Force a layout reflow so a renderer xterm paused while the view was
+    // occluded actually resumes drawing. This is the exact step a manual Redraw
+    // (resetRenderer) and a click both supply, and the one repaintForReveal was
+    // missing: handlePostWake unpauses standard agents via maybeReflowTerminal,
+    // but EARLY-RETURNS for settled-strategy agents (Codex, Gemini, Cursor,
+    // Copilot, …), so for those the atlas repair above landed in a still-paused
+    // renderer and the pane stayed garbled until the next write, the 3s
+    // heartbeat, or a click. Without this the reveal was not click-equivalent
+    // for most agent terminals.
+    try {
+      forceXtermReflow(element);
+    } catch (error) {
+      logWarn(`repaintForReveal reflow failed for ${id}`, { error });
+    }
+
+    // Re-fit and unpause IO through the shared post-wake resize path. Going via
+    // handlePostWake (not a bare fit()) honors the settled-strategy atomic-resize
+    // contract: for settled agents a plain fit() would resize xterm ahead of the
+    // deferred PTY resize and break atomicity — handlePostWake routes those
+    // through sendPtyResize instead, and still fit()s + reflows standard agents.
+    this.handlePostWake(id);
+
+    // Clear the reflow throttle so the next write or the 3s heartbeat reflows
+    // immediately rather than being debounced away (mirrors resetRenderer).
+    managed.lastReflowAt = 0;
+
+    return true;
+  }
+
+  /**
+   * Foreground reveal entry point for a single grid terminal, driven by the
+   * `app:view-revealed` fan-out ({@link repaintActiveWorktreeTerminals}) once
+   * the cached project view is detached from the anti-flash bridge and actually
+   * presented.
+   *
+   * Splits the two states a long-dwell return can leave a terminal in:
+   *
+   * - **Hibernated or unopened** — a dwell past the hibernation delay tore the
+   *   xterm instance down, and the occluded warm wake could not re-open it
+   *   (no measurable host box behind the bridge). The lightweight repaint can't
+   *   help (it guards on `isOpened`), so run the full
+   *   {@link fullWakeForVisibilityRestore}: now that the host has real layout it
+   *   opens, pulls the missed range from the headless mirror, and repaints. This
+   *   is the gap the older reveal patches (#10362) left open for the long-dwell
+   *   case.
+   * - **Already opened and woken** (the common warm path) — only the culled
+   *   paint needs replaying, so take the cheap {@link repaintForReveal}.
+   *
+   * @returns `true` when the terminal was paintable and the repaint/open ran
+   * (or the terminal is gone — nothing to retry); `false` when it isn't paintable
+   * yet (host not laid out / not visible) and the caller should retry on a later
+   * frame. {@link repaintActiveWorktreeTerminals} drives that retry.
+   */
+  async revealTerminal(id: string): Promise<boolean> {
+    const managed = this.instances.get(id);
+    // Gone — nothing to repaint and nothing to retry, so report "settled".
+    if (!managed) return true;
+    if (managed.isHibernated || !managed.isOpened) {
+      // A hibernated/unopened pane needs the full open+wake, but
+      // fullWakeForVisibilityRestore only opens once the host has a real layout
+      // box. While the foreground view is still settling that box can read zero
+      // (or the host is visibility:hidden), so report "not paintable yet" and
+      // let the reveal sweep retry on a later frame rather than spending the
+      // open attempt against an unmeasurable host.
+      if (!this.hostHasRenderableDims(managed)) return false;
+      await this.fullWakeForVisibilityRestore(id);
+      const after = this.instances.get(id);
+      // Gone mid-wake → nothing left to retry. Otherwise it's settled only once
+      // the pane actually opened AND the wake wasn't merely DEFERRED:
+      // fullWakeForVisibilityRestore sets pendingVisibilityWake and returns early
+      // while an attach is in flight (notifyAttachSettledWaiters re-runs it on
+      // settle). Report "retry" until the open+wake has truly landed so the
+      // sweep's confirm paints aren't spent against a not-yet-revealed pane.
+      return (
+        !after ||
+        (after.isOpened === true &&
+          after.isHibernated !== true &&
+          after.isAttaching !== true &&
+          after.pendingVisibilityWake !== true)
+      );
+    }
+    return this.repaintForReveal(id);
   }
 
   /**
@@ -1629,6 +1816,67 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Open xterm against its host element — the first-paint step that builds the
+   * DOM, forces a reflow to measure the cell grid, and inits the renderer.
+   * Idempotent (no-op once `isOpened`). Extracted from {@link attach} so the
+   * foreground reveal-hydration path can re-open a terminal whose occluded warm
+   * wake could not (the host had no measurable layout box behind the anti-flash
+   * bridge) using the exact same sequence — never a divergent second open path.
+   *
+   * The caller owns the precondition that the host is measurable: `attach()`
+   * runs from the mount/reparent effect where layout is settled, and
+   * {@link fullWakeForVisibilityRestore} gates this behind
+   * {@link hostHasRenderableDims}. Opening against a zero-sized host would have
+   * xterm measure a 0/NaN cell and build a broken grid.
+   */
+  private ensureOpened(id: string, managed: ManagedTerminal): void {
+    if (managed.isOpened) return;
+    // Seed xterm's grid before open() so cold-start restore paints at the
+    // saved size instead of flashing 80x24 then snapping (#6983).
+    if (managed.targetCols && managed.targetRows) {
+      managed.terminal.resize(managed.targetCols, managed.targetRows);
+    }
+    // terminalOpenStartedAt anchors the first-write delta (#9809).
+    managed.terminalOpenStartedAt =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    managed.hasEmittedFirstWriteMark = false;
+    markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
+    try {
+      managed.terminal.open(managed.hostElement);
+    } finally {
+      markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
+    }
+    managed.isOpened = true;
+    logDebug(`[TIS] Opened terminal ${id}`);
+    // Build the deferred Image/link addons now that the terminal is live.
+    // Skip BACKGROUND terminals — the tier machinery disposes these addons
+    // there on purpose; they're rebuilt on the next promotion.
+    if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
+      this.ensureDeferredAddons(id, managed);
+    }
+    if (this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+      this.webGLManager.ensureContext(id, managed);
+    }
+  }
+
+  /**
+   * Whether the host element currently has a real, measurable layout box —
+   * the precondition for {@link ensureOpened}. A detached/occluded project
+   * view (cached `WebContentsView` behind the anti-flash bridge) can report a
+   * zero box; only a foreground-presented view is safe to open/measure against.
+   */
+  private hostHasRenderableDims(managed: ManagedTerminal): boolean {
+    const el = managed.hostElement;
+    if (!el || !el.isConnected) return false;
+    // A visibility:hidden / content-visibility:hidden host keeps a nonzero
+    // layout box but must not be opened or measured against — mirror the
+    // checkVisibility() gate the resize controller's fit() already uses.
+    // Guarded for availability: not every DOM impl exposes checkVisibility.
+    if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
+    return el.clientWidth > 0 && el.clientHeight > 0;
+  }
+
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
     const managed = this.instances.get(id);
     if (!managed) {
@@ -1659,36 +1907,7 @@ class TerminalInstanceService {
       container.appendChild(managed.hostElement);
     }
 
-    if (!managed.isOpened) {
-      // Seed xterm's grid before open() so cold-start restore paints at the
-      // saved size instead of flashing 80x24 then snapping (#6983).
-      if (managed.targetCols && managed.targetRows) {
-        managed.terminal.resize(managed.targetCols, managed.targetRows);
-      }
-      // Bracket the synchronous open() — the first-paint step that builds
-      // xterm's DOM, forces a reflow to measure the cell grid, and inits the
-      // renderer. terminalOpenStartedAt anchors the first-write delta (#9809).
-      managed.terminalOpenStartedAt =
-        typeof performance !== "undefined" ? performance.now() : Date.now();
-      managed.hasEmittedFirstWriteMark = false;
-      markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
-      try {
-        managed.terminal.open(managed.hostElement);
-      } finally {
-        markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
-      }
-      managed.isOpened = true;
-      logDebug(`[TIS.attach] Opened terminal ${id}`);
-      // Build the deferred Image/link addons now that the terminal is live.
-      // Skip BACKGROUND terminals — the tier machinery disposes these addons
-      // there on purpose; they're rebuilt on the next promotion.
-      if (managed.lastAppliedTier !== TerminalRefreshTier.BACKGROUND) {
-        this.ensureDeferredAddons(id, managed);
-      }
-      if (managed.runtimeAgentId && isWebGLEligibleTier(managed.lastAppliedTier)) {
-        this.webGLManager.ensureContext(id, managed);
-      }
-    }
+    this.ensureOpened(id, managed);
     managed.attachGeneration++;
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;
@@ -1962,6 +2181,67 @@ class TerminalInstanceService {
     options: { immediate?: boolean } = {}
   ): { cols: number; rows: number } | null {
     return this.resizeController.resize(id, width, height, options);
+  }
+
+  private backgroundResizeSession: {
+    basis: { width: number; height: number };
+    origin: Map<string, { width: number; height: number }>;
+  } | null = null;
+
+  /**
+   * PTY-tracking resize for a backgrounded project view (#10415). A detached
+   * WebContentsView keeps its stale viewport until reattach — setBounds()
+   * does not propagate while detached and ResizeObservers never fire in a
+   * hidden page — so per-panel pixel sizes cannot be re-measured here.
+   * Instead each terminal's host size is scaled by the window-bounds ratio,
+   * which is exact for 1fr grid tracks and at worst off by ~1 col where
+   * fixed chrome doesn't scale. The PTY-only resize keeps agents wrapping
+   * at the right width the whole time; the wake path
+   * (`fullWakeForVisibilityRestore` → `applyDeferredResize`) reconciles
+   * xterm and corrects any residual error from real layout on reattach.
+   *
+   * Scaling is anchored to a per-background-session snapshot: the basis is
+   * the stale viewport (which all `lastWidth`/`lastHeight` measurements were
+   * laid out against) and each terminal's origin size is captured the first
+   * time it's seen. Every event computes absolute targets from that anchor,
+   * so repeated resizes never compound and a terminal skipped in one pass
+   * (resize-locked) still lands on the correct size in the next.
+   */
+  applyBackgroundWindowResize(width: number, height: number): void {
+    if (document.visibilityState === "visible") {
+      // Queued delivery after reactivation — real layout owns geometry again.
+      this.backgroundResizeSession = null;
+      return;
+    }
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+    const session = (this.backgroundResizeSession ??= {
+      basis: { width: window.innerWidth, height: window.innerHeight },
+      origin: new Map(),
+    });
+    if (session.basis.width <= 0 || session.basis.height <= 0) return;
+    const widthRatio = width / session.basis.width;
+    const heightRatio = height / session.basis.height;
+    for (const [id, managed] of this.instances) {
+      if (managed.isHibernated) continue;
+      if (!managed.isOpened) continue;
+      let origin = session.origin.get(id);
+      if (!origin) {
+        if (managed.lastWidth <= 0 || managed.lastHeight <= 0) continue;
+        origin = { width: managed.lastWidth, height: managed.lastHeight };
+        session.origin.set(id, origin);
+      }
+      this.resizeController.resizePtyOnly(
+        id,
+        origin.width * widthRatio,
+        origin.height * heightRatio
+      );
+    }
+  }
+
+  resetBackgroundResizeBasis(): void {
+    this.backgroundResizeSession = null;
   }
 
   /**
@@ -2462,6 +2742,14 @@ class TerminalInstanceService {
 
     managed.isFocused = isFocused;
     managed.lastActiveTime = Date.now();
+    // Track the focused terminal in the WebGL manager: when the count-based
+    // mode switch has the fleet on the DOM renderer, the pin keeps exactly
+    // one context on the pane the user is reading. Focus is tracked here
+    // (not in onTierApplied) because same-tier focus moves dedup away the
+    // tier application.
+    if (isFocused && !managed.isHibernated) {
+      this.webGLManager.pinFocus(id, managed);
+    }
   }
 
   isFocused(id: string): boolean {
@@ -2744,10 +3032,30 @@ class TerminalInstanceService {
     this.applyCursorBlinkPolicy(managed);
     restoreScrollback(managed);
     // Agent demotion is authoritative — cancel any pending hide-dwell so the
-    // timer can't fire later and call releaseContext on a stale slot.
+    // timer can't fire later and call releaseContext on a stale slot. A
+    // focused pane stays WebGL-eligible as a plain terminal, so keep (or
+    // acquire) its context instead of churning it through a release.
     this.cancelWebGLHideTimer(managed);
-    this.webGLManager.releaseContext(id);
+    if (managed.isOpened && this.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
+      this.webGLManager.ensureContext(id, managed);
+    } else {
+      this.webGLManager.releaseContext(id);
+    }
     this.maybeReflowTerminal(managed);
+  }
+
+  // Re-derive the scrollback policy for every live foreground terminal.
+  // Called on resource-profile changes after setAgentScrollbackMaxLines so
+  // the new agent ceiling applies to terminals that are already open.
+  // Background terminals are skipped: their scrollback was deliberately
+  // reduced and is restored by the tier-upgrade path.
+  restoreScrollbackAllForeground(): void {
+    for (const managed of this.instances.values()) {
+      if (managed.isHibernated) continue;
+      const tier = managed.lastAppliedTier ?? managed.getRefreshTier?.();
+      if (tier === TerminalRefreshTier.BACKGROUND) continue;
+      restoreScrollback(managed);
+    }
   }
 
   reduceScrollbackAllBackground(targetLines: number): void {

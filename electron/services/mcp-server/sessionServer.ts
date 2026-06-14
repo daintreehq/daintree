@@ -1043,7 +1043,7 @@ async function listConcreteResources(
       uri: "daintree://project/current/issues",
       name: "Current project — open issues",
       mimeType: "application/json",
-      description: "Open GitHub issues for the active project.",
+      description: "Open issues for the active project.",
     });
   }
   if (isResourcePermitted(sessionId, deps, "pulse")) {
@@ -1162,7 +1162,7 @@ async function readResourceContents(
     return { uri, mimeType: "application/json", text };
   }
   if (parsed.kind === "issues") {
-    const envelope = await dispatchAction("github.listIssues", {});
+    const envelope = await dispatchAction("forge.listIssues", {});
     const text = serializeResourcePayload(unwrapDispatchResult(envelope));
     return { uri, mimeType: "application/json", text: truncateText(text) };
   }

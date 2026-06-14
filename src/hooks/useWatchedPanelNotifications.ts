@@ -38,12 +38,20 @@ export function useWatchedPanelNotifications(): void {
       }
     });
 
-    let prevAgentStates = new Map<string, string | undefined>(
-      usePanelStore.getState().panelIds.map((id) => {
-        const t = usePanelStore.getState().panelsById[id];
-        return [id, t && isPtyPanel(t) ? t.agentState : undefined];
-      })
-    );
+    const snapshotAgentStates = (state: ReturnType<typeof usePanelStore.getState>) =>
+      new Map<string, string | undefined>(
+        state.panelIds.map((id) => {
+          const t = state.panelsById[id];
+          return [id, t && isPtyPanel(t) ? t.agentState : undefined];
+        })
+      );
+
+    // Null while nothing is watched — skips the per-update snapshot allocation
+    // in the common (no watches) case. Seeded when watching starts.
+    let prevAgentStates: Map<string, string | undefined> | null =
+      usePanelStore.getState().watchedPanels.size > 0
+        ? snapshotAgentStates(usePanelStore.getState())
+        : null;
     const staggerQueue: Array<() => void> = [];
     let staggerTimer: ReturnType<typeof setTimeout> | null = null;
     let hasWarnedOverflow = false;
@@ -71,17 +79,21 @@ export function useWatchedPanelNotifications(): void {
     }
 
     const unsubscribe = usePanelStore.subscribe((state) => {
-      const { watchedPanels, panelsById, panelIds } = state;
-      const currentAgentStates = new Map<string, string | undefined>(
-        panelIds.map((id) => {
-          const p = panelsById[id];
-          return [id, p && isPtyPanel(p) ? p.agentState : undefined];
-        })
-      );
+      const { watchedPanels, panelsById } = state;
+      if (watchedPanels.size === 0) {
+        prevAgentStates = null;
+        return;
+      }
+      const currentAgentStates = snapshotAgentStates(state);
+      if (prevAgentStates === null) {
+        // Watching just started — seed without diffing this tick.
+        prevAgentStates = currentAgentStates;
+        return;
+      }
 
       for (const panelId of watchedPanels) {
         const currentState = currentAgentStates.get(panelId);
-        const previousState = prevAgentStates.get(panelId);
+        const previousState = prevAgentStates?.get(panelId);
 
         if (
           (currentState === "completed" ||

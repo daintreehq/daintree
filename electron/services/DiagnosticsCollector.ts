@@ -7,6 +7,7 @@ import { logBuffer } from "./LogBuffer.js";
 import type { PtyClient } from "./PtyClient.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
+import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -167,6 +168,7 @@ async function collectRuntime() {
   return {
     platform: process.platform,
     arch: process.arch,
+    runningUnderRosetta: isRunningUnderRosetta(),
     execPath: sanitizePath(app.getPath("exe")),
     appPath: sanitizePath(app.getAppPath()),
     userData: sanitizePath(app.getPath("userData")),
@@ -229,8 +231,15 @@ async function collectGpu() {
   try {
     const { isGpuDisabledByFlag, isGpuAngleFallbackByFlag, isGpuAngleFallbackApplied } =
       await import("./GpuCrashMonitorService.js");
+    const { readGpuDisabledFlagData } = await import("./gpuDisabledFlag.js");
     const userDataPath = app.getPath("userData");
     result.hardwareAccelerationDisabled = isGpuDisabledByFlag(userDataPath);
+    // Reason/version/timestamp distinguish a crash-fallback victim from a
+    // deliberate Settings toggle in support exports (#10379).
+    const disabledFlagData = readGpuDisabledFlagData(userDataPath);
+    result.gpuDisabledReason = disabledFlagData?.reason ?? null;
+    result.gpuDisabledFlagVersion = disabledFlagData?.version ?? null;
+    result.gpuDisabledFlagTimestamp = disabledFlagData?.timestamp ?? null;
     // Both surfaced: `angleFallbackActive` reflects what the app is actually
     // running with (platform-gated, matches the renderer signal). The raw
     // flag is also reported so support can tell when a non-Linux-Wayland
@@ -241,6 +250,9 @@ async function collectGpu() {
     result.hardwareAccelerationDisabled = "unknown";
     result.angleFallbackActive = "unknown";
     result.angleFallbackFlag = "unknown";
+    result.gpuDisabledReason = "unknown";
+    result.gpuDisabledFlagVersion = "unknown";
+    result.gpuDisabledFlagTimestamp = "unknown";
   }
 
   try {

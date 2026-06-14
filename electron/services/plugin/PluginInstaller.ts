@@ -9,12 +9,8 @@ import {
   isPrivateOrLoopbackHostname,
   SCOPED_PLUGIN_NAME_PATTERN,
 } from "../../schemas/plugin.js";
-import {
-  extractPluginArchive,
-  computeArchiveHash,
-  readArchiveManifest,
-  MAX_DNTR_BYTES,
-} from "../PluginArchive.js";
+import { extractPluginArchive, computeArchiveHash, readArchiveManifest } from "../PluginArchive.js";
+import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
@@ -87,7 +83,7 @@ interface PluginInstallerDeps {
   unloadPlugin: (pluginId: string) => void;
   activatePlugin: (pluginId: string) => Promise<void>;
   setPluginArchiveHash: (pluginId: string, archiveHash: string) => void;
-  setEnabled: (pluginId: string, enabled: boolean) => void;
+  setEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
   broadcastProvenanceChanged: () => void;
   /** Lookup for the running or skipped-at-launch plugin (only `isBuiltin` is consumed). */
   getPlugin: (pluginId: string) => InstallerPluginInfo | undefined;
@@ -979,7 +975,7 @@ export class PluginInstaller {
       this.deps.reservedNames.delete(pluginId);
       // Clear it from the persisted `plugins.disabled` intent list so a disabled
       // plugin can't resurrect itself on the next launch's disabled-dir re-scan.
-      this.deps.setEnabled(pluginId, true);
+      await this.deps.setEnabled(pluginId, true);
       const records = this.records.getInstalledRecords();
       if (pluginId in records) {
         delete records[pluginId];

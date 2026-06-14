@@ -9,8 +9,10 @@ import { closeTelemetry } from "./TelemetryService.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
+import { GPU_DISABLED_FLAG_FILENAME, writeGpuDisabledFlagFile } from "./gpuDisabledFlag.js";
+import type { GpuDisabledReason } from "../../shared/types/ipc/app.js";
 
-const GPU_DISABLED_FLAG = "gpu-disabled.flag";
+const GPU_DISABLED_FLAG = GPU_DISABLED_FLAG_FILENAME;
 const GPU_ANGLE_FALLBACK_FLAG = "gpu-angle-fallback.flag";
 const GPU_CRASH_THRESHOLD = 3;
 export const GPU_CRASH_WINDOW_MS = 5 * 60 * 1000;
@@ -29,12 +31,13 @@ export function isGpuDisabledByFlag(userDataPath: string): boolean {
   return cachedGpuDisabledByFlag;
 }
 
-export function writeGpuDisabledFlag(userDataPath: string): void {
-  resilientAtomicWriteFileSync(
-    path.join(userDataPath, GPU_DISABLED_FLAG),
-    String(Date.now()),
-    "utf8"
-  );
+export function writeGpuDisabledFlag(userDataPath: string, reason: GpuDisabledReason): void {
+  writeGpuDisabledFlagFile(userDataPath, {
+    reason,
+    version: app.getVersion(),
+    timestamp: Date.now(),
+  });
+  cachedGpuDisabledByFlag = null;
 }
 
 export function clearGpuDisabledFlag(userDataPath: string): void {
@@ -42,6 +45,7 @@ export function clearGpuDisabledFlag(userDataPath: string): void {
   if (fs.existsSync(flagPath)) {
     fs.unlinkSync(flagPath);
   }
+  cachedGpuDisabledByFlag = null;
 }
 
 export function isGpuAngleFallbackByFlag(userDataPath: string): boolean {
@@ -155,7 +159,22 @@ class GpuCrashMonitorService {
         exitCode: details.exitCode,
       });
 
-      if (this.relaunching || alreadyDisabled) return;
+      if (this.relaunching) return;
+
+      // Acceleration already off: there is no further mitigation tier to
+      // escalate to, but keep the sliding-window count above running so a GPU
+      // process that crash-loops in software mode stays visible in logs
+      // instead of vanishing behind an early return (#10379).
+      if (alreadyDisabled) {
+        if (effectiveCount >= GPU_CRASH_THRESHOLD) {
+          logger.warn("gpu-crash-loop-while-disabled", {
+            crashCount: effectiveCount,
+            reason: details.reason,
+            exitCode: details.exitCode,
+          });
+        }
+        return;
+      }
 
       // First-strike soft fallback: when the system has not yet been moved to
       // ANGLE/Vulkan, the first crash relaunches with the fallback flags. The
@@ -224,7 +243,7 @@ class GpuCrashMonitorService {
 
       if (effectiveCount >= GPU_CRASH_THRESHOLD) {
         try {
-          writeGpuDisabledFlag(userDataPath);
+          writeGpuDisabledFlag(userDataPath, "crash");
           clearGpuAngleFallbackFlag(userDataPath);
           store.set("gpu", { hardwareAccelerationDisabled: true });
         } catch (err) {

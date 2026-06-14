@@ -107,10 +107,31 @@ export class TerminalWakeManager {
           return { ok: false, replayedMainBuffer: false };
         }
 
-        const { state } = await terminalClient.wake(id);
+        const { state, noChange } = await terminalClient.wake(id, {
+          canSkipUnchanged: managed.wakeSynced === true,
+        });
+
+        // Host proved nothing mutated the buffer since this pane's last
+        // faithful sync — the pane is already current, so skip reset+replay
+        // (which also means there's no selection to protect). Held bytes are
+        // still flushed by callers via `replayedMainBuffer: false`; they are
+        // part of the synced stream, not covered by a snapshot.
+        if (noChange) {
+          if (this.deps.getInstance(id) !== managed) {
+            // Instance replaced mid-wake: the fresh xterm never held the
+            // synced content the skip was granted against.
+            return { ok: false, replayedMainBuffer: false };
+          }
+          this.clearDeclineRetry(id);
+          return { ok: true, replayedMainBuffer: false };
+        }
 
         // Re-check after async: selection may have started while we were awaiting.
         if (managed.terminal.hasSelection()) {
+          // The host may have just serve-marked this window against a snapshot
+          // the pane is now declining — drop the sync claim so the retry
+          // forces a real serialize.
+          managed.wakeSynced = false;
           this.noteDecline(id, false);
           return { ok: false, replayedMainBuffer: false };
         }
@@ -137,6 +158,7 @@ export class TerminalWakeManager {
         // correctly repaints the TUI rather than being silently treated as a
         // no-op resync (#9894).
         if (!state) {
+          managed.wakeSynced = false;
           if (managed.everWoken) {
             this.noteDecline(id, false);
           }
@@ -156,6 +178,7 @@ export class TerminalWakeManager {
         // respawn under the same id) is handled — the captured `managed`
         // reference may be stale.
         if (!restoreOk) {
+          managed.wakeSynced = false;
           const current = this.deps.getInstance(id);
           const restoreError =
             current?.lastScrollbackRestoreError ?? managed.lastScrollbackRestoreError;
@@ -180,6 +203,10 @@ export class TerminalWakeManager {
           // reference. Gates the wake-decline marker on subsequent null-state
           // wakes — see the `!state` branch above.
           managed.everWoken = true;
+          // The pane now holds exactly the served snapshot; the host
+          // serve-marked this window at the matching epoch, so subsequent
+          // wakes may skip while nothing mutates the buffer.
+          managed.wakeSynced = true;
           managed.terminal.refresh(0, managed.terminal.rows - 1);
           // A previous failed wake of this terminal may have left a banner
           // in the panel store. Mirror the hydration retry path's cleanup
@@ -194,6 +221,12 @@ export class TerminalWakeManager {
         return { ok: true, replayedMainBuffer: false };
       } catch (error) {
         console.warn(`[TerminalWakeManager] Failed to wake terminal ${id}:`, error);
+        // The host may have served (and serve-marked) a snapshot this pane
+        // never applied — drop the sync claim so the next wake serializes.
+        const current = this.deps.getInstance(id);
+        if (current) {
+          current.wakeSynced = false;
+        }
         return { ok: false, replayedMainBuffer: false };
       }
     })();

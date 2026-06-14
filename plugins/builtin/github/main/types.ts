@@ -1,9 +1,5 @@
-import type {
-  GitHubIssue,
-  GitHubPR,
-  GitHubPRCIStatus,
-  PRTooltipData,
-} from "../../../../shared/types/github.js";
+import type { GitHubIssue, GitHubPR, GitHubPRCIStatus } from "../shared/types.js";
+import type { PRTooltipData } from "../../../../shared/types/forge.js";
 
 export interface RepoContext {
   owner: string;
@@ -15,6 +11,19 @@ export interface RepoStats {
   prCount: number;
   stale?: boolean;
   lastUpdated?: number;
+  /**
+   * Wall-clock ms when each count was last read from a GitHub count endpoint
+   * (GraphQL `totalCount`, the REST count pair, or a list query's
+   * write-back). Unlike `lastUpdated`, these are NOT re-stamped when an
+   * activity-probe "unchanged" result re-serves cached counts — they are the
+   * honest recency signals for the renderer's badge arbitration and the
+   * dropdown-open force-refresh gate, both of which must distinguish "we
+   * asked GitHub about this count" from "we assumed nothing changed".
+   * Per-count because a list query refreshes only its own kind: a PR
+   * write-back must not make a stale issue count look freshly read.
+   */
+  issueCountRefreshedAt?: number;
+  prCountRefreshedAt?: number;
 }
 
 /** One connection page (issues or PRs) as returned by `getRepoStatsAndPage`. */

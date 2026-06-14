@@ -259,7 +259,7 @@ export function WorktreeOverviewModal({
 
   // Terminal store for derived metadata
   const panelsById = usePanelStore((state) => state.panelsById);
-  const panelIds = usePanelStore((state) => state.panelIds);
+  const panelIdsByWorktreeId = usePanelStore((state) => state.panelIdsByWorktreeId);
   const isInTrash = usePanelStore((state) => state.isInTrash);
   const worktreeIds = useWorktreeIds();
 
@@ -278,10 +278,9 @@ export function WorktreeOverviewModal({
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
       let hasExitedAgent = false;
-      for (const id of panelIds) {
+      for (const id of panelIdsByWorktreeId[worktree.id] ?? []) {
         const t = panelsById[id];
-        if (!t || t.worktreeId !== worktree.id || !isTerminalVisible(t, isInTrash, worktreeIds))
-          continue;
+        if (!t || !isTerminalVisible(t, isInTrash, worktreeIds)) continue;
         terminalCount++;
         if (!isAgentTerminal(t)) continue;
         if (!isPtyPanel(t)) continue;
@@ -327,7 +326,7 @@ export function WorktreeOverviewModal({
       });
     }
     return map;
-  }, [worktrees, panelsById, panelIds, isInTrash, worktreeIds]);
+  }, [worktrees, panelsById, panelIdsByWorktreeId, isInTrash, worktreeIds]);
 
   const chipCounts = useMemo(() => {
     const candidates = hideMainWorktree ? worktrees.filter((w) => !w.isMainWorktree) : worktrees;
@@ -968,7 +967,7 @@ export function WorktreeOverviewModal({
                       />
                       <span
                         className={cn(
-                          "transition",
+                          "transition-colors",
                           hideMainWorktree && "line-through decoration-daintree-text/30"
                         )}
                       >

@@ -55,6 +55,7 @@ export interface ContentPanelProps extends BasePanelProps {
 
   // Slots
   headerContent?: ReactNode;
+  headerContentPlacement?: "leading" | "trailing";
   headerActions?: ReactNode;
   toolbar?: ReactNode;
 
@@ -157,6 +158,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     showRestoreControl,
     children,
     headerContent,
+    headerContentPlacement,
     headerActions,
     toolbar,
     className,
@@ -531,6 +533,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isFleetFollower={isFleetFollower}
           isFleetPreviewed={isFleetPreviewed}
           headerContent={resolvedHeaderContent}
+          headerContentPlacement={headerContentPlacement}
           headerActions={headerActions}
           tabs={tabs}
           groupId={groupId}

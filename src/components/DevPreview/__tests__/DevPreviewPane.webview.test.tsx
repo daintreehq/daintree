@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
 import { DevPreviewPane } from "../DevPreviewPane";
+import { projectClient } from "@/clients";
 
 const notifyMock = vi.hoisted(() => vi.fn());
 
@@ -27,6 +28,7 @@ type MockWebviewElement = HTMLElement & {
   executeJavaScript: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
   getWebContents: () => MockWebContents;
+  capturePage: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -63,6 +65,9 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     disableDeviceEmulation: vi.fn(),
   };
   webview.getWebContents = vi.fn(() => mockWc);
+  webview.capturePage = vi.fn(() =>
+    Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
+  );
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -249,9 +254,17 @@ vi.mock("@/hooks/useFindInPage", () => ({
   }),
 }));
 
-vi.mock("@/components/Browser/BrowserToolbar", () => ({
-  BrowserToolbar: () => <div data-testid="browser-toolbar" />,
+const { browserToolbarPropsSpy } = vi.hoisted(() => ({
+  browserToolbarPropsSpy: vi.fn(),
 }));
+vi.mock("@/components/Browser/BrowserToolbar", () => ({
+  BrowserToolbar: (props: Record<string, unknown>) => {
+    browserToolbarPropsSpy(props);
+    return <div data-testid="browser-toolbar" />;
+  },
+}));
+
+const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/Panel", () => ({
   ContentPanel: ({
@@ -262,7 +275,11 @@ vi.mock("@/components/Panel", () => ({
     headerContent?: React.ReactNode;
   }) => (
     <div data-testid="content-panel">
-      {headerContent && <div data-testid="panel-header-content">{headerContent}</div>}
+      {headerContent && (
+        <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
+          {headerContent}
+        </div>
+      )}
       {children}
     </div>
   ),
@@ -285,6 +302,12 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
+}));
+
+vi.mock("@/components/ui/popover", () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/DevPreview/ConsoleDrawer", () => ({
@@ -385,6 +408,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       },
       clipboard: {
         writeText: vi.fn().mockResolvedValue(undefined),
+        writeImage: vi.fn().mockResolvedValue(undefined),
       },
       webview: {
         registerPanel: vi.fn(() => Promise.resolve()),
@@ -1828,6 +1852,132 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
   });
 
+  describe("screenshot capture", () => {
+    const getToolbarCapture = () => {
+      const props = browserToolbarPropsSpy.mock.calls.at(-1)?.[0] as {
+        onCaptureScreenshot: () => Promise<boolean>;
+      };
+      return props.onCaptureScreenshot;
+    };
+
+    const getWriteImageMock = () => {
+      const electron = (window as unknown as { electron: { clipboard: Record<string, unknown> } })
+        .electron;
+      return electron.clipboard.writeImage as ReturnType<typeof vi.fn>;
+    };
+
+    it("resolves true after a successful capture and clipboard write", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(true);
+      expect(getWriteImageMock()).toHaveBeenCalledTimes(1);
+      expect(getWriteImageMock().mock.calls[0]![0]).toBeInstanceOf(Uint8Array);
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("resolves false without notifying when the URL is about:blank", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.getURL.mockReturnValue("about:blank");
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(getWriteImageMock()).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("resolves false and notifies when the clipboard write fails", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      getWriteImageMock().mockRejectedValueOnce(new Error("clipboard unavailable"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+    });
+
+    it("resolves false and notifies when capturePage rejects", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.capturePage.mockRejectedValueOnce(new Error("capture failed"));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await getToolbarCapture()();
+      });
+
+      expect(result).toBe(false);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Screenshot failed" })
+      );
+      expect(getWriteImageMock()).not.toHaveBeenCalled();
+    });
+
+    it("resolves false for a second capture while the first is still in flight", async () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      let resolveCapture: (value: { toPNG: () => Uint8Array }) => void;
+      webview.capturePage.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCapture = resolve;
+        })
+      );
+
+      let first: Promise<boolean>;
+      let second: boolean | undefined;
+      await act(async () => {
+        first = getToolbarCapture()();
+        second = await getToolbarCapture()();
+        resolveCapture!({ toPNG: () => new Uint8Array([0x89]) });
+        await first;
+      });
+
+      expect(second).toBe(false);
+      await expect(first!).resolves.toBe(true);
+      expect(getWriteImageMock()).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("crash-loop notification", () => {
     beforeEach(() => {
       vi.clearAllMocks();
@@ -1948,6 +2098,176 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
   });
 
+  describe("crash banner persistence (#10363)", () => {
+    it("keeps the crash banner visible while the URL is unchanged", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      // The clearing effect must not self-reset crash state while currentUrl
+      // is unchanged — the banner has to survive the post-crash render flush
+      // so its Reload / Hard restart actions stay reachable.
+      expect(container.textContent).toContain("Preview process crashed");
+      expect(container.textContent).toContain("Reason: crashed (exit code 1)");
+    });
+
+    it("keeps the unresponsive banner visible while the URL is unchanged", () => {
+      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        unresponsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      getWebviewElement(container);
+
+      expect(unresponsiveCb).toBeDefined();
+
+      act(() => {
+        unresponsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+
+      expect(container.textContent).toContain("Preview is not responding");
+    });
+
+    it("clears the unresponsive banner when the guest becomes responsive again", () => {
+      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
+      let responsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        unresponsiveCb = cb;
+        return vi.fn();
+      });
+      electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        responsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      getWebviewElement(container);
+
+      act(() => {
+        unresponsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+      expect(container.textContent).toContain("Preview is not responding");
+
+      act(() => {
+        responsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+      expect(container.textContent).not.toContain("Preview is not responding");
+    });
+
+    it("does not clear a crashed banner when a stale responsive event arrives", () => {
+      let responsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        responsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+
+      act(() => {
+        responsiveCb?.({ panelId: "dev-preview-panel-1" });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+    });
+
+    it("ignores unresponsive events targeting a different panel", () => {
+      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
+      const electron = (window as unknown as { electron: { webview: Record<string, unknown> } })
+        .electron;
+      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
+        unresponsiveCb = cb;
+        return vi.fn();
+      });
+
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      getWebviewElement(container);
+
+      act(() => {
+        unresponsiveCb?.({ panelId: "some-other-panel" });
+      });
+      expect(container.textContent).not.toContain("Preview is not responding");
+    });
+
+    it("clears the crash banner on a confirmed navigation to a new URL", () => {
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/about" });
+      });
+      expect(container.textContent).not.toContain("Preview process crashed");
+    });
+
+    it("does not resurface a stale crash banner after eviction and restore", async () => {
+      terminalStoreState.activeDockTerminalId = "dev-preview-panel-1";
+      let destroyHandler: ((payload: { tier: 1 | 2 }) => void) | undefined;
+      const electron = (window as unknown as { electron: { window: Record<string, unknown> } })
+        .electron;
+      electron.window.onDestroyHiddenWebviews = vi.fn(
+        (handler: (payload: { tier: 1 | 2 }) => void) => {
+          destroyHandler = handler;
+          return vi.fn();
+        }
+      );
+
+      const { container, rerender } = render(<DevPreviewPane {...baseProps} location="dock" />);
+      const webview = getWebviewElement(container);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      act(() => {
+        emitWebviewEvent(webview, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+      });
+      expect(container.textContent).toContain("Preview process crashed");
+
+      // Panel is no longer the active dock panel — eviction is now valid.
+      terminalStoreState.activeDockTerminalId = "other-panel";
+      rerender(<DevPreviewPane {...baseProps} location="dock" />);
+      await act(async () => {
+        destroyHandler?.({ tier: 1 });
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Preview process crashed");
+
+      // Reactivate the panel — eviction auto-clears and the webview remounts.
+      terminalStoreState.activeDockTerminalId = "dev-preview-panel-1";
+      rerender(<DevPreviewPane {...baseProps} location="dock" />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Preview process crashed");
+    });
+  });
+
   describe("header script picker", () => {
     beforeEach(() => {
       projectClientGetSettingsMock.mockResolvedValue({
@@ -2039,6 +2359,204 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       expect(screen.getByTestId("panel-header-content")).toBeTruthy();
       expect(container.textContent).toContain("npm run custom");
+    });
+
+    it("does not propagate pointerdown from the trigger to header ancestors", () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) => {
+        const state = {
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        };
+        return selector(state);
+      });
+
+      render(<DevPreviewPane {...baseProps} />);
+      headerContentPointerDownSpy.mockClear();
+      const trigger = screen.getByLabelText("Switch dev script");
+      fireEvent.pointerDown(trigger);
+      expect(headerContentPointerDownSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("auto-detected run button (#10419)", () => {
+    const flushAutoDetect = async () => {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    type RunnerFixture = { id: string; name: string; command: string; source: "package.json" };
+
+    const defaultRunners: RunnerFixture[] = [
+      { id: "r1", name: "dev", command: "pnpm dev", source: "package.json" },
+    ];
+
+    const setSettingsStoreState = (devServerCommand: string, runners = defaultRunners) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand,
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: runners,
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        })
+      );
+    };
+
+    beforeEach(() => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present: "", future: [] },
+        browserZoom: 1.0,
+        devPreviewConsoleOpen: false,
+        devCommand: "",
+      }));
+      setSettingsStoreState("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "stopped",
+        url: null,
+      };
+      projectClientGetSettingsMock.mockResolvedValue({
+        devServerCommand: "",
+        devServerAutoDetected: false,
+        devServerDismissed: false,
+        turbopackEnabled: true,
+      });
+      saveSettingsMock.mockResolvedValue(undefined);
+    });
+
+    const getRunButton = () => screen.getByRole("button", { name: "Run `pnpm dev`" });
+
+    it("saves the displayed candidate command without re-running detection", async () => {
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          devServerCommand: "pnpm dev",
+          devServerAutoDetected: true,
+          devServerDismissed: false,
+        })
+      );
+      expect(vi.mocked(projectClient.detectRunners)).not.toHaveBeenCalled();
+    });
+
+    it("shows an inline error banner with a retry action when saving fails", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("shows the error banner when project settings cannot be loaded", async () => {
+      projectClientGetSettingsMock.mockResolvedValueOnce(null);
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+    });
+
+    it("shows the error banner when loading settings rejects", async () => {
+      projectClientGetSettingsMock.mockRejectedValueOnce(new Error("IPC failure"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+    });
+
+    it("clears the banner on retry and saves the same command", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await flushAutoDetect();
+
+      expect(screen.queryByText("Couldn't start preview")).toBeNull();
+      expect(saveSettingsMock).toHaveBeenCalledTimes(2);
+      expect(saveSettingsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ devServerCommand: "pnpm dev" })
+      );
+    });
+
+    it("retries the alternate command that failed, not the primary candidate", async () => {
+      setSettingsStoreState("", [
+        { id: "r1", name: "dev", command: "pnpm dev", source: "package.json" },
+        { id: "r2", name: "start", command: "npm start", source: "package.json" },
+      ]);
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      render(<DevPreviewPane {...baseProps} />);
+
+      // The popover mock renders the picker entries inline; pick the alternate.
+      fireEvent.click(screen.getByText("npm start"));
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await flushAutoDetect();
+
+      expect(saveSettingsMock).toHaveBeenCalledTimes(2);
+      expect(saveSettingsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ devServerCommand: "npm start" })
+      );
+    });
+
+    it("does not resurface a stale failure after the pane is reconfigured", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("save failed"));
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+
+      fireEvent.click(getRunButton());
+      await flushAutoDetect();
+      expect(screen.getByText("Couldn't start preview")).toBeTruthy();
+
+      setSettingsStoreState("pnpm dev");
+      rerender(<DevPreviewPane {...baseProps} />);
+      await flushAutoDetect();
+
+      setSettingsStoreState("");
+      rerender(<DevPreviewPane {...baseProps} />);
+
+      expect(screen.queryByText("Couldn't start preview")).toBeNull();
     });
   });
 

@@ -506,7 +506,8 @@ port.on("message", async (rawMsg: any) => {
           request.requestId,
           request.cwd,
           request.filePath,
-          request.status
+          request.status,
+          request.ignoreWhitespace
         );
         break;
 
@@ -530,6 +531,13 @@ port.on("message", async (rawMsg: any) => {
       // as it depletes — and snap back when it resets.
       case "apply-fetch-throttle":
         workspaceService.applyFetchThrottle(request.multiplier);
+        break;
+
+      // Provider hostname-matcher table relayed from main's forge registry.
+      // Arrives async after plugin load (and again on registry changes), so
+      // the service re-evaluates running monitors' matched provider ids.
+      case "forge-provider-matchers":
+        workspaceService.setForgeProviderMatchers(request.matchers);
         break;
 
       case "background":

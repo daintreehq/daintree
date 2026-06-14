@@ -138,6 +138,36 @@ export interface TerminalInfo extends TerminalPublicState {
    * See `AgentStateService` for the suppression policy.
    */
   hysteresisLockedUntil?: number;
+  /**
+   * Final serialized buffer captured when a preserved terminal exits and its
+   * headless xterm is disposed to reclaim memory. Served by
+   * `serializeTerminal`/`serializeTerminalAsync` in place of the live buffer.
+   * Runtime-only; not persisted, not crossed over IPC.
+   */
+  preservedSnapshot?: string;
+  /**
+   * Monotonic count of buffer mutations: PTY output chunks (bumped at the
+   * pty-host routing site), resize reflows, and the preserved-snapshot
+   * capture. Compared against `wakeSyncedEpochByWindow` so a wake can prove
+   * "nothing changed since this window's last faithful view" and skip the
+   * full serialize/replay. Runtime-only; not persisted, not crossed over IPC.
+   */
+  contentEpoch: number;
+  /**
+   * Per-window `contentEpoch` at the last faithful sync: a chunk accepted by
+   * that window's port batcher, or a wake snapshot served on its port (the
+   * latter captured pre-serialize and only while no headless writes are
+   * pending, so the snapshot provably covers the recorded epoch). Entries are
+   * dropped on window disconnect. Runtime-only.
+   */
+  wakeSyncedEpochByWindow?: Map<number, number>;
+  /**
+   * Headless xterm writes issued but whose parse callback hasn't fired yet.
+   * A wake only serve-marks `wakeSyncedEpochByWindow` when this is 0 —
+   * otherwise the snapshot could omit an arrived-but-unparsed tail that the
+   * epoch already counts. Runtime-only.
+   */
+  pendingHeadlessWrites?: number;
 }
 
 export interface PtyManagerEvents {
@@ -264,6 +294,23 @@ export const IPC_LOW_WATERMARK_PERCENT = 33; // Resume PTY when drops to 33% (~1
 // visibly. (history: #3508, #4682, #4683)
 export const IPC_MAX_PAUSE_MS = 10000;
 
+// Aggregate (per-queue-manager) ceiling across ALL terminals. The per-terminal
+// cap alone lets a simultaneous N-agent burst put N x ~2MB in flight to one
+// renderer window before any PTY pauses — bytes that land in the receiving
+// renderer's queues, outside the pty-host budget the ResourceGovernor watches.
+// 16MB mirrors FUTURE_SAB_MAX_TOTAL_PENDING_BYTES (the dual per-terminal +
+// total cap the SAB skeleton was designed with); 50% hysteresis gives a wide
+// drain window so the aggregate gate doesn't flap under multi-agent load.
+// Producers paused by the aggregate gate resume via the same ack-driven
+// tryResume path (swept when the aggregate crosses back below the low
+// watermark) and stay bounded by the IPC_MAX_PAUSE_MS safety timeout.
+export const IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES = 16 * 1024 * 1024;
+export const IPC_TOTAL_QUEUE_LOW_WATERMARK_BYTES = 8 * 1024 * 1024;
+
 // MessagePort adaptive batching configuration
 export const PORT_BATCH_THRESHOLD_BYTES = 64 * 1024; // 64KB — sync-flush when buffered data exceeds this
 export const PORT_BATCH_THROUGHPUT_DELAY_MS = 16; // ~60Hz frame — setTimeout window in throughput mode
+// Output arriving within this window of the last renderer write is treated as
+// keystroke echo: the batcher swaps its throughput timer for an immediate so
+// typing into a flooding terminal isn't delayed by the 16ms batch window.
+export const PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS = 50;

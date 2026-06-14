@@ -119,6 +119,13 @@ export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 export interface PtyHostLifecycleConfig {
   memoryLimitMb: number;
   electronDir: string;
+  /**
+   * Read at each fork. When true the host defers its boot-time homedir pool
+   * warm — used on project-restoring boots where the set-active-project that
+   * follows ready immediately drains the pool to the project path, so the
+   * homedir warm would only spawn shells for the drain to kill (#10393).
+   */
+  deferInitialPoolWarm?: () => boolean;
 }
 
 export interface PtyHostLifecycleCallbacks {
@@ -321,6 +328,7 @@ export class PtyHostLifecycle {
           DAINTREE_UTILITY_PROCESS_KIND: "pty-host",
           DAINTREE_PERF_FORK_ABS_MS: String(forkAbsMs),
           DAINTREE_PERF_MAIN_BOOT_ABS_MS: String(mainBootAbsMs),
+          ...(this.config.deferInitialPoolWarm?.() ? { DAINTREE_PTY_DEFER_POOL_WARM: "1" } : {}),
           // node-pty 1.x hangs intermittently on Linux kernels with io_uring
           // enabled (microsoft/node-pty#630, closed as not planned). The fix
           // is permanent and must be set inside the explicit env object — a

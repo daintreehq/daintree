@@ -13,6 +13,7 @@ import { app, BrowserWindow, crashReporter, protocol } from "electron";
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
+import { isE2EMode } from "./setup/runtimeFlags.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -67,6 +68,7 @@ import {
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
 } from "./window/windowServices.js";
+import { getResourceProfileService } from "./window/serviceRefs.js";
 import {
   setupPowerMonitor,
   setupWindowFocusThrottle,
@@ -78,8 +80,7 @@ import { preAgentSnapshotService } from "./services/PreAgentSnapshotService.js";
 import { isDemoMode, isSmokeTest, kickOffEarlyPathRefresh } from "./setup/environment.js";
 import { store } from "./store.js";
 import { initializeLogger, registerLoggerTransport, setLogLevelOverrides } from "./utils/logger.js";
-import { broadcastToRenderer } from "./ipc/utils.js";
-import { registerCommands } from "./services/commands/index.js";
+import { broadcastToVisibleRenderers } from "./ipc/utils.js";
 import {
   initializeCrashRecoveryService,
   getCrashRecoveryService,
@@ -183,11 +184,16 @@ if (!gotTheLock) {
   // receive the same map after their first `ready` event.
   setLogLevelOverrides(store.get("logLevelOverrides") ?? {});
 
-  registerLoggerTransport(broadcastToRenderer, () => BrowserWindow.getAllWindows().length > 0);
+  // Visible-only: log batches are high-frequency and replayable (LOGS_GET_ALL),
+  // so cached/frozen project views skip them instead of queueing every flush.
+  registerLoggerTransport(
+    broadcastToVisibleRenderers,
+    () => BrowserWindow.getAllWindows().length > 0
+  );
 
-  registerCommands();
-
-  crashReporter.start({ uploadToServer: false });
+  if (!isE2EMode) {
+    crashReporter.start({ uploadToServer: false });
+  }
   initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
 
@@ -216,7 +222,10 @@ if (!gotTheLock) {
   // in globalServicesInit. See #8817.
   const { initializeDatabaseMaintenance } =
     await import("./services/DatabaseMaintenanceService.js");
-  initializeDatabaseMaintenance();
+  // Pass the clean-exit signal so probeDb can skip the O(size) quick_check
+  // on clean boots. CrashLoopGuard zeros its crash count on a clean exit and
+  // accumulates it on crashes, so count === 0 is a reliable clean-boot signal.
+  initializeDatabaseMaintenance(getCrashLoopGuard().getCrashCount() === 0);
 
   // GpuCrashMonitor must install its `child-process-gone` listener BEFORE the
   // GPU process spawns (first BrowserWindow creation), so it sees crashes in
@@ -381,6 +390,12 @@ if (!gotTheLock) {
       },
     });
     setProjectViewManager(pvm);
+
+    // Sync this window's fresh PVM to the live resource profile — the
+    // service's applyProfile fans out only on transitions, so a window
+    // created while the app sits in a non-balanced profile would otherwise
+    // keep its DEFAULT_* balanced constants until the next transition.
+    getResourceProfileService()?.applyCurrentProfileTo(pvm);
 
     // E2E hooks: expose PVM accessor and heap-snapshot writer so the
     // nightly evicted-view leak spec can read main-process state and

@@ -109,7 +109,7 @@ async function waitForProjectAToBeEvictedWithCActive(app: AppContext["app"]): Pr
         );
       },
       {
-        timeout: 15_000,
+        timeout: T_LONG,
         intervals: [200, 400, 800, 1600],
       }
     )
@@ -246,6 +246,8 @@ test.describe.serial("Core: LRU project-view eviction with active terminal/workt
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
+
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
 
     const state = await readPvmState(ctx.app);
     expect(state.viewCount).toBeGreaterThanOrEqual(1);

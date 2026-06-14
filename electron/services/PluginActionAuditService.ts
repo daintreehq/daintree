@@ -16,6 +16,7 @@ import {
 import type { ActionSource, ActionDanger } from "../../shared/types/actions.js";
 import { events } from "./events.js";
 import type { TypedEventBus } from "./events.js";
+import { auditRingStore } from "./persistence/auditRingStore.js";
 import { store } from "../store.js";
 
 const FLUSH_DEBOUNCE_MS = 1000;
@@ -41,6 +42,21 @@ function summarizePlaintext(args: unknown): string | undefined {
     : serialized;
 }
 
+export interface PluginAuditLogStore {
+  read(): unknown;
+  write(records: PluginActionAuditRecord[]): void;
+}
+
+// Persists the ring in the dedicated audit-logs store (migration023) so
+// config.json stays small and audit appends never re-serialize it.
+// `auditEnabled` / `auditMaxRecords` stay in config.json (`plugins`), read via
+// the injected config closures.
+const defaultLogStore: PluginAuditLogStore = {
+  read: () => auditRingStore.readAll("pluginAuditLog"),
+  write: (records) =>
+    auditRingStore.writeAll("pluginAuditLog", records, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS),
+};
+
 /**
  * Main-process ring buffer of plugin-action dispatch audit records. Mirrors
  * the MCP `AuditService` storage pattern (hydrate / append / trim / debounced
@@ -48,9 +64,10 @@ function summarizePlaintext(args: unknown): string | undefined {
  * chronological dispatch trail.
  *
  * Records are appended from the `action:dispatched` bus event whenever the
- * dispatched action carries a `pluginId`. Persistence is wired to the
- * `plugins` store slice via the `saveConfig`/`readConfig` callbacks so the
- * service stays decoupled from the concrete store module.
+ * dispatched action carries a `pluginId`. Config flags are wired to the
+ * `plugins` store slice via the `saveConfig`/`readConfig` callbacks and the
+ * ring to the audit-logs store via `logStore`, so the service stays decoupled
+ * from the concrete store module.
  */
 export class PluginActionAuditService {
   private records: PluginActionAuditRecord[] = [];
@@ -60,7 +77,8 @@ export class PluginActionAuditService {
 
   constructor(
     private readonly saveConfig: (patch: Record<string, unknown>) => void,
-    private readonly readConfig: () => Record<string, unknown>
+    private readonly readConfig: () => Record<string, unknown>,
+    private readonly logStore: PluginAuditLogStore = defaultLogStore
   ) {}
 
   /**
@@ -100,9 +118,9 @@ export class PluginActionAuditService {
 
   hydrate(): void {
     if (this.hydrated) return;
-    const config = this.readConfig();
-    const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
-    const cap = this.normalizeMaxRecords(config.auditMaxRecords);
+    const stored = this.logStore.read();
+    const persisted = Array.isArray(stored) ? stored : [];
+    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
     const safe = persisted.filter((r: unknown): r is PluginActionAuditRecord => {
       if (r === null || typeof r !== "object") return false;
       const rec = r as { id?: unknown; pluginId?: unknown; actionId?: unknown };
@@ -150,7 +168,10 @@ export class PluginActionAuditService {
     /** Human-readable failure message — `error` records. */
     errorMessage?: string;
   }): void {
-    if (this.readConfig().auditEnabled === false) return;
+    // Single config read per append — the same result gates the kill switch
+    // and supplies the trim cap.
+    const config = this.readConfig();
+    if (config.auditEnabled === false) return;
     this.hydrate();
 
     const record: PluginActionAuditRecord = {
@@ -174,12 +195,11 @@ export class PluginActionAuditService {
     if (input.contributionId !== undefined) record.contributionId = input.contributionId;
     if (input.errorMessage !== undefined) record.errorMessage = input.errorMessage;
 
-    this.enqueueAndTrim(record);
+    this.enqueueAndTrim(record, this.normalizeMaxRecords(config.auditMaxRecords));
   }
 
-  private enqueueAndTrim(record: PluginActionAuditRecord): void {
+  private enqueueAndTrim(record: PluginActionAuditRecord, cap: number): void {
     this.records.push(record);
-    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
     if (this.records.length > cap) {
       this.records.splice(0, this.records.length - cap);
     }
@@ -198,7 +218,7 @@ export class PluginActionAuditService {
   private flush(): void {
     if (!this.hydrated) return;
     try {
-      this.saveConfig({ auditLog: [...this.records] });
+      this.logStore.write([...this.records]);
     } catch (err) {
       console.error("[PluginAudit] Failed to flush audit log:", err);
     }
@@ -267,6 +287,8 @@ export function getPluginActionAuditService(): PluginActionAuditService {
   if (!instance) {
     // `store` is the lazy electron-store Proxy — importing it doesn't initialize
     // the backing store, and the singleton is only constructed on first use.
+    // The spread merge keeps a legacy `plugins.auditLog` carryover intact for
+    // installs where migration023 deferred (audit-logs store not durable).
     instance = new PluginActionAuditService(
       (patch) => {
         const current = (store.get("plugins") ?? {}) as Record<string, unknown>;

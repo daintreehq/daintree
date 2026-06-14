@@ -11,6 +11,13 @@ interface FixtureRepoOptions {
   withUncommittedChanges?: boolean;
   withSpreadCommits?: boolean;
   unstagedFileCount?: number;
+  /**
+   * Point `origin` at a github.com URL (never fetched — hostname matching is
+   * all that runs against it). Forge surfaces (stats pills, issue/PR
+   * dropdowns) only render when the project's remote resolves to a registered
+   * forge provider (#10347), so any spec asserting on them needs this.
+   */
+  withGitHubRemote?: boolean;
 }
 
 export interface FixtureRepo {
@@ -63,6 +70,7 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): FixtureRepo
     withUncommittedChanges = false,
     withSpreadCommits = false,
     unstagedFileCount = 0,
+    withGitHubRemote = false,
   } = options;
 
   if (!Number.isInteger(unstagedFileCount) || unstagedFileCount < 0) {
@@ -74,6 +82,9 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): FixtureRepo
   git("init -b main", dir);
   git('config user.email "test@daintree.dev"', dir);
   git('config user.name "Daintree Test"', dir);
+  if (withGitHubRemote) {
+    git("remote add origin https://github.com/daintreehq/daintree.git", dir);
+  }
 
   writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
 

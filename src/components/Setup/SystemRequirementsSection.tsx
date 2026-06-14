@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
@@ -141,14 +142,18 @@ export function SystemRequirementsSection({
           )}
 
           {visibleSpecs.length === 0 && isChecking && (
-            <div className="grid grid-cols-2 gap-2">
+            <Skeleton label="Checking system requirements" className="grid grid-cols-2 gap-2">
+              {/* `immediate` — spawning version-check processes reliably
+                  exceeds the 400ms gate. */}
               {Array.from({ length: 4 }, (_, i) => (
-                <div
+                <SkeletonBone
                   key={i}
-                  className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-3 py-2.5 animate-pulse h-[52px]"
+                  immediate
+                  heightPx={52}
+                  className="rounded-[var(--radius-md)]"
                 />
               ))}
-            </div>
+            </Skeleton>
           )}
 
           {allDone && hasFatalFailure && (

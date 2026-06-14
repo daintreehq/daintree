@@ -228,7 +228,7 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // If the user already chose a git-tracked destination, `git init` is a
           // no-op — it reports the existing repo and exits 0.
           try {
-            const git = createHardenedGit(destinationPath);
+            const git = await createHardenedGit(destinationPath);
             await git.init();
           } catch (error) {
             logError(

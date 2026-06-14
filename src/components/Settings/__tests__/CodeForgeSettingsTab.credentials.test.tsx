@@ -13,9 +13,15 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 // Isolate the generic credential form: the sibling tabs pull heavy stores
-// (githubConfigStore, project routing) that are out of scope here.
-vi.mock("../GitHubSettingsTab", () => ({
-  GitHubSettingsTab: () => <div data-testid="github-settings-tab" />,
+// (githubConfigStore, project routing) that are out of scope here. The
+// GitHub panel is a plugin-contributed slot, so stub the registry hook.
+vi.mock("@/registry/builtinRendererRegistry", () => ({
+  useBuiltinView: (slotId: string) =>
+    slotId === "github.forgeSettingsTab"
+      ? function GitHubSettingsStub() {
+          return <div data-testid="github-settings-tab" />;
+        }
+      : null,
 }));
 vi.mock("../ForgeIntegrationsTab", () => ({
   ForgeIntegrationsTab: () => <div data-testid="forge-integrations-tab" />,
@@ -31,12 +37,22 @@ function makeProvider(
   pluginId: string,
   id: string,
   name: string,
-  credentialFields?: ForgeProviderEntry["contribution"]["credentialFields"]
+  credentialFields?: ForgeProviderEntry["contribution"]["credentialFields"],
+  slots?: ForgeProviderEntry["contribution"]["slots"]
 ): ForgeProviderEntry {
   return {
     pluginId,
-    contribution: { id, name, matches: ["gitea.example.com"], credentialFields },
+    contribution: { id, name, matches: ["gitea.example.com"], credentialFields, slots },
   };
+}
+
+// The built-in GitHub provider contributes its own settings panel through the
+// `slots.settingsTab` builtin-view ref — the host resolves it generically.
+function makeGitHubProvider(): ForgeProviderEntry {
+  return makeProvider("daintree.github", "github", "GitHub", undefined, {
+    settingsTab: "github.forgeSettingsTab",
+    icon: "github.providerIcon",
+  });
 }
 
 interface ForgeMockOptions {
@@ -74,6 +90,9 @@ function installForgeMocks(opts: ForgeMockOptions) {
     },
     app: {
       getState: vi.fn(async () => ({ developerMode: { enabled: false } })),
+    },
+    plugin: {
+      onProvenanceChanged: vi.fn(() => () => {}),
     },
   } as unknown as typeof window.electron;
   return { setCredential, getCredentialStatus, clearCredential };
@@ -271,7 +290,7 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
   it("routes the built-in GitHub card and a third-party 'github' contribution independently", async () => {
     const { getCredentialStatus } = installForgeMocks({
       providers: [
-        makeProvider("daintree.github", "github", "GitHub"),
+        makeGitHubProvider(),
         makeProvider("acme", "github", "Acme GitHub", [
           { id: "token", label: "API token", type: "password" },
         ]),
@@ -296,7 +315,70 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     expect(screen.queryByTestId("github-settings-tab")).toBeNull();
   });
 
-  it("falls back to the GitHub subtab for an unrecognized bare subtab id", async () => {
+  it("defaults a fresh open (no subtab) to the first registered provider", async () => {
+    installForgeMocks({
+      providers: [
+        makeGitHubProvider(),
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const onSubtabChange = vi.fn();
+    render(<CodeForgeSettingsTab activeSubtab={null} onSubtabChange={onSubtabChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+    // The fallback is display-only — the component must not rewrite the
+    // caller's subtab state.
+    expect(onSubtabChange).not.toHaveBeenCalled();
+  });
+
+  it("falls back to General for a stale unrecognized subtab even while providers are registered", async () => {
+    installForgeMocks({
+      providers: [
+        makeGitHubProvider(),
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    const onSubtabChange = vi.fn();
+    render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={onSubtabChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+    expect(onSubtabChange).not.toHaveBeenCalled();
+  });
+
+  it("deep-link to the GitHub subtab falls back to General when GitHub is unregistered", async () => {
+    // The realistic disabled-plugin dead-end: a stale deep-link (token
+    // banner, UpstreamSyncBadge) targets daintree.github.github after the
+    // plugin was disabled. The provider list omits GitHub, so the subtab
+    // must fall back to General rather than rendering an empty shell.
+    installForgeMocks({
+      providers: [
+        makeProvider("acme", "gitea", "Gitea", [
+          { id: "token", label: "API token", type: "password" },
+        ]),
+      ],
+    });
+
+    render(<CodeForgeSettingsTab activeSubtab="daintree.github.github" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+  });
+
+  it("falls back to General for a stale subtab when GitHub is not registered (plugin disabled)", async () => {
     installForgeMocks({
       providers: [
         makeProvider("acme", "gitea", "Gitea", [
@@ -308,12 +390,13 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     const onSubtabChange = vi.fn();
     render(<CodeForgeSettingsTab activeSubtab="gitea" onSubtabChange={onSubtabChange} />);
 
+    // With the GitHub plugin disabled its provider is absent, so defaulting
+    // to a GitHub settings panel would resurrect the "disable does nothing"
+    // bug — General is the only subtab guaranteed to exist.
     await waitFor(() => {
-      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+      expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
     });
-    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
-    // The fallback is display-only — the component must not rewrite the
-    // caller's subtab state.
+    expect(screen.queryByTestId("github-settings-tab")).toBeNull();
     expect(onSubtabChange).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ import {
   type ResourceProfile,
 } from "../../../shared/types/resourceProfile.js";
 import { setLogLevelOverrides } from "../../utils/logger.js";
+import { setPortBatchThroughputDelayMs } from "../portBatcher.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
@@ -18,8 +19,9 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
       const profileConfig = RESOURCE_PROFILE_CONFIGS[profile];
       if (profileConfig) {
         processTreeCache.setPollInterval(profileConfig.processTreePollInterval);
+        setPortBatchThroughputDelayMs(profileConfig.portBatchThroughputDelayMs);
         console.log(
-          `[PtyHost] Resource profile set to: ${msg.profile} (processTree poll: ${profileConfig.processTreePollInterval}ms)`
+          `[PtyHost] Resource profile set to: ${msg.profile} (processTree poll: ${profileConfig.processTreePollInterval}ms, port batch: ${profileConfig.portBatchThroughputDelayMs}ms)`
         );
       }
       ctx.resourceGovernor.setResourceProfile(profile);

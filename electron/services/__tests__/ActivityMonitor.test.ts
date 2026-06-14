@@ -15,10 +15,7 @@ function visibleCell(partial: Partial<VisibleContentCell> = {}): VisibleContentC
     width: partial.width ?? 1,
     fgColorMode: partial.fgColorMode ?? 0,
     fgColor: partial.fgColor ?? 0,
-    bgColorMode: partial.bgColorMode ?? 0,
-    bgColor: partial.bgColor ?? 0,
     attributes: partial.attributes ?? 0,
-    defaultVisual: partial.defaultVisual ?? true,
   };
 }
 
@@ -827,6 +824,7 @@ describe("ActivityMonitor", () => {
       for (let i = 0; i < 4; i += 1) {
         visibleLines = [...visibleLines];
         visibleLines[i] = `rewritten historical line ${i + 1}`;
+        monitor.onData(visibleLines[i]!);
         vi.advanceTimersByTime(700);
       }
 
@@ -837,6 +835,7 @@ describe("ActivityMonitor", () => {
       for (let i = 0; i < 4; i += 1) {
         visibleLines = [...visibleLines];
         visibleLines[visibleLines.length - 1] = `visible activity ${i + 1}`;
+        monitor.onData(visibleLines[visibleLines.length - 1]!);
         vi.advanceTimersByTime(700);
       }
 
@@ -855,9 +854,7 @@ describe("ActivityMonitor", () => {
         agentId: "claude",
         getVisibleLines: () => ["●●●"],
         getVisibleContentSnapshot: () =>
-          createVisibleCellContentSnapshot([
-            visibleRow("●●●", { fgColorMode: 1, fgColor, defaultVisual: false }),
-          ]),
+          createVisibleCellContentSnapshot([visibleRow("●●●", { fgColorMode: 1, fgColor })]),
         initialState: "idle",
         skipInitialStateEmit: true,
       });
@@ -918,6 +915,7 @@ describe("ActivityMonitor", () => {
 
       for (let i = 0; i < 4; i += 1) {
         visible = `post resize activity ${i + 1}`;
+        monitor.onData(visible);
         vi.advanceTimersByTime(700);
       }
 
@@ -1051,6 +1049,7 @@ describe("ActivityMonitor", () => {
       monitor.notifySubmission();
       vi.advanceTimersByTime(5900);
       visible = "tick 2";
+      monitor.onData(visible);
       vi.advanceTimersByTime(50);
       vi.advanceTimersByTime(5900);
 
@@ -1059,6 +1058,33 @@ describe("ActivityMonitor", () => {
       vi.advanceTimersByTime(200);
       expect(monitor.getState()).toBe("idle");
       expect(onStateChange.mock.calls.filter((call) => call[2] === "busy")).toHaveLength(1);
+
+      monitor.dispose();
+    });
+
+    it("reuses the cached viewport snapshot once quiet and recomputes after new data", () => {
+      const onStateChange = vi.fn();
+      const getVisibleContentSnapshot = vi.fn(() => createVisibleContentSnapshot("waiting"));
+      const monitor = new ActivityMonitor("agent-simple-snapshot-cache", 1000, onStateChange, {
+        agentId: "claude",
+        getVisibleLines: () => ["waiting"],
+        getVisibleContentSnapshot,
+        initialState: "idle",
+        skipInitialStateEmit: true,
+      });
+
+      monitor.startPolling();
+      vi.advanceTimersByTime(2000);
+      getVisibleContentSnapshot.mockClear();
+
+      // Quiet past the settle window: polling must stop re-extracting the viewport
+      vi.advanceTimersByTime(1000);
+      expect(getVisibleContentSnapshot).not.toHaveBeenCalled();
+
+      // New data restarts extraction on the next polls
+      monitor.onData("new output");
+      vi.advanceTimersByTime(100);
+      expect(getVisibleContentSnapshot).toHaveBeenCalled();
 
       monitor.dispose();
     });
@@ -5582,16 +5608,19 @@ describe("ActivityMonitor", () => {
 
       monitor.startPolling();
       // The data path runs through onData() and triggers bootDetector.check
-      // against the rolling pattern buffer.
+      // against the rolling pattern buffer. Back-to-back chunks inside the
+      // pattern-scan throttle window are scanned by the trailing-edge timer.
       monitor.onData("starting up\nstill working\n");
       expect(onBootComplete).not.toHaveBeenCalled();
 
       monitor.onData("system ready\n");
+      vi.advanceTimersByTime(30);
       expect(onBootComplete).toHaveBeenCalledTimes(1);
       expect(onBootComplete).toHaveBeenCalledWith(expect.any(Number));
 
       // Subsequent matching data must not re-fire.
       monitor.onData("ready again ready\n");
+      vi.advanceTimersByTime(30);
       expect(onBootComplete).toHaveBeenCalledTimes(1);
 
       monitor.dispose();
@@ -5728,6 +5757,51 @@ describe("ActivityMonitor", () => {
       expect(onBootComplete).toHaveBeenCalledTimes(1);
 
       monitor.dispose();
+    });
+  });
+
+  describe("Pattern-scan throttle", () => {
+    it("scans a chunk arriving inside the throttle window via the trailing-edge timer", () => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      const monitor = new ActivityMonitor("scan-trailing", 1000, vi.fn(), {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        bootCompletePatterns: [/ready/i],
+        idleDebounceMs: 4000,
+        onBootComplete,
+      });
+
+      monitor.startPolling();
+      monitor.onData("starting up\n");
+      monitor.onData("system ready\n");
+      expect(onBootComplete).not.toHaveBeenCalled();
+
+      // No further data: the deferred run must still scan the final chunk.
+      vi.advanceTimersByTime(30);
+      expect(onBootComplete).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
+    it("dispose cancels a pending trailing-edge scan", () => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      const monitor = new ActivityMonitor("scan-dispose", 1000, vi.fn(), {
+        getVisibleLines: () => ["> "],
+        getCursorLine: () => "> ",
+        bootCompletePatterns: [/ready/i],
+        idleDebounceMs: 4000,
+        onBootComplete,
+      });
+
+      monitor.startPolling();
+      monitor.onData("starting up\n");
+      monitor.onData("system ready\n");
+      monitor.dispose();
+
+      vi.advanceTimersByTime(100);
+      expect(onBootComplete).not.toHaveBeenCalled();
     });
   });
 

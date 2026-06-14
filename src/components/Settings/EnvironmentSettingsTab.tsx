@@ -230,7 +230,7 @@ export function EnvironmentSettingsTab() {
         description="Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
         id="environment-variables"
       >
-        <div className="text-sm text-status-error/90 py-8 px-4 border border-status-error/40 rounded-[var(--radius-md)] bg-status-error/5">
+        <div className="text-sm text-status-error/90 py-8 px-4 border border-status-error/20 rounded-[var(--radius-md)] bg-status-error/5">
           Couldn't load saved environment variables. Close and reopen settings to try again. Editing
           isn't available right now to avoid overwriting your stored values.
         </div>
@@ -347,7 +347,7 @@ export function EnvironmentSettingsTab() {
           <div className="flex items-center gap-2 pt-2">
             <Button onClick={handleSave} disabled={isSaving} size="sm">
               <Save className="w-4 h-4" />
-              {isSaving ? "Saving..." : "Save"}
+              {isSaving ? "Saving…" : "Save"}
             </Button>
             <Button variant="ghost" onClick={handleDiscard} disabled={isSaving} size="sm">
               Discard

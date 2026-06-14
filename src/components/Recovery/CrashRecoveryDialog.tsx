@@ -301,7 +301,7 @@ export function CrashRecoveryDialog({
               </div>
 
               {suspectCount > 0 && (
-                <div data-testid="suspect-warning" className="rounded-md overflow-hidden">
+                <div data-testid="suspect-warning" className="rounded-lg overflow-hidden">
                   <InlineStatusBanner
                     severity="warning"
                     icon={AlertTriangle}
@@ -392,7 +392,7 @@ export function CrashRecoveryDialog({
           )}
 
           {recoveryError && (
-            <div className="rounded-md overflow-hidden" data-testid="recovery-error">
+            <div className="rounded-lg overflow-hidden" data-testid="recovery-error">
               <InlineStatusBanner
                 severity="error"
                 icon={AlertTriangle}

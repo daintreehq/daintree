@@ -54,12 +54,14 @@ async function artifactEntry(releaseDir, fileName) {
 // a native build exists.
 function macZipPriority(fileName) {
   if (fileName.includes("-x64-mac.zip")) return 0;
-  if (fileName.includes("-arm64-mac.zip")) return 1;
-  if (fileName.includes("universal-mac.zip")) return 2;
-  // Bare -mac.zip (no arch suffix) is the x64 build from electron-builder.
-  // Check after arm64 so arm64-mac.zip doesn't match this branch.
-  if (fileName.endsWith("-mac.zip")) return 0;
-  return 3;
+  if (fileName.includes("-arm64-mac.zip")) return 2;
+  if (fileName.includes("universal-mac.zip")) return 3;
+  // Bare -mac.zip (no arch suffix) was the x64 name before the explicit -x64
+  // rename (#10380). Checked after arm64/universal so those never match this
+  // branch; ranked after the explicit x64 name so a stale bare artifact in a
+  // dirty release dir never outranks the current build.
+  if (fileName.endsWith("-mac.zip")) return 1;
+  return 4;
 }
 
 function selectArtifacts(platform, fileNames) {

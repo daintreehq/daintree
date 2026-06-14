@@ -19,6 +19,7 @@ import {
   WorkspaceCopyTreeClient,
 } from "./workspace-client/index.js";
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
+import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type {
   WorkspaceClientConfig,
   WorktreeSnapshot,
@@ -279,10 +280,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   updateMonitorConfig(config: MonitorConfig): void {
-    for (const entry of this.pool.entries.values()) {
-      const requestId = entry.host.generateRequestId();
-      entry.host.send({ type: "update-monitor-config", requestId, config });
-    }
+    this.pool.updateMonitorConfig(config);
   }
 
   pauseProject(projectPath: string): void {
@@ -344,6 +342,12 @@ export class WorkspaceClient extends EventEmitter {
 
   relayFetchThrottle(multiplier: number): void {
     this.pool.relayFetchThrottle(multiplier);
+  }
+
+  // ── Forge provider matchers ──
+
+  relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.pool.relayForgeProviderMatchers(matchers);
   }
 
   // ── State queries ──
@@ -558,7 +562,12 @@ export class WorkspaceClient extends EventEmitter {
     throw lastError ?? new Error(`Worktree not found: ${worktreeId}`);
   }
 
-  async getFileDiff(cwd: string, filePath: string, status: string): Promise<string> {
+  async getFileDiff(
+    cwd: string,
+    filePath: string,
+    status: string,
+    ignoreWhitespace?: boolean
+  ): Promise<string> {
     const host = this.pool.resolveHostForPath(cwd);
     if (!host) throw new Error("No workspace host for path");
     const requestId = host.generateRequestId();
@@ -568,6 +577,7 @@ export class WorkspaceClient extends EventEmitter {
       cwd,
       filePath,
       status,
+      ignoreWhitespace,
     });
     return result.diff;
   }

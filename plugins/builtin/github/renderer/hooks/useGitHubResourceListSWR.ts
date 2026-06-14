@@ -14,13 +14,19 @@ import {
   setCache,
   nextGeneration,
   getGeneration,
-} from "@/lib/githubResourceCache";
-import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
-import { githubClient } from "@/clients/githubClient";
-import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+  type ForgeResourceCacheEntry,
+} from "@/lib/forgeResourceCache";
+import { isRateLimitError, isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
+import { forgeClient } from "@/clients/forgeClient";
+import {
+  useForgeProviderHealthStore,
+  DEFAULT_PROVIDER_HEALTH,
+} from "@/store/forgeProviderHealthStore";
+import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
-import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
+import type { Issue, ListOptions, PR } from "@shared/types/forge";
+import type { GitHubSortOrder } from "../../shared/types.js";
 import { parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -28,6 +34,60 @@ type StateFilter = string;
 
 const FETCH_MAX_ATTEMPTS = 3;
 const FETCH_RETRY_DELAYS_MS = [500, 1500];
+
+// Open-time fetch policy windows (quota guards, #10122 family).
+//
+// FRESH_REVALIDATE_SKIP_MS: an entry whose `freshBypassAt` is this recent was
+// just fetched from GitHub with `bypassCache: true` (hover prefetch landing
+// right before the click is the canonical case) — firing the usual mount-time
+// bypass revalidate would be a second GraphQL query for the same data within
+// seconds. Mirrors the toolbar's PREFETCH_FRESHNESS_MS so hover→click costs
+// one query, not two. Only `freshBypassAt` qualifies; `timestamp` alone can
+// describe broadcast-seeded snapshot content.
+const FRESH_REVALIDATE_SKIP_MS = 10_000;
+
+/**
+ * Open-time fetch policy for warm-cache hydrations in the mount effect. Never
+ * consulted by manual refresh, focus, or wake revalidation — those keep their
+ * unconditional `bypassCache: true`.
+ *
+ * - `"skip"`: the entry was written by a real bypass fetch (hover prefetch /
+ *   bypass revalidate) under FRESH_REVALIDATE_SKIP_MS ago — refetching now
+ *   would double-spend GraphQL on data that just left GitHub.
+ * - `"cached"`: issues-only downgrade. The cheap REST count poll fingerprints
+ *   open-issue counts; while the entry's `countAtWrite` matches every fresh
+ *   poll (no `stale` mark), the revalidate may honor the backend's 60s list
+ *   cache. Issues only: PR rows render CI rollup state, and check-run flips
+ *   never surface in the `/events` feed or the counts, so the PR list keeps
+ *   its unconditional bypass. Count equality can also miss same-count row
+ *   churn (close one, open one) — the 45s renderer TTL and the backend's 60s
+ *   TTL bound that staleness, and manual/focus/wake bypass stays the escape
+ *   hatch.
+ * - `"bypass"`: today's behavior (fresh GraphQL).
+ */
+function planWarmRevalidate(
+  cached: ForgeResourceCacheEntry,
+  type: "issue" | "pr",
+  filterState: string,
+  hasSearch: boolean
+): "skip" | "cached" | "bypass" {
+  if (hasSearch) return "bypass";
+  // Stale wins over everything: a count delta can land between a hover
+  // prefetch and the click, marking the just-prefetched entry stale — the
+  // fresh `freshBypassAt` must not let a provably-diverged page skip its
+  // revalidate.
+  if (cached.stale) return "bypass";
+  if (
+    cached.freshBypassAt != null &&
+    Date.now() - cached.freshBypassAt < FRESH_REVALIDATE_SKIP_MS
+  ) {
+    return "skip";
+  }
+  if (type === "issue" && filterState === "open" && cached.countAtWrite != null) {
+    return "cached";
+  }
+  return "bypass";
+}
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -59,7 +119,7 @@ interface UseGitHubResourceListSWRParams {
 }
 
 export interface UseGitHubResourceListSWRReturn {
-  data: (GitHubIssue | GitHubPR)[];
+  data: (Issue | PR)[];
   debouncedSearch: string;
   numberQuery: ReturnType<typeof parseNumberQuery>;
   hasMore: boolean;
@@ -96,9 +156,9 @@ export function useGitHubResourceListSWR({
   );
   const cachedEntry = useMemo(() => getCache(cacheKey), [cacheKey]);
 
-  const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>(() => cachedEntry?.items ?? []);
-  const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.endCursor ?? null);
-  const [hasMore, setHasMore] = useState(() => cachedEntry?.hasNextPage ?? false);
+  const [data, setData] = useState<(Issue | PR)[]>(() => cachedEntry?.items ?? []);
+  const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.nextCursor ?? null);
+  const [hasMore, setHasMore] = useState(() => cachedEntry?.hasMore ?? false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   // Tracks any in-flight background revalidate (manual refresh button,
@@ -152,11 +212,16 @@ export function useGitHubResourceListSWR({
   // so we read directly here and mirror into a ref for `fetchData` (same
   // rationale as `githubConfigRef` — adding `rateLimitBlocked` to fetchData's
   // deps would recreate the callback on every rate-limit flip and reflash
-  // the skeleton). `recentlyHitRateLimit` covers the brief race window where
+  // the skeleton). The plugin reads its own provider slice from the keyed
+  // health store. `recentlyHitRateLimit` covers the brief race window where
   // a fetch fires just before the store-push lands: the catch path sets it,
   // a successful fetch clears it. `isRateLimited` is the OR.
-  const rateLimitBlocked = useGitHubRateLimitStore((s) => s.blocked);
-  const rateLimitResetAt = useGitHubRateLimitStore((s) => s.resetAt);
+  const rateLimitBlocked = useForgeProviderHealthStore(
+    (s) => (s.providers[BUILTIN_GITHUB_PROVIDER_ID] ?? DEFAULT_PROVIDER_HEALTH).rateLimitBlocked
+  );
+  const rateLimitResetAt = useForgeProviderHealthStore(
+    (s) => (s.providers[BUILTIN_GITHUB_PROVIDER_ID] ?? DEFAULT_PROVIDER_HEALTH).rateLimitResetAt
+  );
   const rateLimitBlockedRef = useRef(rateLimitBlocked);
   useEffect(() => {
     rateLimitBlockedRef.current = rateLimitBlocked;
@@ -178,7 +243,20 @@ export function useGitHubResourceListSWR({
       currentCursor: string | null | undefined,
       append: boolean = false,
       abortSignal?: AbortSignal,
-      options?: { revalidating?: boolean; generation?: number; cacheKey?: string }
+      options?: {
+        revalidating?: boolean;
+        generation?: number;
+        cacheKey?: string;
+        /**
+         * Override the revalidate default of `bypassCache: true`. Set to
+         * `false` by the mount effect's downgraded path when the count signal
+         * says the cached page is still consistent — the request then honors
+         * the backend's 60s list cache instead of forcing fresh GraphQL.
+         * Manual refresh, focus, and wake revalidation never pass this, so
+         * they keep their unconditional bypass.
+         */
+        bypass?: boolean;
+      }
     ) => {
       if (!projectPath) return;
       // Skip the fetch entirely when no token is configured. The render path
@@ -225,32 +303,32 @@ export function useGitHubResourceListSWR({
       try {
         const searchOverride =
           numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
-        const fetchOptions = {
-          cwd: projectPath,
+        // Append (load-more) always wants the next page from network.
+        // SWR revalidates default to bypassing the backend cache — that's
+        // the point of a revalidate — unless the mount effect downgraded
+        // this one via `options.bypass: false` (count signal says the
+        // cached page is still consistent). Cold-mount fetches (no cache,
+        // no revalidating flag) honor the backend's 60s in-memory cache
+        // instead of bypassing — same data either way, but the cached path
+        // returns synchronously and avoids the click-time round-trip the
+        // user sees as "reload".
+        const usedBypass = append ? false : (options?.bypass ?? isRevalidate);
+        // `merged` is a GitHub-supported PR state the provider accepts beyond
+        // the contract's documented set — pass it through with a cast.
+        const fetchOptions: ListOptions = {
           search: searchOverride || debouncedSearch || undefined,
-          state: filterState as "open" | "closed" | "merged" | "all",
+          state: filterState as ListOptions["state"],
           cursor: currentCursor || undefined,
-          // Append (load-more) always wants the next page from network.
-          // SWR revalidates also bypass cache — that's the whole point of
-          // a revalidate. Cold-mount fetches (no cache, no revalidating
-          // flag) honor the backend's 60s in-memory cache instead of
-          // bypassing — same data either way, but the cached path returns
-          // synchronously and avoids the click-time round-trip the user
-          // sees as "reload".
-          bypassCache: append ? false : isRevalidate ? true : false,
-          sortOrder,
+          bypassCache: usedBypass,
+          sort: sortOrder,
         };
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
             const result =
               type === "issue"
-                ? await githubClient.listIssues(
-                    fetchOptions as Parameters<typeof githubClient.listIssues>[0]
-                  )
-                : await githubClient.listPullRequests(
-                    fetchOptions as Parameters<typeof githubClient.listPullRequests>[0]
-                  );
+                ? await forgeClient.listIssues(projectPath, fetchOptions)
+                : await forgeClient.listPRs(projectPath, fetchOptions);
 
             // Check if aborted before updating state
             if (abortSignal?.aborted) return;
@@ -267,8 +345,8 @@ export function useGitHubResourceListSWR({
               setData(result.items);
               setError(null);
             }
-            setCursor(result.pageInfo.endCursor);
-            setHasMore(result.pageInfo.hasNextPage);
+            setCursor(result.nextCursor);
+            setHasMore(result.hasMore);
             // Successful response clears the sticky catch-path flag. The
             // store-driven `rateLimitBlocked` continues to gate the UI.
             setRecentlyHitRateLimit(false);
@@ -278,9 +356,19 @@ export function useGitHubResourceListSWR({
               const now = Date.now();
               setCache(options.cacheKey, {
                 items: result.items,
-                endCursor: result.pageInfo.endCursor,
-                hasNextPage: result.pageInfo.hasNextPage,
+                nextCursor: result.nextCursor,
+                hasMore: result.hasMore,
                 timestamp: now,
+                // `freshBypassAt` only when this request actually skipped the
+                // backend cache — a downgraded/cold fetch may have been served
+                // a cached page, which must not arm the skip-revalidate gate.
+                ...(usedBypass ? { freshBypassAt: now } : {}),
+                // Open-count fingerprint for the count-as-cache-buster: only
+                // the open filter tracks a polled count, so other states stay
+                // un-fingerprinted (and therefore never downgrade).
+                ...(filterState === "open" && result.totalCount != null
+                  ? { countAtWrite: result.totalCount }
+                  : {}),
               });
               setLastUpdatedAt(now);
               // Bind the toolbar count badge to the authoritative server total
@@ -309,19 +397,19 @@ export function useGitHubResourceListSWR({
               if (filterState === "open") {
                 onCountUpdate?.(
                   result.totalCount ?? result.items.length,
-                  result.totalCount == null ? result.pageInfo.hasNextPage : false
+                  result.totalCount == null ? result.hasMore : false
                 );
               }
               // Notify parent (toolbar count badge) that fresh first-page data
-              // landed. Gated on `isRevalidate` so it fires only when
-              // `bypassCache: true` was sent — the main process's
+              // landed. Gated on the request actually having sent
+              // `bypassCache: true` — the main process's
               // `updateRepoStatsCount` runs on the GraphQL path that follows a
               // bypass, so the toolbar's `refresh()` call is guaranteed to see
-              // an updated `repoStatsCache` entry. Cold-mount fetches
-              // (`bypassCache: false`) may hit the main-process cache and
-              // skip the count update entirely; firing onFreshFetch there
-              // would be a wasted IPC round-trip.
-              if (isRevalidate) {
+              // an updated `repoStatsCache` entry. Cold-mount and downgraded
+              // revalidate fetches (`bypassCache: false`) may hit the
+              // main-process cache and skip the count update entirely; firing
+              // onFreshFetch there would be a wasted IPC round-trip.
+              if (usedBypass) {
                 onFreshFetch?.();
               }
             }
@@ -443,16 +531,28 @@ export function useGitHubResourceListSWR({
         // the previously-shown rows must clear on Activity reveal instead
         // of lingering until the revalidate resolves.
         setData(cached.items);
-        setCursor(cached.endCursor);
-        setHasMore(cached.hasNextPage);
+        setCursor(cached.nextCursor);
+        setHasMore(cached.hasMore);
         setLastUpdatedAt(cached.timestamp);
         setError(null);
         setExactNumberNotFound(null);
-        fetchData(null, false, abortController.signal, {
-          revalidating: true,
-          generation: gen,
-          cacheKey,
-        });
+        const plan = planWarmRevalidate(cached, type, filterState, debouncedSearch !== "");
+        if (plan === "skip") {
+          // No fetch will run its `finally` cleanup — clear the activity
+          // flags here. An Activity hide aborts an in-flight revalidate,
+          // whose aborted `finally` deliberately skips `setRefreshing(false)`;
+          // without this, a skip on reveal would leave the header spinner
+          // stuck forever.
+          setLoading(false);
+          setRefreshing(false);
+        } else {
+          fetchData(null, false, abortController.signal, {
+            revalidating: true,
+            generation: gen,
+            cacheKey,
+            ...(plan === "cached" ? { bypass: false } : {}),
+          });
+        }
         lastLoadedEffectKeyRef.current = effectKey;
         return () => abortController.abort();
       }
@@ -490,16 +590,23 @@ export function useGitHubResourceListSWR({
         // warm slot doesn't render the skeleton via `loading && !data.length`.
         setLoading(false);
         setData(targetCached.items);
-        setCursor(targetCached.endCursor);
-        setHasMore(targetCached.hasNextPage);
+        setCursor(targetCached.nextCursor);
+        setHasMore(targetCached.hasMore);
         setLastUpdatedAt(targetCached.timestamp);
         setExactNumberNotFound(null);
         setError(null);
-        fetchData(null, false, abortController.signal, {
-          revalidating: true,
-          generation: gen,
-          cacheKey,
-        });
+        const plan = planWarmRevalidate(targetCached, type, filterState, false);
+        if (plan === "skip") {
+          // Same activity-flag cleanup as the mount/reveal skip above.
+          setRefreshing(false);
+        } else {
+          fetchData(null, false, abortController.signal, {
+            revalidating: true,
+            generation: gen,
+            cacheKey,
+            ...(plan === "cached" ? { bypass: false } : {}),
+          });
+        }
         lastLoadedEffectKeyRef.current = effectKey;
         return () => abortController.abort();
       }
@@ -634,16 +741,15 @@ export function useGitHubResourceListSWR({
 
     const getByNumber = (num: number) =>
       type === "issue"
-        ? githubClient.getIssueByNumber(projectPath, num)
-        : githubClient.getPRByNumber(projectPath, num);
+        ? forgeClient.getIssue(projectPath, num)
+        : forgeClient.getPR(projectPath, num);
 
     const getByNumbers = (numbers: number[]) =>
       type === "issue"
-        ? githubClient.getIssuesByNumbers(projectPath, numbers)
-        : githubClient.getPRsByNumbers(projectPath, numbers);
+        ? forgeClient.getIssuesByNumbers(projectPath, numbers)
+        : forgeClient.getPRsByNumbers(projectPath, numbers);
 
-    const matchesFilter = (item: GitHubIssue | GitHubPR) =>
-      filterState === "all" || item.state.toLowerCase() === filterState;
+    const matchesFilter = (item: Issue | PR) => filterState === "all" || item.state === filterState;
 
     const runNumericAttempt = async () => {
       switch (numberQuery.kind) {
@@ -684,25 +790,20 @@ export function useGitHubResourceListSWR({
         }
 
         case "open-ended": {
-          const options = {
-            cwd: projectPath,
+          const options: ListOptions = {
             search: `number:>=${numberQuery.from}`,
-            state: filterState as "open" | "closed" | "merged" | "all",
+            state: filterState as ListOptions["state"],
             bypassCache: true,
-            sortOrder: "created" as const,
+            sort: "created",
           };
           const result =
             type === "issue"
-              ? await githubClient.listIssues(
-                  options as Parameters<typeof githubClient.listIssues>[0]
-                )
-              : await githubClient.listPullRequests(
-                  options as Parameters<typeof githubClient.listPullRequests>[0]
-                );
+              ? await forgeClient.listIssues(projectPath, options)
+              : await forgeClient.listPRs(projectPath, options);
           if (abortController.signal.aborted) return;
           setData(result.items);
-          setCursor(result.pageInfo.endCursor);
-          setHasMore(result.pageInfo.hasNextPage);
+          setCursor(result.nextCursor);
+          setHasMore(result.hasMore);
           break;
         }
       }

@@ -9,15 +9,16 @@ import type {
   WorkspaceHostRequest,
   WorkspaceHostEvent,
   WorkspaceClientConfig,
+  MonitorConfig,
 } from "../../shared/types/workspace-host.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { GitHubAuth } from "./github/GitHubAuth.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
 import { createLogger } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds.js";
+import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
+import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -96,6 +97,21 @@ export class WorkspaceHostProcess extends EventEmitter {
    * every `ready` (initial + restarts) so a host restart doesn't silently
    * revert monitor fetch cadence to the unthrottled default. */
   private fetchThrottleMultiplierCache = 1;
+
+  /** Last forge provider-matcher table relayed from main. Replayed on every
+   * `ready` (initial + restarts) so a restarted host can still resolve remote
+   * URLs to provider ids. `null` until the first relay — nothing is pushed
+   * before the registry has reported, keeping monitors at their unmatched
+   * initial state. */
+  private forgeProviderMatchersCache: ForgeProviderMatcher[] | null = null;
+
+  /** Accumulated monitor config (poll/fetch intervals, watcher cap) relayed
+   * from main. Merged per-field because callers push partial configs (the
+   * focus throttle sends poll intervals only; the resource profile adds fetch
+   * cadence and watcher cap). Replayed on every `ready` so a host restart
+   * doesn't silently revert to the in-host balanced defaults. `null` until
+   * the first push. */
+  private monitorConfigCache: MonitorConfig | null = null;
 
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
@@ -240,10 +256,50 @@ export class WorkspaceHostProcess extends EventEmitter {
    * Update the cached fetch-throttle multiplier and push immediately if
    * initialized. On restart, `ready` replays the cached value automatically.
    */
+  private async relayForgeCredentialsFromRegistry(): Promise<void> {
+    for (const [providerId, impl] of getForgeProviderImplEntries()) {
+      try {
+        const credentials = await impl.getCredentials();
+        if (!credentials) continue;
+        if (this.isDisposed || !this.isInitialized) return;
+        this.send({ type: "update-forge-credentials", providerId, credentials });
+      } catch {
+        // A provider that cannot produce credentials must not block the
+        // replay of the remaining providers (or the ready handling).
+      }
+    }
+  }
+
   relayFetchThrottle(multiplier: number): void {
     this.fetchThrottleMultiplierCache = multiplier;
     if (this.isInitialized && this.child) {
       this.send({ type: "apply-fetch-throttle", multiplier: this.fetchThrottleMultiplierCache });
+    }
+  }
+
+  /**
+   * Merge the partial config into the cache and push immediately if
+   * initialized. On restart, `ready` replays the merged cache automatically.
+   */
+  updateMonitorConfig(config: MonitorConfig): void {
+    this.monitorConfigCache = { ...this.monitorConfigCache, ...config };
+    if (this.isInitialized && this.child) {
+      this.send({
+        type: "update-monitor-config",
+        requestId: this.generateRequestId(),
+        config,
+      });
+    }
+  }
+
+  /**
+   * Update the cached forge provider-matcher table and push immediately if
+   * initialized. On restart, `ready` replays the cached table automatically.
+   */
+  relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
+    this.forgeProviderMatchersCache = matchers;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "forge-provider-matchers", matchers: this.forgeProviderMatchersCache });
     }
   }
 
@@ -540,7 +596,11 @@ export class WorkspaceHostProcess extends EventEmitter {
         cwd: os.homedir(),
         // Redirect v8.setHeapSnapshotNearHeapLimit dumps (set in
         // workspace-host.ts) into the app's logs directory.
-        execArgv: [`--diagnostic-dir=${app.getPath("logs")}`, "--report-exclude-env"],
+        execArgv: [
+          "--max-old-space-size=256",
+          `--diagnostic-dir=${app.getPath("logs")}`,
+          "--report-exclude-env",
+        ],
         env: {
           ...(process.env as Record<string, string>),
           DAINTREE_USER_DATA: app.getPath("userData"),
@@ -781,14 +841,11 @@ export class WorkspaceHostProcess extends EventEmitter {
         // `exit` handler. This is the fix for #8553 (preserved) and #8683
         // (no proactive reset timer).
 
-        const token = GitHubAuth.getToken();
-        if (token) {
-          this.send({
-            type: "update-forge-credentials",
-            providerId: BUILTIN_GITHUB_PROVIDER_ID,
-            credentials: { kind: "bearer" as const, value: token },
-          });
-        }
+        // Replay every registered provider's credentials into the (re)started
+        // host. Pulled from the forge registry so this stays provider-neutral;
+        // hosts that become ready before a provider plugin activates are
+        // covered by the plugin's activation-time credential push.
+        void this.relayForgeCredentialsFromRegistry();
 
         // Replay cached log-level overrides on every ready (initial + restarts).
         this.send({ type: "set-log-level-overrides", overrides: this.logLevelOverridesCache });
@@ -800,6 +857,26 @@ export class WorkspaceHostProcess extends EventEmitter {
           type: "apply-fetch-throttle",
           multiplier: this.fetchThrottleMultiplierCache,
         });
+
+        // Replay the cached provider-matcher table so a restarted host can
+        // resolve remote URLs without waiting for the next registry change.
+        if (this.forgeProviderMatchersCache !== null) {
+          this.send({
+            type: "forge-provider-matchers",
+            matchers: this.forgeProviderMatchersCache,
+          });
+        }
+
+        // Replay the merged monitor config so a restarted host doesn't run
+        // the in-host balanced defaults until the next profile transition or
+        // focus event.
+        if (this.monitorConfigCache !== null) {
+          this.send({
+            type: "update-monitor-config",
+            requestId: this.generateRequestId(),
+            config: this.monitorConfigCache,
+          });
+        }
 
         if (this.readyResolve) {
           this.readyResolve();

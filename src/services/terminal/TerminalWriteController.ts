@@ -2,10 +2,6 @@ import type { ManagedTerminal } from "./types";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
-// Reused across writes — TextEncoder holds no state between encode() calls, so
-// a single module-level instance avoids re-allocating one per write.
-const utf8Encoder = new TextEncoder();
-
 /**
  * UTF-8 byte length of a string chunk — the unit the pty-host's IPC
  * flow-control ledger is denominated in (the host charges
@@ -14,14 +10,40 @@ const utf8Encoder = new TextEncoder();
  * under-reports every non-ASCII char — box-drawing/CJK are 3 UTF-8 bytes vs 1
  * code unit, emoji are 4 vs 2 — so the host queue drifts toward its high
  * watermark and triggers spurious backpressure pauses (#9893).
+ *
+ * Counted without TextEncoder.encode(): encoding allocates a throwaway
+ * Uint8Array up to ~3x the chunk length per write on the hot path. Matches
+ * Buffer.byteLength/TextEncoder semantics exactly — lone surrogates count as
+ * 3 bytes (U+FFFD), valid pairs as 4.
  */
 function utf8ByteLength(data: string): number {
-  return utf8Encoder.encode(data).byteLength;
+  let bytes = 0;
+  for (let i = 0; i < data.length; i++) {
+    const code = data.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      i + 1 < data.length &&
+      (data.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+    ) {
+      bytes += 4;
+      i++;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 export interface WriteControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
-  acknowledgePortData: (id: string, bytes: number) => void;
+  // chunkCount: how many host-sent chunks this write coalesced — each maps to
+  // one pending port-ack FIFO entry, so the ack must settle all of them.
+  acknowledgePortData: (id: string, bytes: number, chunkCount: number) => void;
   acknowledgeData: (id: string, bytes: number) => void;
   notifyWriteComplete: (id: string, bytes: number) => void;
   incrementUnseen: (id: string, isScrolledBack: boolean) => void;
@@ -47,18 +69,53 @@ export interface WriteControllerDeps {
 export class TerminalWriteController {
   private deps: WriteControllerDeps;
   private perfWriteSampleCounter = 0;
+  // Activity-marker refresh is rAF-coalesced: each xterm marker registration
+  // allocates a Marker plus four buffer emitter subscriptions and each dispose
+  // unhooks them, so doing it per write callback churns hundreds of
+  // alloc/dispose pairs per second under streaming output. The only consumer
+  // (user-invoked scrollToLastActivity) needs at most one fresh position per
+  // frame and already falls back to scrollToBottom on a disposed marker.
+  private pendingMarkerRefresh = new Map<string, ManagedTerminal>();
+  private markerRefreshScheduled = false;
 
   constructor(deps: WriteControllerDeps) {
     this.deps = deps;
   }
 
-  write(id: string, data: string | Uint8Array): void {
+  private scheduleActivityMarkerRefresh(id: string, managed: ManagedTerminal): void {
+    this.pendingMarkerRefresh.set(id, managed);
+    if (this.markerRefreshScheduled) return;
+    if (typeof requestAnimationFrame !== "function") {
+      this.flushActivityMarkers();
+      return;
+    }
+    this.markerRefreshScheduled = true;
+    requestAnimationFrame(() => {
+      this.markerRefreshScheduled = false;
+      this.flushActivityMarkers();
+    });
+  }
+
+  private flushActivityMarkers(): void {
+    const entries = [...this.pendingMarkerRefresh];
+    this.pendingMarkerRefresh.clear();
+    for (const [id, managed] of entries) {
+      // Same stale-identity guard as the write callback (#4850): the instance
+      // can be replaced/destroyed between scheduling and the frame.
+      if (this.deps.getInstance(id) !== managed) continue;
+      if (managed.isHibernated || managed.isAltBuffer) continue;
+      managed.lastActivityMarker?.dispose();
+      managed.lastActivityMarker = managed.terminal.registerMarker(0);
+    }
+  }
+
+  write(id: string, data: string | Uint8Array, chunkCount = 1): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
     if (managed.isHibernated) {
       const bytes = typeof data === "string" ? data.length : data.byteLength;
-      this.deps.acknowledgePortData(id, bytes);
+      this.deps.acknowledgePortData(id, bytes, chunkCount);
       // Hibernated output is dropped, never replayed — IPC-delivered chunks
       // (always strings) were charged to the host's IPC ledger, so ack them
       // here in UTF-8 bytes or the ledger leaks into permanent backpressure.
@@ -72,7 +129,7 @@ export class TerminalWriteController {
     if (managed.isSerializedRestoreInProgress) {
       managed.deferredOutput.push(data);
       const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
-      this.deps.acknowledgePortData(id, deferredBytes);
+      this.deps.acknowledgePortData(id, deferredBytes, chunkCount);
       this.deps.notifyWriteComplete(id, deferredBytes);
       return;
     }
@@ -132,7 +189,7 @@ export class TerminalWriteController {
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
       managed.lastWriteAt = Date.now();
 
-      this.deps.acknowledgePortData(id, renderedBytes);
+      this.deps.acknowledgePortData(id, renderedBytes, chunkCount);
       if (ackBytes !== null) {
         this.deps.acknowledgeData(id, ackBytes);
       }
@@ -154,8 +211,7 @@ export class TerminalWriteController {
       }
 
       if (!managed.isAltBuffer) {
-        managed.lastActivityMarker?.dispose();
-        managed.lastActivityMarker = terminal.registerMarker(0);
+        this.scheduleActivityMarkerRefresh(id, managed);
       }
     });
   }

@@ -73,9 +73,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     const { result } = renderHook(() =>
       useForgeResourceListSWR({
         cwd: "/repo",
-        providerId: "acme.gitea",
-        owner: "acme",
-        repo: "widgets",
         type: "issue",
         filterState: "open",
         sortOrder: "created",
@@ -101,9 +98,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     const { result } = renderHook(() =>
       useForgeResourceListSWR({
         cwd: "/repo",
-        providerId: "acme.gitea",
-        owner: "acme",
-        repo: "widgets",
         type: "pr",
         filterState: "open",
         sortOrder: "created",
@@ -123,9 +117,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     const { result } = renderHook(() =>
       useForgeResourceListSWR({
         cwd: "/repo",
-        providerId: "acme.gitea",
-        owner: "acme",
-        repo: "widgets",
         type: "issue",
         filterState: "open",
         sortOrder: "created",
@@ -147,9 +138,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
 
     const params = {
       cwd: "/repo",
-      providerId: "acme.gitea",
-      owner: "acme",
-      repo: "widgets",
       type: "issue" as const,
       filterState: "open",
       sortOrder: "created",
@@ -177,9 +165,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     const { result, rerender } = renderHook((props) => useForgeResourceListSWR(props), {
       initialProps: {
         cwd: "/repo-a",
-        providerId: "acme.gitea",
-        owner: "acme",
-        repo: "alpha",
         type: "issue" as const,
         filterState: "open",
         sortOrder: "created",
@@ -193,9 +178,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     listIssues.mockRejectedValueOnce(new Error("nope"));
     rerender({
       cwd: "/repo-b",
-      providerId: "acme.gitea",
-      owner: "acme",
-      repo: "beta",
       type: "issue" as const,
       filterState: "open",
       sortOrder: "created",
@@ -219,9 +201,6 @@ describe("useForgeResourceListSWR (fake provider, no GitHub IPC)", () => {
     const { result } = renderHook(() =>
       useForgeResourceListSWR({
         cwd: "/repo",
-        providerId: "acme.gitea",
-        owner: "acme",
-        repo: "widgets",
         type: "issue",
         filterState: "open",
         sortOrder: "created",

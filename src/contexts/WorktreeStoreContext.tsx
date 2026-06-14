@@ -6,16 +6,19 @@ import {
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
-import type { GitHubPR, GitHubPRCIStatus } from "@shared/types/github";
+import type { CIStatusState, PR } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
-import { wakeActiveWorktreeTerminals } from "@/store/wakeActiveWorktreeTerminals";
+import {
+  repaintActiveWorktreeTerminals,
+  wakeActiveWorktreeTerminals,
+} from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
-import { mutateCacheEntries } from "@/lib/githubResourceCache";
+import { mutateCacheEntries } from "@/lib/forgeResourceCache";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -47,7 +50,7 @@ interface PRDetectedEvent {
   prNumber: number;
   prUrl: string;
   prState: "open" | "merged" | "closed";
-  prCiStatus?: GitHubPRCIStatus;
+  prCiStatus?: CIStatusState;
   prTitle?: string;
   issueNumber?: number;
   issueTitle?: string;
@@ -164,7 +167,8 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     }
 
     function fetchInitialState() {
-      const thisGen = ++generation;
+      generation += 1;
+      const thisGen = generation;
       // Only show loading spinner on cold start (no cached data).
       // Wake refreshes should be silent — users see existing cached data.
       const isWake = store.getState().isInitialized;
@@ -186,6 +190,15 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           /* non-critical — next pr-detection-state push corrects it */
         });
 
+      // Manual issue associations live in the electron store, not the
+      // workspace host — fetch them concurrently with the `get-all-states`
+      // round-trip instead of serializing behind it. The `.catch` at creation
+      // is load-bearing twice over: it preserves the #8079 "undefined = keep
+      // cached associations" failure semantics, and it prevents an unhandled
+      // rejection when the handler below returns early (generation/isReady
+      // guards) and never awaits the promise.
+      const associationsPromise = worktreeClient.getAllIssueAssociations().catch(() => undefined);
+
       worktreePort
         .request("get-all-states")
         .then(
@@ -205,9 +218,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
 
             // Hydrate the persistent watcher-degraded indicator from the
             // handshake so a late-mounting view reflects current state without
-            // waiting for a live event. Set before the async associations fetch
-            // so a degradation/recovery event delivered during that await wins
-            // over this now-stale snapshot value.
+            // waiting for a live event. Set before the associations await so a
+            // degradation/recovery event delivered during that await wins over
+            // this now-stale snapshot value.
             store.getState().setWatcherDegraded(response.watcherDegraded ?? false);
             // Hydrate the parallel topology-watcher-dark indicator the same way
             // (#9908), before the await, for the same race reason. A view that
@@ -244,16 +257,8 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // cached". An empty object means "authoritatively no associations".
             // Defaulting to `{}` on failure would wipe cached manual
             // associations on a transient IPC error (#8079 review).
-            let associations:
-              | Record<string, { issueNumber: number; issueTitle?: string }>
-              | undefined;
-            try {
-              associations = await worktreeClient.getAllIssueAssociations();
-              if (thisGen !== generation) return;
-            } catch {
-              // Non-critical — keep cached associations (associations stays undefined)
-              if (thisGen !== generation) return;
-            }
+            const associations = await associationsPromise;
+            if (thisGen !== generation) return;
 
             // If the host crashed during the associations fetch (a separate IPC
             // that port-close cannot reject), skip applySnapshot so it does not
@@ -477,12 +482,22 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           overlayVersion(store.getState().version)
         );
 
-        // Sync the GitHub PR dropdown cache so the sidebar PRBadge and the
+        // Sync the PR dropdown cache so the sidebar PRBadge and the
         // dropdown row can't drift. Read the project path at event time —
         // capturing it in the effect closure would corrupt cache slots after
         // a project switch (#4670).
         const projectPath = useProjectStore.getState().currentProject?.path;
         if (!projectPath) return;
+        // The dropdown cache stores normalized forge rows whose ciStatus is
+        // the same CIStatusState vocabulary as the detection wire. Only the
+        // three render-bearing states are written; neutral/unknown collapse to
+        // undefined ("no checks") to match the row badge's vocabulary.
+        const cacheCiStatus: CIStatusState | undefined =
+          event.prCiStatus === "success" ||
+          event.prCiStatus === "failure" ||
+          event.prCiStatus === "pending"
+            ? event.prCiStatus
+            : undefined;
         mutateCacheEntries(projectPath, "pr", (entry, keyRemainder) => {
           // keyRemainder is `${filterState}:${sortOrder}`; filterState values
           // ("open" | "closed" | "merged" | "all") contain no colons. Unknown
@@ -495,7 +510,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           let changed = false;
           const items: (typeof entry.items)[number][] = [];
           for (const item of entry.items) {
-            const pr = item as GitHubPR;
+            const pr = item as PR;
             if (pr.number !== event.prNumber) {
               items.push(item);
               continue;
@@ -507,16 +522,16 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // stay ahead of the CI-only branch below: it sets changed=true on
             // removal even when ciStatus is unchanged, which is what triggers
             // the generation bump in mutateCacheEntries.
-            if (isFilteredSlot && pr.state && pr.state.toLowerCase() !== event.prState) {
+            if (isFilteredSlot && pr.state && pr.state !== event.prState) {
               changed = true;
               continue;
             }
-            if (pr.ciStatus === event.prCiStatus) {
+            if (pr.ciStatus === cacheCiStatus) {
               items.push(item);
               continue;
             }
             changed = true;
-            items.push({ ...pr, ciStatus: event.prCiStatus });
+            items.push({ ...pr, ciStatus: cacheCiStatus });
           }
           if (!changed) return null;
           return { ...entry, items };
@@ -676,19 +691,34 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // triggers redundant `get-all-states` fetches.
     // De-dupe guard: on warm reactivation Chromium fires the Page Lifecycle
     // `resume` event immediately before `visibilitychange` in the same turn
-    // (#9702). Coalesce both into a single wake fan-out via a microtask so a
-    // resume+visibilitychange pair doesn't run the fan-out twice.
+    // (#9702). Coalesce both into a single wake fan-out.
+    // Double-rAF, not a microtask: a microtask runs before the unfrozen
+    // renderer's first layout pass, so the wake's geometry reads and
+    // terminal.refresh() execute while xterm's IntersectionObserver hasn't
+    // re-fired and its render service is still paused — leaving agent
+    // terminals garbled until a click re-fits them (#10362). The first rAF
+    // fires before ResizeObserver/IntersectionObserver callbacks and paint;
+    // the second is post-paint with settled layout (same idiom as
+    // warmReactivationGate). Visibility is re-checked at execution time in
+    // case the view was re-hidden between scheduling and the second frame.
     let wakePending = false;
+    let wakeRafId: number | null = null;
     function scheduleWake() {
       if (wakePending) return;
       wakePending = true;
-      void Promise.resolve().then(() => {
-        wakePending = false;
-        if (document.visibilityState === "visible") {
-          void wakeActiveWorktreeTerminals();
-        }
+      wakeRafId = requestAnimationFrame(() => {
+        wakeRafId = requestAnimationFrame(() => {
+          wakeRafId = null;
+          wakePending = false;
+          if (document.visibilityState === "visible") {
+            void wakeActiveWorktreeTerminals();
+          }
+        });
       });
     }
+    cleanups.push(() => {
+      if (wakeRafId !== null) cancelAnimationFrame(wakeRafId);
+    });
 
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;
@@ -711,17 +741,52 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     document.addEventListener("resume", handleResume);
     cleanups.push(() => document.removeEventListener("resume", handleResume));
 
+    // Post-reveal repaint (#10362): the wake fan-out above runs on
+    // visibilitychange/resume — while this cached view is still occluded behind
+    // the warm anti-flash bridge (#9679), where Chromium culls the paint, so the
+    // redraw can fail to stick and agent terminals stay garbled until clicked.
+    // Main fires `app:view-revealed` once it detaches the bridge and focuses the
+    // now-foreground view; re-run the redraw then. Separate double-rAF gate from
+    // scheduleWake so a repaint can't be coalesced away by an in-flight wake (and
+    // vice versa); the repaint skips the byte-pull the wake already did.
+    let repaintPending = false;
+    let repaintRafId: number | null = null;
+    function scheduleRepaint() {
+      if (repaintPending) return;
+      repaintPending = true;
+      repaintRafId = requestAnimationFrame(() => {
+        repaintRafId = requestAnimationFrame(() => {
+          repaintRafId = null;
+          repaintPending = false;
+          if (document.visibilityState === "visible") {
+            void repaintActiveWorktreeTerminals();
+          }
+        });
+      });
+    }
+    cleanups.push(() => {
+      if (repaintRafId !== null) cancelAnimationFrame(repaintRafId);
+    });
+
+    const offViewRevealed = window.electron?.app?.onViewRevealed?.(() => {
+      if (document.visibilityState !== "visible") return;
+      scheduleRepaint();
+    });
+    if (offViewRevealed) cleanups.push(offViewRevealed);
+
     // Missed-event guard: if the view is already visible by the time this
     // listener installs (fast cached reactivation), the visibilitychange
     // event has already fired (#4935). Worktree state is fetched via the
     // worktreePort.isReady() / onReady paths above, so only the wake fan-out
-    // needs to run here.
+    // needs to run here. Route through scheduleWake (not a bare call) so it
+    // inherits the same double-rAF settle the visibilitychange/resume paths use
+    // and can't fire mid-frame before layout settles (#10362).
     if (document.visibilityState === "visible") {
-      void wakeActiveWorktreeTerminals();
+      scheduleWake();
     }
 
     return () => {
-      generation++;
+      generation += 1;
       for (const cleanup of cleanups) {
         cleanup();
       }

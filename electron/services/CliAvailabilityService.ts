@@ -1,5 +1,5 @@
 // eager-import-allow: reads the CLI-availability cache via store.get synchronously
-import { execFile, execFileSync } from "child_process";
+import { execFile } from "child_process";
 import { access, constants } from "fs/promises";
 import { delimiter, dirname, join, win32 as pathWin32 } from "path";
 import { homedir } from "os";
@@ -535,91 +535,89 @@ export class CliAvailabilityService {
     return { status: "missing" };
   }
 
-  private probeViaShell(command: string): Promise<ProbeResult> {
-    return new Promise((resolve) => {
-      setImmediate(() => {
-        const isWindows = process.platform === "win32";
-        const checkCmd = isWindows ? "where" : "which";
-        // `where.exe` already prints every PATH match. On Unix, request all
-        // matches via `which -a` to drive duplicate detection (#6054). When
-        // `-a` is rejected by a minimal `which` (e.g. older BusyBox), retry
-        // without the flag so duplicate detection degrades to a single-path
-        // lookup rather than reporting the agent as missing.
-        const runWhich = (
-          extraArgs: string[]
-        ): { ok: true; lines: string[] } | { ok: false; err: unknown } => {
-          try {
-            const buffer = execFileSync(checkCmd, [...extraArgs, command], {
-              stdio: ["ignore", "pipe", "ignore"],
-              timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
-            });
-            const output = buffer.toString("utf8").trim();
-            const lines = output
+  private async probeViaShell(command: string): Promise<ProbeResult> {
+    const isWindows = process.platform === "win32";
+    const checkCmd = isWindows ? "where" : "which";
+    // `where.exe` already prints every PATH match. On Unix, request all
+    // matches via `which -a` to drive duplicate detection (#6054). When
+    // `-a` is rejected by a minimal `which` (e.g. older BusyBox), retry
+    // without the flag so duplicate detection degrades to a single-path
+    // lookup rather than reporting the agent as missing.
+    const runWhich = (
+      extraArgs: string[]
+    ): Promise<{ ok: true; lines: string[] } | { ok: false; err: unknown }> =>
+      new Promise((resolve) => {
+        execFile(
+          checkCmd,
+          [...extraArgs, command],
+          {
+            timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
+            windowsHide: true,
+          },
+          (err, stdout) => {
+            if (err) {
+              resolve({ ok: false, err });
+              return;
+            }
+            const lines = String(stdout ?? "")
+              .trim()
               .split(/\r?\n/)
               .map((line) => line.trim())
               .filter(Boolean);
-            return { ok: true, lines };
-          } catch (err) {
-            return { ok: false, err };
+            resolve({ ok: true, lines });
           }
-        };
-
-        const classifyError = (err: unknown): ProbeResult | null => {
-          const code = (err as NodeJS.ErrnoException | undefined)?.code;
-          // EACCES / EPERM from which/where itself is rare — most endpoint
-          // security blocks surface on the spawn attempt. Still, when they
-          // do, the binary clearly exists on disk (otherwise we'd have
-          // ENOENT) so "blocked" is the correct classification.
-          if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
-            return {
-              status: "blocked",
-              reason: "security",
-              via: "which",
-              message: `${checkCmd} "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
-            };
-          }
-          return null;
-        };
-
-        const primary = runWhich(isWindows ? [] : ["-a"]);
-        if (primary.ok) {
-          if (primary.lines.length === 0) {
-            // Some shells exit 0 with empty stdout. Preserve the historical
-            // contract: fall back to the bare command so the binary is still
-            // launchable via PATH lookup at spawn time.
-            resolve({ status: "found", path: command, via: "which" });
-            return;
-          }
-          const allPaths = dedupePathsByDirectory(primary.lines, isWindows);
-          resolve({ status: "found", path: allPaths[0], via: "which", allPaths });
-          return;
-        }
-
-        // Non-zero exit. On Unix this can be BusyBox/minimal `which`
-        // rejecting `-a`; retry without the flag so a real install isn't
-        // misreported as missing. Skip for security errors so the blocked
-        // verdict surfaces directly.
-        const primaryBlocked = classifyError(primary.err);
-        if (primaryBlocked) {
-          resolve(primaryBlocked);
-          return;
-        }
-        if (!isWindows) {
-          const fallback = runWhich([]);
-          if (fallback.ok) {
-            const path = fallback.lines[0] ?? command;
-            resolve({ status: "found", path, via: "which" });
-            return;
-          }
-          const fallbackBlocked = classifyError(fallback.err);
-          if (fallbackBlocked) {
-            resolve(fallbackBlocked);
-            return;
-          }
-        }
-        resolve({ status: "missing" });
+        );
       });
-    });
+
+    const classifyError = (err: unknown): ProbeResult | null => {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      // EACCES / EPERM from which/where itself is rare — most endpoint
+      // security blocks surface on the spawn attempt. Still, when they
+      // do, the binary clearly exists on disk (otherwise we'd have
+      // ENOENT) so "blocked" is the correct classification.
+      if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
+        return {
+          status: "blocked",
+          reason: "security",
+          via: "which",
+          message: `${checkCmd} "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
+        };
+      }
+      return null;
+    };
+
+    const primary = await runWhich(isWindows ? [] : ["-a"]);
+    if (primary.ok) {
+      if (primary.lines.length === 0) {
+        // Some shells exit 0 with empty stdout. Preserve the historical
+        // contract: fall back to the bare command so the binary is still
+        // launchable via PATH lookup at spawn time.
+        return { status: "found", path: command, via: "which" };
+      }
+      const allPaths = dedupePathsByDirectory(primary.lines, isWindows);
+      return { status: "found", path: allPaths[0], via: "which", allPaths };
+    }
+
+    // Non-zero exit. On Unix this can be BusyBox/minimal `which`
+    // rejecting `-a`; retry without the flag so a real install isn't
+    // misreported as missing. Skip for security errors so the blocked
+    // verdict surfaces directly.
+    const primaryBlocked = classifyError(primary.err);
+    if (primaryBlocked) {
+      return primaryBlocked;
+    }
+    if (!isWindows) {
+      const fallback = await runWhich([]);
+      if (fallback.ok) {
+        const path = fallback.lines[0] ?? command;
+        return { status: "found", path, via: "which" };
+      }
+      const fallbackBlocked = classifyError(fallback.err);
+      if (fallbackBlocked) {
+        return fallbackBlocked;
+      }
+    }
+    return { status: "missing" };
   }
 
   private async probeNativePaths(paths: string[]): Promise<ProbeResult> {

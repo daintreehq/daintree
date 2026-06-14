@@ -26,6 +26,7 @@ export const config: AgentConfig = {
   assistantMinVersion: "1.0.40",
   tooltip: "GitHub's AI coding agent",
   usageUrl: "https://github.com/features/copilot",
+  externalLinks: [{ label: "Billing settings", url: "https://github.com/settings/billing" }],
   contextWindow: 160_000,
   models: [
     { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", shortLabel: "Sonnet 4.6" },

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 vi.mock("@/clients", () => ({
@@ -228,9 +228,21 @@ describe("TerminalInstanceService - scrollToLastActivity", () => {
 
 describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
   let service: LastActivityTestService;
+  let rafCallbacks: FrameRequestCallback[];
+
+  const flushFrame = () => {
+    const cbs = rafCallbacks;
+    rafCallbacks = [];
+    for (const cb of cbs) cb(0);
+  };
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    rafCallbacks = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb);
+      return rafCallbacks.length;
+    });
 
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
@@ -239,7 +251,11 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
     service.instances.clear();
   });
 
-  it("disposes previous marker and replaces it with a new one", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("disposes previous marker and replaces it with a new one on the next frame", () => {
     const oldMarker = makeMockMarker();
     const newMarker = makeMockMarker({ line: 200 });
 
@@ -254,6 +270,7 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
       "t1",
       "test"
     );
+    flushFrame();
 
     expect(oldMarker.dispose).toHaveBeenCalled();
     expect(managed.terminal.registerMarker).toHaveBeenCalledWith(0);
@@ -274,6 +291,7 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
       "t1",
       "test"
     );
+    flushFrame();
 
     expect(marker.dispose).not.toHaveBeenCalled();
     expect(managed.terminal.registerMarker).not.toHaveBeenCalled();

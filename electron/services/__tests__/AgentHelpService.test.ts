@@ -75,16 +75,19 @@ describe("AgentHelpService", () => {
 
     it("throws error for invalid command", async () => {
       vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY } = await import("../../../shared/config/agentRegistry.js");
+      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
+        await import("../../../shared/config/agentRegistry.js");
       (AGENT_REGISTRY as any)["test-agent"] = {
         id: "test-agent",
         name: "Test",
         command: "invalid;command",
       };
+      invalidateEffectiveRegistryCache();
 
       await expect(service.getHelp("test-agent")).rejects.toThrow("Invalid command");
 
       delete (AGENT_REGISTRY as any)["test-agent"];
+      invalidateEffectiveRegistryCache();
     });
 
     it("handles non-zero exit code", async () => {
@@ -249,44 +252,53 @@ describe("AgentHelpService", () => {
   describe("command validation", () => {
     it("rejects empty command", async () => {
       vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY } = await import("../../../shared/config/agentRegistry.js");
+      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
+        await import("../../../shared/config/agentRegistry.js");
       (AGENT_REGISTRY as any)["empty"] = {
         id: "empty",
         name: "Empty",
         command: "",
       };
+      invalidateEffectiveRegistryCache();
 
       await expect(service.getHelp("empty")).rejects.toThrow("Invalid command");
 
       delete (AGENT_REGISTRY as any)["empty"];
+      invalidateEffectiveRegistryCache();
     });
 
     it("rejects command with shell metacharacters", async () => {
       vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY } = await import("../../../shared/config/agentRegistry.js");
+      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
+        await import("../../../shared/config/agentRegistry.js");
       (AGENT_REGISTRY as any)["bad"] = {
         id: "bad",
         name: "Bad",
         command: "cmd && rm -rf /",
       };
+      invalidateEffectiveRegistryCache();
 
       await expect(service.getHelp("bad")).rejects.toThrow("Invalid command");
 
       delete (AGENT_REGISTRY as any)["bad"];
+      invalidateEffectiveRegistryCache();
     });
 
     it("rejects command with subshell syntax that denylist would have missed", async () => {
       vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY } = await import("../../../shared/config/agentRegistry.js");
+      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
+        await import("../../../shared/config/agentRegistry.js");
       (AGENT_REGISTRY as any)["subshell"] = {
         id: "subshell",
         name: "Subshell",
         command: "$(whoami)",
       };
+      invalidateEffectiveRegistryCache();
 
       await expect(service.getHelp("subshell")).rejects.toThrow("Invalid command");
 
       delete (AGENT_REGISTRY as any)["subshell"];
+      invalidateEffectiveRegistryCache();
     });
   });
 });

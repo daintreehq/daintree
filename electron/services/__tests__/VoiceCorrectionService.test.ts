@@ -60,6 +60,38 @@ describe("VoiceCorrectionService", () => {
     expect(result.action).toBe("replace");
   });
 
+  it("removes leading filler from replacement text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          makeFetchResponse({ action: "replace", corrected_text: "Um, React is great." })
+        )
+    );
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct({ rawText: "um react is great" }, BASE_SETTINGS);
+    expect(result.correctedText).toBe("React is great.");
+    expect(result.confirmedText).toBe("React is great.");
+  });
+
+  it("keeps raw text unchanged when API returns no_change with leading filler", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          makeFetchResponse({ action: "no_change", corrected_text: "Um, React is great." })
+        )
+    );
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct({ rawText: "um react is great" }, BASE_SETTINGS);
+    expect(result.correctedText).toBe("um react is great");
+    expect(result.confirmedText).toBe("um react is great");
+  });
+
   it("returns a no_change result without modifying the text", async () => {
     vi.stubGlobal(
       "fetch",
@@ -108,6 +140,80 @@ describe("VoiceCorrectionService", () => {
     expect(result.confirmedText).toBe("react is great");
     expect(result.action).toBe("no_change");
   });
+
+  it("keeps the short timeout for single-sentence corrections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            const timer = setTimeout(() => {}, 30000);
+            init.signal!.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                reject(init.signal!.reason);
+              },
+              { once: true }
+            );
+          })
+      )
+    );
+
+    const svc = new VoiceCorrectionService();
+    const resultPromise = svc.correct({ rawText: "type script compiler" }, BASE_SETTINGS);
+    await vi.advanceTimersByTimeAsync(6999);
+    await Promise.resolve();
+
+    let settled = false;
+    resultPromise.finally(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+    expect(result.confirmedText).toBe("type script compiler");
+    expect(result.action).toBe("no_change");
+  });
+
+  it("allows a longer timeout for paragraph-length corrections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            const timer = setTimeout(() => {}, 30000);
+            init.signal!.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                reject(init.signal!.reason);
+              },
+              { once: true }
+            );
+          })
+      )
+    );
+
+    const input =
+      "um so the type script compiler is throwing errors and we need to fix the racked component, also the tail wind styles are broken and the zoo stand store needs updating";
+    const svc = new VoiceCorrectionService();
+    const resultPromise = svc.correct({ rawText: input }, BASE_SETTINGS);
+
+    let settled = false;
+    resultPromise.finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(8000);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(7000);
+    const result = await resultPromise;
+    expect(result.confirmedText).toBe(input);
+    expect(result.action).toBe("no_change");
+  }, 20_000);
 
   it("includes project context and custom dictionary in the system prompt", async () => {
     const fetchMock = vi
@@ -221,6 +327,21 @@ describe("VoiceCorrectionService", () => {
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
     expect(body.prompt_cache_key).toMatch(/^voice-correction-v7:/);
+  });
+
+  it("uses low reasoning effort for gpt-5-nano corrections", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct({ rawText: "test" }, { ...BASE_SETTINGS, model: "gpt-5-nano" });
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(body.max_output_tokens).toBe(1024);
+    expect(body.text.format.type).toBe("json_schema");
   });
 
   it("skips LLM call when all words are high confidence", async () => {

@@ -77,7 +77,7 @@ describe("DatabaseMaintenanceService", () => {
     const service = new DatabaseMaintenanceService();
     service.initialize();
 
-    expect(mockDbModule.probeDb).toHaveBeenCalledWith("/fake/daintree.db");
+    expect(mockDbModule.probeDb).toHaveBeenCalledWith("/fake/daintree.db", true);
     expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
     void service.dispose();
   });

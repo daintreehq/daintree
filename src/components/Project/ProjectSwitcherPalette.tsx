@@ -1,5 +1,4 @@
-import { useMemo, useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
-import { createPortal } from "react-dom";
+import { useMemo, useEffect, useRef, useState, useCallback } from "react";
 import {
   BellOff,
   ChevronDown,
@@ -22,7 +21,6 @@ import {
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ContextMenu,
@@ -36,7 +34,6 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayClaim } from "@/hooks";
-import { usePaletteStore } from "@/store/paletteStore";
 import type {
   ProjectSwitcherMode,
   SearchableProject,
@@ -78,6 +75,12 @@ export interface ProjectSwitcherPaletteProps {
   onHoverProjectEnd?: (pointerType: string) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
+  /**
+   * Fired when the dropdown's Popover restores focus to its trigger on close.
+   * Lets the trigger (e.g. ProjectSwitcher) suppress a Radix Tooltip from
+   * reopening on the refocused trigger after a project switch. Dropdown-only.
+   */
+  onDropdownCloseAutoFocus?: () => void;
   children?: React.ReactNode;
   removeConfirmProject?: SearchableProject | null;
   onRemoveConfirmClose?: () => void;
@@ -200,16 +203,17 @@ function ProjectListItem({
       aria-disabled={project.isMissing || undefined}
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
+        "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:rounded-r aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
         project.isActive
-          ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-border-subtle")
+          ? cn("text-daintree-text", isSelected && "bg-overlay-raised border-overlay")
           : project.isMissing
             ? cn(
                 "text-daintree-text/50",
-                isSelected ? "bg-overlay-raised border-border-subtle" : "hover:bg-overlay-soft"
+                isSelected ? "bg-overlay-raised border-overlay" : "hover:bg-overlay-subtle"
               )
             : isSelected
-              ? "bg-overlay-raised border-border-subtle text-daintree-text cursor-pointer"
-              : "text-daintree-text/70 hover:bg-overlay-soft hover:text-daintree-text cursor-pointer"
+              ? "bg-overlay-raised border-overlay text-daintree-text cursor-pointer"
+              : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text cursor-pointer"
       )}
       onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
@@ -624,7 +628,7 @@ function ScratchSection({
                         {onSaveAsProject && (
                           <ContextMenuItem onSelect={() => onSaveAsProject(scratch.id)}>
                             <FolderUp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                            Save as project...
+                            Save as project…
                           </ContextMenuItem>
                         )}
                         {onSaveAsProject && onRemove && <ContextMenuSeparator />}
@@ -844,7 +848,7 @@ function ProjectPaletteInner({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search projects..."
+          placeholder="Search projects…"
           role="combobox"
           aria-expanded={true}
           aria-haspopup="listbox"
@@ -898,9 +902,7 @@ function ProjectPaletteInner({
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground">
                   <Settings2 className="h-4 w-4" />
                 </div>
-                <span className="font-medium text-sm text-muted-foreground">
-                  Project Settings...
-                </span>
+                <span className="font-medium text-sm text-muted-foreground">Project Settings…</span>
               </button>
             )}
             {onAddProject && (
@@ -913,7 +915,7 @@ function ProjectPaletteInner({
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                   <Plus className="h-4 w-4" />
                 </div>
-                <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+                <span className="font-medium text-sm text-muted-foreground">Add Project…</span>
               </button>
             )}
             {onCloneRepo && (
@@ -926,9 +928,7 @@ function ProjectPaletteInner({
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                   <Download className="h-4 w-4" />
                 </div>
-                <span className="font-medium text-sm text-muted-foreground">
-                  Clone Repository...
-                </span>
+                <span className="font-medium text-sm text-muted-foreground">Clone Repository…</span>
               </button>
             )}
             {onCreateFolder && (
@@ -941,7 +941,7 @@ function ProjectPaletteInner({
                   <FolderPlus className="h-4 w-4" />
                 </div>
                 <span className="font-medium text-sm text-muted-foreground">
-                  Create New Folder...
+                  Create New Folder…
                 </span>
               </button>
             )}
@@ -965,115 +965,45 @@ function ModalContent({
   useOverlayClaim("project-switcher", isOpen);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  useLayoutEffect(() => {
-    if (isOpen) {
-      previousFocusRef.current = document.activeElement as HTMLElement;
-      requestAnimationFrame(() => inputRef.current?.focus());
-    } else if (previousFocusRef.current) {
-      if (!usePaletteStore.getState().activePaletteId) {
-        previousFocusRef.current.focus();
-      }
-      previousFocusRef.current = null;
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
-      if (e.key === "Tab" && dialogRef.current) {
-        const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
-          'input, button, [tabindex]:not([tabindex="-1"])'
-        );
-        const firstEl = focusableElements[0];
-        const lastEl = focusableElements[focusableElements.length - 1];
-
-        if (e.shiftKey && document.activeElement === firstEl) {
-          e.preventDefault();
-          lastEl?.focus();
-        } else if (!e.shiftKey && document.activeElement === lastEl) {
-          e.preventDefault();
-          firstEl?.focus();
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
-
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) {
-        onClose();
-      }
-    },
-    [onClose]
-  );
-
-  if (!isOpen) return null;
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-sm backdrop-saturate-[var(--theme-material-saturation)]"
-      onClick={handleBackdropClick}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Project switcher"
+  return (
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="Project switcher"
+      className={PALETTE_WIDTH}
     >
-      <div
-        ref={dialogRef}
-        className={cn(
-          PALETTE_WIDTH,
-          "mx-4 surface-overlay shadow-overlay rounded-[var(--radius-lg)] overflow-hidden",
-          "animate-in fade-in slide-in-from-top-4 duration-150"
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <ProjectPaletteInner
-          inputRef={inputRef}
-          listRef={listRef}
-          query={innerProps.query}
-          results={innerProps.results}
-          selectedIndex={innerProps.selectedIndex}
-          mode={mode}
-          onQueryChange={innerProps.onQueryChange}
-          onSelect={innerProps.onSelect}
-          onClose={onClose}
-          onSelectPrevious={innerProps.onSelectPrevious}
-          onSelectNext={innerProps.onSelectNext}
-          onAddProject={innerProps.onAddProject}
-          onCloneRepo={innerProps.onCloneRepo}
-          onCreateFolder={innerProps.onCreateFolder}
-          onOpenProjectSettings={innerProps.onOpenProjectSettings}
-          onStopProject={innerProps.onStopProject}
-          onCloseProject={innerProps.onCloseProject}
-          onLocateProject={innerProps.onLocateProject}
-          onTogglePinProject={innerProps.onTogglePinProject}
-          onCopyPath={innerProps.onCopyPath}
-          onSelectNewWindow={innerProps.onSelectNewWindow}
-          onHoverProject={innerProps.onHoverProject}
-          onHoverProjectEnd={innerProps.onHoverProjectEnd}
-          scratchResults={innerProps.scratchResults}
-          onCreateScratch={innerProps.onCreateScratch}
-          onSelectScratch={innerProps.onSelectScratch}
-          onRemoveScratch={innerProps.onRemoveScratch}
-          onSaveAsProject={innerProps.onSaveAsProject}
-        />
-        {/* Co-located live region: this palette manages its own
-            `aria-modal` and does not pass through `AppPaletteDialog`, so
-            VoiceOver would otherwise suppress external `aria-live`
-            updates when `document.ariaNotify` is unavailable
-            (Chromium 354736464). */}
-        <AccessibilityAnnouncer />
-      </div>
-    </div>,
-    document.body
+      <ProjectPaletteInner
+        inputRef={inputRef}
+        listRef={listRef}
+        query={innerProps.query}
+        results={innerProps.results}
+        selectedIndex={innerProps.selectedIndex}
+        mode={mode}
+        onQueryChange={innerProps.onQueryChange}
+        onSelect={innerProps.onSelect}
+        onClose={onClose}
+        onSelectPrevious={innerProps.onSelectPrevious}
+        onSelectNext={innerProps.onSelectNext}
+        onAddProject={innerProps.onAddProject}
+        onCloneRepo={innerProps.onCloneRepo}
+        onCreateFolder={innerProps.onCreateFolder}
+        onOpenProjectSettings={innerProps.onOpenProjectSettings}
+        onStopProject={innerProps.onStopProject}
+        onCloseProject={innerProps.onCloseProject}
+        onLocateProject={innerProps.onLocateProject}
+        onTogglePinProject={innerProps.onTogglePinProject}
+        onCopyPath={innerProps.onCopyPath}
+        onSelectNewWindow={innerProps.onSelectNewWindow}
+        onHoverProject={innerProps.onHoverProject}
+        onHoverProjectEnd={innerProps.onHoverProjectEnd}
+        scratchResults={innerProps.scratchResults}
+        onCreateScratch={innerProps.onCreateScratch}
+        onSelectScratch={innerProps.onSelectScratch}
+        onRemoveScratch={innerProps.onRemoveScratch}
+        onSaveAsProject={innerProps.onSaveAsProject}
+      />
+    </AppPaletteDialog>
   );
 }
 
@@ -1083,6 +1013,7 @@ function DropdownContent({
   dropdownAlign = "start",
   children,
   mode,
+  onDropdownCloseAutoFocus,
   ...innerProps
 }: ProjectSwitcherPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1128,6 +1059,7 @@ function DropdownContent({
           e.preventDefault();
           inputRef.current?.focus();
         }}
+        onCloseAutoFocus={() => onDropdownCloseAutoFocus?.()}
         onInteractOutside={(event) => {
           const target = event.target;
           if (target instanceof HTMLElement && target.closest('[role="menu"]')) {
@@ -1193,6 +1125,7 @@ export function ProjectSwitcherPalette({
   onHoverProject,
   onHoverProjectEnd,
   onOpenProjectSettings,
+  onDropdownCloseAutoFocus,
   dropdownAlign,
   children,
   removeConfirmProject,
@@ -1240,6 +1173,7 @@ export function ProjectSwitcherPalette({
         onHoverProject={onHoverProject}
         onHoverProjectEnd={onHoverProjectEnd}
         onOpenProjectSettings={onOpenProjectSettings}
+        onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
         dropdownAlign={dropdownAlign}
         scratchResults={scratchResults}
         onCreateScratch={onCreateScratch}

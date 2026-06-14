@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { useDevPreviewConsoleCapture } from "../useDevPreviewConsoleCapture";
-import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
+import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
 import { usePanelStore } from "@/store";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -69,6 +69,12 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+// Ingest is RAF-coalesced; flush synchronously so assertions see the row.
+function addRowViaCb(r: SerializedConsoleRow) {
+  messageCb?.(r);
+  flushConsoleCaptureBuffer();
+}
 
 describe("useDevPreviewConsoleCapture", () => {
   it("registers the panel before starting capture when the webview is mounted and not evicted", async () => {
@@ -181,10 +187,10 @@ describe("useDevPreviewConsoleCapture", () => {
     const webview = makeWebviewElement();
     renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
 
-    messageCb?.(row({ paneId: "other-pane" }));
+    addRowViaCb(row({ paneId: "other-pane" }));
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(0);
 
-    messageCb?.(row({ paneId: PANE_ID }));
+    addRowViaCb(row({ paneId: PANE_ID }));
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
   });
 
@@ -192,7 +198,7 @@ describe("useDevPreviewConsoleCapture", () => {
     const webview = makeWebviewElement();
     renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
 
-    messageCb?.(row({ paneId: PANE_ID, navigationGeneration: 1 }));
+    addRowViaCb(row({ paneId: PANE_ID, navigationGeneration: 1 }));
     clearedCb?.({ paneId: "other-pane", navigationGeneration: 2 });
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)[0]?.isStale).toBe(false);
 
@@ -205,7 +211,7 @@ describe("useDevPreviewConsoleCapture", () => {
     const { unmount } = renderHook(() =>
       useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
     );
-    messageCb?.(row({ paneId: PANE_ID }));
+    addRowViaCb(row({ paneId: PANE_ID }));
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
 
     unmount();
@@ -222,7 +228,7 @@ describe("useDevPreviewConsoleCapture", () => {
     const { unmount } = renderHook(() =>
       useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
     );
-    messageCb?.(row({ paneId: PANE_ID }));
+    addRowViaCb(row({ paneId: PANE_ID }));
     expect(useConsoleCaptureStore.getState().getMessages(PANE_ID)).toHaveLength(1);
 
     unmount();
@@ -241,7 +247,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+      addRowViaCb(row({ summaryText: "[vite] failed to connect to websocket." }));
     });
     expect(result.current.hmrDead).toBe(true);
   });
@@ -250,7 +256,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ summaryText: "[vite] server connection lost. Polling for restart..." }));
+      addRowViaCb(row({ summaryText: "[vite] server connection lost. Polling for restart..." }));
     });
     expect(result.current.hmrDead).toBe(true);
   });
@@ -259,7 +265,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ summaryText: "[VITE] FAILED TO CONNECT TO WEBSOCKET." }));
+      addRowViaCb(row({ summaryText: "[VITE] FAILED TO CONNECT TO WEBSOCKET." }));
     });
     expect(result.current.hmrDead).toBe(true);
   });
@@ -268,7 +274,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ level: "info", summaryText: "[vite] hmr update /src/App.tsx" }));
+      addRowViaCb(row({ level: "info", summaryText: "[vite] hmr update /src/App.tsx" }));
     });
     expect(result.current.hmrDead).toBe(false);
   });
@@ -288,7 +294,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+      addRowViaCb(row({ summaryText: "[vite] failed to connect to websocket." }));
     });
     expect(result.current.hmrDead).toBe(true);
 
@@ -302,7 +308,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+      addRowViaCb(row({ summaryText: "[vite] failed to connect to websocket." }));
     });
     act(() => {
       clearedCb?.({ paneId: "other-pane", navigationGeneration: 2 });
@@ -314,7 +320,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
     act(() => {
-      messageCb?.(row({ summaryText: "[vite] failed to connect to websocket." }));
+      addRowViaCb(row({ summaryText: "[vite] failed to connect to websocket." }));
     });
     expect(result.current.hmrDead).toBe(true);
 
@@ -390,7 +396,7 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
       useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
     );
     act(() => {
-      messageCb?.(row({ paneId: "pane-2", summaryText: "[vite] failed to connect to websocket." }));
+      addRowViaCb(row({ paneId: "pane-2", summaryText: "[vite] failed to connect to websocket." }));
     });
     expect(pane1.current.hmrDead).toBe(false);
   });

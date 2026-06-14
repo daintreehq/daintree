@@ -127,6 +127,9 @@ const DURABLE_ALLOWLIST = new Set([
   // PanelPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
   "src/components/PanelPalette/PanelPalette.tsx",
 
+  // ProjectSwitcherPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
+  "src/components/Project/ProjectSwitcherPalette.tsx",
+
   // PluginManagerView selected-row left-edge accent stripe in the master-detail
   // list, plus the detail subtab active-tab underline (single primary anchor per
   // active focus region)
@@ -160,7 +163,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
-    "src/components/Commands/CommandPickerHost.tsx",
     "src/components/DevPreview/DevPreviewPane.tsx",
     "src/components/Diagnostics/DiagnosticsDock.tsx",
     "src/components/Diagnostics/TelemetryContent.tsx",

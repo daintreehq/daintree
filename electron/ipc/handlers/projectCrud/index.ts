@@ -29,7 +29,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     registerProjectSettingsHandlers(deps),
     registerGitInitHandlers(),
     registerGitCloneHandlers(),
-    registerProjectPrefetchHandlers(),
+    registerProjectPrefetchHandlers(deps),
   ];
 
   return () => cleanups.forEach((cleanup) => cleanup());

@@ -35,8 +35,9 @@ import {
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
-import { getBuiltinView } from "@/registry/builtinRendererRegistry";
-import type { BulkCreateWorktreeDialogProps } from "@github-renderer/components/BulkCreateWorktreeDialog";
+import { useBuiltinView } from "@/registry/builtinRendererRegistry";
+import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { FleetPickerPalette } from "@/components/Fleet/FleetPickerPalette";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -502,6 +503,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       closeBulkCreateDialog: state.closeBulkCreateDialog,
     }))
   );
+  // Resolved reactively from the active provider's slot so the dialog drops
+  // out (and back in) live with the owning plugin's enable state instead of
+  // holding a stale slot reference.
+  const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const BulkCreateWorktreeDialog = useBuiltinView<ForgeBulkCreateWorktreeDialogProps>(
+    forgeProviderEntry?.contribution.slots?.bulkCreateWorktreeDialog ?? ""
+  );
   // Direct subscription (no useDeferredValue) so the skeleton renders the
   // moment the dialog submits — defer would make the placeholder lag the
   // dialog close by a frame and lose the perceived-responsiveness win.
@@ -716,26 +724,37 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const setManualOrder = useWorktreeFilterStore((state) => state.setManualOrder);
 
-  // Clean up stale pinned and collapsed worktrees in a single store write so
-  // pin/collapse pruning costs one persist flush, not N.
+  // Clean up stale pinned/collapsed worktrees (single store write so pruning
+  // costs one persist flush, not N) and stale manual order entries. Merged so
+  // the worktree-ID Set is built at most once per pass.
   useEffect(() => {
-    if (pinnedWorktrees.length === 0 && collapsedWorktrees.length === 0) return;
+    if (
+      pinnedWorktrees.length === 0 &&
+      collapsedWorktrees.length === 0 &&
+      manualOrder.length === 0
+    ) {
+      return;
+    }
     const existingIds = new Set(worktrees.map((w) => w.id));
     const hasStalePin = pinnedWorktrees.some((id) => !existingIds.has(id));
     const hasStaleCollapsed = collapsedWorktrees.some((id) => !existingIds.has(id));
-    if (!hasStalePin && !hasStaleCollapsed) return;
-    pruneStaleWorktreeIds(existingIds);
-  }, [worktrees, pinnedWorktrees, collapsedWorktrees, pruneStaleWorktreeIds]);
-
-  // Clean up stale manual order entries
-  useEffect(() => {
-    if (manualOrder.length === 0) return;
-    const existingIds = new Set(worktrees.map((w) => w.id));
-    const cleaned = manualOrder.filter((id) => existingIds.has(id));
-    if (cleaned.length !== manualOrder.length) {
-      setManualOrder(cleaned);
+    if (hasStalePin || hasStaleCollapsed) {
+      pruneStaleWorktreeIds(existingIds);
     }
-  }, [worktrees, manualOrder, setManualOrder]);
+    if (manualOrder.length > 0) {
+      const cleaned = manualOrder.filter((id) => existingIds.has(id));
+      if (cleaned.length !== manualOrder.length) {
+        setManualOrder(cleaned);
+      }
+    }
+  }, [
+    worktrees,
+    pinnedWorktrees,
+    collapsedWorktrees,
+    manualOrder,
+    pruneStaleWorktreeIds,
+    setManualOrder,
+  ]);
 
   // Compute derived metadata for each worktree. Panel scan is delegated to the
   // single-pass `panelStateByWorktree` selector above, so this useMemo only
@@ -1182,8 +1201,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // wrap the whole Virtuoso surface.
   const sidebarItems = useMemo<SidebarFlatItem[]>(() => {
     const items: SidebarFlatItem[] = [];
+    const pinnedSet = new Set(pinnedWorktrees);
     let nextRowIndex = firstScrollableRowIndex;
     if (groupedSections) {
+      const orderIndex = new Map(dragStartOrder.map((id, i) => [id, i]));
       for (const section of groupedSections) {
         items.push({
           kind: "header",
@@ -1199,8 +1220,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             id: `row-${w.id}`,
             worktreeId: w.id,
             ariaRowIndex: nextRowIndex++,
-            rowIndex: dragStartOrder.indexOf(w.id),
-            isPinned: pinnedWorktrees.includes(w.id),
+            rowIndex: orderIndex.get(w.id) ?? -1,
+            isPinned: pinnedSet.has(w.id),
             mode: "static",
           });
         }
@@ -1214,7 +1235,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           worktreeId: w.id,
           ariaRowIndex: nextRowIndex++,
           rowIndex: i,
-          isPinned: pinnedWorktrees.includes(w.id),
+          isPinned: pinnedSet.has(w.id),
           mode: "sortable",
         });
       }
@@ -1511,11 +1532,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               { source: "user" }
             );
           }}
-          className={`inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent ${
-            canArmMatching
-              ? "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]"
-              : "text-daintree-text/25 cursor-not-allowed"
-          }`}
+          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
           aria-label={armMatchingLabel}
         >
           <Zap className="w-3 h-3" aria-hidden="true" />
@@ -1905,22 +1922,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         componentName="BulkCreateWorktreeDialog"
         resetKeys={[Number(bulkCreateDialog.isOpen)]}
       >
-        {(() => {
-          const BulkCreateWorktreeDialog = getBuiltinView<BulkCreateWorktreeDialogProps>(
-            "github.bulkCreateWorktreeDialog"
-          );
-          if (!BulkCreateWorktreeDialog) return null;
-          return (
-            <BulkCreateWorktreeDialog
-              isOpen={bulkCreateDialog.isOpen}
-              onClose={closeBulkCreateDialog}
-              mode={bulkCreateDialog.mode}
-              selectedIssues={bulkCreateDialog.selectedIssues}
-              selectedPRs={bulkCreateDialog.selectedPRs}
-              onComplete={closeBulkCreateDialog}
-            />
-          );
-        })()}
+        {BulkCreateWorktreeDialog && (
+          <BulkCreateWorktreeDialog
+            isOpen={bulkCreateDialog.isOpen}
+            onClose={closeBulkCreateDialog}
+            mode={bulkCreateDialog.mode}
+            selectedIssues={bulkCreateDialog.selectedIssues}
+            selectedPRs={bulkCreateDialog.selectedPRs}
+            onComplete={closeBulkCreateDialog}
+          />
+        )}
       </ErrorBoundary>
 
       <ErrorBoundary

@@ -1,9 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { idleTerminalClient } from "@/clients/idleTerminalClient";
 import { notify } from "@/lib/notify";
 import { useUIStore } from "@/store/uiStore";
 
+// One-way latch: the broadcast IPC listener is an app-lifetime, notify-only
+// singleton with no teardown. Never reset this — resetting it on unmount let a
+// PostHydrationListeners remount re-subscribe and fire duplicate toasts (#10455).
 let ipcListenerAttached = false;
 
 function pluralize(n: number, word: string): string {
@@ -11,15 +14,10 @@ function pluralize(n: number, word: string): string {
 }
 
 export function useIdleTerminalNotifications(): void {
-  const didAttachListener = useRef(false);
-
   useEffect(() => {
     if (!isElectronAvailable() || ipcListenerAttached) return;
 
-    ipcListenerAttached = true;
-    didAttachListener.current = true;
-
-    const unsubscribe = idleTerminalClient.onNotify((payload) => {
+    idleTerminalClient.onNotify((payload) => {
       const projects = payload.projects ?? [];
       if (projects.length === 0) return;
 
@@ -97,11 +95,9 @@ export function useIdleTerminalNotifications(): void {
       });
     });
 
-    return () => {
-      if (didAttachListener.current) {
-        unsubscribe();
-        ipcListenerAttached = false;
-      }
-    };
+    // Latch only after a successful subscribe so a throwing onNotify (e.g. a
+    // partially-initialized preload) doesn't wedge the latch and silently
+    // suppress all future notifications for this renderer.
+    ipcListenerAttached = true;
   }, []);
 }

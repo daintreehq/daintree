@@ -3,6 +3,13 @@ import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
 
+// worktreePath → gitDir/commonDir is immutable for a live worktree and all
+// removal/switch paths invalidate explicitly via clearGitDirCache /
+// clearGitCommonDirCache, so successful resolutions never expire — a TTL
+// would only force periodic blocking execSync re-resolution on hot poll
+// paths. Cached error (null) entries keep the default TTL so transient
+// failures self-heal.
+const SUCCESS_TTL_MS = Number.POSITIVE_INFINITY;
 const gitDirCache = new Cache<string, string | null>({ maxSize: 200, defaultTTL: 600_000 });
 const gitCommonDirCache = new Cache<string, string | null>({ maxSize: 200, defaultTTL: 600_000 });
 
@@ -31,7 +38,7 @@ export function getGitDir(worktreePath: string, options: GitDirOptions = {}): st
     const resolved = isAbsolute(result) ? result : pathJoin(worktreePath, result);
 
     if (cache) {
-      gitDirCache.set(worktreePath, resolved);
+      gitDirCache.set(worktreePath, resolved, SUCCESS_TTL_MS);
     }
 
     return resolved;
@@ -78,7 +85,7 @@ export function getGitCommonDir(worktreePath: string, options: GitDirOptions = {
     const resolved = isAbsolute(result) ? result : pathJoin(worktreePath, result);
 
     if (cache) {
-      gitCommonDirCache.set(worktreePath, resolved);
+      gitCommonDirCache.set(worktreePath, resolved, SUCCESS_TTL_MS);
     }
 
     return resolved;

@@ -12,12 +12,14 @@ import {
   Clock,
 } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
-import { isTokenRelatedError, isTransientNetworkError } from "@/lib/githubErrors";
+import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+import { safeStringify } from "@/lib/safeStringify";
 import { GitHubListItem } from "./GitHubListItem";
 import { BulkActionBar } from "./BulkActionBar";
 import { useIssueSelection } from "@/hooks/useIssueSelection";
@@ -30,7 +32,8 @@ import {
   type PRStateFilter,
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
-import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
+import type { GitHubSortOrder } from "../../shared/types.js";
 import { MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import {
   GitHubResourceRowsSkeleton,
@@ -269,8 +272,8 @@ export function GitHubResourceList({
   }, [handleManualRefresh]);
 
   const selection = useIssueSelection(type, projectPath);
-  const [issueCache, setIssueCache] = useState<Map<number, GitHubIssue>>(() => new Map());
-  const [prCache, setPrCache] = useState<Map<number, GitHubPR>>(() => new Map());
+  const [issueCache, setIssueCache] = useState<Map<number, Issue>>(() => new Map());
+  const [prCache, setPrCache] = useState<Map<number, PR>>(() => new Map());
 
   // The toolbar reuses one keepMounted GitHubResourceList per type across
   // every project — switching projects only updates `projectPath`, it doesn't
@@ -291,13 +294,13 @@ export function GitHubResourceList({
 
   // Accumulate item objects into the session cache whenever data changes
   useEffect(() => {
-    const newIssues: GitHubIssue[] = [];
-    const newPRs: GitHubPR[] = [];
+    const newIssues: Issue[] = [];
+    const newPRs: PR[] = [];
     for (const item of data) {
       if ("isDraft" in item) {
-        newPRs.push(item as GitHubPR);
+        newPRs.push(item);
       } else {
-        newIssues.push(item as GitHubIssue);
+        newIssues.push(item);
       }
     }
     if (newIssues.length > 0) {
@@ -337,19 +340,48 @@ export function GitHubResourceList({
   const handleOpenInGitHub = () => {
     const query = searchQuery.trim() || undefined;
     const state = filterState as string;
-    if (type === "issue") {
-      void actionService.dispatch(
-        "forge.openIssues",
+    // dispatch() never throws — failures come back as { ok: false }, so they
+    // must be surfaced here or the click silently does nothing.
+    const actionId = type === "issue" ? ("forge.openIssues" as const) : ("forge.openPRs" as const);
+    const open = () => {
+      const dispatched = actionService.dispatch(
+        actionId,
         { projectPath, query, state },
         { source: "user" }
       );
-    } else {
-      void actionService.dispatch(
-        "forge.openPRs",
-        { projectPath, query, state },
-        { source: "user" }
-      );
-    }
+      void dispatched.then((result) => {
+        if (!result.ok) {
+          const message =
+            "The page couldn't be opened in your browser. Check that this project has a GitHub remote and the GitHub plugin is enabled, then try again.";
+          notify({
+            type: "error",
+            title: "Couldn't open GitHub",
+            message,
+            coalesce: {
+              key: `forge-open-failed:${projectPath}:${actionId}`,
+              buildMessage: () => message,
+            },
+            action: { label: "Try again", variant: "primary", onClick: open },
+            actions: [
+              {
+                label: "Copy details",
+                successLabel: "Copied",
+                variant: "secondary",
+                onClick: () => {
+                  void navigator.clipboard
+                    ?.writeText(safeStringify({ action: actionId, error: result.error }, 2))
+                    .catch(() => {
+                      // Clipboard writes can reject in unfocused contexts; the
+                      // toast already carries the friendly summary.
+                    });
+                },
+              },
+            ],
+          });
+        }
+      });
+    };
+    open();
     handleClose();
   };
 
@@ -364,7 +396,7 @@ export function GitHubResourceList({
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
 
   const handleCreateWorktree = useCallback(
-    (item: GitHubIssue | GitHubPR) => {
+    (item: Issue | PR) => {
       if ("isDraft" in item) {
         openCreateDialogForPR(item);
       } else {
@@ -449,7 +481,7 @@ export function GitHubResourceList({
               }
               if (matchedWt) {
                 handleSwitchToWorktree(matchedWt.id);
-              } else if (activeItem.state === "OPEN") {
+              } else if (activeItem.state === "open") {
                 handleCreateWorktree(activeItem);
               }
             }
@@ -761,9 +793,7 @@ export function GitHubResourceList({
           (() => {
             const allSelected = data.every((item) => selection.selectedIds.has(item.number));
             const unassigned =
-              type === "issue"
-                ? data.filter((item) => (item as GitHubIssue).assignees.length === 0)
-                : [];
+              type === "issue" ? data.filter((item) => (item as Issue).assignees.length === 0) : [];
             return (
               <div
                 className="flex items-center gap-1.5"
@@ -1059,14 +1089,14 @@ export function GitHubResourceList({
           type === "issue"
             ? Array.from(selection.selectedIds)
                 .map((id) => issueCache.get(id))
-                .filter((issue): issue is GitHubIssue => issue !== undefined)
+                .filter((issue): issue is Issue => issue !== undefined)
             : []
         }
         selectedPRs={
           type === "pr"
             ? Array.from(selection.selectedIds)
                 .map((id) => prCache.get(id))
-                .filter((pr): pr is GitHubPR => pr !== undefined)
+                .filter((pr): pr is PR => pr !== undefined)
             : []
         }
         selectedCount={selection.selectedIds.size}

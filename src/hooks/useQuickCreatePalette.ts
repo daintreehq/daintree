@@ -217,7 +217,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
                     notify({
                       type: "warning",
                       title: "Couldn't undo assignment",
-                      message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on GitHub`,
+                      message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on the forge`,
                     });
                   }
                 }
@@ -228,7 +228,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               notify({
                 type: "warning",
                 title: "Could not assign issue",
-                message: `${assignmentError} — you can assign it manually on GitHub`,
+                message: `${assignmentError} — you can assign it manually on the forge`,
                 priority: "high",
                 context: { eventKind: "uiFeedback" },
               });

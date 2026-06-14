@@ -1,7 +1,7 @@
 import type { HelpAssistantTier } from "../types/ipc/maps.js";
 import type { BuiltInActionId } from "../types/actions.js";
 
-const ACTIONS_LIST_TOOL = "actions.list";
+export const ACTIONS_LIST_TOOL = "actions.list";
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 
 export const WORKBENCH_TIER_TOOLS = [
@@ -46,11 +46,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "git.snapshotGet",
   "git.snapshotList",
 
-  "github.checkCli",
-  "github.getRepoStats",
-  "github.listIssues",
-  "github.listPullRequests",
-  "github.getIssueByNumber",
+  "forge.getRepoStats",
+  "forge.listIssues",
+  "forge.listPRs",
+  "forge.getIssue",
 
   "workflow.prepBranchForReview",
 
@@ -78,6 +77,7 @@ export const ACTION_TIER_ADDONS = [
   "terminal.moveToDock",
   "terminal.moveToGrid",
   "terminal.toggleDock",
+  "terminal.rename",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
 
   "recipe.list",
@@ -124,9 +124,9 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
+  "forge.openPR",
   "forge.assignIssue",
   "forge.validateToken",
-  "github.openPR",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

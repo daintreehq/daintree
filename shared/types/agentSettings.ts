@@ -2,6 +2,15 @@ import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
 
+/**
+ * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
+ * (force-enable / force-disable); `"inherit"` defers to the next level up
+ * (preset → agent → global). Modeled after VS Code workspace-vs-user override
+ * and IAM explicit-deny precedence: a more-specific `"off"` always vetoes a
+ * broader `"on"` (principle of least privilege).
+ */
+export type DangerousMode = "inherit" | "on" | "off";
+
 export interface AgentSettingsEntry {
   /**
    * Tri-state pin for the toolbar: `true` (explicit pin), `false` (explicit
@@ -16,8 +25,24 @@ export interface AgentSettingsEntry {
   customFlags?: string;
   /** Additional args appended when dangerous mode is enabled */
   dangerousArgs?: string;
-  /** Toggle to include dangerousArgs in the final command */
+  /**
+   * Legacy boolean toggle to include dangerousArgs in the final command.
+   * Superseded by {@link AgentSettingsEntry.dangerousMode}; still read for
+   * back-compat (`true` → `"on"`, `false`/absent → `"inherit"`) by
+   * {@link resolveDangerousMode}. New writes set `dangerousMode` and keep this
+   * mirrored (`true` only when `"on"`) so boolean readers (toolbar badges,
+   * setup wizard) keep working.
+   */
   dangerousEnabled?: boolean;
+  /**
+   * Tri-state permission-bypass intent for this agent's Default scope (#10432
+   * follow-up): `"on"` force-enables bypass, `"off"` force-disables it (an
+   * explicit veto that beats the global override), `"inherit"`/absent defers to
+   * the global "Skip permission prompts for agents" switch. Resolved (with
+   * legacy fallback) by {@link resolveDangerousMode}; preset overrides layer on
+   * top via {@link combineDangerousModes}.
+   */
+  dangerousMode?: DangerousMode;
   /** Use inline rendering instead of fullscreen alt-screen TUI */
   inlineMode?: boolean;
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
@@ -45,6 +70,13 @@ export interface AgentSettingsEntry {
     env?: Record<string, string>;
     args?: string[];
     dangerousEnabled?: boolean;
+    /**
+     * Tri-state bypass override for this preset, layered on top of the agent's
+     * resolved mode (see {@link combineDangerousModes}). `"off"` vetoes the
+     * agent/global value; `"inherit"`/absent defers to the agent's Default
+     * scope. Legacy `dangerousEnabled` is read as a fallback.
+     */
+    dangerousMode?: DangerousMode;
     customFlags?: string;
     inlineMode?: boolean;
     color?: string;
@@ -69,6 +101,19 @@ export interface AgentSettings {
    * main-process IPC handler on the first write after migration.
    */
   settingsVersion?: number;
+  /**
+   * Global "skip permission prompts" override (#10432). When `true`, every
+   * agent whose config declares `supports.permissionBypass === true` launches
+   * in permission-bypass mode regardless of its per-agent/preset
+   * `dangerousEnabled` toggle. Default off — this is a high-blast-radius,
+   * opt-in switch. It is a *live override*, not a default: it is OR-ed into
+   * the effective bypass at flag-generation time (see {@link resolveEffectiveBypass})
+   * and never mutates per-agent `dangerousEnabled`, so toggling it off
+   * immediately stops injecting bypass flags on future spawns/restarts/resumes.
+   * Scoped to normal agent terminals; Daintree Assistant / help sessions keep
+   * their own independent bypass setting.
+   */
+  globalSkipPermissions?: boolean;
 }
 
 export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
@@ -100,7 +145,150 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
       },
     ])
   ),
+  globalSkipPermissions: false,
 };
+
+/**
+ * Whether an agent opts into permission-bypass via its config
+ * (`supports.permissionBypass === true`). Strict — agents that omit the field
+ * or set it `false` are NOT bypass-supported, so the global skip-permissions
+ * override must never inject their dangerous flag (#10432).
+ */
+export function isAgentBypassSupported(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const supports = getEffectiveAgentConfig(agentId)?.supports;
+  // `supports` is `AssistantSupports | false | undefined`; only the structured
+  // form carries `permissionBypass`.
+  return supports !== false && supports?.permissionBypass === true;
+}
+
+/**
+ * Reads the tri-state {@link DangerousMode} from a settings entry or preset,
+ * falling back to the legacy `dangerousEnabled` boolean. Legacy `true` →
+ * `"on"`; legacy `false`/absent → `"inherit"` (the historical "fall through to
+ * the global override" semantics). An explicit `"off"` veto is reachable only
+ * via the newer `dangerousMode` field, so legacy stores never gain a veto they
+ * didn't ask for.
+ */
+export function resolveDangerousMode(source: {
+  dangerousMode?: DangerousMode;
+  dangerousEnabled?: boolean;
+}): DangerousMode {
+  return source.dangerousMode ?? (source.dangerousEnabled ? "on" : "inherit");
+}
+
+/**
+ * Layers a preset's mode on top of the agent's resolved mode: the preset wins
+ * unless it defers (`"inherit"`). This makes preset `"off"` a true veto over an
+ * agent `"on"`, and preset `"on"` an override of an agent `"off"` — the
+ * specific-overrides-general rule applied one level down.
+ */
+export function combineDangerousModes(
+  agentMode: DangerousMode,
+  presetMode?: DangerousMode
+): DangerousMode {
+  return presetMode && presetMode !== "inherit" ? presetMode : agentMode;
+}
+
+/**
+ * Resolves the effective permission-bypass decision for a launch from the
+ * (already preset-merged) effective entry's tri-state mode:
+ *
+ * - `"on"`  → bypass (unguarded — preserves per-agent toggles like Gemini's
+ *   `--yolo` even for agents that don't declare `supports.permissionBypass`).
+ * - `"off"` → no bypass; an explicit veto that beats the global override.
+ * - `"inherit"` → defer to the global "Skip permission prompts for agents"
+ *   switch, which only applies to agents that declare bypass support so it
+ *   can't inject a dangerous flag into an agent that rejects it.
+ *
+ * Callers that resolve a launch from a preset must bake the combined mode onto
+ * the entry first (see `applyPresetBehaviorOverrides`) so this single chokepoint
+ * sees the final intent.
+ *
+ * @param entry - The effective settings entry (after preset overrides applied).
+ */
+export function resolveEffectiveBypass(
+  entry: AgentSettingsEntry,
+  agentId: string | undefined,
+  globalSkipPermissions?: boolean
+): boolean {
+  const mode = resolveDangerousMode(entry);
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  return !!globalSkipPermissions && isAgentBypassSupported(agentId);
+}
+
+/**
+ * Reconciles a persisted `agentLaunchFlags` snapshot against the current
+ * effective bypass setting (#10432, the "resume trap").
+ *
+ * Strips the agent's canonical bypass flag (the resolved `dangerousArgs`, plus
+ * the registry default as a fallback so a snapshot captured under a different
+ * `dangerousArgs` still gets cleaned) from `flags`, then re-appends it only
+ * when `effectiveBypass` is true. This makes every spawn/restart/restore/resume
+ * idempotent: flipping the resolved decision off stops carrying a stale bypass
+ * flag forward, and flipping it on re-adds it.
+ *
+ * `effectiveBypass` is the single source of truth — it already encodes the full
+ * tri-state decision (preset/agent `"on"`/`"off"` and the support-gated global
+ * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly even
+ * to agents that don't declare `supports.permissionBypass`: their `"on"` flag
+ * (e.g. Gemini's `--yolo`) is preserved when `effectiveBypass` is true, and an
+ * explicit `"off"` veto strips a stale token when it is false. Agents with no
+ * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
+ * fall through the empty-strip-set guard below and are left untouched.
+ *
+ * All known bypass flags in {@link DEFAULT_DANGEROUS_ARGS} are single tokens;
+ * the strip matches whole tokens so flag *values* are never collaterally
+ * removed.
+ *
+ * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
+ *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
+ */
+export function reconcileBypassFlags(
+  flags: readonly string[],
+  agentId: string,
+  effectiveBypass: boolean,
+  bypassArgs?: string
+): string[] {
+  const resolved = (bypassArgs?.trim() || DEFAULT_DANGEROUS_ARGS[agentId] || "").trim();
+  // Strip both the resolved args and the registry default: a snapshot may have
+  // been captured before the user customized `dangerousArgs`, so cleaning only
+  // the current value could leave a stale default token behind.
+  const stripTokens = new Set<string>();
+  for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
+    if (!source) continue;
+    for (const token of source.trim().split(/\s+/)) {
+      if (token) stripTokens.add(token);
+    }
+  }
+  if (stripTokens.size === 0) return [...flags];
+
+  if (!effectiveBypass || !resolved) {
+    // Bypass not wanted: drop every occurrence of the canonical token(s).
+    return flags.filter((flag) => !stripTokens.has(flag));
+  }
+
+  // Bypass wanted: replace the first canonical occurrence in place with the
+  // currently-resolved args (preserving flag order so a snapshot that already
+  // carries the right flag is left untouched), drop any duplicates, and append
+  // if the flag was absent.
+  const resolvedTokens = resolved.split(/\s+/).filter(Boolean);
+  const reconciled: string[] = [];
+  let inserted = false;
+  for (const flag of flags) {
+    if (stripTokens.has(flag)) {
+      if (!inserted) {
+        reconciled.push(...resolvedTokens);
+        inserted = true;
+      }
+    } else {
+      reconciled.push(flag);
+    }
+  }
+  if (!inserted) reconciled.push(...resolvedTokens);
+  return reconciled;
+}
 
 export function getAgentSettingsEntry(
   settings: AgentSettings | null | undefined,
@@ -129,6 +317,12 @@ export function resolveEffectivePresetId(
 export interface GenerateAgentFlagsOptions {
   /** Absolute path to the clipboard temp directory (e.g. /tmp/daintree-clipboard) */
   clipboardDirectory?: string;
+  /**
+   * Global skip-permissions override (#10432). When true, OR-ed into the
+   * effective bypass for agents that declare `supports.permissionBypass`, so
+   * the agent's dangerous flag is injected even when its per-agent toggle is off.
+   */
+  globalSkipPermissions?: boolean;
 }
 
 export function generateAgentFlags(
@@ -137,7 +331,7 @@ export function generateAgentFlags(
   options?: GenerateAgentFlagsOptions
 ): string[] {
   const flags: string[] = [];
-  if (entry.dangerousEnabled) {
+  if (resolveEffectiveBypass(entry, agentId, options?.globalSkipPermissions)) {
     // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
     const dangerousArgs =
       entry.dangerousArgs?.trim() || (agentId ? DEFAULT_DANGEROUS_ARGS[agentId] : "");
@@ -184,6 +378,8 @@ export interface GenerateAgentCommandOptions {
   recipeArgs?: string;
   /** Additional CLI arguments from agent preset (whitespace-separated string) */
   presetArgs?: string;
+  /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
+  globalSkipPermissions?: boolean;
 }
 
 /**
@@ -212,6 +408,7 @@ export function generateAgentCommand(
 ): string {
   const flags = generateAgentFlags(entry, agentId, {
     clipboardDirectory: options?.clipboardDirectory,
+    globalSkipPermissions: options?.globalSkipPermissions,
   });
   const parts: string[] = [baseCommand];
 
@@ -433,7 +630,7 @@ export function generateAgentCommand(
 export function buildAgentLaunchFlags(
   entry: AgentSettingsEntry,
   agentId: string,
-  options?: { modelId?: string; presetArgs?: string[] }
+  options?: { modelId?: string; presetArgs?: string[]; globalSkipPermissions?: boolean }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
   const flags: string[] = [];
@@ -461,7 +658,9 @@ export function buildAgentLaunchFlags(
   }
 
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
-  const settingsFlags = generateAgentFlags(entry, agentId);
+  const settingsFlags = generateAgentFlags(entry, agentId, {
+    globalSkipPermissions: options?.globalSkipPermissions,
+  });
   flags.push(...settingsFlags);
 
   return flags;

@@ -12,13 +12,16 @@ import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
-const CORRECTION_TIMEOUT_MS = 7000;
+const SHORT_CORRECTION_TIMEOUT_MS = 7000;
+const LONG_CORRECTION_TIMEOUT_MS = 15000;
+const LONG_CORRECTION_MIN_CHARS = 140;
 const MAX_OUTPUT_TOKENS = 1024;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
 const PROMPT_CACHE_PREFIX = "voice-correction-v7";
 const FILE_LINK_DETECTION_MODEL = "gpt-5-nano";
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
+const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 
 // Permissive pre-filter — biased toward false positives so legitimate file references
 // always reach the LLM. False positives cost a skipped LLM call; false negatives silently
@@ -346,6 +349,21 @@ export class VoiceCorrectionService {
     return AbortSignal.timeout(timeoutMs);
   }
 
+  private getCorrectionTimeoutMs(request: VoiceCorrectionRequest): number {
+    if (request.rawText.length >= LONG_CORRECTION_MIN_CHARS || (request.segmentCount ?? 0) > 1) {
+      return LONG_CORRECTION_TIMEOUT_MS;
+    }
+    return SHORT_CORRECTION_TIMEOUT_MS;
+  }
+
+  private getReasoningConfig(model: string): { effort: "low" } | undefined {
+    return model === "gpt-5-nano" ? { effort: "low" } : undefined;
+  }
+
+  private normalizeCorrectedText(text: string): string {
+    return text.replace(LEADING_FILLER_RE, "");
+  }
+
   private async callApi(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings
@@ -368,13 +386,14 @@ export class VoiceCorrectionService {
       segmentCount: request.segmentCount ?? 0,
     });
 
+    const reasoningConfig = this.getReasoningConfig(model);
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...buildOpenAIHeaders(apiKey, settings.organizationId, settings.projectId),
       },
-      signal: this.buildFetchSignal(CORRECTION_TIMEOUT_MS),
+      signal: this.buildFetchSignal(this.getCorrectionTimeoutMs(request)),
       body: JSON.stringify({
         model,
         // Pass the system prompt as the first developer message in the `input`
@@ -386,6 +405,7 @@ export class VoiceCorrectionService {
         ],
         prompt_cache_key: this.buildPromptCacheKey(settings),
         service_tier: "auto",
+        ...(reasoningConfig ? { reasoning: reasoningConfig } : {}),
         text: {
           format: {
             type: "json_schema",
@@ -421,7 +441,10 @@ export class VoiceCorrectionService {
 
     return {
       action: parsed.action,
-      correctedText: parsed.action === "no_change" ? request.rawText : parsed.corrected_text,
+      correctedText:
+        parsed.action === "no_change"
+          ? request.rawText
+          : this.normalizeCorrectedText(parsed.corrected_text),
       confidence: parsed.confidence,
     };
   }

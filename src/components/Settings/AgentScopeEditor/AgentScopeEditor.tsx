@@ -111,22 +111,22 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           <BehavioralControls
             scopeKind={scope.scopeKind}
             scopeLabel={scope.scopeLabel}
+            dangerousMode={scope.dangerousMode}
             effectiveSkipPerms={scope.effectiveSkipPerms}
+            inheritResolvesToOn={scope.inheritResolvesToOn}
+            inheritOriginLabel={scope.inheritOriginLabel}
             effectiveInlineMode={scope.effectiveInlineMode}
-            agentDefaultDangerous={scope.agentDefaultDangerous}
             agentDefaultInline={scope.agentDefaultInline}
             customArgsValue={scope.customArgsValue}
             customArgsPlaceholder={scope.customArgsPlaceholder}
             customArgsDescription={scope.customArgsDescription}
-            dangerousOverride={scope.dangerousOverride}
             inlineOverride={scope.inlineOverride}
             customFlagsOverride={scope.customFlagsOverride}
             supportsInlineMode={scope.supportsInlineMode}
             defaultDangerousArg={defaultDangerousArg}
-            onSkipPermsChange={scope.handleSkipPermsChange}
+            onDangerousModeChange={scope.handleDangerousModeChange}
             onInlineModeChange={scope.handleInlineModeChange}
             onCustomFlagsChange={scope.handleCustomFlagsChange}
-            onDangerousOverrideReset={scope.handleDangerousOverrideReset}
             onInlineOverrideReset={scope.handleInlineOverrideReset}
             onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
           />

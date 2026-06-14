@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { LoadedPluginInfo, PluginCapability } from "@shared/types/plugin";
+import type { LoadedPluginInfo, PluginCapability, PluginCategoryId } from "@shared/types/plugin";
 import { filterPlugins, isQueryActive, parsePluginQuery, scorePlugin } from "../pluginSearch";
 
 function makePlugin(overrides: {
   name: string;
   displayName?: string;
   description?: string;
+  tagline?: string;
+  category?: PluginCategoryId;
   isBuiltin?: boolean;
   disabled?: boolean;
   capabilities?: PluginCapability[];
@@ -16,6 +18,8 @@ function makePlugin(overrides: {
       version: "1.0.0",
       displayName: overrides.displayName,
       description: overrides.description,
+      tagline: overrides.tagline,
+      category: overrides.category,
       capabilities: overrides.capabilities,
       contributes: {
         panels: [],
@@ -169,6 +173,34 @@ describe("filterPlugins @cap", () => {
   });
 });
 
+describe("filterPlugins @cat", () => {
+  const plugins = [
+    makePlugin({ name: "a.github", category: "forge" }),
+    makePlugin({ name: "b.notes", category: "workspace" }),
+    makePlugin({ name: "c.misc" }),
+  ];
+
+  it("matches the declared category", () => {
+    expect(names(filterPlugins(plugins, "@cat:forge"))).toEqual(["a.github"]);
+  });
+
+  it("matches the derived fallback category for undeclared plugins", () => {
+    expect(names(filterPlugins(plugins, "@cat:other"))).toEqual(["c.misc"]);
+  });
+
+  it("@cat with no value matches nothing", () => {
+    expect(names(filterPlugins(plugins, "@cat:"))).toEqual([]);
+  });
+
+  it("AND-combines with state operators", () => {
+    const mixed = [
+      makePlugin({ name: "on.forge", category: "forge" }),
+      makePlugin({ name: "off.forge", category: "forge", disabled: true }),
+    ];
+    expect(names(filterPlugins(mixed, "@cat:forge @disabled"))).toEqual(["off.forge"]);
+  });
+});
+
 describe("filterPlugins free text", () => {
   const plugins = [
     makePlugin({ name: "a.notes", displayName: "Notes", description: "Take quick notes" }),
@@ -181,6 +213,14 @@ describe("filterPlugins free text", () => {
 
   it("drops plugins matching neither name nor description", () => {
     expect(names(filterPlugins(plugins, "zzzznomatch"))).toEqual([]);
+  });
+
+  it("matches tagline text", () => {
+    const tagged = [
+      makePlugin({ name: "t.tagged", displayName: "Tagged", tagline: "Quick capture for ideas" }),
+      makePlugin({ name: "u.untagged", displayName: "Untagged" }),
+    ];
+    expect(names(filterPlugins(tagged, "capture"))).toEqual(["t.tagged"]);
   });
 
   it("combines operators with free text (AND)", () => {

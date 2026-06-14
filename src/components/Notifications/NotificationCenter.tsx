@@ -226,6 +226,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // unrelated render trigger.
   const [, forceTick] = useState(0);
   const now = Date.now();
+  // Quantized to the minute so every row doesn't get a fresh prop on each
+  // unrelated re-render — snooze expiry only needs minute resolution, and the
+  // quiet-hours tick already re-renders on minute boundaries.
+  const snoozeRenderTime = now - (now % 60_000);
   const isSessionMuted = quietUntil > now;
   const isScheduledMuted = isScheduledQuietNow({
     quietHoursEnabled,
@@ -833,7 +837,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
-      <div className="flex items-start justify-between px-3 py-2 border-b border-divider gap-2">
+      {/* pr-2, not px-3: the right-side icon buttons carry 4px of internal p-1
+          touch padding, so an 8px container edge lands their glyphs at the same
+          12px optical inset as the title text on the left. */}
+      <div className="flex items-start justify-between pl-3 pr-2 py-2 border-b border-divider gap-2">
         <div className="flex flex-1 flex-wrap items-center gap-1.5 min-w-0">
           <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
           {entries.length > 0 && (
@@ -912,10 +919,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               aria-pressed={groupByContext}
               title="Group by project or worktree"
               onClick={() => setGroupByContext(!groupByContext)}
-              className={cn(
-                "toolbar-icon-button p-1 rounded-[var(--radius-sm)] border text-daintree-text/50",
-                groupByContext ? "border-transparent" : "border-daintree-text/15"
-              )}
+              className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
             >
               <Layers className="w-3 h-3" aria-hidden="true" />
             </button>
@@ -976,7 +980,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onClose();
                   }}
                 >
-                  <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                  <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                   Clear all
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -1079,7 +1083,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   onDismissThread={dismissByCorrelationId}
                   snoozePendingIndex={snoozePendingIndex}
                   snoozedThreads={snoozedThreads}
-                  snoozeRenderTime={now}
+                  snoozeRenderTime={snoozeRenderTime}
                   onConsumeSnoozePending={consumeSnoozePending}
                   onSnoozeRow={handleSnoozeForRow}
                   onUnsnoozeRow={handleUnsnoozeForRow}
@@ -1106,7 +1110,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   onMarkIdsRead={markIdsReadWithUndo}
                   snoozePendingIndex={snoozePendingIndex}
                   snoozedThreads={snoozedThreads}
-                  snoozeRenderTime={now}
+                  snoozeRenderTime={snoozeRenderTime}
                   onConsumeSnoozePending={consumeSnoozePending}
                   onSnoozeRow={handleSnoozeForRow}
                   onUnsnoozeRow={handleUnsnoozeForRow}
@@ -1284,7 +1288,12 @@ function ChronoSection({
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
           const flatIndex = indexOffset + idx;
           return (
-            <div key={groupKey}>
+            <div
+              key={groupKey}
+              // Off-screen rows skip layout/paint — the popover mounts up to
+              // 200 heavy rows in a plain scroll container (sidebar precedent).
+              style={{ contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
+            >
               {isDivider && (
                 <NewSinceLastLookedDivider
                   ref={dividerRef}

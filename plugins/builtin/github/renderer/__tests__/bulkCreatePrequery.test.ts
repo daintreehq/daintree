@@ -1,18 +1,22 @@
 import { describe, it, expect, vi } from "vitest";
 import { resolveIssuePrequeries } from "../components/bulkCreatePrequery";
-import type { GitHubIssue } from "@shared/types";
+import type { Issue } from "@shared/types/forge";
 
 describe("resolveIssuePrequeries", () => {
-  const mockIssue = (number: number): GitHubIssue => ({
+  const mockIssue = (number: number): Issue => ({
     number,
     title: `Test Issue ${number}`,
-    state: "OPEN",
+    body: "",
+    state: "open",
+    rawState: "OPEN",
     url: `https://github.com/test/repo/issues/${number}`,
-    updatedAt: new Date().toISOString(),
-    author: { login: "testuser", avatarUrl: "https://example.com/avatar.png" },
+    author: { login: "testuser", avatarUrl: "https://example.com/avatar.png", rawData: null },
     assignees: [],
-    commentCount: 0,
     labels: [],
+    commentCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
   });
 
   const mockPlanned = (number: number, branchName: string = `feature/issue-${number}`) => ({

@@ -9,6 +9,7 @@ export const config: AgentConfig = {
   supportsContextInjection: true,
   tooltip: "Sourcegraph's agentic coding tool",
   usageUrl: "https://ampcode.com/",
+  externalLinks: [{ label: "View docs", url: "https://ampcode.com/manual" }],
   packages: {
     npm: "@ampcode/cli",
   },

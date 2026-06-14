@@ -10,7 +10,11 @@ import type {
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
-import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import { inferKind } from "./statePatcher";
+import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -190,13 +194,21 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
 
     useProjectStore.setState((state) => {
-      if (!currentProject) return { currentProject: null };
-      const projects = state.projects.some((project) => project.id === currentProject.id)
-        ? state.projects.map((project) =>
+      // The full project list rides along in newer hydrate payloads (#10390).
+      // Seed it (plus the bootstrap flag the Toolbar mount effect checks) so
+      // the IPC-pull fallback path gets the same dedup as the boot path,
+      // which seeds earlier via ensureHydrationBootstrap.
+      const baseProjects = hydrateResult.projects ?? state.projects;
+      const bootstrapped = state.isBootstrapped || hydrateResult.projects !== undefined;
+      if (!currentProject) {
+        return { projects: baseProjects, currentProject: null, isBootstrapped: bootstrapped };
+      }
+      const projects = baseProjects.some((project) => project.id === currentProject.id)
+        ? baseProjects.map((project) =>
             project.id === currentProject.id ? currentProject : project
           )
-        : [...state.projects, currentProject];
-      return { projects, currentProject };
+        : [...baseProjects, currentProject];
+      return { projects, currentProject, isBootstrapped: bootstrapped };
     });
 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
@@ -235,48 +247,61 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       return null;
     });
 
+    // Each of these rides along in the batched hydrate payload when the main
+    // process is new enough; the standalone IPC calls only fire as a fallback
+    // when the field is absent (older main process, or the safe-boot
+    // {ok:false} payload). Mirrors the systemTmpDir fallback above.
     const tabGroupsPromise =
       currentProjectId && options.hydrateTabGroups
-        ? projectClient
-            .getTabGroups(currentProjectId)
-            .then((tabGroups) => tabGroups ?? [])
-            .catch((error) => {
-              logWarn("Failed to prefetch tab groups", { error });
-              return null;
-            })
+        ? hydrateResult.tabGroups !== undefined
+          ? Promise.resolve(hydrateResult.tabGroups)
+          : projectClient
+              .getTabGroups(currentProjectId)
+              .then((tabGroups) => tabGroups ?? [])
+              .catch((error) => {
+                logWarn("Failed to prefetch tab groups", { error });
+                return null;
+              })
         : null;
 
     type TerminalSizeMap = Record<string, { cols: number; rows: number }>;
     const emptyTerminalSizes: TerminalSizeMap = {};
     const terminalSizesPromise: Promise<TerminalSizeMap> = currentProjectId
-      ? projectClient
-          .getTerminalSizes(currentProjectId)
-          .then((sizes) => sizes ?? emptyTerminalSizes)
-          .catch((error) => {
-            logWarn("Failed to prefetch terminal sizes", { error });
-            return emptyTerminalSizes;
-          })
+      ? hydrateResult.terminalSizes !== undefined
+        ? Promise.resolve(hydrateResult.terminalSizes)
+        : projectClient
+            .getTerminalSizes(currentProjectId)
+            .then((sizes) => sizes ?? emptyTerminalSizes)
+            .catch((error) => {
+              logWarn("Failed to prefetch terminal sizes", { error });
+              return emptyTerminalSizes;
+            })
       : Promise.resolve(emptyTerminalSizes);
 
     const emptyDraftInputs: Record<string, string> = {};
     const draftInputsPromise: Promise<Record<string, string>> = currentProjectId
-      ? projectClient
-          .getDraftInputs(currentProjectId)
-          .then((drafts) => drafts ?? emptyDraftInputs)
-          .catch((error) => {
-            logWarn("Failed to prefetch draft inputs", { error });
-            return emptyDraftInputs;
-          })
+      ? hydrateResult.draftInputs !== undefined
+        ? Promise.resolve(hydrateResult.draftInputs)
+        : projectClient
+            .getDraftInputs(currentProjectId)
+            .then((drafts) => drafts ?? emptyDraftInputs)
+            .catch((error) => {
+              logWarn("Failed to prefetch draft inputs", { error });
+              return emptyDraftInputs;
+            })
       : Promise.resolve(emptyDraftInputs);
 
     const emptyProjectPresets: Record<string, AgentPreset[]> = {};
-    const projectPresetsPromise: Promise<Record<string, AgentPreset[]>> =
-      currentProjectId && typeof projectClient.getInRepoPresets === "function"
-        ? projectClient.getInRepoPresets(currentProjectId).catch((error) => {
-            logWarn("Failed to prefetch project presets during hydration", { error });
-            return emptyProjectPresets;
-          })
-        : Promise.resolve(emptyProjectPresets);
+    const projectPresetsPromise: Promise<Record<string, AgentPreset[]>> = currentProjectId
+      ? hydrateResult.projectPresets !== undefined
+        ? Promise.resolve(hydrateResult.projectPresets)
+        : typeof projectClient.getInRepoPresets === "function"
+          ? projectClient.getInRepoPresets(currentProjectId).catch((error) => {
+              logWarn("Failed to prefetch project presets during hydration", { error });
+              return emptyProjectPresets;
+            })
+          : Promise.resolve(emptyProjectPresets)
+      : Promise.resolve(emptyProjectPresets);
 
     const recipeLoadPromise = currentProjectId
       ? loadRecipes(currentProjectId).catch((error) => {
@@ -321,6 +346,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     }
 
     if (currentProjectId) {
+      // Saved→restored panel id remap produced by restorePanelsPhase; consumed
+      // by the tab-group hydration block below. Declared here (not in the
+      // restore try) so it survives into that block even if panel restore
+      // throws, in which case it stays empty and tab groups hydrate unremapped
+      // exactly as before (#10440).
+      let savedIdToRestoredId = new Map<string, string>();
       try {
         const backendTerminals = await getForProjectPromise;
         finishGetForProjectSpan?.();
@@ -343,6 +374,42 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
         // Build a map of backend terminals by ID for quick lookup
         const backendTerminalMap = new Map(backendTerminals.map((t) => [t.id, t]));
+
+        // Prefetch reconnect probes for saved PTY panels that getForProject
+        // missed, in one bulk IPC, before the serialized spawn queue would
+        // otherwise fire them one-by-one (#10390). Spawn realization stays
+        // serialized inside restorePanelsPhase — only the probe lookup moves
+        // from "fire IPC inside the queue" to "read from this prefetch map".
+        // Timeout/failure resolves to undefined so panel restore falls back to
+        // the original per-panel probe path.
+        const reconnectPrefetchIds = (appState.terminals ?? [])
+          .filter((saved) => {
+            // A corrupt saved id would make the strict bulk handler reject the
+            // whole batch; keep it out so one bad panel can't disable the
+            // prefetch for the rest (it still gets its per-panel fallback).
+            if (!saved || typeof saved.id !== "string" || !saved.id.trim()) return false;
+            if (isSmokeTestTerminalId(saved.id)) return false;
+            if (backendTerminalMap.has(saved.id)) return false;
+            const kind = inferKind(saved);
+            return kind !== "assistant" && panelKindHasPty(kind);
+          })
+          .map((saved) => saved.id);
+        const reconnectPrefetchPromise: Promise<
+          Record<string, TerminalReconnectResult> | undefined
+        > =
+          reconnectPrefetchIds.length > 0 && typeof terminalClient.reconnectBulk === "function"
+            ? Promise.race([
+                terminalClient.reconnectBulk(reconnectPrefetchIds),
+                new Promise<undefined>((resolve) =>
+                  setTimeout(() => resolve(undefined), RECONNECT_TIMEOUT_MS)
+                ),
+              ]).catch((error: unknown) => {
+                logWarn("Bulk reconnect prefetch failed; falling back to per-panel probes", {
+                  error,
+                });
+                return undefined;
+              })
+            : Promise.resolve(undefined);
 
         // Fetch terminal sizes for restoration
         const terminalSizes = await terminalSizesPromise;
@@ -373,10 +440,13 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           logHydrationInfo(`Restoring ${appState.terminals.length} saved panel(s)`);
         }
 
-        const { restoreTasks } = await restorePanelsPhase(appState.terminals, {
+        const prefetchedReconnectResults = await reconnectPrefetchPromise;
+
+        const restoreResult = await restorePanelsPhase(appState.terminals, {
           addPanel,
           withHydrationBatch,
           backendTerminalMap,
+          prefetchedReconnectResults,
           terminalSizes,
           activeWorktreeId,
           projectRoot: projectRoot || "",
@@ -388,6 +458,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           safeMode: hydrateResult.safeMode,
           logHydrationInfo,
         });
+        const { restoreTasks } = restoreResult;
+        // Capture the saved→restored panel id remap so the tab-group block
+        // below (outside this try) can keep group membership intact when a
+        // panel respawned with a fresh id (#10440).
+        savedIdToRestoredId = restoreResult.savedIdToRestoredId;
 
         // Schedule scrollback restores at background priority — no blocking IPC
         // fetch on the critical path. The overlay can dismiss immediately and
@@ -430,7 +505,33 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
               logHydrationInfo("Clearing stale tab groups (no groups for project)");
             }
             tabGroupRestoreCount = tabGroups.length;
-            options.hydrateTabGroups(tabGroups);
+            // Remap persisted panel ids onto the ids panels actually restored
+            // under before handing off to hydrateTabGroups. A panel whose PTY
+            // reconnect timed out respawns with a fresh id, so its persisted
+            // tab-group entry points at a now-dead saved id; without this remap
+            // hydrateTabGroups filters that id out, the group shrinks to one
+            // member, and it is discarded and persisted away — permanently
+            // destroying the grouping (#10440). The map is sparse and empty
+            // whenever every panel kept its saved id, so the fast path leaves
+            // the original array untouched.
+            const remappedTabGroups =
+              savedIdToRestoredId.size > 0
+                ? tabGroups.map((group) =>
+                    // Leave malformed groups untouched so hydrateTabGroups' own
+                    // sanitizer handles them exactly as before — mapping over a
+                    // non-array panelIds here would throw and the catch below
+                    // would wipe every group for the session.
+                    Array.isArray(group.panelIds)
+                      ? {
+                          ...group,
+                          activeTabId:
+                            savedIdToRestoredId.get(group.activeTabId) ?? group.activeTabId,
+                          panelIds: group.panelIds.map((id) => savedIdToRestoredId.get(id) ?? id),
+                        }
+                      : group
+                  )
+                : tabGroups;
+            options.hydrateTabGroups(remappedTabGroups);
             markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_TAB_GROUPS_END, {
               tabGroupCount: tabGroupRestoreCount,
             });

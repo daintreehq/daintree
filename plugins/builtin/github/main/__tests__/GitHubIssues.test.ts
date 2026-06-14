@@ -40,7 +40,13 @@ vi.mock("../GitHubRepoContext.js", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { assignIssue, extractLinkedPR } from "../GitHubIssues.js";
+import { assignIssue, extractLinkedPR, listIssues } from "../GitHubIssues.js";
+import { GitHubAuth } from "../GitHubAuth.js";
+import {
+  issueListCache,
+  repoStatsCache,
+  invalidateRepoListCachesForCountChange,
+} from "../GitHubCaches.js";
 
 describe("assignIssue error handling", () => {
   beforeEach(() => {
@@ -250,10 +256,11 @@ describe("assignIssue cache invalidation", () => {
       number: 42,
       title: "Test Issue",
       bodyExcerpt: "excerpt",
-      state: "OPEN",
-      createdAt: "2024-01-01T00:00:00Z",
-      author: { login: "author", avatarUrl: "" },
-      assignees: [{ login: "olduser", avatarUrl: "" }],
+      state: "open",
+      rawState: "OPEN",
+      createdAt: Date.parse("2024-01-01T00:00:00Z"),
+      author: { login: "author", avatarUrl: "", rawData: null },
+      assignees: [{ login: "olduser", avatarUrl: "", rawData: null }],
       labels: [],
     });
 
@@ -275,9 +282,10 @@ describe("assignIssue cache invalidation", () => {
       number: 99,
       title: "Other Issue",
       bodyExcerpt: "excerpt",
-      state: "OPEN",
-      createdAt: "2024-01-01T00:00:00Z",
-      author: { login: "author", avatarUrl: "" },
+      state: "open",
+      rawState: "OPEN",
+      createdAt: Date.parse("2024-01-01T00:00:00Z"),
+      author: { login: "author", avatarUrl: "", rawData: null },
       assignees: [],
       labels: [],
     });
@@ -372,9 +380,10 @@ describe("assignIssue — tooltip cache preserved on failure", () => {
       number: 42,
       title: "Test",
       bodyExcerpt: "excerpt",
-      state: "OPEN" as const,
-      createdAt: "2024-01-01T00:00:00Z",
-      author: { login: "author", avatarUrl: "" },
+      state: "open" as const,
+      rawState: "OPEN",
+      createdAt: Date.parse("2024-01-01T00:00:00Z"),
+      author: { login: "author", avatarUrl: "", rawData: null },
       assignees: [],
       labels: [],
     };
@@ -390,5 +399,70 @@ describe("assignIssue — tooltip cache preserved on failure", () => {
 
     await expect(assignIssue("/test", 42, "someuser")).rejects.toThrow();
     expect(issueTooltipCache.get(tooltipKey)).toEqual(tooltipEntry);
+  });
+});
+
+describe("listIssues — mid-flight count-buster guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearGitHubCaches();
+  });
+
+  it("a response that started before a count bust neither repopulates the list cache nor rolls back the stats count", async () => {
+    let resolveQuery!: (value: unknown) => void;
+    const clientMock = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveQuery = resolve;
+        })
+    );
+    vi.mocked(GitHubAuth.createClient).mockReturnValueOnce(clientMock as never);
+
+    // The count poll has already committed the post-change total.
+    repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
+
+    const pending = listIssues({ cwd: "/test", bypassCache: true });
+    // The count buster fires while the list query is in flight.
+    invalidateRepoListCachesForCountChange("testowner", "testrepo", { issues: true, prs: false });
+
+    // The stale response carries the pre-change total.
+    resolveQuery({
+      repository: {
+        issues: {
+          totalCount: 5,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [],
+        },
+      },
+    });
+    const result = await pending;
+
+    // The caller still receives the page…
+    expect(result.totalCount).toBe(5);
+    // …but it must not be committed anywhere shared: the cache write would pin
+    // a pre-change page for 60s, and the stats write would roll the toolbar
+    // count back under a fresh lastUpdated.
+    expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+    expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(6);
+  });
+
+  it("an undisturbed response commits both the list cache and the stats count", async () => {
+    const clientMock = vi.fn(async () => ({
+      repository: {
+        issues: {
+          totalCount: 5,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [],
+        },
+      },
+    }));
+    vi.mocked(GitHubAuth.createClient).mockReturnValueOnce(clientMock as never);
+    repoStatsCache.set("testowner/testrepo", { issueCount: 6, prCount: 0, lastUpdated: 1 });
+
+    const result = await listIssues({ cwd: "/test", bypassCache: true });
+
+    expect(result.totalCount).toBe(5);
+    expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+    expect(repoStatsCache.get("testowner/testrepo")?.issueCount).toBe(5);
   });
 });

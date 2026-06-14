@@ -28,6 +28,14 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
 
   test("opens a terminal with SAB disabled", async () => {
     const { window } = ctx;
+    // SAB-based terminal transport is unavailable (PTY host runs in a UtilityProcess
+    // that can't share buffers), so the bridge hands back no transport buffers and the
+    // app falls through to the IPC path. The renderer's SharedArrayBuffer global may
+    // still exist — the load-bearing signal is the empty buffer handshake, not the global.
+    const buffers = await window.evaluate(() => window.electron.terminal.getSharedBuffers());
+    expect(buffers.signalBuffer).toBeNull();
+    expect(buffers.visualBuffers).toHaveLength(0);
+
     await openTerminal(window);
     const panel = getFirstGridPanel(window);
     await expect(panel).toBeVisible({ timeout: T_LONG });
@@ -77,14 +85,10 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
     );
     await waitForTerminalText(panel, "MULTI_BOTTOM", T_LONG);
 
-    await panel.locator(SEL.terminal.xtermRows).click();
-    await window.waitForTimeout(T_SETTLE);
-
-    for (let i = 0; i < 15; i++) {
-      await window.keyboard.press("Shift+PageUp");
-    }
-    await window.waitForTimeout(T_SETTLE);
-
+    // The scrollback buffer must retain the full 150-line run end-to-end via the
+    // IPC-fed ring buffer: the top sentinel and a mid-run line are only present if
+    // the lines scrolled out of the viewport were captured, not just the tail.
     await waitForTerminalText(panel, "MULTI_TOP", T_MEDIUM);
+    await waitForTerminalText(panel, "\n75\n", T_MEDIUM);
   });
 });

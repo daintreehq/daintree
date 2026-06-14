@@ -72,7 +72,7 @@ export function FindBar({ find }: FindBarProps) {
         aria-label="Find in page"
         aria-describedby={counterId}
         data-testid="find-bar-input"
-        className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-daintree-text/40 outline-hidden border border-transparent focus:border-border-strong transition-colors"
+        className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder outline-hidden border border-transparent focus:border-border-strong transition-colors"
         spellCheck={false}
       />
       <span
@@ -111,7 +111,7 @@ export function FindBar({ find }: FindBarProps) {
               type="button"
               onClick={goPrev}
               disabled={matchCount === 0}
-              className="p-0.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors text-daintree-text/70"
+              className="p-1 rounded hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none transition-colors text-daintree-text/70"
               aria-label="Previous match"
             >
               <ChevronUp className="w-3.5 h-3.5" />
@@ -127,7 +127,7 @@ export function FindBar({ find }: FindBarProps) {
               type="button"
               onClick={goNext}
               disabled={matchCount === 0}
-              className="p-0.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors text-daintree-text/70"
+              className="p-1 rounded hover:bg-overlay-medium disabled:opacity-40 disabled:pointer-events-none transition-colors text-daintree-text/70"
               aria-label="Next match"
             >
               <ChevronDown className="w-3.5 h-3.5" />
@@ -141,7 +141,7 @@ export function FindBar({ find }: FindBarProps) {
           <button
             type="button"
             onClick={close}
-            className="p-0.5 rounded hover:bg-overlay-medium transition-colors text-daintree-text/70"
+            className="p-1 rounded hover:bg-overlay-medium transition-colors text-daintree-text/70"
             aria-label="Close find bar"
           >
             <X className="w-3.5 h-3.5" />

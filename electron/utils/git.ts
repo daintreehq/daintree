@@ -45,10 +45,35 @@ function makeFileStatCacheKey(
   return `${headOid}:${absolutePath}:${mtimeMs}:${size}`;
 }
 
+// Untracked-file line counts are a pure function of file content, so the key
+// deliberately excludes HEAD OID — commits must not thrash these entries. The
+// prefix keeps them disjoint from tracked-diff keys in the shared cache.
+function makeUntrackedLineCountCacheKey(
+  absolutePath: string,
+  mtimeMs: number,
+  size: number
+): string {
+  return `untracked:${absolutePath}:${mtimeMs}:${size}`;
+}
+
 // Test-only: clear the per-file diff stat cache between cases. Production code
 // relies on (HEAD OID, mtime, size) self-invalidation and TTL eviction.
 export function __clearPerFileDiffStatCacheForTesting(): void {
   PER_FILE_DIFF_STAT_CACHE.clear();
+}
+
+// Cache last-commit metadata keyed on HEAD OID. The log output is a pure
+// function of the commit object, so the OID is sufficient for invalidation —
+// commits, amends, resets, and checkouts all change the OID. Per-worktree
+// bound (maxSize matches GIT_WORKTREE_CHANGES_CACHE) keeps memory stable
+// across long sessions with many worktrees.
+const LAST_COMMIT_LOG_CACHE = new Cache<string, string>({
+  maxSize: 100,
+  defaultTTL: 300_000,
+});
+
+export function __clearLastCommitLogCacheForTesting(): void {
+  LAST_COMMIT_LOG_CACHE.clear();
 }
 
 export type DiffStatMode = "staged" | "unstaged";
@@ -188,7 +213,7 @@ export function parseNumstat(diffOutput: string, gitRoot: string): Map<string, D
 
 export async function getCommitCount(cwd: string): Promise<number> {
   try {
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
     const count = await git.raw(["rev-list", "--count", "HEAD"]);
     return parseInt(count.trim(), 10);
   } catch (error) {
@@ -224,7 +249,7 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
   const { cwd, search, branch, skip = 0, limit = 30 } = options;
 
   try {
-    const git = createHardenedGit(cwd);
+    const git = await createHardenedGit(cwd);
 
     const totalCountStr = await git.raw(["rev-list", "--count", branch || "HEAD"]);
     const total = parseInt(totalCountStr.trim(), 10);
@@ -278,7 +303,7 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
 
 export async function getLatestTrackedFileMtime(worktreePath: string): Promise<number | null> {
   try {
-    const git = createHardenedGit(worktreePath);
+    const git = await createHardenedGit(worktreePath);
     const unixSeconds = await git.raw(["log", "-1", "--format=%ct"]);
     const parsed = Number.parseInt(unixSeconds.trim(), 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : null;
@@ -302,10 +327,12 @@ export interface GetWorktreeChangesOptions {
   wsl?: WslGitInvocation;
 }
 
-function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): SimpleGit {
+async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<SimpleGit> {
   if (opts.wsl) {
     try {
-      return createWslHardenedGit(opts.wsl);
+      // `await` so a rejected factory promise lands in this catch and falls
+      // back, matching the previous synchronous-throw behaviour.
+      return await createWslHardenedGit(opts.wsl);
     } catch {
       // Fall back to native git if the WSL invocation is rejected (e.g. wrong
       // platform, missing distro). Polling continues using the slower path.
@@ -356,7 +383,7 @@ export async function getWorktreeChangesWithStats(
     }
 
     try {
-      const git: SimpleGit = gitForChanges(cwd, options);
+      const git: SimpleGit = await gitForChanges(cwd, options);
       const status: StatusResult = await git.status();
 
       // Consolidate rev-parse into a single spawn; HEAD may not exist in empty
@@ -372,10 +399,20 @@ export async function getWorktreeChangesWithStats(
           return { headOid: "", toplevelRaw };
         });
 
-      const [{ toplevelRaw, headOid }, logOutput] = await Promise.all([
-        revParsePromise,
-        git.raw(["log", "-1", "--format=%at%x09%an%x09%ae%x09%s"]).catch(() => ""),
-      ]);
+      // Resolve rev-parse first so we can skip the log spawn when HEAD is
+      // unchanged. The log output is a pure function of the HEAD OID, so the
+      // cache self-invalidates on every commit, amend, reset, or checkout.
+      // On cache miss we spawn the log and store the result; empty-repo
+      // paths yield headOid="" and are not cached (always spawn).
+      const { toplevelRaw, headOid } = await revParsePromise;
+      const cachedLog = headOid ? LAST_COMMIT_LOG_CACHE.get(headOid) : undefined;
+      const logOutput =
+        cachedLog !== undefined
+          ? cachedLog
+          : await git.raw(["log", "-1", "--format=%at%x09%an%x09%ae%x09%s"]).catch(() => "");
+      if (headOid && cachedLog === undefined) {
+        LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
+      }
 
       const gitRoot = realpathSync(toplevelRaw.trim());
 
@@ -530,14 +567,10 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          const cacheKey = headOid
-            ? makeFileStatCacheKey(headOid, filePath, stats.mtimeMs, stats.size)
-            : "";
-          if (cacheKey) {
-            const cached = PER_FILE_DIFF_STAT_CACHE.get(cacheKey);
-            if (cached && cached.insertions !== null) {
-              return cached.insertions;
-            }
+          const cacheKey = makeUntrackedLineCountCacheKey(filePath, stats.mtimeMs, stats.size);
+          const cached = PER_FILE_DIFF_STAT_CACHE.get(cacheKey);
+          if (cached && cached.insertions !== null) {
+            return cached.insertions;
           }
 
           const buffer = await fs.readFile(filePath);
@@ -547,23 +580,18 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          const content = buffer.toString("utf-8");
-
+          // Count newline bytes directly — decoding up to 10MB to a string
+          // would double the allocation for no benefit (0x0A is unambiguous
+          // in UTF-8).
           let lineCount = 0;
-          if (content.length > 0) {
-            for (let i = 0; i < content.length; i++) {
-              if (content[i] === "\n") {
-                lineCount++;
-              }
-            }
-            if (content[content.length - 1] !== "\n") {
-              lineCount++;
-            }
+          for (let i = 0; i < buffer.length; i++) {
+            if (buffer[i] === 0x0a) lineCount++;
+          }
+          if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
+            lineCount++;
           }
 
-          if (cacheKey) {
-            PER_FILE_DIFF_STAT_CACHE.set(cacheKey, { insertions: lineCount, deletions: 0 });
-          }
+          PER_FILE_DIFF_STAT_CACHE.set(cacheKey, { insertions: lineCount, deletions: 0 });
 
           return lineCount;
         } catch (_error) {

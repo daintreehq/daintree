@@ -9,152 +9,147 @@
     ],
     "missing": []
   },
-  "chunkCount": 132,
+  "chunkCount": 151,
   "chunks": {
-    "_AccessibilityAnnouncer-CDfVFgQ-.js": {
-      "file": "assets/AccessibilityAnnouncer-CDfVFgQ-.js",
-      "raw": 1403,
-      "gzip": 700
+    "_AccessibilityAnnouncer-6aw3UBZP.js": {
+      "file": "assets/AccessibilityAnnouncer-6aw3UBZP.js",
+      "raw": 1360,
+      "gzip": 685
     },
-    "_ActionService-Beqsgx73.js": {
-      "file": "assets/ActionService-Beqsgx73.js",
-      "raw": 10989,
-      "gzip": 4221
+    "_ActionService-DzQ11XPi.js": {
+      "file": "assets/ActionService-DzQ11XPi.js",
+      "raw": 11596,
+      "gzip": 4477
     },
-    "_AgentShortcutCapture-dhff751h.js": {
-      "file": "assets/AgentShortcutCapture-dhff751h.js",
-      "raw": 1685,
-      "gzip": 894
+    "_AgentShortcutCapture-D9_Q0a1I.js": {
+      "file": "assets/AgentShortcutCapture-D9_Q0a1I.js",
+      "raw": 1859,
+      "gzip": 965
     },
-    "_DaintreeIcon-DDa5bNTl.js": {
-      "file": "assets/DaintreeIcon-DDa5bNTl.js",
-      "raw": 1858,
-      "gzip": 942
+    "_Avatar-BO8oB3_y.js": {
+      "file": "assets/Avatar-BO8oB3_y.js",
+      "raw": 1975,
+      "gzip": 1108
     },
-    "_DiffViewer-BqNT53n1.js": {
-      "file": "assets/DiffViewer-BqNT53n1.js",
-      "raw": 31833,
-      "gzip": 11846
+    "_DaintreeIcon-BbQ1Ebz0.js": {
+      "file": "assets/DaintreeIcon-BbQ1Ebz0.js",
+      "raw": 1816,
+      "gzip": 927
     },
-    "_GitHubDropdownSkeletons-5T1m4bJ1.js": {
-      "file": "assets/GitHubDropdownSkeletons-5T1m4bJ1.js",
-      "raw": 6499,
-      "gzip": 1995
+    "_DiagnosticsDock-0scoe-l0.js": {
+      "file": "assets/DiagnosticsDock-0scoe-l0.js",
+      "raw": 92985,
+      "gzip": 27610
     },
-    "_GitHubIcon-DVtG4h8j.js": {
-      "file": "assets/GitHubIcon-DVtG4h8j.js",
-      "raw": 1117,
-      "gzip": 701
+    "_DockPopoverChildContext-tjuATp2V.js": {
+      "file": "assets/DockPopoverChildContext-tjuATp2V.js",
+      "raw": 349,
+      "gzip": 260
     },
-    "_KeybindingService-Bff_chqf.js": {
-      "file": "assets/KeybindingService-Bff_chqf.js",
-      "raw": 42554,
-      "gzip": 9946
+    "_FileDiffModal-Bb-e81bj.js": {
+      "file": "assets/FileDiffModal-Bb-e81bj.js",
+      "raw": 7114,
+      "gzip": 3220
     },
-    "_LiveTimeAgo-Cd4M8_gR.js": {
-      "file": "assets/LiveTimeAgo-Cd4M8_gR.js",
-      "raw": 3263,
-      "gzip": 1610
+    "_GitHubDropdownSkeletons-CqI9cML4.js": {
+      "file": "assets/GitHubDropdownSkeletons-CqI9cML4.js",
+      "raw": 6457,
+      "gzip": 1981
     },
-    "_McpServerIcon-BKA1zJ2B.js": {
-      "file": "assets/McpServerIcon-BKA1zJ2B.js",
-      "raw": 1048,
-      "gzip": 635
+    "_GitHubIcon-N-ATSEvZ.js": {
+      "file": "assets/GitHubIcon-N-ATSEvZ.js",
+      "raw": 1075,
+      "gzip": 687
     },
-    "_PaletteStrip-mRoPMRSW.js": {
-      "file": "assets/PaletteStrip-mRoPMRSW.js",
-      "raw": 640,
-      "gzip": 439
+    "_KeybindingService-DiK-Ki5P.js": {
+      "file": "assets/KeybindingService-DiK-Ki5P.js",
+      "raw": 42694,
+      "gzip": 9983
     },
-    "_RecipeEditor-Bh2VzzFi.js": {
-      "file": "assets/RecipeEditor-Bh2VzzFi.js",
-      "raw": 16862,
-      "gzip": 4485
+    "_LiveTimeAgo-C0EWHxDl.js": {
+      "file": "assets/LiveTimeAgo-C0EWHxDl.js",
+      "raw": 3249,
+      "gzip": 1604
     },
-    "_ReviewHubContent-Ba1pqu2E.js": {
-      "file": "assets/ReviewHubContent-Ba1pqu2E.js",
-      "raw": 130464,
-      "gzip": 35940
+    "_McpServerIcon-DNR30SNp.js": {
+      "file": "assets/McpServerIcon-DNR30SNp.js",
+      "raw": 1006,
+      "gzip": 618
     },
-    "_SettingsSection-nQ6d22I6.js": {
-      "file": "assets/SettingsSection-nQ6d22I6.js",
-      "raw": 1570,
-      "gzip": 877
+    "_PaletteStrip-C3e5k4Ch.js": {
+      "file": "assets/PaletteStrip-C3e5k4Ch.js",
+      "raw": 598,
+      "gzip": 424
     },
-    "_SettingsShortcutCapture-BXKgEppd.js": {
-      "file": "assets/SettingsShortcutCapture-BXKgEppd.js",
-      "raw": 6552,
-      "gzip": 2371
+    "_RecipeEditor-Cs2X6E_t.js": {
+      "file": "assets/RecipeEditor-Cs2X6E_t.js",
+      "raw": 17207,
+      "gzip": 4590
     },
-    "_SettingsSubtabBar-BKrqzF0S.js": {
-      "file": "assets/SettingsSubtabBar-BKrqzF0S.js",
-      "raw": 1815,
-      "gzip": 961
+    "_ReviewHubContent-DTvLe6Ux.js": {
+      "file": "assets/ReviewHubContent-DTvLe6Ux.js",
+      "raw": 88511,
+      "gzip": 24401
     },
-    "_SettingsSwitch-DEhVM6sG.js": {
-      "file": "assets/SettingsSwitch-DEhVM6sG.js",
-      "raw": 2021,
-      "gzip": 878
+    "_SettingsLoadErrorBanner-CzPEcfcy.js": {
+      "file": "assets/SettingsLoadErrorBanner-CzPEcfcy.js",
+      "raw": 936,
+      "gzip": 542
     },
-    "_SettingsSwitchCard-BfQNi5Oi.js": {
-      "file": "assets/SettingsSwitchCard-BfQNi5Oi.js",
-      "raw": 4134,
-      "gzip": 1962
+    "_SettingsShortcutCapture-BTm2oPFj.js": {
+      "file": "assets/SettingsShortcutCapture-BTm2oPFj.js",
+      "raw": 6550,
+      "gzip": 2380
     },
-    "_Spinner-CrAxZ4jm.js": {
-      "file": "assets/Spinner-CrAxZ4jm.js",
-      "raw": 580,
-      "gzip": 400
+    "_SettingsValidationRegistry-Dc8XDGpe.js": {
+      "file": "assets/SettingsValidationRegistry-Dc8XDGpe.js",
+      "raw": 1358,
+      "gzip": 754
     },
-    "_TerminalInstanceService-zZ2hcbHA.js": {
-      "file": "assets/TerminalInstanceService-zZ2hcbHA.js",
-      "raw": 247981,
-      "gzip": 64909
+    "_TerminalInstanceService-Bltle8fP.js": {
+      "file": "assets/TerminalInstanceService-Bltle8fP.js",
+      "raw": 248366,
+      "gzip": 64819
     },
-    "_TruncatedTooltip-7Jw2eUX-.js": {
-      "file": "assets/TruncatedTooltip-7Jw2eUX-.js",
-      "raw": 2682,
-      "gzip": 1366
+    "_WorktreeSidebarSearchBar-IBoQ3DKB.js": {
+      "file": "assets/WorktreeSidebarSearchBar-IBoQ3DKB.js",
+      "raw": 219174,
+      "gzip": 68106
     },
-    "_WorktreeSidebarSearchBar-BG8UM-NB.js": {
-      "file": "assets/WorktreeSidebarSearchBar-BG8UM-NB.js",
-      "raw": 228180,
-      "gzip": 70217
+    "_accessibilityAnnouncerStore-DQRLpKOH.js": {
+      "file": "assets/accessibilityAnnouncerStore-DQRLpKOH.js",
+      "raw": 658,
+      "gzip": 408
     },
-    "_accessibilityAnnouncerStore-ajE887GM.js": {
-      "file": "assets/accessibilityAnnouncerStore-ajE887GM.js",
-      "raw": 565,
-      "gzip": 341
+    "_actionPaletteSearch-CV4vPfNv.js": {
+      "file": "assets/actionPaletteSearch-CV4vPfNv.js",
+      "raw": 2477,
+      "gzip": 1198
     },
-    "_actionPaletteSearch-BJB4PU95.js": {
-      "file": "assets/actionPaletteSearch-BJB4PU95.js",
-      "raw": 2366,
-      "gzip": 1124
-    },
-    "_actionPrefsStore-BLR2G0t3.js": {
-      "file": "assets/actionPrefsStore-BLR2G0t3.js",
-      "raw": 2198,
-      "gzip": 889
+    "_actionPrefsStore-DHBFKoT1.js": {
+      "file": "assets/actionPrefsStore-DHBFKoT1.js",
+      "raw": 2291,
+      "gzip": 958
     },
     "_agentIds-CjIYvJsG.js": {
       "file": "assets/agentIds-CjIYvJsG.js",
       "raw": 284,
       "gzip": 212
     },
-    "_agentRegistry-CnFEYj6E.js": {
-      "file": "assets/agentRegistry-CnFEYj6E.js",
-      "raw": 41711,
-      "gzip": 9314
+    "_agentRegistry-DFZWubWm.js": {
+      "file": "assets/agentRegistry-DFZWubWm.js",
+      "raw": 42433,
+      "gzip": 9434
     },
-    "_agentSettingsStore-DdwXVBlo.js": {
-      "file": "assets/agentSettingsStore-DdwXVBlo.js",
-      "raw": 11063,
-      "gzip": 3717
+    "_agentSettingsStore-C1qwhwty.js": {
+      "file": "assets/agentSettingsStore-C1qwhwty.js",
+      "raw": 12343,
+      "gzip": 4247
     },
-    "_agents-B9RRxTZP.js": {
-      "file": "assets/agents-B9RRxTZP.js",
-      "raw": 56629,
-      "gzip": 18355
+    "_agents-Ct96l_VY.js": {
+      "file": "assets/agents-Ct96l_VY.js",
+      "raw": 56587,
+      "gzip": 18339
     },
     "_animationUtils-CjbAl3EI.js": {
       "file": "assets/animationUtils-CjbAl3EI.js",
@@ -171,55 +166,55 @@
       "raw": 732,
       "gzip": 229
     },
-    "_appThemeStore-DX3auRav.js": {
-      "file": "assets/appThemeStore-DX3auRav.js",
-      "raw": 99804,
-      "gzip": 23248
+    "_appThemeStore-B9KUqAg8.js": {
+      "file": "assets/appThemeStore-B9KUqAg8.js",
+      "raw": 108982,
+      "gzip": 25736
     },
-    "_appThemeViewTransition-JeRFoh_P.js": {
-      "file": "assets/appThemeViewTransition-JeRFoh_P.js",
-      "raw": 1398,
-      "gzip": 779
-    },
-    "_branchPrefixes-7aMa_TF3.js": {
-      "file": "assets/branchPrefixes-7aMa_TF3.js",
+    "_branchPrefixes-BqReXQUb.js": {
+      "file": "assets/branchPrefixes-BqReXQUb.js",
       "raw": 1358,
-      "gzip": 522
+      "gzip": 524
     },
-    "_button--txbbXNn.js": {
-      "file": "assets/button--txbbXNn.js",
-      "raw": 5989,
-      "gzip": 2132
+    "_builtinRendererRegistry-mWVS5ukH.js": {
+      "file": "assets/builtinRendererRegistry-mWVS5ukH.js",
+      "raw": 667,
+      "gzip": 424
+    },
+    "_button-CorTiQae.js": {
+      "file": "assets/button-CorTiQae.js",
+      "raw": 6424,
+      "gzip": 2386
     },
     "_categoryColors-BS5bIvxQ.js": {
       "file": "assets/categoryColors-BS5bIvxQ.js",
       "raw": 2599,
       "gzip": 655
     },
-    "_checklistItems-CphKuYPw.js": {
-      "file": "assets/checklistItems-CphKuYPw.js",
-      "raw": 799,
-      "gzip": 456
-    },
     "_clientAppError-jdvMvyXj.js": {
       "file": "assets/clientAppError-jdvMvyXj.js",
       "raw": 349,
       "gzip": 259
     },
-    "_clients-BvpupytF.js": {
-      "file": "assets/clients-BvpupytF.js",
-      "raw": 21101,
-      "gzip": 5372
+    "_clientGitError-Tu3vWCWX.js": {
+      "file": "assets/clientGitError-Tu3vWCWX.js",
+      "raw": 475,
+      "gzip": 320
     },
-    "_clike-BFiq8qGV.js": {
-      "file": "assets/clike-BFiq8qGV.js",
-      "raw": 768,
-      "gzip": 483
+    "_clients-p-_pco24.js": {
+      "file": "assets/clients-p-_pco24.js",
+      "raw": 25545,
+      "gzip": 7031
     },
-    "_colorUtils-4uQ5q06O.js": {
-      "file": "assets/colorUtils-4uQ5q06O.js",
+    "_clipboardSanitize-BR4uYapM.js": {
+      "file": "assets/clipboardSanitize-BR4uYapM.js",
+      "raw": 101,
+      "gzip": 118
+    },
+    "_colorUtils-BXbIHuvj.js": {
+      "file": "assets/colorUtils-BXbIHuvj.js",
       "raw": 386,
-      "gzip": 258
+      "gzip": 256
     },
     "_commandsClient-DYWBRrwZ.js": {
       "file": "assets/commandsClient-DYWBRrwZ.js",
@@ -231,40 +226,45 @@
       "raw": 507,
       "gzip": 197
     },
-    "_css-Dq8_3G65.js": {
-      "file": "assets/css-Dq8_3G65.js",
-      "raw": 1295,
-      "gzip": 646
+    "_deriveEffectiveTier-B9U-GxdG.js": {
+      "file": "assets/deriveEffectiveTier-B9U-GxdG.js",
+      "raw": 275,
+      "gzip": 208
     },
     "_devServerDetection-CsVYjR2e.js": {
       "file": "assets/devServerDetection-CsVYjR2e.js",
       "raw": 926,
       "gzip": 523
     },
-    "_diagnosticsReviewStore-B_gXowZr.js": {
-      "file": "assets/diagnosticsReviewStore-B_gXowZr.js",
-      "raw": 1807,
-      "gzip": 881
+    "_diagnosticsReviewStore-rD-O2mlC.js": {
+      "file": "assets/diagnosticsReviewStore-rD-O2mlC.js",
+      "raw": 1900,
+      "gzip": 943
+    },
+    "_distributionStore-BouYZUJ_.js": {
+      "file": "assets/distributionStore-BouYZUJ_.js",
+      "raw": 946,
+      "gzip": 514
     },
     "_errorContext-BVRF90hs.js": {
       "file": "assets/errorContext-BVRF90hs.js",
       "raw": 2165,
       "gzip": 909
     },
-    "_errorMessage-BapfRg4A.js": {
-      "file": "assets/errorMessage-BapfRg4A.js",
-      "raw": 3457,
-      "gzip": 1390
+    "_errorMessage-MPsshAe0.js": {
+      "file": "assets/errorMessage-MPsshAe0.js",
+      "raw": 3675,
+      "gzip": 1494
     },
     "_filesClient-l9UrgdV_.js": {
       "file": "assets/filesClient-l9UrgdV_.js",
       "raw": 445,
       "gzip": 301
     },
-    "_forgeProviderIds-81y-ldQY.js": {
-      "file": "assets/forgeProviderIds-81y-ldQY.js",
-      "raw": 221,
-      "gzip": 170
+    "_forgeHostnames-oASChYRn.js": {
+      "file": "assets/forgeHostnames-oASChYRn.js",
+      "raw": 597,
+      "gzip": 347
     },
     "_formatBytes-ClVVsV50.js": {
       "file": "assets/formatBytes-ClVVsV50.js",
@@ -276,35 +276,35 @@
       "raw": 352,
       "gzip": 218
     },
-    "_gitPullRebaseConfirmStore-AxPLavdB.js": {
-      "file": "assets/gitPullRebaseConfirmStore-AxPLavdB.js",
-      "raw": 361,
-      "gzip": 223
+    "_generatedFileClassifier-D0TX0ln_.js": {
+      "file": "assets/generatedFileClassifier-D0TX0ln_.js",
+      "raw": 1381,
+      "gzip": 684
     },
-    "_gitPushConfirmStore-AxPLavdB.js": {
-      "file": "assets/gitPushConfirmStore-AxPLavdB.js",
-      "raw": 361,
-      "gzip": 223
+    "_gitConstants-B-E5rUts.js": {
+      "file": "assets/gitConstants-B-E5rUts.js",
+      "raw": 98,
+      "gzip": 104
     },
-    "_githubConfigStore-WZS59oOC.js": {
-      "file": "assets/githubConfigStore-WZS59oOC.js",
-      "raw": 654,
-      "gzip": 332
+    "_gitPullRebaseConfirmStore-D-K0q1v1.js": {
+      "file": "assets/gitPullRebaseConfirmStore-D-K0q1v1.js",
+      "raw": 454,
+      "gzip": 283
     },
-    "_githubRateLimitStore-Dg-_ZMHw.js": {
-      "file": "assets/githubRateLimitStore-Dg-_ZMHw.js",
-      "raw": 2823,
-      "gzip": 1388
+    "_gitPushConfirmStore-D-K0q1v1.js": {
+      "file": "assets/gitPushConfirmStore-D-K0q1v1.js",
+      "raw": 454,
+      "gzip": 283
     },
     "_globalEnvClient-CvP9Ykdb.js": {
       "file": "assets/globalEnvClient-CvP9Ykdb.js",
       "raw": 436,
       "gzip": 274
     },
-    "_helpPanelStore-cE1pmsfE.js": {
-      "file": "assets/helpPanelStore-cE1pmsfE.js",
-      "raw": 2961,
-      "gzip": 1107
+    "_helpPanelStore-DF3WFuq8.js": {
+      "file": "assets/helpPanelStore-DF3WFuq8.js",
+      "raw": 3185,
+      "gzip": 1192
     },
     "_kbdShortcut-DwZEG1yq.js": {
       "file": "assets/kbdShortcut-DwZEG1yq.js",
@@ -321,55 +321,65 @@
       "raw": 625,
       "gzip": 212
     },
-    "_markup-BoEddWVz.js": {
-      "file": "assets/markup-BoEddWVz.js",
-      "raw": 2941,
-      "gzip": 1177
+    "_mcpAnomalyStore-cM3WVKGY.js": {
+      "file": "assets/mcpAnomalyStore-cM3WVKGY.js",
+      "raw": 874,
+      "gzip": 521
     },
-    "_mcpConfirmStore-BBd4KJKJ.js": {
-      "file": "assets/mcpConfirmStore-BBd4KJKJ.js",
-      "raw": 806,
-      "gzip": 430
+    "_mcpConfirmStore-DfeA1n2C.js": {
+      "file": "assets/mcpConfirmStore-DfeA1n2C.js",
+      "raw": 899,
+      "gzip": 495
     },
-    "_memoryLeakConfigStore-CIhaCtv2.js": {
-      "file": "assets/memoryLeakConfigStore-CIhaCtv2.js",
-      "raw": 304,
-      "gzip": 199
+    "_memoryLeakConfigStore-Cg6SKcBG.js": {
+      "file": "assets/memoryLeakConfigStore-Cg6SKcBG.js",
+      "raw": 397,
+      "gzip": 262
     },
     "_normalizeErrorMessage-LQxevj8G.js": {
       "file": "assets/normalizeErrorMessage-LQxevj8G.js",
       "raw": 578,
       "gzip": 284
     },
-    "_notificationSettingsStore-BLFelR_e.js": {
-      "file": "assets/notificationSettingsStore-BLFelR_e.js",
-      "raw": 2377,
-      "gzip": 724
+    "_notificationCount-ehF2voEy.js": {
+      "file": "assets/notificationCount-ehF2voEy.js",
+      "raw": 217,
+      "gzip": 160
     },
-    "_notify-C2V2mkpM.js": {
-      "file": "assets/notify-C2V2mkpM.js",
-      "raw": 12443,
-      "gzip": 4477
+    "_notificationSettingsStore-aonVhk5B.js": {
+      "file": "assets/notificationSettingsStore-aonVhk5B.js",
+      "raw": 2470,
+      "gzip": 787
     },
-    "_panelKindRegistry-SrJ3IdPG.js": {
-      "file": "assets/panelKindRegistry-SrJ3IdPG.js",
+    "_notify-Tj8D_fmu.js": {
+      "file": "assets/notify-Tj8D_fmu.js",
+      "raw": 12563,
+      "gzip": 4548
+    },
+    "_panelKindRegistry-5Cd9UEIT.js": {
+      "file": "assets/panelKindRegistry-5Cd9UEIT.js",
       "raw": 3409,
-      "gzip": 1312
+      "gzip": 1311
     },
-    "_panelLimitStore-YISChPmp.js": {
-      "file": "assets/panelLimitStore-YISChPmp.js",
-      "raw": 3139,
-      "gzip": 1239
+    "_panelLimitStore-D2qJNVZi.js": {
+      "file": "assets/panelLimitStore-D2qJNVZi.js",
+      "raw": 3365,
+      "gzip": 1327
     },
-    "_panelSpawning-Ciluof5r.js": {
-      "file": "assets/panelSpawning-Ciluof5r.js",
-      "raw": 12797,
-      "gzip": 4891
+    "_panelSpawning-5fzCnCgt.js": {
+      "file": "assets/panelSpawning-5fzCnCgt.js",
+      "raw": 12651,
+      "gzip": 4826
     },
     "_path-CSFlL01-.js": {
       "file": "assets/path-CSFlL01-.js",
       "raw": 1234,
       "gzip": 605
+    },
+    "_performance-BZIFBHlg.js": {
+      "file": "assets/performance-BZIFBHlg.js",
+      "raw": 2402,
+      "gzip": 1026
     },
     "_persistedStoreRegistry-DUkNedAi.js": {
       "file": "assets/persistedStoreRegistry-DUkNedAi.js",
@@ -381,15 +391,20 @@
       "raw": 587,
       "gzip": 263
     },
-    "_pluginConfirmStore-7GXk117x.js": {
-      "file": "assets/pluginConfirmStore-7GXk117x.js",
-      "raw": 833,
-      "gzip": 439
+    "_pluginConfirmStore-BC4-ImJ8.js": {
+      "file": "assets/pluginConfirmStore-BC4-ImJ8.js",
+      "raw": 926,
+      "gzip": 505
     },
-    "_pluginMcpConfirmStore-BwLu9d9g.js": {
-      "file": "assets/pluginMcpConfirmStore-BwLu9d9g.js",
-      "raw": 654,
-      "gzip": 357
+    "_pluginMcpConfirmStore-BeyreFUU.js": {
+      "file": "assets/pluginMcpConfirmStore-BeyreFUU.js",
+      "raw": 747,
+      "gzip": 425
+    },
+    "_pluginRuntimeStore-uQivqdTd.js": {
+      "file": "assets/pluginRuntimeStore-uQivqdTd.js",
+      "raw": 636,
+      "gzip": 412
     },
     "_preload-helper-BuFhgTb3.js": {
       "file": "assets/preload-helper-BuFhgTb3.js",
@@ -401,105 +416,90 @@
       "raw": 224,
       "gzip": 170
     },
-    "_projectPresetsStore-g4kXMWyy.js": {
-      "file": "assets/projectPresetsStore-g4kXMWyy.js",
-      "raw": 287,
-      "gzip": 175
+    "_projectPresetsStore-C-Bx9GKJ.js": {
+      "file": "assets/projectPresetsStore-C-Bx9GKJ.js",
+      "raw": 380,
+      "gzip": 238
     },
-    "_projectSettingsStore-DhKXAZIE.js": {
-      "file": "assets/projectSettingsStore-DhKXAZIE.js",
-      "raw": 1920,
-      "gzip": 833
+    "_projectSettingsStore-Cnu5sibe.js": {
+      "file": "assets/projectSettingsStore-Cnu5sibe.js",
+      "raw": 2013,
+      "gzip": 903
     },
-    "_projectStore-DBhBN1cX.js": {
-      "file": "assets/projectStore-DBhBN1cX.js",
-      "raw": 15231,
-      "gzip": 5099
+    "_projectStore-DEYzbBXV.js": {
+      "file": "assets/projectStore-DEYzbBXV.js",
+      "raw": 15723,
+      "gzip": 5271
     },
-    "_radix-loader-BvpL77U3.js": {
-      "file": "assets/radix-loader-BvpL77U3.js",
-      "raw": 1065,
-      "gzip": 587
+    "_radix-loader-D_IFZ7pg.js": {
+      "file": "assets/radix-loader-D_IFZ7pg.js",
+      "raw": 991,
+      "gzip": 565
     },
-    "_recipeConflictStore-DvfSuC1W.js": {
-      "file": "assets/recipeConflictStore-DvfSuC1W.js",
-      "raw": 363,
-      "gzip": 220
+    "_recipeConflictStore-D9To0aa4.js": {
+      "file": "assets/recipeConflictStore-D9To0aa4.js",
+      "raw": 456,
+      "gzip": 282
     },
-    "_recipeNotify-DJ6zaNT7.js": {
-      "file": "assets/recipeNotify-DJ6zaNT7.js",
-      "raw": 630,
-      "gzip": 362
+    "_recipeStore-jnnHNeZS.js": {
+      "file": "assets/recipeStore-jnnHNeZS.js",
+      "raw": 15163,
+      "gzip": 5021
     },
-    "_recipeStore-B2RHqDyD.js": {
-      "file": "assets/recipeStore-B2RHqDyD.js",
-      "raw": 15070,
-      "gzip": 4974
-    },
-    "_resourceMonitoringStore-DirxJ2-L.js": {
-      "file": "assets/resourceMonitoringStore-DirxJ2-L.js",
-      "raw": 3002,
-      "gzip": 1301
+    "_resourceMonitoringStore-BicWGIu1.js": {
+      "file": "assets/resourceMonitoringStore-BicWGIu1.js",
+      "raw": 3093,
+      "gzip": 1364
     },
     "_rolldown-runtime-Cyuzqnbw.js": {
       "file": "assets/rolldown-runtime-Cyuzqnbw.js",
       "raw": 826,
       "gzip": 473
     },
-    "_safeStorage-Bvtq_U5I.js": {
-      "file": "assets/safeStorage-Bvtq_U5I.js",
-      "raw": 5449,
-      "gzip": 2042
+    "_safeStorage-Df2YunCz.js": {
+      "file": "assets/safeStorage-Df2YunCz.js",
+      "raw": 3608,
+      "gzip": 1318
     },
-    "_safeStringify-Dr5gG76m.js": {
-      "file": "assets/safeStringify-Dr5gG76m.js",
-      "raw": 403,
-      "gzip": 276
+    "_safeStringify-ClGBoy1K.js": {
+      "file": "assets/safeStringify-ClGBoy1K.js",
+      "raw": 460,
+      "gzip": 319
     },
     "_scrollback-B04snv6N.js": {
       "file": "assets/scrollback-B04snv6N.js",
       "raw": 201,
       "gzip": 175
     },
-    "_settingsTabRegistry-DDJeUVIB.js": {
-      "file": "assets/settingsTabRegistry-DDJeUVIB.js",
-      "raw": 71828,
-      "gzip": 18504
-    },
-    "_sortableAnnouncements-D1sWsZ0j.js": {
-      "file": "assets/sortableAnnouncements-D1sWsZ0j.js",
-      "raw": 7603,
-      "gzip": 2951
-    },
-    "_storeAccessors-DH_ZiOxi.js": {
-      "file": "assets/storeAccessors-DH_ZiOxi.js",
-      "raw": 7511,
-      "gzip": 2309
+    "_storeAccessors-BrJLIzXx.js": {
+      "file": "assets/storeAccessors-BrJLIzXx.js",
+      "raw": 7549,
+      "gzip": 2313
     },
     "_svg-DOXfJCEr.js": {
       "file": "assets/svg-DOXfJCEr.js",
       "raw": 121,
       "gzip": 127
     },
-    "_svgSanitizer-DLAuoI4G.js": {
-      "file": "assets/svgSanitizer-DLAuoI4G.js",
-      "raw": 1966,
-      "gzip": 999
+    "_svgSanitizer-AYn_q4zm.js": {
+      "file": "assets/svgSanitizer-AYn_q4zm.js",
+      "raw": 2742,
+      "gzip": 1372
     },
-    "_systemWakeStore-C-ila6Pz.js": {
-      "file": "assets/systemWakeStore-C-ila6Pz.js",
-      "raw": 5371,
-      "gzip": 2423
+    "_systemWakeStore-DXRZivNy.js": {
+      "file": "assets/systemWakeStore-DXRZivNy.js",
+      "raw": 5936,
+      "gzip": 2699
     },
-    "_terminalChrome-D-1xqUi7.js": {
-      "file": "assets/terminalChrome-D-1xqUi7.js",
+    "_terminalChrome-BuHr6_9I.js": {
+      "file": "assets/terminalChrome-BuHr6_9I.js",
       "raw": 2526,
-      "gzip": 974
+      "gzip": 976
     },
-    "_terminalColorSchemeStore-DZUJdPiQ.js": {
-      "file": "assets/terminalColorSchemeStore-DZUJdPiQ.js",
-      "raw": 18192,
-      "gzip": 5162
+    "_terminalColorSchemeStore-Dr2CI89V.js": {
+      "file": "assets/terminalColorSchemeStore-Dr2CI89V.js",
+      "raw": 18497,
+      "gzip": 5302
     },
     "_terminalConfigClient-gwxZMd4Q.js": {
       "file": "assets/terminalConfigClient-gwxZMd4Q.js",
@@ -511,173 +511,268 @@
       "raw": 686,
       "gzip": 427
     },
-    "_terminalInputStore-OuBaRRDJ.js": {
-      "file": "assets/terminalInputStore-OuBaRRDJ.js",
-      "raw": 7703,
-      "gzip": 2749
+    "_terminalInputStore-BpqiQ9uk.js": {
+      "file": "assets/terminalInputStore-BpqiQ9uk.js",
+      "raw": 8300,
+      "gzip": 2875
     },
-    "_twoPaneSplitStore-BBuUQj-Y.js": {
-      "file": "assets/twoPaneSplitStore-BBuUQj-Y.js",
-      "raw": 2148,
-      "gzip": 951
+    "_tooltip-DvUTL8CZ.js": {
+      "file": "assets/tooltip-DvUTL8CZ.js",
+      "raw": 9246,
+      "gzip": 3986
     },
-    "_uiStore-DzcVYjGo.js": {
-      "file": "assets/uiStore-DzcVYjGo.js",
-      "raw": 7357,
-      "gzip": 2326
+    "_twoPaneSplitStore-TxFFwrUj.js": {
+      "file": "assets/twoPaneSplitStore-TxFFwrUj.js",
+      "raw": 2374,
+      "gzip": 1036
     },
-    "_useAgentDiscoveryOnboarding-BLoWrhwx.js": {
-      "file": "assets/useAgentDiscoveryOnboarding-BLoWrhwx.js",
-      "raw": 2768,
-      "gzip": 1045
+    "_uiStore-CorTrTBZ.js": {
+      "file": "assets/uiStore-CorTrTBZ.js",
+      "raw": 7573,
+      "gzip": 2409
     },
-    "_useDebounce-CM3dYzsI.js": {
-      "file": "assets/useDebounce-CM3dYzsI.js",
-      "raw": 410,
-      "gzip": 286
+    "_useAgentDiscoveryOnboarding-WADUTw1O.js": {
+      "file": "assets/useAgentDiscoveryOnboarding-WADUTw1O.js",
+      "raw": 2824,
+      "gzip": 1100
     },
-    "_useEscapeStack-CufWCqdR.js": {
-      "file": "assets/useEscapeStack-CufWCqdR.js",
-      "raw": 2817,
-      "gzip": 1197
+    "_useBranchForPath-DqZ9Tpws.js": {
+      "file": "assets/useBranchForPath-DqZ9Tpws.js",
+      "raw": 354,
+      "gzip": 263
     },
-    "_useFindInPage-CJUqgPrm.js": {
-      "file": "assets/useFindInPage-CJUqgPrm.js",
-      "raw": 35236,
-      "gzip": 10297
+    "_useCopyWithFeedback-CwbRFWXh.js": {
+      "file": "assets/useCopyWithFeedback-CwbRFWXh.js",
+      "raw": 1039,
+      "gzip": 633
     },
-    "_useMcpReadiness-D2ERJ6lz.js": {
-      "file": "assets/useMcpReadiness-D2ERJ6lz.js",
-      "raw": 1289,
-      "gzip": 724
+    "_useDebounce-BWFJHUvm.js": {
+      "file": "assets/useDebounce-BWFJHUvm.js",
+      "raw": 368,
+      "gzip": 269
     },
-    "_useResizeObserverRaf-B1H1Zpw2.js": {
-      "file": "assets/useResizeObserverRaf-B1H1Zpw2.js",
-      "raw": 36907,
-      "gzip": 11437
+    "_useEscapeStack-GZgn5zc_.js": {
+      "file": "assets/useEscapeStack-GZgn5zc_.js",
+      "raw": 2775,
+      "gzip": 1183
     },
-    "_utils-_gwFrnzV.js": {
-      "file": "assets/utils-_gwFrnzV.js",
-      "raw": 218,
-      "gzip": 194
+    "_useFindInPage-DJma4P95.js": {
+      "file": "assets/useFindInPage-DJma4P95.js",
+      "raw": 35173,
+      "gzip": 10378
     },
-    "_vendor-BFOg8uMJ.js": {
-      "file": "assets/vendor-BFOg8uMJ.js",
-      "raw": 425518,
-      "gzip": 137378
+    "_useImageError-ze1Flheh.js": {
+      "file": "assets/useImageError-ze1Flheh.js",
+      "raw": 580,
+      "gzip": 383
     },
-    "_vendor-editor-B3sMcg9f.js": {
-      "file": "assets/vendor-editor-B3sMcg9f.js",
-      "raw": 450913,
-      "gzip": 145635
+    "_useMcpReadiness-CZDMjsDe.js": {
+      "file": "assets/useMcpReadiness-CZDMjsDe.js",
+      "raw": 1247,
+      "gzip": 707
     },
-    "_vendor-icons-C8xWPkuE.js": {
-      "file": "assets/vendor-icons-C8xWPkuE.js",
-      "raw": 50252,
-      "gzip": 15025
+    "_usePluginToolbarButtons-C2b9Kosu.js": {
+      "file": "assets/usePluginToolbarButtons-C2b9Kosu.js",
+      "raw": 7304,
+      "gzip": 2710
     },
-    "_vendor-motion~App-VsZUhQx4.js": {
-      "file": "assets/vendor-motion~App-VsZUhQx4.js",
-      "raw": 1075,
-      "gzip": 605
+    "_useResizeObserverRaf-BrYt9MTX.js": {
+      "file": "assets/useResizeObserverRaf-BrYt9MTX.js",
+      "raw": 36845,
+      "gzip": 11397
     },
-    "_vendor-motion~App~WorktreeOverviewModal-C6SQasSZ.js": {
-      "file": "assets/vendor-motion~App~WorktreeOverviewModal-C6SQasSZ.js",
-      "raw": 7612,
-      "gzip": 3358
+    "_useResolvedForgeProvider-ft6MdfWc.js": {
+      "file": "assets/useResolvedForgeProvider-ft6MdfWc.js",
+      "raw": 1832,
+      "gzip": 924
     },
-    "_vendor-motion~App~motionFeatures~WorktreeOverviewModal-ywDVJ3sf.js": {
-      "file": "assets/vendor-motion~App~motionFeatures~WorktreeOverviewModal-ywDVJ3sf.js",
+    "_useTabLoad-D3oEG-1h.js": {
+      "file": "assets/useTabLoad-D3oEG-1h.js",
+      "raw": 1487,
+      "gzip": 786
+    },
+    "_useWorktreeTerminals-DlaXr-XE.js": {
+      "file": "assets/useWorktreeTerminals-DlaXr-XE.js",
+      "raw": 2093,
+      "gzip": 1107
+    },
+    "_utils-FwNA2_4C.js": {
+      "file": "assets/utils-FwNA2_4C.js",
+      "raw": 305,
+      "gzip": 260
+    },
+    "_vendor-icons-vxhgtUiA.js": {
+      "file": "assets/vendor-icons-vxhgtUiA.js",
+      "raw": 52533,
+      "gzip": 15475
+    },
+    "_vendor-motion~App-B0BPcFUa.js": {
+      "file": "assets/vendor-motion~App-B0BPcFUa.js",
+      "raw": 1072,
+      "gzip": 603
+    },
+    "_vendor-motion~App~WorktreeOverviewModal-BkRfyTDs.js": {
+      "file": "assets/vendor-motion~App~WorktreeOverviewModal-BkRfyTDs.js",
+      "raw": 7610,
+      "gzip": 3356
+    },
+    "_vendor-motion~App~motionFeatures~WorktreeOverviewModal-B5YOKNrE.js": {
+      "file": "assets/vendor-motion~App~motionFeatures~WorktreeOverviewModal-B5YOKNrE.js",
       "raw": 28096,
-      "gzip": 11064
+      "gzip": 11062
     },
-    "_vendor-motion~index-Cf42Vc4i.js": {
-      "file": "assets/vendor-motion~index-Cf42Vc4i.js",
-      "raw": 5584,
-      "gzip": 2430
+    "_vendor-motion~index-BN64pNCO.js": {
+      "file": "assets/vendor-motion~index-BN64pNCO.js",
+      "raw": 5581,
+      "gzip": 2425
     },
-    "_vendor-motion~index~BrowserPane~DevPreviewPane~App~CelebrationConfetti~OnboardingFlow~Workt~d1asc0vi-Dtc8Ys-k.js": {
-      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~CelebrationConfetti~OnboardingFlow~Workt~d1asc0vi-Dtc8Ys-k.js",
-      "raw": 7911,
-      "gzip": 3421
+    "_vendor-motion~index~BrowserPane~DevPreviewPane~App~CelebrationConfetti~OnboardingFlow~Workt~d1asc0vi-g7SccTD6.js": {
+      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~CelebrationConfetti~OnboardingFlow~Workt~d1asc0vi-g7SccTD6.js",
+      "raw": 7908,
+      "gzip": 3417
     },
     "_vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Getti~bfe2l8g2-9cbmD0Xv.js": {
       "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Getti~bfe2l8g2-9cbmD0Xv.js",
       "raw": 269,
       "gzip": 201
     },
-    "_vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~f3gnuexl-NRIFKczS.js": {
-      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~f3gnuexl-NRIFKczS.js",
-      "raw": 31315,
-      "gzip": 11246
+    "_vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~f3gnuexl-BHtoxoXi.js": {
+      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~f3gnuexl-BHtoxoXi.js",
+      "raw": 31313,
+      "gzip": 11245
     },
-    "_vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~j1o0q54h-CiQn6fFx.js": {
-      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~j1o0q54h-CiQn6fFx.js",
-      "raw": 603,
-      "gzip": 416
+    "_vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~j1o0q54h-DDwssyuz.js": {
+      "file": "assets/vendor-motion~index~BrowserPane~DevPreviewPane~App~motionFeatures~CelebrationConfetti~Onboa~j1o0q54h-DDwssyuz.js",
+      "raw": 601,
+      "gzip": 414
     },
-    "_vendor-radix-DqHrnn5A.js": {
-      "file": "assets/vendor-radix-DqHrnn5A.js",
-      "raw": 5056,
-      "gzip": 1917
+    "_vendor-radix-Qx_xFRxt.js": {
+      "file": "assets/vendor-radix-Qx_xFRxt.js",
+      "raw": 5057,
+      "gzip": 1914
     },
-    "_vendor-radix-utils-BoY3IfhJ.js": {
-      "file": "assets/vendor-radix-utils-BoY3IfhJ.js",
-      "raw": 14557,
-      "gzip": 3261
+    "_vendor-radix-utils-BIchhNwM.js": {
+      "file": "assets/vendor-radix-utils-BIchhNwM.js",
+      "raw": 14504,
+      "gzip": 3243
     },
-    "_vendor-react-Cjr9AYj0.js": {
-      "file": "assets/vendor-react-Cjr9AYj0.js",
-      "raw": 181960,
-      "gzip": 56453
+    "_vendor-react-Z4IRr5AJ.js": {
+      "file": "assets/vendor-react-Z4IRr5AJ.js",
+      "raw": 189835,
+      "gzip": 58856
     },
-    "_vendor-xterm-CHyutUX2.js": {
-      "file": "assets/vendor-xterm-CHyutUX2.js",
-      "raw": 458095,
-      "gzip": 116331
+    "_vendor-xterm-zvE5kmR-.js": {
+      "file": "assets/vendor-xterm-zvE5kmR-.js",
+      "raw": 458124,
+      "gzip": 116353
     },
     "_vendor-zod-CcQGOMcc.js": {
       "file": "assets/vendor-zod-CcQGOMcc.js",
       "raw": 74222,
       "gzip": 19584
     },
-    "_viewportPresets-BhRvLo4y.js": {
-      "file": "assets/viewportPresets-BhRvLo4y.js",
-      "raw": 5428,
-      "gzip": 2063
+    "_vendor~App~DiagnosticsReviewDialogHost~index~GitHubResourceList-DW4w20WV.js": {
+      "file": "assets/vendor~App~DiagnosticsReviewDialogHost~index~GitHubResourceList-DW4w20WV.js",
+      "raw": 7556,
+      "gzip": 2466
+    },
+    "_vendor~DevPreviewPane~App-B-Fjvgpw.js": {
+      "file": "assets/vendor~DevPreviewPane~App-B-Fjvgpw.js",
+      "raw": 59204,
+      "gzip": 18947
+    },
+    "_vendor~index-BCcIiwjZ.js": {
+      "file": "assets/vendor~index-BCcIiwjZ.js",
+      "raw": 49886,
+      "gzip": 16168
+    },
+    "_vendor~index~App~WorktreeOverviewModal~AgentSettings~WelcomeScreen~NewWorktreeDialog~index-B4cPtCYA.js": {
+      "file": "assets/vendor~index~App~WorktreeOverviewModal~AgentSettings~WelcomeScreen~NewWorktreeDialog~index-B4cPtCYA.js",
+      "raw": 1038,
+      "gzip": 621
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~8b5xtmos-B_4SCzUX.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~BaseBranchDiffModal~~8b5xtmos-B_4SCzUX.js",
+      "raw": 924,
+      "gzip": 479
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~eu22eu0c-K8zNtuYp.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~eu22eu0c-K8zNtuYp.js",
+      "raw": 2035,
+      "gzip": 1006
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~gu33kovx-DZJGj1NY.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~gu33kovx-DZJGj1NY.js",
+      "raw": 320,
+      "gzip": 235
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~lepxdb0k-B_AA55HL.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~lepxdb0k-B_AA55HL.js",
+      "raw": 27227,
+      "gzip": 8534
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~mpnqpdlt-RD3VtNXB.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~mpnqpdlt-RD3VtNXB.js",
+      "raw": 532,
+      "gzip": 359
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~oat2utdf-CxBux3XL.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~FileViewerModal~HybridInputBar~FileDiffModal~BaseBr~oat2utdf-CxBux3XL.js",
+      "raw": 736,
+      "gzip": 459
+    },
+    "_vendor~index~BrowserPane~DevPreviewPane~HybridInputBar~FileDiffModal~BaseBranchDiffModal~Re~dxf9kmtc-CJLbH6eW.js": {
+      "file": "assets/vendor~index~BrowserPane~DevPreviewPane~HybridInputBar~FileDiffModal~BaseBranchDiffModal~Re~dxf9kmtc-CJLbH6eW.js",
+      "raw": 23755,
+      "gzip": 7622
+    },
+    "_vendor~index~HybridInputBar~App~ShortcutReferenceDialog~LogLevelPalette~ThemePalette~Settin~jh0rtt5a-CexWHJmK.js": {
+      "file": "assets/vendor~index~HybridInputBar~App~ShortcutReferenceDialog~LogLevelPalette~ThemePalette~Settin~jh0rtt5a-CexWHJmK.js",
+      "raw": 23847,
+      "gzip": 8285
+    },
+    "_viewportPresets-ebJ8NZmA.js": {
+      "file": "assets/viewportPresets-ebJ8NZmA.js",
+      "raw": 5376,
+      "gzip": 2048
+    },
+    "_worktreeCIStatus-CwDDEuSp.js": {
+      "file": "assets/worktreeCIStatus-CwDDEuSp.js",
+      "raw": 3416,
+      "gzip": 1635
     },
     "index.html": {
-      "file": "assets/index-CQpzOhvi.js",
-      "raw": 481258,
-      "gzip": 151102
+      "file": "assets/index-BEqO7Cjm.js",
+      "raw": 481810,
+      "gzip": 150462
     },
     "src/App.tsx": {
-      "file": "assets/App-CMAn25Km.js",
-      "raw": 1395396,
-      "gzip": 393497
+      "file": "assets/App-fBJopePn.js",
+      "raw": 1212191,
+      "gzip": 347636
     },
     "src/components/Browser/BrowserPane.tsx": {
-      "file": "assets/BrowserPane-DweyqPPV.js",
-      "raw": 21533,
-      "gzip": 6793
+      "file": "assets/BrowserPane-CaVBOVP0.js",
+      "raw": 21439,
+      "gzip": 6789
     },
     "src/components/DevPreview/DevPreviewPane.tsx": {
-      "file": "assets/DevPreviewPane-BxE2PJxz.js",
-      "raw": 87730,
-      "gzip": 26082
+      "file": "assets/DevPreviewPane-DTG2parD.js",
+      "raw": 90080,
+      "gzip": 26886
     },
     "src/panels/review/ReviewPane.tsx": {
-      "file": "assets/ReviewPane-COvjQglw.js",
-      "raw": 1109,
-      "gzip": 667
+      "file": "assets/ReviewPane-BuSIFQPG.js",
+      "raw": 1066,
+      "gzip": 651
     }
   },
   "eagerTotals": {
-    "raw": 5058638,
-    "gzip": 1506171
+    "raw": 4183870,
+    "gzip": 1244317
   },
   "totals": {
-    "raw": 7872742,
-    "gzip": 2487002
+    "raw": 8067491,
+    "gzip": 2568597
   }
 }

@@ -12,7 +12,6 @@ const {
   onUpdateMock,
   debounceCancelSpy,
   compareWorktreesMock,
-  openPRMock,
   openExternalMock,
   classifyPushErrorMock,
   abortRepositoryOperationMock,
@@ -41,7 +40,6 @@ const {
   onUpdateMock: vi.fn(),
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
-  openPRMock: vi.fn().mockResolvedValue(undefined),
   openExternalMock: vi.fn().mockResolvedValue(undefined),
   // Mirrors the real GitHub forge provider: extracts a GH### code from stderr
   // and reports the resolved canonical provider id used to route the
@@ -112,26 +110,67 @@ vi.mock("@/hooks", () => ({
   useTruncationDetection: vi.fn(() => ({ ref: vi.fn(), isTruncated: false })),
 }));
 
+interface CapturedNavProps {
+  filePath: string;
+  currentFileIndex?: number;
+  totalFileCount?: number;
+  onNavigateFile?: (delta: -1 | 1) => void;
+}
+
 const { fileDiffModalOpenHistory, fileDiffModalLastFilePath } = vi.hoisted(() => ({
   fileDiffModalOpenHistory: { value: [] as boolean[] },
   fileDiffModalLastFilePath: { value: null as string | null },
 }));
+const fileDiffModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
+  value: null,
+}));
+const baseBranchModalNavCapture = vi.hoisted((): { value: CapturedNavProps | null } => ({
+  value: null,
+}));
 vi.mock("../../FileDiffModal", () => ({
-  FileDiffModal: ({ isOpen, filePath }: { isOpen: boolean; filePath: string }) => {
+  FileDiffModal: ({
+    isOpen,
+    filePath,
+    currentFileIndex,
+    totalFileCount,
+    onNavigateFile,
+  }: { isOpen: boolean } & CapturedNavProps) => {
     fileDiffModalOpenHistory.value.push(isOpen);
-    if (isOpen) fileDiffModalLastFilePath.value = filePath;
+    if (isOpen) {
+      fileDiffModalLastFilePath.value = filePath;
+      fileDiffModalNavCapture.value = {
+        filePath,
+        currentFileIndex,
+        totalFileCount,
+        onNavigateFile,
+      };
+    }
     return null;
   },
 }));
-vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
+vi.mock("../BaseBranchDiffModal", () => ({
+  BaseBranchDiffModal: ({
+    isOpen,
+    filePath,
+    currentFileIndex,
+    totalFileCount,
+    onNavigateFile,
+  }: { isOpen: boolean } & CapturedNavProps) => {
+    if (isOpen) {
+      baseBranchModalNavCapture.value = {
+        filePath,
+        currentFileIndex,
+        totalFileCount,
+        onNavigateFile,
+      };
+    }
+    return null;
+  },
+}));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
-}));
-
-vi.mock("@/clients/githubClient", () => ({
-  githubClient: { openPR: openPRMock },
 }));
 
 vi.mock("@/clients/systemClient", () => ({
@@ -382,8 +421,11 @@ describe("ReviewHub", () => {
     ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
-    onUpdateMock.mockImplementation((callback: (state: WorktreeState) => void) => {
-      capturedUpdateCallback = callback;
+    onUpdateMock.mockImplementation((_type: string, callback: (data: unknown) => void) => {
+      // The component subscribes to the per-view worktree port; tests keep
+      // driving it with a plain WorktreeState by wrapping it in the port
+      // event envelope here.
+      capturedUpdateCallback = (state: WorktreeState) => callback({ worktree: state });
       return mockUnsubscribe;
     });
 
@@ -442,7 +484,7 @@ describe("ReviewHub", () => {
           onPushProgress: vi.fn().mockReturnValue(vi.fn()),
         },
         system: { openInEditor: openInEditorMock },
-        worktree: { onUpdate: onUpdateMock },
+        worktreePort: { onEvent: onUpdateMock },
         plugin: {
           // Default to no decorations; per-describe blocks can override via
           // `getDecorationsMock.mockResolvedValueOnce(...)` once a worktree
@@ -962,6 +1004,151 @@ describe("ReviewHub", () => {
     });
   });
 
+  describe("diff modal file stepping", () => {
+    const steppingStatus = () =>
+      makeStatus({
+        staged: [
+          { path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 },
+          { path: "src/b.ts", status: "modified", insertions: 1, deletions: 0 },
+        ],
+        unstaged: [
+          { path: "src/x.ts", status: "modified", insertions: 1, deletions: 0 },
+          { path: "src/y.ts", status: "modified", insertions: 1, deletions: 0 },
+        ],
+      });
+
+    beforeEach(() => {
+      fileDiffModalNavCapture.value = null;
+      baseBranchModalNavCapture.value = null;
+    });
+
+    it("passes the flat staged-then-unstaged index and steps across the section boundary", async () => {
+      getStagingStatusMock.mockResolvedValue(steppingStatus());
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/b.ts"));
+
+      fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"));
+
+      // First open mounts the lazy modal chunk — wait for the capture.
+      await waitFor(() => {
+        expect(fileDiffModalNavCapture.value).toMatchObject({
+          filePath: "src/b.ts",
+          currentFileIndex: 1,
+          totalFileCount: 4,
+        });
+      });
+
+      act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(1));
+
+      expect(fileDiffModalNavCapture.value).toMatchObject({
+        filePath: "src/x.ts",
+        currentFileIndex: 2,
+        totalFileCount: 4,
+      });
+
+      act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(-1));
+      act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(-1));
+
+      expect(fileDiffModalNavCapture.value).toMatchObject({
+        filePath: "src/a.ts",
+        currentFileIndex: 0,
+      });
+    });
+
+    it("clamps stepping at both list boundaries", async () => {
+      getStagingStatusMock.mockResolvedValue(steppingStatus());
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/a.ts"));
+
+      fireEvent.click(screen.getByTestId("file-stage-row-src/a.ts"));
+      act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(-1));
+      expect(fileDiffModalNavCapture.value).toMatchObject({
+        filePath: "src/a.ts",
+        currentFileIndex: 0,
+      });
+
+      fireEvent.click(screen.getByTestId("file-stage-row-src/y.ts"));
+      act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(1));
+      expect(fileDiffModalNavCapture.value).toMatchObject({
+        filePath: "src/y.ts",
+        currentFileIndex: 3,
+      });
+    });
+
+    it("clamps a stale index when the list shrinks while the modal is open", async () => {
+      getStagingStatusMock.mockResolvedValue(steppingStatus());
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("file-stage-row-src/y.ts"));
+
+      fireEvent.click(screen.getByTestId("file-stage-row-src/y.ts"));
+      expect(fileDiffModalNavCapture.value).toMatchObject({
+        filePath: "src/y.ts",
+        currentFileIndex: 3,
+      });
+
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [{ path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 }],
+          unstaged: [{ path: "src/x.ts", status: "modified", insertions: 1, deletions: 0 }],
+        })
+      );
+      act(() => capturedUpdateCallback?.(makeWorktreeState()));
+      await waitFor(() => {
+        expect(screen.queryByTestId("file-stage-row-src/y.ts")).toBeNull();
+      });
+
+      act(() => fileDiffModalNavCapture.value?.onNavigateFile?.(-1));
+
+      expect(fileDiffModalNavCapture.value).toMatchObject({
+        filePath: "src/a.ts",
+        currentFileIndex: 0,
+        totalFileCount: 2,
+      });
+    });
+
+    it("steps through base-branch files in rendered order and clamps at the end", async () => {
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [
+          { status: "A", path: "src/new-file.ts" },
+          { status: "M", path: "src/component.tsx" },
+        ],
+      });
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /vs main/i }));
+      });
+      await waitFor(() => screen.getByText("component.tsx"));
+
+      fireEvent.click(screen.getByText("component.tsx"));
+
+      // First open mounts the lazy modal chunk — wait for the capture.
+      await waitFor(() => {
+        expect(baseBranchModalNavCapture.value).toMatchObject({
+          filePath: "src/component.tsx",
+          currentFileIndex: 0,
+          totalFileCount: 2,
+        });
+      });
+
+      act(() => baseBranchModalNavCapture.value?.onNavigateFile?.(1));
+      expect(baseBranchModalNavCapture.value).toMatchObject({
+        filePath: "src/new-file.ts",
+        currentFileIndex: 1,
+      });
+
+      act(() => baseBranchModalNavCapture.value?.onNavigateFile?.(1));
+      expect(baseBranchModalNavCapture.value).toMatchObject({
+        filePath: "src/new-file.ts",
+        currentFileIndex: 1,
+      });
+    });
+  });
+
   describe("focus retention", () => {
     it("commit textarea retains focus during background resync", async () => {
       const onClose = vi.fn();
@@ -1060,7 +1247,7 @@ describe("ReviewHub", () => {
       prNumber: number;
       prUrl: string;
       prState: "open" | "merged" | "closed";
-      prCiStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      prCiStatus?: "success" | "failure" | "pending";
     }) {
       const existing = worktreeStoreData.current.get("main-wt")!;
       const mappedState =
@@ -1070,11 +1257,11 @@ describe("ReviewHub", () => {
             ? ("merged" as const)
             : ("open" as const);
       const ciState =
-        prData.prCiStatus === "SUCCESS"
+        prData.prCiStatus === "success"
           ? ("success" as const)
-          : prData.prCiStatus === "FAILURE" || prData.prCiStatus === "ERROR"
+          : prData.prCiStatus === "failure"
             ? ("failure" as const)
-            : prData.prCiStatus === "PENDING" || prData.prCiStatus === "EXPECTED"
+            : prData.prCiStatus === "pending"
               ? ("pending" as const)
               : undefined;
       worktreeStoreData.current.set("main-wt", {
@@ -1146,8 +1333,6 @@ describe("ReviewHub", () => {
       // system opener (no GitHub-specific IPC).
       fireEvent.click(screen.getByRole("button", { name: /view pull request #42/i }));
       expect(openExternalMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
-      // The GitHub-specific IPC must not be used (works for any forge now).
-      expect(openPRMock).not.toHaveBeenCalled();
     });
 
     it("shows 'No PR' when branch has remote but no PR", async () => {
@@ -1212,7 +1397,7 @@ describe("ReviewHub", () => {
         prNumber: 42,
         prUrl: "https://github.com/test/repo/pull/42",
         prState: "open",
-        prCiStatus: "FAILURE",
+        prCiStatus: "failure",
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
 
@@ -2954,7 +3139,7 @@ describe("ReviewHub", () => {
       });
     });
 
-    it("uses per-file stageFile when filter is active", async () => {
+    it("uses batched stageFiles when filter is active", async () => {
       getStagingStatusMock.mockResolvedValue(multiFileStatus());
 
       render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
@@ -2970,7 +3155,7 @@ describe("ReviewHub", () => {
       fireEvent.click(stageBtn);
 
       await waitFor(() => {
-        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/legacy.ts");
+        expect(stageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/legacy.ts"]);
         expect(window.electron.git.stageAll).not.toHaveBeenCalled();
       });
     });

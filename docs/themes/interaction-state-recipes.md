@@ -34,7 +34,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "hover:bg-overlay-subtle hover:text-daintree-text";
 ```
 
-**Usage:** For selected state, use `aria-selected:bg-overlay-soft aria-selected:border-overlay` with a `before:` pseudo-element for the 2px accent rail (`aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent`). Used in `QuickSwitcherItem.tsx`.
+**Usage:** For selected state, use `aria-selected:bg-overlay-raised aria-selected:border-overlay` with a `before:` pseudo-element for the 2px accent rail (`aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent`). The raised token follows the `bondi.ts` "elevate-to-select for menu/palette rows" rationale (#9727) — `overlay-soft` is sub-threshold on near-white surfaces. Used in `QuickSwitcherItem.tsx`.
 
 ---
 
@@ -75,7 +75,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** Selected list item in a picker. Uses background fill with accent rail via pseudo-element.
 
 ```tsx
-"aria-selected:bg-overlay-soft aria-selected:border-overlay aria-selected:text-daintree-text aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']";
+"aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']";
 ```
 
 **Usage:** Selected items do not add hover overlay — the background fill and accent rail provide sufficient state distinction. Unselected items get `hover:bg-overlay-subtle`. Used in `QuickSwitcherItem.tsx`.

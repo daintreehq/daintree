@@ -47,7 +47,20 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
         message: "Worktree card should become selected",
       })
       .toContain("selected");
-    await ctx.window.waitForTimeout(3000);
+
+    await ensureWindowFocused(ctx.app);
+    await ctx.window.keyboard.press(`${mod}+Shift+P`);
+    const readyPalette = ctx.window.locator(SEL.actionPalette.dialog);
+    await expect(readyPalette).toBeVisible({ timeout: T_MEDIUM });
+    await readyPalette.locator(SEL.actionPalette.searchInput).fill("Check Resource Status");
+    const readyOption = readyPalette
+      .locator('[role="option"]')
+      .filter({ hasText: /Check Resource Status/i });
+    await expect(readyOption.first()).toBeVisible({ timeout: T_LONG });
+    // First Escape clears the non-empty query, second closes (useEscapeStack).
+    await ctx.window.keyboard.press("Escape");
+    await ctx.window.keyboard.press("Escape");
+    await expect(readyPalette).toBeHidden({ timeout: T_MEDIUM });
   });
 
   test.afterAll(async () => {
@@ -65,7 +78,9 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
     await expect(newCard).toBeVisible({ timeout: T_LONG });
 
     await newCard.click({ position: { x: 10, y: 10 } });
-    await window.waitForTimeout(500);
+
+    const stateFile = path.join(fixtureDir, ".daintree", "resource-state.json");
+    fs.writeFileSync(stateFile, JSON.stringify({ status: "ready" }));
 
     await window.keyboard.press(`${mod}+Shift+P`);
 
@@ -86,9 +101,9 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
         async () => {
           return await newCard.getAttribute("data-resource-status");
         },
-        { timeout: T_LONG, message: "Resource status badge should appear" }
+        { timeout: T_LONG, message: "Resource status badge should reflect primed ready state" }
       )
-      .toMatch(/ready|provisioning|unknown/);
+      .toBe("ready");
   });
 
   test("pause resource action updates status", async () => {
@@ -106,11 +121,6 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
     const pauseOption = palette.locator('[role="option"]').filter({ hasText: /Pause Resource/i });
     await expect(pauseOption.first()).toBeVisible({ timeout: T_SHORT });
     await pauseOption.first().click();
-
-    const confirmBtn = window.locator('button:has-text("Confirm")');
-    if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await confirmBtn.click();
-    }
 
     await window.keyboard.press(`${mod}+Shift+P`);
     const palette2 = window.locator(SEL.actionPalette.dialog);
@@ -149,13 +159,6 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
     const resumeOption = palette.locator('[role="option"]').filter({ hasText: /Resume Resource/i });
     await expect(resumeOption.first()).toBeVisible({ timeout: T_SHORT });
     await resumeOption.first().click();
-
-    const confirmBtn = window.locator('button:has-text("Confirm")');
-    if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await confirmBtn.click();
-    }
-
-    await window.waitForTimeout(1000);
 
     await window.keyboard.press(`${mod}+Shift+P`);
     const palette2 = window.locator(SEL.actionPalette.dialog);
@@ -197,13 +200,6 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
     await expect(provisionOption.first()).toBeVisible({ timeout: T_SHORT });
     await provisionOption.first().click();
 
-    const confirmBtn = window.locator('button:has-text("Confirm")');
-    if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await confirmBtn.click();
-    }
-
-    await window.waitForTimeout(2000);
-
     await window.keyboard.press(`${mod}+Shift+P`);
     const palette2 = window.locator(SEL.actionPalette.dialog);
     await expect(palette2).toBeVisible({ timeout: T_MEDIUM });
@@ -223,7 +219,7 @@ test.describe.serial("Full: Worktree Resource Ops", () => {
         timeout: T_LONG,
         message: "Resource badge should show ready after provision",
       })
-      .toMatch(/ready|provisioning/);
+      .toBe("ready");
   });
 
   test("unhealthy status JSON is reflected in badge", async () => {

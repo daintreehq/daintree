@@ -7,7 +7,8 @@ import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
 import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { handleDirectoryOpen } from "../menu.js";
+import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
+import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
@@ -39,7 +40,7 @@ import {
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
-import { initPerWindowServices } from "./perWindowInit.js";
+import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -47,6 +48,8 @@ import {
   getWorktreePortBrokerRef,
   setWorktreePortBrokerRef,
   getCliAvailabilityServiceRef,
+  getMainProcessWatchdogClientRef,
+  setMainProcessWatchdogClientRef,
   getCleanupErrorHandlers,
   setCleanupErrorHandlers,
   setCleanupIpcHandlers,
@@ -147,6 +150,12 @@ export async function setupWindowServices(
   const deferRendererLoadForE2E = shouldDeferRendererLoadForE2E();
 
   let rendererLoadStarted = false;
+  // True once a port pair has been distributed with a live PtyClient (the
+  // client queues ports internally until the host is running, so "client
+  // exists" is sufficient). Lets the post-services block below skip its
+  // redundant re-distribution, which would discard the pair the renderer is
+  // already holding.
+  let ptyPortsWired = false;
   const startRendererLoad = (reason: string): void => {
     if (rendererLoadStarted) return;
     rendererLoadStarted = true;
@@ -164,6 +173,9 @@ export async function setupWindowServices(
       if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
       markPerformance(PERF_MARKS.RENDERER_READY);
       createAndDistributePorts(win, ctx);
+      if (getPtyClient()) {
+        ptyPortsWired = true;
+      }
       // Re-register the renderer in directPortViews on reload so
       // sendToEntryWindows continues routing host events to it. With
       // early-renderer mode (default), workspaceClient may still be null on
@@ -202,6 +214,37 @@ export async function setupWindowServices(
     console.log("[MAIN] E2E renderer-load deferral enabled — waiting for services");
   }
 
+  // Initial menu build, unconditional and synchronous: after the renderer-load
+  // kick-off so the native Menu.buildFromTemplate/setApplicationMenu work no
+  // longer delays the load dispatch, but before the first await so it can
+  // never lose a race with the deferred cli-availability-check /
+  // plugin-menu-rebuild rebuilds and clobber the availability-aware menu. On
+  // already-drained queues (second windows) those rebuilds may run first and
+  // this build harmlessly rebuilds from the same cached availability/plugin
+  // state. The smoke and DAINTREE_E2E_DEFER_RENDERER_LOAD paths get the menu
+  // here too, before their serial startRendererLoad below.
+  console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
+  createApplicationMenu(win, cliAvailabilityService ?? undefined);
+
+  // Start the external main-process watchdog before ptyClient.start() so a
+  // deadlock during PTY host fork (worst case: a synchronous spawn that
+  // hangs) is still recoverable — that pre-fork ordering is the watchdog's
+  // only invariant, which is why it lives here with the fork rather than
+  // pre-renderer-load in initPerWindowServices. The watchdog is fail-open:
+  // if its own fork throws, PtyClient still starts normally.
+  if (!isSmokeTest && !getMainProcessWatchdogClientRef()) {
+    try {
+      // Use the singleton accessor so `disposeMainProcessWatchdog()` in
+      // shutdown.ts reaches the running instance instead of a no-op.
+      const watchdog = getMainProcessWatchdogClient();
+      setMainProcessWatchdogClientRef(watchdog);
+      wireWatchdogDisabledBroadcast(watchdog, windowRegistry);
+    } catch (err) {
+      console.error("[MAIN] Failed to start main-process watchdog:", err);
+      setMainProcessWatchdogClientRef(null);
+    }
+  }
+
   // Fork the PTY host now — *after* startRendererLoad — so first paint is no
   // longer blocked by the early PATH refresh (#8827). PtyClient was constructed
   // with `deferStart` in initPerWindowServices, so the host has not forked yet.
@@ -219,6 +262,14 @@ export async function setupWindowServices(
     // this never double-runs the probe and guarantees the #8625 invariant holds
     // before the fork rather than silently skipping it on a null promise.
     await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
+    // Project-restoring boots send set-active-project with a project path
+    // right after the host is ready, draining the pool — tell the host to
+    // skip the homedir warm those drains would immediately kill (#10393).
+    // The host falls back to a homedir warm if the restore falls through.
+    // Keyed on initialProjectId only: path-only boots (CLI open) send
+    // set-active-project(null) before the project-switch, which would fire
+    // the fallback homedir warm and waste the deferral anyway.
+    ptyClient.setDeferInitialPoolWarm(Boolean(opts.initialProjectId));
     ptyClient.start();
   }
 
@@ -272,20 +323,36 @@ export async function setupWindowServices(
 
     // Give PluginService the WorkspaceClient reference now that it's ready.
     // initialize() is deferred and may run before or after this point — the
-    // service's pendingWorktreeSubs replay handles either ordering.
-    try {
-      const { pluginService } = await import("../services/PluginService.js");
-      pluginService.setWorkspaceClient(workspaceClient);
-    } catch (err) {
-      console.error("[MAIN] Failed to wire WorkspaceClient into PluginService:", err);
+    // service's pendingWorktreeSubs replay handles either ordering. The two
+    // imports are independent; load them concurrently with per-module error
+    // isolation.
+    const [pluginServiceResult, portBrokerResult] = await Promise.allSettled([
+      import("../services/PluginService.js"),
+      import("../services/WorktreePortBroker.js"),
+    ]);
+
+    if (pluginServiceResult.status === "fulfilled") {
+      try {
+        pluginServiceResult.value.pluginService.setWorkspaceClient(workspaceClient);
+      } catch (err) {
+        console.error("[MAIN] Failed to wire WorkspaceClient into PluginService:", err);
+      }
+    } else {
+      console.error(
+        "[MAIN] Failed to wire WorkspaceClient into PluginService:",
+        pluginServiceResult.reason
+      );
     }
 
     markPerformance(PERF_MARKS.SERVICE_INIT_WORKSPACE_READY);
 
     // Create WorktreePortBroker alongside WorkspaceClient
     if (!getWorktreePortBrokerRef()) {
-      const { WorktreePortBroker } = await import("../services/WorktreePortBroker.js");
-      setWorktreePortBrokerRef(new WorktreePortBroker());
+      if (portBrokerResult.status === "fulfilled") {
+        setWorktreePortBrokerRef(new portBrokerResult.value.WorktreePortBroker());
+      } else {
+        throw portBrokerResult.reason;
+      }
     }
 
     handlerDeps.worktreeService = workspaceClient;
@@ -437,7 +504,11 @@ export async function setupWindowServices(
   // PTY-related features
   if (ptyReady) {
     const pty = getPtyClient()!;
-    createAndDistributePorts(win, ctx);
+    // Skip when the did-finish-load handler already distributed a pair with a
+    // live PtyClient — re-distributing here would close the renderer's ports.
+    if (!ptyPortsWired) {
+      createAndDistributePorts(win, ctx);
+    }
 
     if (restoreProject) {
       pty.setActiveProject(

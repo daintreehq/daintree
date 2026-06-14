@@ -16,6 +16,7 @@ function createMockWebContents() {
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
+    invalidate: vi.fn(),
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
@@ -77,6 +78,8 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterWebContents: vi.fn(),
   registerProjectView: vi.fn(),
   unregisterProjectView: vi.fn(),
+  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -116,6 +119,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   INSTANCE_ROLE_ARG: "--daintree-instance-role",
   resolveInstanceRole: vi.fn(() => "attended"),
+  resolveE2EPreloadArgs: vi.fn(() => []),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
@@ -158,6 +162,8 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
+
+const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function createMockWindow() {
   return {
@@ -248,7 +254,9 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
 
     // Evict proj-a (its webContents → project mapping is torn down).
     await evictingManager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await evictingManager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(() => evictingManager.recordPreloadDuration(staleWcId, 42)).not.toThrow();
     expect(evictingManager.getProjectIdForWebContents(staleWcId)).toBeNull();
@@ -273,14 +281,19 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
     revivalManager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await revivalManager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await revivalManager.switchTo("proj-c", "/path/c"); // evicts proj-a (ET set)
+    await flushImmediates();
     await revivalManager.switchTo("proj-a", "/path/a"); // cold start — proj-a re-created
+    await flushImmediates();
 
     revivalManager.recordPreloadDuration(webContentsIdFor(revivalManager, "proj-a"), 27.5);
 
     // A cache hit on proj-a (still carrying its eviction timestamp) fires revival.
     await revivalManager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await revivalManager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
 
     const revivals = (logInfo as ReturnType<typeof vi.fn>).mock.calls.filter(
       ([event, ctx]) =>
@@ -296,10 +309,15 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
     revivalManager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await revivalManager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await revivalManager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await revivalManager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
     await revivalManager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await revivalManager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
 
     const revival = (logInfo as ReturnType<typeof vi.fn>).mock.calls.find(
       ([event, ctx]) =>

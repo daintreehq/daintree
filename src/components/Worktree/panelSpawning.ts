@@ -106,10 +106,12 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             const agentConfig = getAgentConfig(agentId);
             const baseCommand = agentConfig?.command ?? "";
             const entry = agentSettings?.agents?.[agentId] ?? {};
+            const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               clipboardDirectory,
               modelId: t.agentModelId,
               recipeArgs: t.args?.trim() || undefined,
+              globalSkipPermissions,
             });
             // Preserve flags the caller already captured (the clone-layout path
             // projects a live panel's `agentLaunchFlags` onto the recipe). For
@@ -119,7 +121,10 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             // and recipe args from being dropped on resume (#9650). Recipe args
             // append as raw tokens.
             const agentLaunchFlags = t.agentLaunchFlags ?? [
-              ...buildAgentLaunchFlags(entry, agentId, { modelId: t.agentModelId }),
+              ...buildAgentLaunchFlags(entry, agentId, {
+                modelId: t.agentModelId,
+                globalSkipPermissions,
+              }),
               ...(t.args?.trim().split(/\s+/).filter(Boolean) ?? []),
             ];
 

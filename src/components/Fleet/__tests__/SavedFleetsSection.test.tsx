@@ -62,15 +62,6 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-// Mock isSnapshotStale so we control staleness deterministically: scopes
-// whose terminalIds array is empty are stale; everything else is usable.
-// The default mock keeps the existing tests stable without seeding panels.
-vi.mock("@/components/Fleet/fleetStaleness", () => ({
-  isSnapshotStale: vi.fn((scope: { terminalIds?: string[] }) => {
-    return !scope.terminalIds || scope.terminalIds.length === 0;
-  }),
-}));
-
 // SavedFleetRow uses computeSavedScopePaneCount directly to render the live
 // count and decide aria-disabled. Mock it with the same terminalIds-length
 // heuristic so the row's staleness check agrees with the section's.
@@ -425,23 +416,27 @@ describe("SavedFleetsSection ranking", () => {
   });
 });
 
-describe("SavedFleetsSection integration (real isSnapshotStale)", () => {
-  // Swap the mocked `isSnapshotStale` for one that reads live panel-store
-  // state so this block exercises the actual panel-eligibility check that
-  // the production component runs.
+describe("SavedFleetsSection integration (live pane counts)", () => {
+  // Swap the mocked `computeSavedScopePaneCount` for one that reads live
+  // panel-store state so this block exercises the actual panel-eligibility
+  // path the production component derives staleness from (count of still-
+  // eligible terminalIds; zero ⇒ stale).
   beforeEach(async () => {
-    const mod = (await import("@/components/Fleet/fleetStaleness")) as unknown as {
-      isSnapshotStale: ReturnType<typeof vi.fn>;
+    const mod = (await import("@/services/actions/definitions/fleetActions")) as unknown as {
+      computeSavedScopePaneCount: ReturnType<typeof vi.fn>;
     };
-    mod.isSnapshotStale.mockImplementation((scope: { kind: string; terminalIds?: string[] }) => {
-      if (scope.kind !== "snapshot" || !scope.terminalIds) return false;
-      const { panelsById } = usePanelStore.getState();
-      for (const id of scope.terminalIds) {
-        const panel = panelsById[id];
-        if (panel && (panel as { kind?: string }).kind === "terminal") return false;
+    mod.computeSavedScopePaneCount.mockImplementation(
+      (scope: { kind: string; terminalIds?: string[] }) => {
+        if (scope.kind !== "snapshot" || !scope.terminalIds) return 3;
+        const { panelsById } = usePanelStore.getState();
+        let n = 0;
+        for (const id of scope.terminalIds) {
+          const panel = panelsById[id];
+          if (panel && (panel as { kind?: string }).kind === "terminal") n += 1;
+        }
+        return n;
       }
-      return true;
-    });
+    );
   });
 
   it("demotes a snapshot whose terminalIds are all gone to the stale sub-group", () => {

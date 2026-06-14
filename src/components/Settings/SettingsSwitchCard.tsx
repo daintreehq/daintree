@@ -58,7 +58,7 @@ export function SettingsSwitchCard({
 
   const scopeBadge = scope ? (
     <span
-      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+      className={`text-[10px] px-1.5 py-0.5 rounded-sm font-medium ${
         scope === "project"
           ? "bg-status-info/10 text-status-info"
           : scope === "global"
@@ -73,7 +73,7 @@ export function SettingsSwitchCard({
   const card = (
     <div
       className={cn(
-        "relative w-full flex items-center justify-between transition",
+        "relative w-full flex items-center justify-between transition-colors",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
         "border-daintree-border text-daintree-text/70",
         isEnabled && "border-daintree-border text-daintree-text",

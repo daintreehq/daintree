@@ -139,7 +139,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
     <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
       <AppDialog.Header className="flex-col items-stretch gap-4">
         <div className="flex items-center justify-between">
-          <AppDialog.Title className="text-2xl">Keyboard Shortcuts</AppDialog.Title>
+          <AppDialog.Title>Keyboard shortcuts</AppDialog.Title>
           <AppDialog.CloseButton />
         </div>
         <input
@@ -150,7 +150,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search shortcuts"
           aria-controls={resultsId}
-          className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+          className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
         />
       </AppDialog.Header>
 
@@ -222,7 +222,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer className="justify-center bg-daintree-bg/50">
+      <AppDialog.Footer className="justify-center">
         <div className="text-sm text-daintree-text/60">
           Press <Kbd>Esc</Kbd> to close
         </div>

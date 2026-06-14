@@ -4,6 +4,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
+import { gitServiceCache } from "../GitServiceCache.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 
@@ -47,10 +48,15 @@ export class WorkspaceHostEventRouter {
         if (worktree.path) {
           this.worktreePathToProject.set(path.resolve(worktree.path), entry.projectPath);
         }
-        sendToEntryWindows(entry, CHANNELS.EVENTS_PUSH, {
-          name: "worktree:update",
-          payload: { worktree },
-        });
+        // No renderer relay: the host already fans every worktree-update
+        // directly to each per-view worktree MessagePort
+        // (DIRECT_RENDERER_EVENTS in electron/workspace-host.ts), and the
+        // full snapshot (incl. the per-file changes array) is the heaviest
+        // worktree stream — relaying it again via EVENTS_PUSH doubled the
+        // renderer-bound serialization for a copy only ReviewHubContent
+        // consumed (now migrated to the port). Same shape as the
+        // worktree-activated migration below. The main-side emits stay for
+        // PluginService and sys-bus consumers.
         this.emit("worktree-update", {
           worktree,
           projectPath: entry.projectPath,
@@ -110,6 +116,11 @@ export class WorkspaceHostEventRouter {
         // The resolved worktree path is the map key (set on `worktree-update`).
         // Prune it here so removed paths don't accumulate until `dispose()`.
         this.worktreePathToProject.delete(path.resolve(event.worktreeId));
+        // Evict the GitService for the removed path — this event covers both
+        // UI-driven (worktree-port) and external removals, which the legacy
+        // WORKTREE_DELETE IPC handler's eviction does not.
+        gitServiceCache.delete(event.worktreeId);
+        gitServiceCache.delete(path.resolve(event.worktreeId));
         break;
 
       case "clear-wsl-git-opt-in": {

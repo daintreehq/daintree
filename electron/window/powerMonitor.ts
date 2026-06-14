@@ -7,7 +7,7 @@ import type { IdleTerminalNotificationService } from "../services/IdleTerminalNo
 import type { PreAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
-import { gitHubTokenHealthService } from "../services/github/GitHubTokenHealthService.js";
+import { getForgeProviderImplEntries } from "../services/forgeProviderRegistry.js";
 import { agentConnectivityService } from "../services/connectivity/AgentConnectivityService.js";
 import {
   setDiskSpaceMonitorPollInterval,
@@ -17,6 +17,13 @@ import {
   setAppMetricsMonitorPollInterval,
   refreshAppMetricsMonitor,
 } from "../services/ProcessMemoryMonitor.js";
+import { RESOURCE_PROFILE_CONFIGS } from "../../shared/types/resourceProfile.js";
+import { getResourceProfileService } from "./serviceRefs.js";
+import {
+  FOCUS_THROTTLE_MULTIPLIER,
+  isFocusThrottled,
+  setFocusThrottled,
+} from "./focusThrottleState.js";
 
 let resumeTimeout: NodeJS.Timeout | null = null;
 
@@ -24,6 +31,17 @@ export function clearResumeTimeout(): void {
   if (resumeTimeout) {
     clearTimeout(resumeTimeout);
     resumeTimeout = null;
+  }
+}
+
+/** Fire-and-forget token-health re-probe across every registered forge provider. */
+function refreshForgeTokenHealth(options?: { force?: boolean }): void {
+  for (const [, impl] of getForgeProviderImplEntries()) {
+    try {
+      void impl.healthEvents?.refreshTokenHealth?.(options);
+    } catch {
+      // A throwing provider must not break resume/focus handling.
+    }
   }
 }
 
@@ -91,10 +109,10 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           workspaceClient.resumeHealthCheck();
           await workspaceClient.refreshOnWake();
         }
-        // Force an immediate token-health probe on wake — a PAT that expired
-        // during a long laptop sleep would otherwise sit undetected until the
-        // next 30-minute poll tick.
-        void gitHubTokenHealthService.refresh({ force: true });
+        // Force an immediate token-health probe on wake — a credential that
+        // expired during a long laptop sleep would otherwise sit undetected
+        // until the provider's next scheduled probe.
+        refreshForgeTokenHealth({ force: true });
         // Re-probe agent provider reachability on wake. A long sleep across a
         // network change (Wi-Fi swap, airplane mode toggle) often invalidates
         // the cached "reachable" state.
@@ -126,13 +144,9 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
 
 // --- Window Focus Throttle ---
 
-const THROTTLE_MULTIPLIER = 5;
+const THROTTLE_MULTIPLIER = FOCUS_THROTTLE_MULTIPLIER;
 const BLUR_DEBOUNCE_MS = 100;
 
-const WORKSPACE_ACTIVE_NORMAL = 2_000;
-const WORKSPACE_BACKGROUND_NORMAL = 10_000;
-const STATS_NORMAL = 5_000;
-const PROCESS_TREE_NORMAL = 2_500;
 const DISK_SPACE_NORMAL = 5 * 60 * 1000;
 const APP_METRICS_NORMAL = 30_000;
 const IDLE_TERMINAL_NORMAL = 5 * 60 * 1000;
@@ -147,21 +161,40 @@ export interface WindowFocusThrottleDeps {
 }
 
 const focusThrottleState = {
-  isThrottled: false,
   blurTimeout: null as NodeJS.Timeout | null,
 };
 
 let focusThrottleDeps: WindowFocusThrottleDeps | null = null;
 
+/**
+ * Polling baselines derive from the live resource profile, not hardcoded
+ * balanced constants. removeThrottle() runs on every browser-window-focus;
+ * restoring balanced values there would silently revert profile-tuned
+ * cadences (e.g. efficiency's slower polling) until the next profile
+ * transition — which may never come while the profile is stable.
+ */
+function profilePollingBaseline() {
+  const profile = getResourceProfileService()?.getProfile() ?? "balanced";
+  const config = RESOURCE_PROFILE_CONFIGS[profile];
+  return {
+    workspaceActive: config.pollIntervalActive,
+    workspaceBackground: config.pollIntervalBackground,
+    stats: config.projectStatsPollInterval,
+    processTree: config.processTreePollInterval,
+  };
+}
+
 function applyThrottle(): void {
-  if (focusThrottleState.isThrottled || !focusThrottleDeps) return;
-  focusThrottleState.isThrottled = true;
+  if (isFocusThrottled() || !focusThrottleDeps) return;
+  setFocusThrottled(true);
+
+  const baseline = profilePollingBaseline();
 
   const workspaceClient = focusThrottleDeps.getWorkspaceClient();
   if (workspaceClient) {
     workspaceClient.updateMonitorConfig({
-      pollIntervalActive: WORKSPACE_ACTIVE_NORMAL * THROTTLE_MULTIPLIER,
-      pollIntervalBackground: WORKSPACE_BACKGROUND_NORMAL * THROTTLE_MULTIPLIER,
+      pollIntervalActive: baseline.workspaceActive * THROTTLE_MULTIPLIER,
+      pollIntervalBackground: baseline.workspaceBackground * THROTTLE_MULTIPLIER,
     });
     workspaceClient.setPollingEnabled(false);
     workspaceClient.setPRPollCadence(false);
@@ -169,12 +202,12 @@ function applyThrottle(): void {
 
   const statsService = focusThrottleDeps.getProjectStatsService();
   if (statsService) {
-    statsService.updatePollInterval(STATS_NORMAL * THROTTLE_MULTIPLIER);
+    statsService.updatePollInterval(baseline.stats * THROTTLE_MULTIPLIER);
   }
 
   const ptyClient = focusThrottleDeps.getPtyClient();
   if (ptyClient) {
-    ptyClient.setProcessTreePollInterval(PROCESS_TREE_NORMAL * THROTTLE_MULTIPLIER);
+    ptyClient.setProcessTreePollInterval(baseline.processTree * THROTTLE_MULTIPLIER);
   }
 
   setDiskSpaceMonitorPollInterval(DISK_SPACE_NORMAL * THROTTLE_MULTIPLIER);
@@ -192,14 +225,16 @@ function applyThrottle(): void {
 }
 
 function removeThrottle(): void {
-  if (!focusThrottleState.isThrottled || !focusThrottleDeps) return;
-  focusThrottleState.isThrottled = false;
+  if (!isFocusThrottled() || !focusThrottleDeps) return;
+  setFocusThrottled(false);
+
+  const baseline = profilePollingBaseline();
 
   const workspaceClient = focusThrottleDeps.getWorkspaceClient();
   if (workspaceClient) {
     workspaceClient.updateMonitorConfig({
-      pollIntervalActive: WORKSPACE_ACTIVE_NORMAL,
-      pollIntervalBackground: WORKSPACE_BACKGROUND_NORMAL,
+      pollIntervalActive: baseline.workspaceActive,
+      pollIntervalBackground: baseline.workspaceBackground,
     });
     workspaceClient.setPollingEnabled(true);
     workspaceClient.setPRPollCadence(true);
@@ -208,13 +243,13 @@ function removeThrottle(): void {
 
   const statsService = focusThrottleDeps.getProjectStatsService();
   if (statsService) {
-    statsService.updatePollInterval(STATS_NORMAL);
+    statsService.updatePollInterval(baseline.stats);
     statsService.refresh();
   }
 
   const ptyClient = focusThrottleDeps.getPtyClient();
   if (ptyClient) {
-    ptyClient.setProcessTreePollInterval(PROCESS_TREE_NORMAL);
+    ptyClient.setProcessTreePollInterval(baseline.processTree);
   }
 
   setDiskSpaceMonitorPollInterval(DISK_SPACE_NORMAL);
@@ -232,10 +267,9 @@ function removeThrottle(): void {
     preAgentSnapshotService.updatePollInterval(PRE_AGENT_PRUNE_NORMAL);
   }
 
-  // Opportunistic token-health re-check on focus regain, gated by the
-  // service's own 5-minute cooldown so rapid window switching doesn't
-  // hammer the API.
-  void gitHubTokenHealthService.refresh();
+  // Opportunistic token-health re-check on focus regain, gated by each
+  // provider's own cooldown so rapid window switching doesn't hammer APIs.
+  refreshForgeTokenHealth();
   // Same opportunistic re-check for agent reachability — internal cooldown
   // prevents the alt-tab path from fanning out probes.
   void agentConnectivityService.refresh({ reason: "focus" });

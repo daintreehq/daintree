@@ -20,7 +20,7 @@ import {
 } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
-import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
+import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
@@ -36,9 +36,18 @@ interface AgentCliStepProps {
   availability: CliAvailability;
   selections: Record<string, boolean>;
   onInstallComplete?: () => void;
+  // During first-run, the dedicated permissions step owns the global trust
+  // decision, so the per-agent dangerous toggles here are suppressed to avoid
+  // a competing control.
+  isFirstRun?: boolean;
 }
 
-export function AgentCliStep({ availability, selections, onInstallComplete }: AgentCliStepProps) {
+export function AgentCliStep({
+  availability,
+  selections,
+  onInstallComplete,
+  isFirstRun = false,
+}: AgentCliStepProps) {
   const [cardStatuses, setCardStatuses] = useState<Record<string, CardStatus>>({});
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
   const [expandedErrors, setExpandedErrors] = useState<Record<string, boolean>>({});
@@ -403,7 +412,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
         </button>
       )}
 
-      {agentsWithDangerousToggle.length > 0 && (
+      {!isFirstRun && agentsWithDangerousToggle.length > 0 && (
         <div className="border-t border-daintree-border pt-3 space-y-2">
           <div className="text-xs font-medium text-daintree-text/60">Skip permissions</div>
           <div className="space-y-1.5">
@@ -411,7 +420,9 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
               const config = AGENT_REGISTRY[agentId];
               if (!config) return null;
               const dangerousArg = DEFAULT_DANGEROUS_ARGS[agentId] ?? "";
-              const isEnabled = agentSettings?.[agentId]?.dangerousEnabled ?? false;
+              // Setup is a simple on/off: "on" force-enables, unchecking returns
+              // to "inherit" (defer to the global switch), never the "off" veto.
+              const isEnabled = resolveDangerousMode(agentSettings?.[agentId] ?? {}) === "on";
               return (
                 <label
                   key={agentId}
@@ -422,7 +433,10 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
                     className="w-3.5 h-3.5 accent-status-error shrink-0"
                     checked={isEnabled}
                     onChange={() => {
-                      void updateAgent(agentId, { dangerousEnabled: !isEnabled });
+                      void updateAgent(agentId, {
+                        dangerousMode: isEnabled ? "inherit" : "on",
+                        dangerousEnabled: !isEnabled,
+                      });
                     }}
                   />
                   <span className="text-xs text-daintree-text/70">{config.name}</span>

@@ -3,7 +3,7 @@
  */
 
 import { CHANNELS } from "../../channels.js";
-import { broadcastToRenderer } from "../../utils.js";
+import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import type {
@@ -67,7 +67,9 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   ptyClient.on("spawn-result", handleSpawnResult);
   handlers.push(() => ptyClient.off("spawn-result", handleSpawnResult));
 
-  // Terminal status for flow control visibility
+  // Terminal status for flow control visibility. Per-terminal pulses are
+  // inherently project-scoped — only views of the owning project host panels
+  // for the terminal, so don't pay a clone + IPC task per unrelated view.
   const handleTerminalStatus = (payload: {
     id: string;
     status: string;
@@ -76,7 +78,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     droppedBytes?: number;
     timestamp: number;
   }) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_STATUS, payload);
+    broadcastToProjectRenderers(
+      ptyClient.getTerminalProjectId(payload.id),
+      CHANNELS.TERMINAL_STATUS,
+      payload
+    );
   };
   ptyClient.on("terminal-status", handleTerminalStatus);
   handlers.push(() => ptyClient.off("terminal-status", handleTerminalStatus));
@@ -115,11 +121,16 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   ptyClient.on("fd-leak-warning", handleFdLeakWarning);
   handlers.push(() => ptyClient.off("fd-leak-warning", handleFdLeakWarning));
 
-  // Terminal activity
+  // Terminal activity — per-terminal headline updates, project-scoped like
+  // the status pulses above.
   const unsubTerminalActivity = events.on(
     "terminal:activity",
     (payload: DaintreeEventMap["terminal:activity"]) => {
-      broadcastToRenderer(CHANNELS.TERMINAL_ACTIVITY, payload);
+      broadcastToProjectRenderers(
+        ptyClient.getTerminalProjectId(payload.terminalId),
+        CHANNELS.TERMINAL_ACTIVITY,
+        payload
+      );
     }
   );
   handlers.push(unsubTerminalActivity);

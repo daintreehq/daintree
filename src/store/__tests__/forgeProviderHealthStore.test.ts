@@ -36,6 +36,9 @@ describe("forgeProviderHealthStore", () => {
       rateLimitMultiplier: 1,
       tokenUnhealthy: false,
       tokenBannerDismissed: false,
+      tokenHealth: null,
+      providerName: null,
+      pluginId: null,
     });
   });
 
@@ -64,6 +67,9 @@ describe("forgeProviderHealthStore", () => {
       rateLimitMultiplier: 1,
       tokenUnhealthy: false,
       tokenBannerDismissed: false,
+      tokenHealth: null,
+      providerName: null,
+      pluginId: null,
     });
     expect(fake).toEqual({
       rateLimitBlocked: true,
@@ -72,6 +78,9 @@ describe("forgeProviderHealthStore", () => {
       rateLimitMultiplier: 1,
       tokenUnhealthy: true,
       tokenBannerDismissed: false,
+      tokenHealth: null,
+      providerName: null,
+      pluginId: null,
     });
   });
 
@@ -185,5 +194,68 @@ describe("forgeProviderHealthStore", () => {
       useForgeProviderHealthStore.getState()
     );
     expect(gh.rateLimitMultiplier).toBe(1);
+  });
+
+  it("stores the token-health snapshot while unhealthy and clears it on a bare recovery", () => {
+    const snapshot = {
+      status: "unhealthy" as const,
+      tokenVersion: 2,
+      checkedAt: 123,
+      reauthUrl: "https://example.com/sso",
+    };
+    useForgeProviderHealthStore
+      .getState()
+      .setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true, snapshot);
+    expect(
+      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
+        .tokenHealth
+    ).toEqual(snapshot);
+
+    // A bare "still unhealthy" push must not drop the observed snapshot.
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
+    expect(
+      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
+        .tokenHealth?.reauthUrl
+    ).toBe("https://example.com/sso");
+
+    // A bare recovery clears it.
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, false);
+    expect(
+      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
+        .tokenHealth
+    ).toBeNull();
+  });
+
+  it("attaches registration metadata via setProviderMeta without touching health flags", () => {
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
+    useForgeProviderHealthStore.getState().setProviderMeta(BUILTIN_GITHUB_PROVIDER_ID, {
+      providerName: "GitHub",
+      pluginId: "daintree.github",
+    });
+
+    const gh = selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(
+      useForgeProviderHealthStore.getState()
+    );
+    expect(gh.providerName).toBe("GitHub");
+    expect(gh.pluginId).toBe("daintree.github");
+    expect(gh.tokenUnhealthy).toBe(true);
+  });
+
+  it("clears the banner dismissal on a fresh expiry but not on repeated unhealthy pushes", () => {
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
+    useForgeProviderHealthStore.getState().dismissTokenBanner(BUILTIN_GITHUB_PROVIDER_ID);
+
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
+    expect(
+      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
+        .tokenBannerDismissed
+    ).toBe(true);
+
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, false);
+    useForgeProviderHealthStore.getState().setTokenUnhealthy(BUILTIN_GITHUB_PROVIDER_ID, true);
+    expect(
+      selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(useForgeProviderHealthStore.getState())
+        .tokenBannerDismissed
+    ).toBe(false);
   });
 });

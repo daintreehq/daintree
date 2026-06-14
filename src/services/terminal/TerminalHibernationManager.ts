@@ -107,6 +107,15 @@ export class TerminalHibernationManager {
       /* ignore */
     }
     managed.webLinksAddon = null;
+    try {
+      managed.imageLinksDisposable?.dispose();
+    } catch {
+      /* ignore */
+    }
+    // Null is load-bearing: ensureDeferredAddons() only rebuilds when the
+    // field is null, so a stale reference here would leave the woken terminal
+    // wired to the old disposed instance.
+    managed.imageLinksDisposable = null;
 
     // Dispose terminal-bound listeners (keep IPC listeners at the beginning)
     const terminalBoundListeners = managed.listeners.splice(managed.ipcListenerCount);
@@ -117,6 +126,10 @@ export class TerminalHibernationManager {
         /* ignore — terminal already disposing */
       }
     }
+
+    // The selection listener is gone now, so the cached selection can only go
+    // stale — clear it instead of letting it survive until destroy().
+    this.deps.deleteCachedSelection(id);
 
     // Dispose parser handler
     try {
@@ -136,16 +149,44 @@ export class TerminalHibernationManager {
 
     // Dispose terminal instance — this removes xterm's injected DOM elements
     // from the hostElement but leaves the hostElement itself in the DOM
-    // so XtermAdapter's container ref stays valid for reattachment
+    // so XtermAdapter's container ref stays valid for reattachment.
+    // The spread is load-bearing: `terminal.options` is a live getter proxy
+    // backed by rawOptions, and dispose() nulls rawOptions.linkHandler — a
+    // plain snapshot taken pre-dispose keeps the handler for the wake path.
+    const options = { ...managed.terminal.options };
     try {
       managed.terminal.dispose();
     } catch {
       /* ignore — terminal already disposing */
     }
+    // Swap in a fresh un-opened placeholder so the disposed instance — and
+    // with it the whole scrollback buffer graph — becomes GC-eligible for the
+    // duration of hibernation. The placeholder carries the options for
+    // unhibernate(); it must never be open()-ed or given listeners.
+    // Scrollback is clamped to 0: xterm's constructor eagerly allocates the
+    // full rows+scrollback CircularList, so an agent-policy placeholder would
+    // retain ~100-200KB for the duration of hibernation. The real value is
+    // stashed on `managed` (where scrollback-policy writes also land while
+    // hibernated) and restored by unhibernate().
+    managed.hibernatedScrollback = options.scrollback;
+    managed.terminal = new Terminal({ ...options, scrollback: 0 });
+    // Re-point the eager addons at the placeholder. loadAddon() left each of
+    // them holding a _terminal reference, so keeping the old instances on
+    // `managed` would retain the disposed terminal's buffer graph anyway.
+    // unhibernate() overwrites all of these from its own setupTerminalAddons
+    // call; the placeholder set exists only to sever that edge while keeping
+    // the fields non-null (fit/search on an un-opened terminal are no-ops).
+    const placeholderAddons = setupTerminalAddons(managed.terminal);
+    managed.fitAddon = placeholderAddons.fitAddon;
+    managed.serializeAddon = placeholderAddons.serializeAddon;
+    managed.searchAddon = placeholderAddons.searchAddon;
 
     managed.isHibernated = true;
     managed.isOpened = false;
     managed.keyHandlerInstalled = false;
+    // The placeholder terminal is empty — the wake no-change claim no longer
+    // describes what this instance holds.
+    managed.wakeSynced = false;
 
     // Clear resize state
     this.deps.clearResizeJob(managed);
@@ -162,8 +203,14 @@ export class TerminalHibernationManager {
 
     logDebug(`[TIS.unhibernate] Restoring terminal ${id}`);
 
-    // Create fresh Terminal with same options
-    const terminal = new Terminal(managed.terminal.options);
+    // Create fresh Terminal with same options, undoing the placeholder's
+    // scrollback clamp before the serialized replay (replaying history into a
+    // zero-scrollback buffer would drop it).
+    const terminal = new Terminal({
+      ...managed.terminal.options,
+      scrollback: managed.hibernatedScrollback ?? managed.terminal.options.scrollback,
+    });
+    managed.hibernatedScrollback = undefined;
     managed.terminal = terminal;
 
     // Create fresh eager-core addons, then rebuild the deferred Image/link set

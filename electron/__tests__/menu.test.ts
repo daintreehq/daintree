@@ -130,6 +130,13 @@ vi.mock("../services/AutoUpdaterService.js", () => ({
   autoUpdaterService: autoUpdaterServiceMock,
 }));
 
+// menu.ts wires update-menu state through the deferred-loaded serviceRef, not
+// a static AutoUpdaterService import. Return the mock so wiring stays
+// synchronous in tests (mirrors the post-deferred-task state at runtime).
+vi.mock("../window/serviceRefs.js", () => ({
+  getAutoUpdaterServiceRef: vi.fn(() => autoUpdaterServiceMock),
+}));
+
 vi.mock("../services/pluginMenuRegistry.js", () => ({
   getPluginMenuItems: vi.fn(() => []),
 }));
@@ -271,7 +278,7 @@ describe("createApplicationMenu", () => {
 
   describe("File menu Clone Repository item", () => {
     it("has a Clone Repository... item that sends clone-repo action", () => {
-      const item = findMenuItem(capturedTemplate, "File", "Clone Repository...");
+      const item = findMenuItem(capturedTemplate, "File", "Clone Repository…");
       expect(item).toBeDefined();
       item!.click!(
         {} as Electron.MenuItem,
@@ -355,7 +362,7 @@ describe("update menu lifecycle", () => {
 
       const item = menuItemRegistry.get("check-for-updates-mac");
       expect(item).toBeDefined();
-      expect(item!.label).toBe("Restart to install update");
+      expect(item!.label).toBe("Restart to Install Update");
       expect(item!.enabled).toBe(true);
     });
 
@@ -430,7 +437,12 @@ describe("update menu lifecycle", () => {
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
     });
 
-    it("calls checkForUpdatesManually when state is idle", () => {
+    // The click handler dynamic-imports AutoUpdaterService (keeping
+    // electron-updater off the boot path), so the branch runs a microtask
+    // after the click — flush before asserting.
+    const flushClick = () => new Promise((resolve) => setImmediate(resolve));
+
+    it("calls checkForUpdatesManually when state is idle", async () => {
       autoUpdaterServiceMock.__setMenuState("idle");
       const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
 
@@ -439,12 +451,13 @@ describe("update menu lifecycle", () => {
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
       );
+      await flushClick();
 
       expect(autoUpdaterServiceMock.checkForUpdatesManually).toHaveBeenCalledTimes(1);
       expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
     });
 
-    it("calls checkForUpdatesManually when state is checking (defensive — item is also disabled)", () => {
+    it("calls checkForUpdatesManually when state is checking (defensive — item is also disabled)", async () => {
       autoUpdaterServiceMock.__setMenuState("checking");
       const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
 
@@ -453,12 +466,13 @@ describe("update menu lifecycle", () => {
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
       );
+      await flushClick();
 
       expect(autoUpdaterServiceMock.checkForUpdatesManually).toHaveBeenCalledTimes(1);
       expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
     });
 
-    it("calls quitAndInstallIfReady when state is ready", () => {
+    it("calls quitAndInstallIfReady when state is ready", async () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
 
@@ -467,6 +481,7 @@ describe("update menu lifecycle", () => {
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
       );
+      await flushClick();
 
       expect(autoUpdaterServiceMock.quitAndInstallIfReady).toHaveBeenCalledTimes(1);
       expect(autoUpdaterServiceMock.checkForUpdatesManually).not.toHaveBeenCalled();
@@ -527,7 +542,7 @@ describe("update menu lifecycle", () => {
       const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
       expect(items.some((i) => i.label === "Exit")).toBe(false);
       const fileSettings = items.find(
-        (i) => i.label === "Settings..." && i.accelerator === "CommandOrControl+,"
+        (i) => i.label === "Settings…" && i.accelerator === "CommandOrControl+,"
       );
       expect(fileSettings).toBeUndefined();
     });
@@ -545,7 +560,7 @@ describe("update menu lifecycle", () => {
       expect(last.role).toBe("quit");
       expect(penultimate.type).toBe("separator");
 
-      const settings = items.find((i) => i.label === "Settings...");
+      const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
 
@@ -563,7 +578,7 @@ describe("update menu lifecycle", () => {
       expect(last.label).toBe("Exit");
       expect(last.role).toBe("quit");
 
-      const settings = items.find((i) => i.label === "Settings...");
+      const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
       expect(settings!.accelerator).toBe("CommandOrControl+,");
     });
@@ -574,7 +589,7 @@ describe("update menu lifecycle", () => {
 
       const fileMenu = capturedTemplate.find((m) => m.label === "File");
       const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
-      const settings = items.find((i) => i.label === "Settings...");
+      const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
 
       settings!.click!(
@@ -659,7 +674,7 @@ describe("update menu lifecycle", () => {
     it("ready state sets restart label", () => {
       dispatchUpdate("ready");
       const item = menuItemRegistry.get("check-for-updates-mac");
-      expect(item!.label).toBe("Restart to install update");
+      expect(item!.label).toBe("Restart to Install Update");
       expect(item!.enabled).toBe(true);
     });
 

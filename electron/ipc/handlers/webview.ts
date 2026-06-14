@@ -74,10 +74,20 @@ function logEntryLevelToLevel(level: unknown): "log" | "info" | "warning" | "err
   }
 }
 
+// Above this size, expired entries are swept before inserting. Keys embed
+// guest-page URLs, so without a sweep the map grows monotonically for the
+// pane's whole capture lifetime (one entry per distinct failing URL/line).
+const LOG_RATE_SWEEP_THRESHOLD = 256;
+
 function shouldAllowLogEntry(session: CdpSession, key: string): boolean {
   const now = Date.now();
   const entry = session.logRateLimit.get(key);
   if (!entry || now >= entry.resetAt) {
+    if (session.logRateLimit.size >= LOG_RATE_SWEEP_THRESHOLD) {
+      for (const [k, v] of session.logRateLimit) {
+        if (now >= v.resetAt) session.logRateLimit.delete(k);
+      }
+    }
     session.logRateLimit.set(key, { count: 1, resetAt: now + LOG_RATE_WINDOW_MS });
     return true;
   }
@@ -344,6 +354,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
               handleLogEntryAdded(session, params);
             } else if (method === "Runtime.executionContextsCleared") {
               session.navigationGeneration++;
+              // Rate state from the previous page is meaningless after
+              // navigation, and its keys embed that page's URLs.
+              session.logRateLimit.clear();
               // Reset group depth and clear stale objectIds for all panes
               for (const pid of session.paneIds) {
                 session.groupDepthByPane.set(pid, 0);
@@ -451,24 +464,28 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
-    for (const paneId of session.paneIds) {
-      let groupDepth = session.groupDepthByPane.get(paneId) ?? 0;
-
-      if (cdpType === "endGroup") {
-        groupDepth = Math.max(0, groupDepth - 1);
-        session.groupDepthByPane.set(paneId, groupDepth);
-        // Don't emit a row for endGroup, just adjust depth
-        continue;
+    if (cdpType === "endGroup") {
+      // Don't emit a row for endGroup, just adjust depth per pane
+      for (const paneId of session.paneIds) {
+        const groupDepth = session.groupDepthByPane.get(paneId) ?? 0;
+        session.groupDepthByPane.set(paneId, Math.max(0, groupDepth - 1));
       }
+      return;
+    }
 
-      const args: CdpRemoteArg[] = Array.isArray(p.args)
-        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          p.args.map((a: any) => normalizeRemoteObject(a))
-        : [];
+    // Normalization is pane-independent — hoisted so multi-pane sessions
+    // don't repeat the recursive remote-object walks per pane.
+    const args: CdpRemoteArg[] = Array.isArray(p.args)
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        p.args.map((a: any) => normalizeRemoteObject(a))
+      : [];
 
-      const level = cdpTypeToLevel(cdpType);
-      const summaryText = buildSummaryText(args);
-      const stackTrace = normalizeStackTrace(p.stackTrace);
+    const level = cdpTypeToLevel(cdpType);
+    const summaryText = buildSummaryText(args);
+    const stackTrace = normalizeStackTrace(p.stackTrace);
+
+    for (const paneId of session.paneIds) {
+      const groupDepth = session.groupDepthByPane.get(paneId) ?? 0;
 
       trackObjectIds(session, paneId, args);
 

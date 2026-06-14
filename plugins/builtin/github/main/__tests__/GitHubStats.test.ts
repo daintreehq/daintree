@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 
 // `getRepoStatsAndPage` is an orchestration boundary — mock the
@@ -56,26 +56,29 @@ const mockStatsCache = {
     ) => { issueCount: number; prCount: number; lastUpdated: number; projectPath: string } | null
   >(() => null),
 };
-vi.mock("../../../../../electron/services/GitHubStatsCache.js", () => ({
+vi.mock("../GitHubStatsCache.js", () => ({
   GitHubStatsCache: { getInstance: () => mockStatsCache },
 }));
 
 const mockFirstPageCache = { get: vi.fn(() => undefined), set: vi.fn(), clear: vi.fn() };
-vi.mock("../../../../../electron/services/GitHubFirstPageCache.js", () => ({
+vi.mock("../GitHubFirstPageCache.js", () => ({
   GitHubFirstPageCache: { getInstance: () => mockFirstPageCache },
 }));
 
-import { getRepoStatsAndPage, parseLinkLastPage } from "../GitHubStats.js";
+import { fetchRestCounts, getRepoStatsAndPage, parseLinkLastPage } from "../GitHubStats.js";
 import {
   repoStatsCache,
   issueListCache,
   prListCache,
+  forgeIssueListCache,
+  forgePRListCache,
   repoStatsAndPageSnapshotCache,
   restCountsCache,
   repoEventsETagCache,
   repoEventsPollIntervalCache,
   repoEventsNoChangeCount,
   repoEventsLastProbeAt,
+  getRepoListEpoch,
   clearPRCaches,
 } from "../GitHubCaches.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
@@ -716,6 +719,106 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     });
   });
 
+  describe("count refreshed-at stamps — honest count recency on probe re-serves", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("preserves the refreshed-at stamps when an unchanged probe re-serves the last REST counts", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(304)],
+        repo: [repoOk(8)],
+        pulls: [pullsOk(3)],
+      });
+
+      const first = await getRepoStatsAndPage("/test", false);
+      const baseline = first.stats?.prCountRefreshedAt;
+      expect(baseline).toBe(first.stats?.lastUpdated);
+      expect(first.stats?.issueCountRefreshedAt).toBe(baseline);
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 60_000);
+      const second = await getRepoStatsAndPage("/test", false);
+      // `lastUpdated` re-stamps (the probe confirmed freshness) but the
+      // count-recency signals must keep the original count fetch time —
+      // re-stamping them is what let stale cached counts outrank a fresher
+      // dropdown-observed total in the renderer arbitration.
+      expect(second.stats?.prCountRefreshedAt).toBe(baseline);
+      expect(second.stats?.issueCountRefreshedAt).toBe(baseline);
+      expect(second.stats?.lastUpdated).toBeGreaterThan(baseline!);
+    });
+
+    it("preserves the refreshed-at stamps when an unchanged probe re-serves the snapshot", async () => {
+      mockClient.mockResolvedValue(statsResponse(5, 3));
+      routeFetch({ events: [eventsResponse(304)] });
+
+      const first = await getRepoStatsAndPage("/test", true);
+      const baseline = first.stats?.prCountRefreshedAt;
+      expect(baseline).toBe(first.stats?.lastUpdated);
+
+      expireMemoryCaches();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 60_000);
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.prCountRefreshedAt).toBe(baseline);
+      expect(result.stats?.issueCountRefreshedAt).toBe(baseline);
+      expect(result.stats?.lastUpdated).toBeGreaterThan(baseline!);
+    });
+
+    it("advances the refreshed-at stamps on a 304 count replay — the endpoints were re-verified", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' }), eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(8, '"r1"'), restResponse(304)],
+        pulls: [pullsOk(3, '"p1"'), restResponse(304)],
+      });
+
+      const first = await getRepoStatsAndPage("/test", false);
+      const baseline = first.stats?.prCountRefreshedAt;
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 60_000);
+      const second = await getRepoStatsAndPage("/test", false);
+      // A 304 is a direct GitHub confirmation that the count endpoint's
+      // content is unchanged — unlike a probe re-serve, the counts were
+      // genuinely re-checked, so recency advances.
+      expect(second.stats?.prCountRefreshedAt).toBeGreaterThan(baseline!);
+      expect(second.stats?.issueCountRefreshedAt).toBeGreaterThan(baseline!);
+    });
+
+    it("re-reads the count baselines after the probe await so a concurrent reconciliation sticks", async () => {
+      // Seed the snapshot (1 PR) via an explicit refresh.
+      mockClient.mockResolvedValue(statsResponse(5, 1));
+      routeFetch({});
+      await getRepoStatsAndPage("/test", true);
+      expireMemoryCaches();
+      expireBackoffWindow();
+
+      // While the /events probe is in flight, a dropdown list write-back
+      // reconciles the stale snapshot away (updateRepoStatsCount's drop).
+      // The poll must not serve its pre-await capture of that snapshot.
+      mockFetch.mockImplementation((input: unknown) => {
+        const url = String(input);
+        if (url.includes("/events")) {
+          repoStatsAndPageSnapshotCache.invalidate(CACHE_KEY);
+          return Promise.resolve(eventsResponse(304));
+        }
+        if (url.includes("/pulls")) return Promise.resolve(pullsOk(2));
+        return Promise.resolve(repoOk(7));
+      });
+
+      const result = await getRepoStatsAndPage("/test", false);
+
+      // Fell through to a fresh REST count read instead of resurrecting the
+      // captured snapshot's stale PR count.
+      expect(result.stats?.prCount).toBe(2);
+      expect(result.stats?.issueCount).toBe(5);
+    });
+  });
+
   describe("adaptive backoff cadence (issues #9041, #9741)", () => {
     it("stores the server-advertised X-Poll-Interval as the backoff floor (ms)", async () => {
       routeFetch({
@@ -830,5 +933,124 @@ describe("getRepoStatsAndPage — decoupled REST count poll (issue #10122)", () 
     await getRepoStatsAndPage("/test", false); // 200 without etag -> invalidate
 
     expect(repoEventsETagCache.get(CACHE_KEY)).toBeUndefined();
+  });
+
+  describe("count-as-cache-buster on the background poll", () => {
+    const forgePage = { items: [], nextCursor: null, hasMore: false };
+    const legacyPage = { items: [], pageInfo: { hasNextPage: false, endCursor: null } };
+
+    function seedListPages(): void {
+      forgeIssueListCache.set("issue:testowner/testrepo:open::created:", forgePage as never);
+      issueListCache.set("issue:testowner/testrepo:open::created:", legacyPage as never);
+      forgePRListCache.set("pr:testowner/testrepo:open::created:", forgePage as never);
+      prListCache.set("pr:testowner/testrepo:open::created:", legacyPage as never);
+      repoStatsAndPageSnapshotCache.set(CACHE_KEY, {
+        stats: { issueCount: 5, prCount: 3, lastUpdated: 1 },
+        issues: { items: [], endCursor: null, hasNextPage: false, totalCount: 5 },
+        prs: { items: [], endCursor: null, hasNextPage: false, totalCount: 3 },
+      });
+    }
+
+    it("busts only the changed type's pages when a poll commits a moved count", async () => {
+      // Poll 1 establishes the baseline: combined 8, PRs 3 → issues 5.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(8, '"r1"')],
+        pulls: [pullsOk(3, '"p1"')],
+      });
+      await getRepoStatsAndPage("/test", false);
+
+      // Expire first — `expireMemoryCaches` clears the legacy list caches, so
+      // the warm pages under test are seeded after it. `repoStatsCache` stays
+      // cleared, so the memory-cache fast path still misses.
+      expireMemoryCaches();
+      expireBackoffWindow();
+      seedListPages();
+      const issueEpochBefore = getRepoListEpoch("issue", "testowner", "testrepo");
+      const prEpochBefore = getRepoListEpoch("pr", "testowner", "testrepo");
+
+      // Poll 2: a new issue opened — combined 9 (200), PR leg replays via 304.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [repoOk(9, '"r2"')],
+        pulls: [restResponse(304)],
+      });
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.issueCount).toBe(6);
+      expect(result.stats?.prCount).toBe(3);
+
+      // Issue pages (both cache families) dropped; PR pages untouched.
+      expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+      expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeUndefined();
+      expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+      expect(prListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+      // The combined snapshot embeds both first pages — dropped on any delta.
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeUndefined();
+      // Only the issue epoch moved, so in-flight PR writes stay valid.
+      expect(getRepoListEpoch("issue", "testowner", "testrepo")).toBe(issueEpochBefore + 1);
+      expect(getRepoListEpoch("pr", "testowner", "testrepo")).toBe(prEpochBefore);
+    });
+
+    it("does not bust anything when both legs replay unchanged counts via 304", async () => {
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(8, '"r1"')],
+        pulls: [pullsOk(3, '"p1"')],
+      });
+      await getRepoStatsAndPage("/test", false);
+
+      expireMemoryCaches();
+      expireBackoffWindow();
+      seedListPages();
+      const issueEpochBefore = getRepoListEpoch("issue", "testowner", "testrepo");
+
+      // Probe sees activity (e.g. a push), but the counts themselves replay.
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e2"' })],
+        repo: [restResponse(304)],
+        pulls: [restResponse(304)],
+      });
+      const result = await getRepoStatsAndPage("/test", false);
+      expect(result.stats?.issueCount).toBe(5);
+
+      expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+      expect(issueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+      expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+      expect(repoStatsAndPageSnapshotCache.get(CACHE_KEY)).toBeDefined();
+      expect(getRepoListEpoch("issue", "testowner", "testrepo")).toBe(issueEpochBefore);
+    });
+
+    it("concurrent count polls singleflight — one REST pair, one shared result", async () => {
+      routeFetch({
+        repo: [repoOk(8, '"r1"')],
+        pulls: [pullsOk(3, '"p1"')],
+      });
+
+      const [a, b] = await Promise.all([
+        fetchRestCounts("test-token", "testowner", "testrepo"),
+        fetchRestCounts("test-token", "testowner", "testrepo"),
+      ]);
+
+      expect(a).toEqual(b);
+      expect(a?.issueCount).toBe(5);
+      // One request per endpoint — the second caller joined the first's
+      // in-flight promise instead of racing it (a racing pair could commit a
+      // stale 304 replay over fresh counts and double-fire the count buster).
+      expect(repoCallCount()).toBe(1);
+      expect(pullsCallCount()).toBe(1);
+    });
+
+    it("the first-ever commit (no prior baseline) busts nothing", async () => {
+      seedListPages();
+      routeFetch({
+        events: [eventsResponse(200, { etag: '"e1"' })],
+        repo: [repoOk(8)],
+        pulls: [pullsOk(3)],
+      });
+      await getRepoStatsAndPage("/test", false);
+
+      expect(forgeIssueListCache.get("issue:testowner/testrepo:open::created:")).toBeDefined();
+      expect(forgePRListCache.get("pr:testowner/testrepo:open::created:")).toBeDefined();
+    });
   });
 });

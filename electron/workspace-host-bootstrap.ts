@@ -1,4 +1,4 @@
-import { enableCompileCache } from "node:module";
+import { enableCompileCache, flushCompileCache } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -49,3 +49,13 @@ await import("./workspace-host.js");
 // Import succeeded — workspace-host.ts installed its own handlers during
 // evaluation, so drop the bootstrap guard to avoid double-reporting later crashes.
 removeBootstrapGuard();
+
+// Flush compile-cache entries written during this host's boot. See the
+// equivalent block in pty-host-bootstrap.ts for rationale.
+setImmediate(() => {
+  try {
+    flushCompileCache();
+  } catch {
+    // Non-fatal: next boot will re-parse from source.
+  }
+});

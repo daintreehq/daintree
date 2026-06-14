@@ -232,6 +232,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     // before each fresh launch. Zombie crashpad helpers from a closed app can
     // hold Mach ports and contribute to first-launch flakes.
     if (isMacOSLocal) cleanupMacElectronE2eProcesses();
+    if (isMacOSLocal && !options.enableWebgl) {
+      // Local macOS Electron E2E can hit Crashpad/GPU-process FATALs during
+      // restart-heavy specs. Mirror the screenshot harness mitigation for
+      // ordinary non-WebGL E2E launches; WebGL leak tests opt back into GPU.
+      args.unshift("--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs");
+    }
 
     if (options.extraArgs?.length) {
       args.unshift(...options.extraArgs);

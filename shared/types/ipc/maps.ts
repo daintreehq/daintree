@@ -1,7 +1,6 @@
 import type { StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
-import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
   ProjectSettings,
@@ -79,22 +78,6 @@ import type {
   ProjectWorktreeLoadStatusPayload,
 } from "./project.js";
 import type {
-  RepositoryStats,
-  ProjectHealthData,
-  GitHubCliStatus,
-  GitHubTokenConfig,
-  GitHubTokenValidation,
-  GitHubRateLimitDetails,
-  GitHubTokenHealthPayload,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
-  GitHubFirstPageCachePayload,
-  PRDetectedPayload,
-  PRClearedPayload,
-  IssueDetectedPayload,
-  IssueNotFoundPayload,
-} from "./github.js";
-import type {
   GitGetFileDiffPayload,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
@@ -111,12 +94,7 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
-import type {
-  GitCommitListOptions,
-  GitCommitListResponse,
-  IssueTooltipData,
-  PRTooltipData,
-} from "../github.js";
+import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
 import type {
   SpawnResult,
   TerminalReliabilityMetricPayload,
@@ -159,7 +137,16 @@ import type {
   ListOptions,
   ForgeUser,
 } from "../forge.js";
-import type { ForgeRateLimitChangedPayload, ForgeTokenHealthChangedPayload } from "./forge.js";
+import type {
+  ForgeRateLimitChangedPayload,
+  ForgeTokenHealthChangedPayload,
+  ForgeRepoStatsAndPagePayload,
+  ForgeRepoCountsUpdatedPayload,
+  PRDetectedPayload,
+  PRClearedPayload,
+  IssueDetectedPayload,
+  IssueNotFoundPayload,
+} from "./forge.js";
 
 export type ChecklistItemId =
   | "openedProject"
@@ -420,6 +407,18 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  // Renderer CPU profile capture (Settings > Troubleshooting). Start begins a
+  // CDP Profiler session on the calling WebContents with a main-side 15s
+  // auto-stop; stop collects the profile and runs the save-dialog flow. The
+  // target WebContents is taken from event.sender on the handler side.
+  "system:renderer-cpu-profile-start": {
+    args: [];
+    result: import("./system.js").RendererCpuProfileStartResult;
+  };
+  "system:renderer-cpu-profile-stop": {
+    args: [];
+    result: import("./system.js").RendererCpuProfileStopResult;
   };
 
   // App state channels
@@ -699,93 +698,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "project:locate": {
     args: [projectId: string];
     result: Project | null;
-  };
-
-  // GitHub channels
-  "github:get-repo-stats": {
-    args: [cwd: string, bypassCache?: boolean];
-    result: RepositoryStats;
-  };
-  "github:get-first-page-cache": {
-    args: [cwd: string];
-    result: GitHubFirstPageCachePayload | null;
-  };
-  "github:get-project-health": {
-    args: [cwd: string, bypassCache?: boolean];
-    result: ProjectHealthData;
-  };
-  "github:open-issues": {
-    args: [cwd: string, query?: string, state?: string];
-    result: void;
-  };
-  "github:open-prs": {
-    args: [cwd: string, query?: string, state?: string];
-    result: void;
-  };
-  "github:open-commits": {
-    args: [cwd: string];
-    result: void;
-  };
-  "github:open-issue": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: void;
-  };
-  "github:open-pr": {
-    args: [prUrl: string];
-    result: void;
-  };
-  "github:check-cli": {
-    args: [];
-    result: GitHubCliStatus;
-  };
-  "github:get-config": {
-    args: [];
-    result: GitHubTokenConfig;
-  };
-  "github:set-token": {
-    args: [token: string];
-    result: GitHubTokenValidation;
-  };
-  "github:clear-token": {
-    args: [];
-    result: void;
-  };
-  "github:validate-token": {
-    args: [token: string];
-    result: GitHubTokenValidation;
-  };
-  "github:list-issues": {
-    args: [
-      options: { cwd: string; search?: string; state?: "open" | "closed" | "all"; cursor?: string },
-    ];
-    result: import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>;
-  };
-  "github:assign-issue": {
-    args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
-  };
-  "github:list-prs": {
-    args: [
-      options: {
-        cwd: string;
-        search?: string;
-        state?: "open" | "closed" | "merged" | "all";
-        cursor?: string;
-      },
-    ];
-    result: import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>;
-  };
-  "github:get-issue-url": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: string | null;
-  };
-  "github:get-issue-tooltip": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: IssueTooltipData | null;
-  };
-  "github:get-pr-tooltip": {
-    args: [payload: { cwd: string; prNumber: number }];
-    result: PRTooltipData | null;
   };
 
   // Agent settings channels
@@ -1333,48 +1245,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   // Command system channels
-  // Additional GitHub channels
-  "github:get-issue-by-number": {
-    args: [payload: { cwd: string; issueNumber: number }];
-    result: import("../github.js").GitHubIssue | null;
-  };
-  "github:get-pr-by-number": {
-    args: [payload: { cwd: string; prNumber: number }];
-    result: import("../github.js").GitHubPR | null;
-  };
-  "github:get-issues-by-numbers": {
-    args: [payload: { cwd: string; numbers: number[] }];
-    result: Array<import("../github.js").GitHubIssue | null>;
-  };
-  "github:get-prs-by-numbers": {
-    args: [payload: { cwd: string; numbers: number[] }];
-    result: Array<import("../github.js").GitHubPR | null>;
-  };
-  "github:get-pr-review-threads": {
-    args: [payload: { cwd: string; prNumber: number }];
-    result: Record<string, number>;
-  };
-  "github:list-remotes": {
-    args: [cwd: string];
-    result: Array<{
-      name: string;
-      fetchUrl: string;
-      parsedRepo: { owner: string; repo: string } | null;
-    }>;
-  };
-  "github:get-token-health": {
-    args: [];
-    result: GitHubTokenHealthPayload;
-  };
-  "github:get-rate-limit-details": {
-    args: [];
-    result: GitHubRateLimitDetails | null;
-  };
-  "github:resolve-author-avatar": {
-    args: [email: string];
-    result: string | null;
-  };
-
   // Scratch (throwaway one-off agent workspace) channels
   // Global env channels
   // Global recipe channels
@@ -1497,7 +1367,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
  */
 export interface IpcEventMap {
   // Worktree events
-  "worktree:update": { worktree: WorktreeState };
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };
 
@@ -1582,23 +1451,16 @@ export interface IpcEventMap {
   "issue:detected": IssueDetectedPayload;
   "issue:not-found": IssueNotFoundPayload;
 
-  // GitHub token health state push (expiry/revocation detection)
-  "github:token-health-changed": GitHubTokenHealthPayload;
-
   // Provider-keyed forge rate-limit / token-health state push. Carries the
   // canonical providerId so the renderer keys state per provider — GitHub and
   // any additional forge provider share these channels without cross-talk.
   "forge:rate-limit-changed": ForgeRateLimitChangedPayload;
   "forge:token-health-changed": ForgeTokenHealthChangedPayload;
 
-  // Combined repo stats + first page of open issues + open PRs push, emitted
-  // after every successful poll. Lets renderers prime githubResourceCache
-  // for the (open, created) default-filter cache key with no click-time fetch.
-  "github:repo-stats-and-page-updated": RepoStatsAndPagePayload;
-
-  // Count-only stats push from the cheap REST background poll (issue #10122).
-  // No page items — the dropdown loads its own first page on open.
-  "github:repo-counts-updated": RepoCountsUpdatedPayload;
+  // Provider-keyed stats pushes, broadcast by the forge repo-stats handler
+  // after a fresh network poll.
+  "forge:repo-stats-and-page-updated": ForgeRepoStatsAndPagePayload;
+  "forge:repo-counts-updated": ForgeRepoCountsUpdatedPayload;
 
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;
@@ -1632,6 +1494,7 @@ export interface IpcEventMap {
     args: unknown;
     confirmed: boolean;
     context?: import("../actions.js").ActionContext;
+    callerInfo?: import("./mcpServer.js").McpBearerIdentity;
   };
 
   /**
@@ -1719,6 +1582,7 @@ export interface IpcEventMap {
   "project:on-switch": ProjectSwitchPayload;
   "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
   "project:focus-on-activate": { intent: "focus-next-waiting" };
+  "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;
@@ -1890,6 +1754,13 @@ export interface IpcEventMap {
   // Config reload events
   "app:config-reloaded": void;
 
+  // Fired by ProjectViewManager after a warm cached view is detached from the
+  // anti-flash bridge and focused as the foreground surface (#10362). The
+  // renderer re-runs its terminal redraw here — the wake fan-out driven by
+  // visibilitychange/resume ran while the view was still occluded, where
+  // Chromium culls the paint, so it can fail to stick until the user clicks.
+  "app:view-revealed": void;
+
   // Privacy events
   "privacy:telemetry-consent-changed": {
     level: "off" | "errors" | "full";
@@ -2033,8 +1904,6 @@ export type IpcEventBusMap = Pick<
   | "agent:detected"
   | "agent:exited"
   | "agent:fallback-triggered"
-  // Worktree updates (window-scoped — routed via EVENTS_PUSH directly by sender)
-  | "worktree:update"
   // Window lifecycle (window-scoped)
   | "window:fullscreen-change"
   | "window:reclaim-memory"

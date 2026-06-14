@@ -61,7 +61,7 @@ export function TypedNameConfirmInput({
         aria-invalid={value.length > 0 && !isMatched}
         autoComplete="off"
         spellCheck={false}
-        className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-border-strong rounded focus:outline-hidden focus:ring-2 focus:ring-status-error"
+        className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">

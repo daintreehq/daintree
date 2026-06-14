@@ -24,9 +24,17 @@ import {
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import {
   ACTION_TIER_ADDONS as ACTION_TIER_ADDONS_LIST,
+  ACTIONS_LIST_TOOL,
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
+
+// Re-exported for SDK-free consumers that historically imported from here.
+// `readinessProbe.ts` and `pluginMcpHash.ts` import from the standalone homes
+// directly — this module value-imports the MCP SDK's `types.js` above, so an
+// eager import edge into it drags zod schema construction onto the boot path.
+export { ACTIONS_LIST_TOOL, safeSerializeToolResult };
 
 export {
   type WaitUntilIdleResult,
@@ -130,8 +138,6 @@ export const MCP_DENIAL_SILENCE_THRESHOLD = 2;
 
 export const MCP_MANIFEST_REQUEST_TIMEOUT_MS = 5_000;
 export const MCP_DISPATCH_TIMEOUT_MS = 30_000;
-
-export const ACTIONS_LIST_TOOL = "actions.list";
 
 export const MAX_RESTART_ATTEMPTS = 5;
 export const RESTART_BASE_DELAY_MS = 500;
@@ -304,18 +310,17 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "git.snapshotRevert",
   "git.snapshotDelete",
 
-  "github.checkCli",
-  "github.getRepoStats",
-  "github.listIssues",
-  "github.listPullRequests",
-  "github.getIssueByNumber",
+  "forge.getRepoStats",
+  "forge.listIssues",
+  "forge.listPRs",
+  "forge.getIssue",
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
   "forge.openIssue",
+  "forge.openPR",
   "forge.assignIssue",
   "forge.validateToken",
-  "github.openPR",
 
   "terminal.list",
   "terminal.getOutput",
@@ -323,6 +328,7 @@ const MCP_TOOL_ALLOWLIST_ENTRIES = [
   "terminal.sendCommand",
   "terminal.inject",
   "terminal.new",
+  "terminal.rename",
   "terminal.waitUntilIdle",
 
   "worktree.list",
@@ -390,7 +396,7 @@ export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
  * duplicate issue/PR. The seed cohort (`terminal.new`,
  * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
  * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
- * `github.openPR`) now that the args-hash collision guard (#8429) is in
+ * `forge.openPR`) now that the args-hash collision guard (#8429) is in
  * place to make the widening safe. Widened further (#9156) to the remaining
  * destructive mutations — `worktree.delete`, `git.snapshotRevert`,
  * `git.snapshotDelete`, `forge.assignIssue` — so every side-effecting tool
@@ -407,7 +413,7 @@ export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
   "git.commit",
   "git.push",
   "forge.openIssue",
-  "github.openPR",
+  "forge.openPR",
   "worktree.delete",
   "git.snapshotRevert",
   "git.snapshotDelete",
@@ -475,7 +481,7 @@ export const RATE_LIMIT_TOOL_MAP: ReadonlyMap<string, RateLimitConfig> = new Map
   ["git.commit", RATE_LIMIT_TIERS.mutation],
   ["git.push", RATE_LIMIT_TIERS.mutation],
   ["forge.openIssue", RATE_LIMIT_TIERS.mutation],
-  ["github.openPR", RATE_LIMIT_TIERS.mutation],
+  ["forge.openPR", RATE_LIMIT_TIERS.mutation],
   ["worktree.delete", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotRevert", RATE_LIMIT_TIERS.mutation],
   ["git.snapshotDelete", RATE_LIMIT_TIERS.mutation],
@@ -522,7 +528,7 @@ export const RESOURCE_BACKING_ACTIONS: Readonly<Record<ResourceKind, string>> = 
   pulse: "git.getProjectPulse",
   scrollback: "terminal.getOutput",
   agentState: "terminal.list",
-  issues: "github.listIssues",
+  issues: "forge.listIssues",
 };
 
 export const RESOURCE_TEXT_MAX_BYTES = 50 * 1024;
@@ -835,54 +841,6 @@ export function readStringField(value: unknown, keys: readonly string[]): string
     if (typeof v === "string" && v.length > 0) return v;
   }
   return undefined;
-}
-
-export function safeSerializeToolResult(value: unknown): string {
-  const seen = new WeakSet<object>();
-
-  try {
-    const serialized = JSON.stringify(
-      value,
-      (_key, currentValue) => {
-        if (typeof currentValue === "bigint") {
-          return currentValue.toString();
-        }
-        if (typeof currentValue === "symbol") {
-          return currentValue.toString();
-        }
-        if (typeof currentValue === "function") {
-          return `[Function: ${currentValue.name || "anonymous"}]`;
-        }
-        if (currentValue instanceof Error) {
-          return {
-            name: currentValue.name,
-            message: currentValue.message,
-            stack: currentValue.stack,
-          };
-        }
-        if (currentValue !== null && typeof currentValue === "object") {
-          if (seen.has(currentValue)) {
-            return "[Circular]";
-          }
-          seen.add(currentValue);
-        }
-        return currentValue;
-      },
-      2
-    );
-
-    if (serialized !== undefined) {
-      return serialized;
-    }
-  } catch {
-    // Fall through to string coercion.
-  }
-
-  try {
-    return String(value);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
 }
 
 export type {

@@ -15,18 +15,20 @@ import {
   issueListCache,
   issueTooltipCache,
   issueTooltipWrittenAt,
+  getRepoListEpoch,
 } from "./GitHubCaches.js";
-import { GitHubStatsCache } from "../../../../electron/services/GitHubStatsCache.js";
+import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import { buildListCacheKey, updateRepoStatsCount } from "./GitHubPRs.js";
-import { truncateBody } from "./GitHubCaches.js";
+import { truncateBody, isoToEpochMs } from "./GitHubCaches.js";
 import type {
   GitHubIssue,
   GitHubUser,
   GitHubListOptions,
   GitHubListResponse,
-  IssueTooltipData,
   LinkedPRInfo,
-} from "../../../../shared/types/github.js";
+} from "../shared/types.js";
+import type { ForgeLabel, ForgeUser, IssueTooltipData } from "../../../../shared/types/forge.js";
+import type { RepoContext } from "./types.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 
 export function extractLinkedPR(
@@ -397,8 +399,24 @@ function removeIssueAssigneeFromCache(
 
 const inFlightIssueTooltips = new Map<string, Promise<IssueTooltipData | null>>();
 
-export async function getIssueTooltip(
-  cwd: string,
+/** GraphQL `{ login, avatarUrl }` actor node → forge {@link ForgeUser} tooltip projection. */
+function toTooltipUser(node: { login?: string; avatarUrl?: string } | null | undefined): ForgeUser {
+  return { login: node?.login ?? "unknown", avatarUrl: node?.avatarUrl ?? "", rawData: null };
+}
+
+function toTooltipLabels(
+  nodes: Array<{ name?: string; color?: string }> | undefined
+): ForgeLabel[] {
+  return (nodes ?? []).filter(Boolean).map((l) => ({ name: l.name ?? "", color: l.color ?? "" }));
+}
+
+/**
+ * Context-variant core of {@link getIssueTooltip}. Network errors propagate so
+ * the cwd wrapper's repo-context retry can classify them; capability callers
+ * (forge `tooltips`) catch and return `null` themselves.
+ */
+export async function getIssueTooltipForContext(
+  context: RepoContext,
   issueNumber: number
 ): Promise<IssueTooltipData | null> {
   const client = GitHubAuth.createClient();
@@ -406,79 +424,79 @@ export async function getIssueTooltip(
     return null;
   }
 
+  const cacheKey = `${context.owner}/${context.repo}:${issueNumber}`;
+  const cached = issueTooltipCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const inFlight = inFlightIssueTooltips.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const requestedAt = Date.now();
+  const promise = (async () => {
+    const response = (await client(GET_ISSUE_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+      number: issueNumber,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
+
+    const issue = response?.repository?.issue;
+    if (!issue) {
+      return null;
+    }
+
+    const author = issue.author as { login?: string; avatarUrl?: string } | null;
+    const assigneesData = issue.assignees as {
+      nodes?: Array<{ login?: string; avatarUrl?: string }>;
+    };
+    const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const rawState = (issue.state as string) ?? "OPEN";
+
+    const tooltipData: IssueTooltipData = {
+      number: issue.number as number,
+      title: issue.title as string,
+      bodyExcerpt: truncateBody(issue.bodyText as string | null),
+      state: rawState.toUpperCase() === "CLOSED" ? "closed" : "open",
+      rawState,
+      createdAt: isoToEpochMs(issue.createdAt),
+      author: toTooltipUser(author),
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map(toTooltipUser),
+      labels: toTooltipLabels(labelsData?.nodes),
+    };
+
+    const existing = issueTooltipWrittenAt.get(cacheKey);
+    if (existing === undefined || requestedAt >= existing) {
+      issueTooltipCache.set(cacheKey, tooltipData);
+      issueTooltipWrittenAt.set(cacheKey, requestedAt);
+    }
+    return tooltipData;
+  })();
+
+  inFlightIssueTooltips.set(cacheKey, promise);
+  promise.then(
+    () => {
+      inFlightIssueTooltips.delete(cacheKey);
+    },
+    () => {
+      inFlightIssueTooltips.delete(cacheKey);
+    }
+  );
+
+  return promise;
+}
+
+export async function getIssueTooltip(
+  cwd: string,
+  issueNumber: number
+): Promise<IssueTooltipData | null> {
   try {
-    return await withRepoContextRetry(cwd, async (context) => {
-      const cacheKey = `${context.owner}/${context.repo}:${issueNumber}`;
-      const cached = issueTooltipCache.get(cacheKey);
-      if (cached) {
-        return cached;
-      }
-
-      const inFlight = inFlightIssueTooltips.get(cacheKey);
-      if (inFlight) return inFlight;
-
-      const requestedAt = Date.now();
-      const promise = (async () => {
-        const response = (await client(GET_ISSUE_QUERY, {
-          owner: context.owner,
-          repo: context.repo,
-          number: issueNumber,
-          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-        })) as GraphQlQueryResponseData;
-
-        gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
-
-        const issue = response?.repository?.issue;
-        if (!issue) {
-          return null;
-        }
-
-        const author = issue.author as { login?: string; avatarUrl?: string } | null;
-        const assigneesData = issue.assignees as {
-          nodes?: Array<{ login?: string; avatarUrl?: string }>;
-        };
-        const labelsData = issue.labels as { nodes?: Array<{ name?: string; color?: string }> };
-
-        const tooltipData: IssueTooltipData = {
-          number: issue.number as number,
-          title: issue.title as string,
-          bodyExcerpt: truncateBody(issue.bodyText as string | null),
-          state: issue.state as "OPEN" | "CLOSED",
-          createdAt: issue.createdAt as string,
-          author: {
-            login: author?.login ?? "unknown",
-            avatarUrl: author?.avatarUrl ?? "",
-          },
-          assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-            login: a.login ?? "unknown",
-            avatarUrl: a.avatarUrl ?? "",
-          })),
-          labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-            name: l.name ?? "",
-            color: l.color ?? "",
-          })),
-        };
-
-        const existing = issueTooltipWrittenAt.get(cacheKey);
-        if (existing === undefined || requestedAt >= existing) {
-          issueTooltipCache.set(cacheKey, tooltipData);
-          issueTooltipWrittenAt.set(cacheKey, requestedAt);
-        }
-        return tooltipData;
-      })();
-
-      inFlightIssueTooltips.set(cacheKey, promise);
-      promise.then(
-        () => {
-          inFlightIssueTooltips.delete(cacheKey);
-        },
-        () => {
-          inFlightIssueTooltips.delete(cacheKey);
-        }
-      );
-
-      return promise;
-    });
+    return await withRepoContextRetry(cwd, (context) =>
+      getIssueTooltipForContext(context, issueNumber)
+    );
   } catch {
     return null;
   }
@@ -501,24 +519,17 @@ function prewarmIssueTooltips(
       nodes?: Array<{ login?: string; avatarUrl?: string }>;
     };
     const labelsData = node.labels as { nodes?: Array<{ name?: string; color?: string }> };
+    const rawState = (node.state as string) ?? "OPEN";
     issueTooltipCache.set(cacheKey, {
       number: num,
       title: node.title as string,
       bodyExcerpt: truncateBody(node.bodyText as string | null),
-      state: node.state as "OPEN" | "CLOSED",
-      createdAt: node.createdAt as string,
-      author: {
-        login: author?.login ?? "unknown",
-        avatarUrl: author?.avatarUrl ?? "",
-      },
-      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map((a) => ({
-        login: a.login ?? "unknown",
-        avatarUrl: a.avatarUrl ?? "",
-      })),
-      labels: (labelsData?.nodes ?? []).filter(Boolean).map((l) => ({
-        name: l.name ?? "",
-        color: l.color ?? "",
-      })),
+      state: rawState.toUpperCase() === "CLOSED" ? "closed" : "open",
+      rawState,
+      createdAt: isoToEpochMs(node.createdAt),
+      author: toTooltipUser(author),
+      assignees: (assigneesData?.nodes ?? []).filter(Boolean).map(toTooltipUser),
+      labels: toTooltipLabels(labelsData?.nodes),
     });
     issueTooltipWrittenAt.set(cacheKey, requestedAt);
   }
@@ -553,6 +564,11 @@ export async function listIssues(
       const cached = issueListCache.get(cacheKey);
       if (cached) return cached;
     }
+
+    // Captured before the network call: if the count-as-cache-buster bumps
+    // the epoch mid-flight, this page predates the observed change and must
+    // not repopulate the just-busted cache.
+    const epochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
 
     try {
       let result: GitHubListResponse<GitHubIssue>;
@@ -621,27 +637,34 @@ export async function listIssues(
           totalCount,
         };
 
-        issueListCache.set(cacheKey, result);
+        // Mid-flight count-buster guard — see `getRepoListEpoch`. The stats
+        // updates sit behind the same guard: a response too old to repopulate
+        // the list cache is also too old to roll `repoStatsCache` (or the
+        // disk stats) back to its pre-change total under a fresh
+        // `lastUpdated`.
+        if (getRepoListEpoch("issue", context.owner, context.repo) === epochAtStart) {
+          issueListCache.set(cacheKey, result);
 
-        if (
-          (!options.state || options.state === "open") &&
-          !options.cursor &&
-          totalCount !== undefined
-        ) {
-          const statsCacheKey = `${context.owner}/${context.repo}`;
-          updateRepoStatsCount(statsCacheKey, "issue", totalCount);
+          if (
+            (!options.state || options.state === "open") &&
+            !options.cursor &&
+            totalCount !== undefined
+          ) {
+            const statsCacheKey = `${context.owner}/${context.repo}`;
+            updateRepoStatsCount(statsCacheKey, "issue", totalCount);
 
-          const memoryStats = repoStatsCache.get(statsCacheKey);
-          if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
-            const persistentCache = GitHubStatsCache.getInstance();
-            persistentCache.set(
-              statsCacheKey,
-              {
-                issueCount: memoryStats.issueCount,
-                prCount: memoryStats.prCount,
-              },
-              options.cwd
-            );
+            const memoryStats = repoStatsCache.get(statsCacheKey);
+            if (memoryStats && memoryStats.issueCount > 0 && memoryStats.prCount > 0) {
+              const persistentCache = GitHubStatsCache.getInstance();
+              persistentCache.set(
+                statsCacheKey,
+                {
+                  issueCount: memoryStats.issueCount,
+                  prCount: memoryStats.prCount,
+                },
+                options.cwd
+              );
+            }
           }
         }
       }
@@ -692,6 +715,47 @@ export async function getIssueByNumber(
   }
 }
 
+/**
+ * Context-variant core of {@link getIssuesByNumbers}. Results align with the
+ * positive-integer-filtered input order; errors propagate so the cwd wrapper's
+ * repo-context retry and error classification stay in charge.
+ */
+export async function getIssuesByNumbersForContext(
+  context: RepoContext,
+  numbers: number[]
+): Promise<Array<GitHubIssue | null>> {
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    throw new Error("GitHub token not configured. Set it in Settings.");
+  }
+
+  const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (valid.length === 0) return [];
+
+  const results: Array<GitHubIssue | null> = [];
+
+  for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
+    const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
+    const query = buildBatchIssuesQuery(context.owner, context.repo, chunk);
+    if (!query) continue;
+
+    const response = (await client(query, {
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as GraphQlQueryResponseData;
+
+    gitHubRateLimitService.updateFromGraphQL(response);
+
+    const repo = response?.repository as Record<string, unknown> | undefined;
+    for (const num of chunk) {
+      const alias = `i${num}`;
+      const node = repo?.[alias] as Record<string, unknown> | null;
+      results.push(node ? parseIssueNode(node) : null);
+    }
+  }
+
+  return results;
+}
+
 export async function getIssuesByNumbers(
   cwd: string,
   numbers: number[]
@@ -705,30 +769,9 @@ export async function getIssuesByNumbers(
   if (valid.length === 0) return [];
 
   try {
-    return await withRepoContextRetry(cwd, async (context) => {
-      const results: Array<GitHubIssue | null> = [];
-
-      for (let i = 0; i < valid.length; i += GRAPHQL_BATCH_CHUNK_SIZE) {
-        const chunk = valid.slice(i, i + GRAPHQL_BATCH_CHUNK_SIZE);
-        const query = buildBatchIssuesQuery(context.owner, context.repo, chunk);
-        if (!query) continue;
-
-        const response = (await client(query, {
-          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
-        })) as GraphQlQueryResponseData;
-
-        gitHubRateLimitService.updateFromGraphQL(response);
-
-        const repo = response?.repository as Record<string, unknown> | undefined;
-        for (const num of chunk) {
-          const alias = `i${num}`;
-          const node = repo?.[alias] as Record<string, unknown> | null;
-          results.push(node ? parseIssueNode(node) : null);
-        }
-      }
-
-      return results;
-    });
+    return await withRepoContextRetry(cwd, (context) =>
+      getIssuesByNumbersForContext(context, numbers)
+    );
   } catch (error) {
     const message = formatErrorMessage(error, "Failed to fetch GitHub issues");
     if (message === "Not a GitHub repository") {

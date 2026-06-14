@@ -67,6 +67,10 @@ export interface PatternDetectionResult {
  * Handles CSI sequences, OSC sequences, and simple escape sequences.
  */
 export function stripAnsi(text: string): string {
+  // Every pattern below requires a literal ESC; skip all passes when absent.
+  if (!text.includes("\x1b")) {
+    return text;
+  }
   // CSI sequences: ESC [ ... <final byte>
   // OSC sequences: ESC ] ... (ST | BEL)
   // Simple escapes: ESC <char>

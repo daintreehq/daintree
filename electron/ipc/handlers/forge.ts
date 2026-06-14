@@ -59,6 +59,34 @@ export const forgeUnassignIssueNamespace = defineIpcNamespace({
   },
 });
 
+async function handleForgeOpenPR(payload: { cwd: string; prNumber: number }): Promise<void> {
+  checkRateLimit(CHANNELS.FORGE_OPEN_PR, 20, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  if (typeof payload.cwd !== "string" || !payload.cwd) {
+    throw new Error("Invalid working directory");
+  }
+  if (
+    typeof payload.prNumber !== "number" ||
+    !Number.isInteger(payload.prNumber) ||
+    payload.prNumber <= 0
+  ) {
+    throw new Error("Invalid PR number");
+  }
+  const { namespaceId, repoRef } = await resolveForCwd(payload.cwd);
+  const impl = getImplForNamespace(namespaceId);
+  const url = impl.buildPRUrl(repoRef, payload.prNumber);
+  await openExternalUrl(url);
+}
+
+export const forgeOpenPRNamespace = defineIpcNamespace({
+  name: "forgeOpenPR",
+  ops: {
+    openPR: op(CHANNELS.FORGE_OPEN_PR, handleForgeOpenPR),
+  },
+});
+
 export function registerForgeHandlers(): () => void {
   const cleanups: Array<() => void> = [];
 
@@ -120,6 +148,8 @@ export function registerForgeHandlers(): () => void {
       }
     )
   );
+
+  cleanups.push(forgeOpenPRNamespace.register());
 
   cleanups.push(
     typedHandle(

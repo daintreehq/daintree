@@ -625,4 +625,93 @@ describe("TabButton", () => {
       expect(screen.queryByText(/^Agent /)).toBeNull();
     });
   });
+
+  describe("keyboard drag pickup composition", () => {
+    it("activates an inactive tab on Space instead of forwarding to the sortable sensor", () => {
+      const onClick = vi.fn();
+      const sensorKeyDown = vi.fn();
+      render(
+        <TabButton
+          {...defaultProps}
+          isActive={false}
+          onClick={onClick}
+          sortableListeners={{ onKeyDown: sensorKeyDown }}
+        />
+      );
+      fireEvent.keyDown(screen.getByRole("tab"), { key: " " });
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(sensorKeyDown).not.toHaveBeenCalled();
+    });
+
+    it("forwards Space/Enter on the active tab to the sortable keydown so dnd-kit can pick it up", () => {
+      const onClick = vi.fn();
+      const sensorKeyDown = vi.fn();
+      render(
+        <TabButton
+          {...defaultProps}
+          isActive
+          onClick={onClick}
+          sortableListeners={{ onKeyDown: sensorKeyDown }}
+        />
+      );
+      fireEvent.keyDown(screen.getByRole("tab"), { key: "Enter" });
+      expect(sensorKeyDown).toHaveBeenCalledTimes(1);
+      expect(onClick).not.toHaveBeenCalled();
+    });
+
+    it("keeps Space activation on the active tab when no sortable listeners are wired", () => {
+      const onClick = vi.fn();
+      render(<TabButton {...defaultProps} isActive onClick={onClick} />);
+      fireEvent.keyDown(screen.getByRole("tab"), { key: " " });
+      expect(onClick).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("pointer drag composition (issue #10443)", () => {
+    it("stops the tab pointerdown from bubbling to the parent panel drag surface", () => {
+      const parentPointerDown = vi.fn();
+      const sensorPointerDown = vi.fn();
+      render(
+        <div onPointerDown={parentPointerDown}>
+          <TabButton {...defaultProps} sortableListeners={{ onPointerDown: sensorPointerDown }} />
+        </div>
+      );
+      fireEvent.pointerDown(screen.getByRole("tab"));
+      // Guard stops propagation so the parent panel-move drag is never armed...
+      expect(parentPointerDown).not.toHaveBeenCalled();
+      // ...but the inner tab sortable sensor still receives the pointerdown so
+      // tab reorder can pick up. This proves the spread no longer clobbers it.
+      expect(sensorPointerDown).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not route the close button pointerdown through the sortable sensor", () => {
+      const parentPointerDown = vi.fn();
+      const sensorPointerDown = vi.fn();
+      render(
+        <div onPointerDown={parentPointerDown}>
+          <TabButton
+            {...defaultProps}
+            onClose={vi.fn()}
+            sortableListeners={{ onPointerDown: sensorPointerDown }}
+          />
+        </div>
+      );
+      fireEvent.pointerDown(screen.getByLabelText("Close Test Agent"));
+      // Close button is not a drag activator: it stops propagation outright and
+      // must NOT pick up a tab drag, so neither the parent nor the sortable fire.
+      expect(parentPointerDown).not.toHaveBeenCalled();
+      expect(sensorPointerDown).not.toHaveBeenCalled();
+    });
+
+    it("still stops propagation when no sortable listeners are wired", () => {
+      const parentPointerDown = vi.fn();
+      render(
+        <div onPointerDown={parentPointerDown}>
+          <TabButton {...defaultProps} />
+        </div>
+      );
+      fireEvent.pointerDown(screen.getByRole("tab"));
+      expect(parentPointerDown).not.toHaveBeenCalled();
+    });
+  });
 });

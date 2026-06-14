@@ -60,7 +60,7 @@ export function ExistingBranchPicker({
           <div className="flex items-center border-b border-daintree-border px-3">
             <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
             <input
-              className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-daintree-accent/40"
+              className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-daintree-accent/40"
               placeholder="Search local branches..."
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}

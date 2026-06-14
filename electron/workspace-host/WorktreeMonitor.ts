@@ -11,14 +11,11 @@ import type {
   WorktreeLifecyclePhaseResult,
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
-import type { GitHubPRCIStatus } from "../../shared/types/github.js";
+import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
-import {
-  isRepoOperationInProgress,
-  getRepoOperationStateSync,
-} from "../utils/gitRepoOperationState.js";
+import { getRepoOperationStateSync } from "../utils/gitRepoOperationState.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
@@ -69,6 +66,10 @@ const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 // match on the next stat pass without forcing a real git check.
 const STAT_ABSENT_SENTINEL = -1;
 
+// FNV-1a 32-bit offset basis. Also the digest of an empty change list, which
+// makes it the natural initial value for `previousStateHash` (see below).
+const FNV_OFFSET_BASIS = 0x811c9dc5;
+
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.floor(Math.random() * (maxMs - minMs));
@@ -79,6 +80,13 @@ interface GitFileStatBaseline {
   head: number;
   refsHead: number;
   packedRefs: number;
+}
+
+interface BaseDivergence {
+  baseBranchName: string | null;
+  aheadCount: number | null;
+  behindCount: number | null;
+  matchesUpstream: boolean;
 }
 
 export interface WorktreeMonitorConfig {
@@ -131,7 +139,11 @@ export class WorktreeMonitor {
   private summary: string | undefined;
   private modifiedCount: number = 0;
   private lastActivityTimestamp: number | null = null;
-  private previousStateHash: string = "";
+  // Seeded with the FNV-1a offset basis — the digest of an empty change list —
+  // mirroring the legacy string implementation where the initial sentinel ""
+  // equaled the clean-tree hash, so a first poll of a clean tree reads as
+  // "no change" exactly as before.
+  private previousStateHash: number = FNV_OFFSET_BASIS;
 
   // Note state
   private aiNote: string | undefined;
@@ -156,7 +168,7 @@ export class WorktreeMonitor {
   private prNumber: number | undefined;
   private prUrl: string | undefined;
   private prState: import("../../shared/types/forge.js").NormalizedPRState | undefined;
-  private prCiStatus: GitHubPRCIStatus | undefined;
+  private prCiStatus: CIStatusState | undefined;
   private prTitle: string | undefined;
   private issueTitle: string | undefined;
   private _branchDerivedTitle: string | undefined;
@@ -205,6 +217,9 @@ export class WorktreeMonitor {
   // simple-git fork-exec. null = no baseline yet (first poll, or post-error).
   private lastStatBaseline: GitFileStatBaseline | null = null;
   private lastStatBaselineAt: number = 0;
+  private lastBaseDivergenceKey: string | null = null;
+  private lastBaseDivergenceResult: BaseDivergence | null = null;
+  private cachedCommonDir: string | null = null;
   // Timer used to defer the initial `updateGitStatus` call for background
   // monitors so N monitors starting together don't fork git simultaneously.
   // Cleared by `clearTimers()` so `stop()` cancels the deferred poll.
@@ -258,16 +273,18 @@ export class WorktreeMonitor {
   private readonly fetchScheduler: FetchScheduler;
 
   // Fetch freshness state — surfaced to the renderer via the snapshot so the
-  // worktree card can show "Last fetched X ago", an in-flight pulse, and a
-  // GitHub auth-failure affordance. `_lastFetchedAt` and `_fetchAuthFailed`
-  // are pushed in via `setFetchState` from `WorkspaceService` (which receives
-  // them on every coordinator round-trip and fans them out to siblings sharing
-  // the commondir). `_isGitHubRemote` is set once at monitor start when the
-  // origin URL is probed.
+  // worktree card can show "Last fetched X ago", an in-flight pulse, and an
+  // auth-failure affordance. `_lastFetchedAt` and `_fetchAuthFailed` are
+  // pushed in via `setFetchState` from `WorkspaceService` (which receives
+  // them on every coordinator round-trip and fans them out to siblings
+  // sharing the commondir). `_remoteFetchUrl` is probed once at monitor
+  // start; `_matchedForgeProviderId` is resolved from it against the relayed
+  // provider-matcher table and re-resolved whenever the table changes.
   private _lastFetchedAt: number | null = null;
   private _fetchAuthFailed: boolean = false;
   private _fetchNetworkFailed: boolean = false;
-  private _isGitHubRemote: boolean = false;
+  private _remoteFetchUrl: string | undefined;
+  private _matchedForgeProviderId: string | null = null;
 
   // Poll queue concurrency
   private _pendingPollPromise: Promise<void> | null = null;
@@ -524,20 +541,36 @@ export class WorktreeMonitor {
   }
 
   /**
-   * Set once at monitor start when `WorkspaceService` resolves the origin URL.
-   * Gates the "Sign in to refresh" affordance — non-GitHub remotes silently
-   * hide the affordance even when an auth failure is recorded.
+   * Origin fetch URL probed once at monitor start by `WorkspaceService`.
+   * Remembered so the matched provider id can be re-resolved without
+   * re-probing git when the provider-matcher table changes.
+   */
+  get remoteFetchUrl(): string | undefined {
+    return this._remoteFetchUrl;
+  }
+
+  setRemoteFetchUrl(url: string | undefined): void {
+    if (!this._isRunning) return;
+    this._remoteFetchUrl = url;
+  }
+
+  /**
+   * Resolved when `WorkspaceService` matches the origin URL against the
+   * relayed provider-matcher table — at monitor start and again on every
+   * table change. Gates forge affordances ("Sign in to refresh", PR badge) —
+   * unmatched remotes silently hide them even when an auth failure is
+   * recorded.
    *
-   * Guarded against post-stop emits: `probeGitHubRemoteAsync` is a fire-and-
+   * Guarded against post-stop emits: `probeForgeRemoteAsync` is a fire-and-
    * forget async call that may resolve after the monitor is torn down (e.g.
    * worktree removal, project switch). Without this check the late resolution
    * would emit a `worktree-update` after `worktree-removed`, re-adding a
    * ghost card to the renderer.
    */
-  setIsGitHubRemote(value: boolean): void {
+  setMatchedForgeProviderId(value: string | null): void {
     if (!this._isRunning) return;
-    if (this._isGitHubRemote === value) return;
-    this._isGitHubRemote = value;
+    if (this._matchedForgeProviderId === value) return;
+    this._matchedForgeProviderId = value;
     if (this._hasInitialStatus) {
       this.emitUpdate();
     }
@@ -660,7 +693,7 @@ export class WorktreeMonitor {
     prNumber?: number;
     prUrl?: string;
     prState?: import("../../shared/types/forge.js").NormalizedPRState;
-    prCiStatus?: GitHubPRCIStatus;
+    prCiStatus?: CIStatusState;
     prTitle?: string;
     issueTitle?: string;
     prLastUpdatedAt?: number;
@@ -1109,15 +1142,13 @@ export class WorktreeMonitor {
         ? "closed"
         : linkedPr.state
       : undefined;
-    const linkedPrCiStatus: GitHubPRCIStatus | undefined = linkedPr?.ciStatus
-      ? linkedPr.ciStatus.state === "success"
-        ? "SUCCESS"
-        : linkedPr.ciStatus.state === "failure"
-          ? "FAILURE"
-          : linkedPr.ciStatus.state === "pending"
-            ? "PENDING"
-            : undefined
-      : undefined;
+    const linkedPrCiStatus: CIStatusState | undefined =
+      linkedPr?.ciStatus &&
+      (linkedPr.ciStatus.state === "success" ||
+        linkedPr.ciStatus.state === "failure" ||
+        linkedPr.ciStatus.state === "pending")
+        ? linkedPr.ciStatus.state
+        : undefined;
 
     const snapshot: WorktreeSnapshot = {
       id: this.id,
@@ -1177,7 +1208,7 @@ export class WorktreeMonitor {
       // so a snapshot emitted between fetch-start and fetch-end always
       // serializes the correct value, never a stale cached copy.
       isFetchInFlight: this.fetchScheduler.isFetchInFlight || undefined,
-      isGitHubRemote: this._isGitHubRemote || undefined,
+      matchedForgeProviderId: this._matchedForgeProviderId ?? undefined,
       isWslPath: this._isWslPath || undefined,
       wslDistro: this._wslDistro,
       wslPosixPath: this._wslPosixPath,
@@ -1493,8 +1524,9 @@ export class WorktreeMonitor {
 
     // Detect blocking git operation state from sentinel files so the renderer
     // can surface it even when git status is skipped.
+    let opState: import("../../shared/types/git.js").RepoState | undefined;
     if (gitDir) {
-      const opState = getRepoOperationStateSync(gitDir);
+      opState = getRepoOperationStateSync(gitDir);
       if (opState !== this._repoState) {
         this._repoState = opState;
         if (this._hasInitialStatus) {
@@ -1505,7 +1537,7 @@ export class WorktreeMonitor {
       this._repoState = undefined;
     }
 
-    if (gitDir && isRepoOperationInProgress(gitDir)) {
+    if (gitDir && opState !== undefined) {
       // If we're skipping the very first poll (e.g. app started mid-rebase),
       // emit a default snapshot so the renderer can still display the worktree.
       // Mirrors startWithoutGitStatus()'s contract.
@@ -1686,7 +1718,9 @@ export class WorktreeMonitor {
         return;
       }
 
-      const isInitialLoad = this.previousStateHash === "";
+      // True on initial load OR while the tree has stayed clean — the two are
+      // deliberately indistinguishable (legacy ""-hash semantics).
+      const isInitialLoad = this.previousStateHash === FNV_OFFSET_BASIS;
       const isNowClean = newChanges.changedFileCount === 0;
       const hasPendingChanges = newChanges.changedFileCount > 0;
       const shouldUpdateTimestamp =
@@ -1796,6 +1830,10 @@ export class WorktreeMonitor {
    * Mirrors `GitFileWatcher.resolveCommonDir` but uses async `readFile`.
    */
   private async resolveCommonDirAsync(gitDir: string): Promise<string> {
+    // The commondir pointer is immutable for the lifetime of a worktree, so
+    // a successful resolve is cached for the monitor's lifetime. Fallback
+    // paths (missing file, timeout) stay uncached so transient errors retry.
+    if (this.cachedCommonDir !== null) return this.cachedCommonDir;
     const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this._pollAbortController.signal);
     try {
       const commondirContent = await readFile(pathJoin(gitDir, "commondir"), {
@@ -1804,7 +1842,8 @@ export class WorktreeMonitor {
       });
       const trimmed = commondirContent.trim();
       if (!trimmed) return gitDir;
-      return isAbsolute(trimmed) ? trimmed : pathJoin(gitDir, trimmed);
+      this.cachedCommonDir = isAbsolute(trimmed) ? trimmed : pathJoin(gitDir, trimmed);
+      return this.cachedCommonDir;
     } catch {
       // Missing file, timeout, or poll abort — fall back to gitDir. A timeout
       // here just degrades the next poll to a full git check rather than the
@@ -1932,50 +1971,49 @@ export class WorktreeMonitor {
     }
   }
 
-  private async computeBaseDivergence(hasUpstream: boolean): Promise<{
-    baseBranchName: string | null;
-    aheadCount: number | null;
-    behindCount: number | null;
-    matchesUpstream: boolean;
-  } | null> {
+  private async computeBaseDivergence(hasUpstream: boolean): Promise<BaseDivergence | null> {
     if (!this._branch || this._isMainWorktree) return null;
+
+    // Pick the branch to diff against. A linked PR's base branch is
+    // authoritative — it's exactly where this worktree's work will merge,
+    // which may differ from the repo's integration branch (e.g. a hotfix
+    // PR targeting `main` in a gitflow repo). Without a PR, fall back to
+    // the repository's main/integration branch.
+    const baseBranch = this._linked?.pr?.baseRef?.trim() || this.mainBranch;
+
+    // Divergence only moves when refs move, never on working-tree edits, so
+    // a stat key over the involved refs lets forced passes (watcher-driven
+    // edit storms) reuse the last result without any git spawns.
+    const key = await this.buildBaseDivergenceKey(baseBranch, hasUpstream);
+    if (key !== null && key === this.lastBaseDivergenceKey) {
+      return this.lastBaseDivergenceResult;
+    }
+
     const wsl = this.wslInvocation;
     const git = wsl
-      ? createWslHardenedGit(wsl, this._pollAbortController.signal)
-      : createHardenedGit(this.path, this._pollAbortController.signal);
+      ? await createWslHardenedGit(wsl, this._pollAbortController.signal)
+      : await createHardenedGit(this.path, this._pollAbortController.signal);
 
     try {
-      // Pick the branch to diff against. A linked PR's base branch is
-      // authoritative — it's exactly where this worktree's work will merge,
-      // which may differ from the repo's integration branch (e.g. a hotfix
-      // PR targeting `main` in a gitflow repo). Without a PR, fall back to
-      // the repository's main/integration branch.
-      const baseBranch = this._linked?.pr?.baseRef?.trim() || this.mainBranch;
-
-      // Resolve base ref: try origin/<branch> first (remote ref stays fresh
-      // after fetch), fall back to local branch for repos without a remote.
+      // Resolve base ref via the rev-list itself: try origin/<branch> first
+      // (remote ref stays fresh after fetch), fall back to the local branch
+      // for repos without a remote.
       const remoteRef = `origin/${baseBranch}`;
       const localRef = baseBranch;
-      let resolvedRef: string;
+      const baseBranchName = baseBranch;
+      let resolvedRef = remoteRef;
+      let result: string;
       try {
-        await git.raw(["rev-parse", "--verify", remoteRef]);
-        resolvedRef = remoteRef;
+        result = await git.raw(["rev-list", "--count", "--left-right", `${remoteRef}...HEAD`]);
       } catch {
         try {
-          await git.raw(["rev-parse", "--verify", localRef]);
+          result = await git.raw(["rev-list", "--count", "--left-right", `${localRef}...HEAD`]);
           resolvedRef = localRef;
         } catch {
+          this.lastBaseDivergenceKey = null;
           return null;
         }
       }
-
-      const baseBranchName = baseBranch;
-      const result = await git.raw([
-        "rev-list",
-        "--count",
-        "--left-right",
-        `${resolvedRef}...HEAD`,
-      ]);
       const trimmed = result.trim();
       const parts = trimmed.split("\t");
       const behindCount = parts[0] != null && parts[0] !== "" ? parseInt(parts[0], 10) : 0;
@@ -1984,31 +2022,81 @@ export class WorktreeMonitor {
       let matchesUpstream = false;
       if (hasUpstream) {
         try {
-          const upstreamCommit = await git.raw(["rev-parse", "@{u}"]);
-          const baseCommit = await git.raw(["rev-parse", resolvedRef]);
-          matchesUpstream = upstreamCommit.trim() === baseCommit.trim();
+          // One invocation resolves both revs — rev-parse prints one OID per
+          // line, and either failing exits non-zero (caught below), matching
+          // the previous two-call error semantics.
+          const out = await git.raw(["rev-parse", "@{u}", resolvedRef]);
+          const [upstreamCommit, baseCommit] = out.trim().split("\n");
+          matchesUpstream = baseCommit !== undefined && upstreamCommit.trim() === baseCommit.trim();
         } catch {
           matchesUpstream = false;
         }
       }
 
-      return {
+      const divergence: BaseDivergence = {
         baseBranchName,
         aheadCount: Number.isFinite(aheadCount) ? aheadCount : null,
         behindCount: Number.isFinite(behindCount) ? behindCount : null,
         matchesUpstream,
       };
+      this.lastBaseDivergenceKey = key;
+      this.lastBaseDivergenceResult = divergence;
+      return divergence;
+    } catch {
+      this.lastBaseDivergenceKey = null;
+      return null;
+    }
+  }
+
+  /**
+   * Stat-derived cache key for `computeBaseDivergence`. Covers every ref the
+   * computation reads: HEAD, this branch's local ref, the base branch's local
+   * and remote refs, the upstream remote ref (the `@{u}` proxy for
+   * `matchesUpstream`), and packed-refs. The remote-ref stats are essential —
+   * `git fetch` writes loose refs under refs/remotes/ without touching
+   * packed-refs, so the stat-baseline fields alone would serve stale
+   * behind-of-base counts after background fetches. Returns `null` (compute,
+   * don't cache) on any stat failure beyond ENOENT.
+   */
+  private async buildBaseDivergenceKey(
+    baseBranch: string,
+    hasUpstream: boolean
+  ): Promise<string | null> {
+    const branch = this._branch;
+    if (!branch) return null;
+    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    if (!gitDir) return null;
+    try {
+      const commonDir = await this.resolveCommonDirAsync(gitDir);
+      const stats = await Promise.all([
+        this.statMtime(pathJoin(gitDir, "HEAD")),
+        this.statMtime(pathJoin(commonDir, "refs", "heads", branch)),
+        this.statMtime(pathJoin(commonDir, "packed-refs")),
+        this.statMtime(pathJoin(commonDir, "refs", "heads", baseBranch)),
+        this.statMtime(pathJoin(commonDir, "refs", "remotes", "origin", baseBranch)),
+        this.statMtime(pathJoin(commonDir, "refs", "remotes", "origin", branch)),
+      ]);
+      return [branch, baseBranch, hasUpstream, ...stats].join(" ");
     } catch {
       return null;
     }
   }
 
-  private calculateStateHash(changes: WorktreeChanges): string {
+  // 32-bit FNV-1a digest instead of the raw joined string: the previous
+  // implementation retained a path+stats concatenation proportional to the
+  // worktree's change count for the monitor's lifetime. A hash collision
+  // (~1 in 2^32 per state pair) suppresses the change event until the next
+  // non-colliding state or a forced refresh.
+  private calculateStateHash(changes: WorktreeChanges): number {
     const hashInput = changes.changes
       .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
       .sort()
       .join("|");
-    return hashInput;
+    let hash = FNV_OFFSET_BASIS;
+    for (let i = 0; i < hashInput.length; i++) {
+      hash = Math.imul(hash ^ hashInput.charCodeAt(i), 0x01000193) >>> 0;
+    }
+    return hash >>> 0;
   }
 
   private async fetchLastCommitMessage(changes: WorktreeChanges): Promise<string> {
@@ -2020,8 +2108,8 @@ export class WorktreeMonitor {
     try {
       const wsl = this.wslInvocation;
       const git = wsl
-        ? createWslHardenedGit(wsl, this._pollAbortController.signal)
-        : createHardenedGit(this.path, this._pollAbortController.signal);
+        ? await createWslHardenedGit(wsl, this._pollAbortController.signal)
+        : await createHardenedGit(this.path, this._pollAbortController.signal);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

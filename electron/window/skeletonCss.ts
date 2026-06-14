@@ -14,7 +14,7 @@ import {
   getAppThemeCssVariables,
   applyAccentOverrideToScheme,
 } from "../../shared/theme/index.js";
-import type { AppColorScheme } from "../../shared/theme/index.js";
+import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
 import {
   appCustomSchemesReadSchema,
@@ -35,7 +35,7 @@ export const INITIAL_COLOR_SCHEME_ARG = "--daintree-initial-color-scheme-id";
  * Command-line argument carrying the destination project id from the main
  * process into each project-switch `WebContentsView`. Replaces the former
  * `?projectId=` query string on `loadURL` so the document URL stays static
- * across projects, keeping the V8 bytecode cache (`v8CacheOptions: "code"`)
+ * across projects, keeping the V8 bytecode cache (`v8CacheOptions`)
  * keyed to a single URL instead of fragmenting one entry per project (#9162).
  * Read synchronously in preload.cts from `process.argv` and exposed as
  * `window.__DAINTREE_INITIAL_PROJECT__`.
@@ -53,6 +53,16 @@ export const INITIAL_PROJECT_ID_ARG = "--daintree-initial-project-id";
  */
 export const INSTANCE_ROLE_ARG = "--daintree-instance-role";
 
+/**
+ * E2E-only preload flags. These mirror the first-paint/project identity args:
+ * the main process reads the launch environment, then threads stable argv
+ * flags into each sandboxed renderer preload. Relying on preload `process.env`
+ * alone is brittle under sandboxed Electron contexts.
+ */
+export const E2E_MODE_ARG = "--daintree-e2e-mode";
+export const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
+export const E2E_FAULT_MODE_ARG = "--daintree-e2e-fault-mode";
+
 export type InstanceRole = "attended" | "worker";
 
 /**
@@ -65,15 +75,28 @@ export function resolveInstanceRole(): InstanceRole {
   return process.env.DAINTREE_INSTANCE_ROLE === "worker" ? "worker" : "attended";
 }
 
+export function resolveE2EPreloadArgs(): string[] {
+  const args: string[] = [];
+  if (process.env.DAINTREE_E2E_MODE === "1") args.push(E2E_MODE_ARG);
+  if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+    args.push(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
+  }
+  if (process.env.DAINTREE_E2E_FAULT_MODE === "1") args.push(E2E_FAULT_MODE_ARG);
+  return args;
+}
+
 /**
  * Resolves the color scheme id to seed the renderer with on cold start.
  * Mirrors the fallback logic in createWindow and getAppThemeConfig: the raw
  * persisted id when present (without resolving `followSystem` — that happens
  * post-mount), else Daintree's dark default, or Bondi when the OS prefers a
- * light appearance.
+ * light appearance. Accepts a pre-read theme config so callers that already
+ * hold one avoid a redundant full-store read (every `store.get()` re-reads
+ * the config file from disk).
  */
-export function resolveInitialColorSchemeId(): string {
-  const themeConfig = store.get("appTheme");
+export function resolveInitialColorSchemeId(
+  themeConfig: Partial<AppThemeConfig> = store.get("appTheme")
+): string {
   if (
     themeConfig &&
     typeof themeConfig === "object" &&
@@ -97,8 +120,8 @@ export function resolveInitialColorSchemeId(): string {
  * does not touch surface-canvas, so the base scheme value is correct.
  */
 export function resolveInitialCanvasBackgroundColor(): string {
-  const colorSchemeId = resolveInitialColorSchemeId();
   const themeConfig = store.get("appTheme") ?? {};
+  const colorSchemeId = resolveInitialColorSchemeId(themeConfig);
   let customSchemes: AppColorScheme[] = [];
   const rawSchemes = (themeConfig as Record<string, unknown>).customSchemes;
   if (rawSchemes !== undefined) {
@@ -114,19 +137,24 @@ export function resolveInitialCanvasBackgroundColor(): string {
 }
 
 /**
- * Inject the first-paint skeleton CSS custom properties. When a cold-start
- * project switch supplies the destination `project`, its accent color (when
- * set) overrides the theme's native accent tokens so the skeleton paints the
- * project's brand color before React mounts (#9162). Passing `null`/`undefined`
- * (the initial-window path) leaves the resolved scheme untouched.
+ * Builds the first-paint skeleton CSS custom-property block. Reads the
+ * persisted app state and theme config synchronously, so callers on the boot
+ * critical path can precompute the string once (before loadURL) instead of
+ * re-reading config.json inside the dom-ready handler that gates win.show().
+ * Accepts a pre-read theme config so callers that already hold one avoid a
+ * redundant full-store read (every `store.get()` re-reads the config file
+ * from disk).
  */
-export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "color"> | null): void {
+export function buildSkeletonCss(
+  project?: Pick<Project, "color"> | null,
+  preReadThemeConfig?: Partial<AppThemeConfig>
+): string {
   const appState = store.get("appState");
   const sidebarWidth = appState?.sidebarWidth ?? 350;
   const focusMode = appState?.focusMode ?? false;
 
   // Resolve theme
-  const themeConfig = store.get("appTheme") ?? {};
+  const themeConfig = preReadThemeConfig ?? store.get("appTheme") ?? {};
   const colorSchemeId =
     typeof themeConfig.colorSchemeId === "string" ? themeConfig.colorSchemeId : "daintree";
   // Apply lazy migration for legacy string-encoded customSchemes
@@ -196,11 +224,29 @@ export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "colo
     lines.push("#startup-skeleton .skeleton-sidebar { display: none; }");
   }
 
-  void wc.insertCSS(lines.join("\n"), { cssOrigin: "user" }).catch(() => {
+  return lines.join("\n");
+}
+
+/**
+ * Insert a (possibly precomputed) skeleton CSS string into a WebContents.
+ */
+export function insertSkeletonCss(wc: WebContents, css: string): void {
+  void wc.insertCSS(css, { cssOrigin: "user" }).catch(() => {
     // Best-effort first-paint seed: a destroyed/navigated WebContents during
     // rapid project switching rejects here. Swallow — the index.html skeleton
     // styles carry hardcoded fallbacks, so the splash still paints.
   });
+}
+
+/**
+ * Inject the first-paint skeleton CSS custom properties. When a cold-start
+ * project switch supplies the destination `project`, its accent color (when
+ * set) overrides the theme's native accent tokens so the skeleton paints the
+ * project's brand color before React mounts (#9162). Passing `null`/`undefined`
+ * (the initial-window path) leaves the resolved scheme untouched.
+ */
+export function injectSkeletonCss(wc: WebContents, project?: Pick<Project, "color"> | null): void {
+  insertSkeletonCss(wc, buildSkeletonCss(project));
 }
 
 /**

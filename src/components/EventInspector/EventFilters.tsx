@@ -171,7 +171,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               "w-full pl-9 pr-9 py-2 text-sm rounded-[var(--radius-md)]",
               "bg-muted/50 border border-transparent",
               "focus:bg-background focus:border-primary focus:outline-hidden",
-              "placeholder:text-muted-foreground",
+              "placeholder:text-text-placeholder",
               "[&::-webkit-search-cancel-button]:hidden"
             )}
           />
@@ -202,7 +202,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                 "w-full pl-3 pr-9 py-2 text-sm rounded-[var(--radius-md)] font-mono",
                 "bg-muted/50 border border-transparent",
                 "focus:bg-background focus:border-primary focus:outline-hidden",
-                "placeholder:text-muted-foreground placeholder:font-sans"
+                "placeholder:text-text-placeholder placeholder:font-sans"
               )}
             />
             {traceIdInput && (

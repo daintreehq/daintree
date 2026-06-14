@@ -89,7 +89,7 @@ describe("panelStatusBuffer — activity batching", () => {
     setSpy.mockClear();
 
     for (let i = 0; i < 10; i++) {
-      enqueueActivityUpdate(`term-${i}`, `Working ${i}`, "working", "interactive", 1000 + i, "cmd");
+      enqueueActivityUpdate(`term-${i}`, `Working ${i}`, "working", "interactive", "cmd");
     }
 
     expect(setSpy).not.toHaveBeenCalled();
@@ -101,20 +101,18 @@ describe("panelStatusBuffer — activity batching", () => {
       expect(t?.activityHeadline).toBe(`Working ${i}`);
       expect(t?.activityStatus).toBe("working");
       expect(t?.activityType).toBe("interactive");
-      expect(t?.activityTimestamp).toBe(1000 + i);
       expect(t?.lastCommand).toBe("cmd");
     }
   });
 
   it("last-write-wins within a frame for the same terminal", () => {
     seedPanel("term-1");
-    enqueueActivityUpdate("term-1", "First", "working", "interactive", 100, "a");
-    enqueueActivityUpdate("term-1", "Second", "waiting", "interactive", 200, "b");
+    enqueueActivityUpdate("term-1", "First", "working", "interactive", "a");
+    enqueueActivityUpdate("term-1", "Second", "waiting", "interactive", "b");
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Second");
     expect(t?.activityStatus).toBe("waiting");
-    expect(t?.activityTimestamp).toBe(200);
     expect(t?.lastCommand).toBe("b");
   });
 
@@ -123,11 +121,10 @@ describe("panelStatusBuffer — activity batching", () => {
       activityHeadline: "Stable",
       activityStatus: "working",
       activityType: "interactive",
-      activityTimestamp: 100,
       lastCommand: "cmd",
     });
     const setSpy = vi.spyOn(usePanelStore, "setState");
-    enqueueActivityUpdate("term-1", "Stable", "working", "interactive", 100, "cmd");
+    enqueueActivityUpdate("term-1", "Stable", "working", "interactive", "cmd");
     raf.flushAll();
     // setState is still called once (the fold runs), but the returned object
     // reflects no terminal change. Assert via state equality, not call count.
@@ -137,7 +134,7 @@ describe("panelStatusBuffer — activity batching", () => {
   });
 
   it("drops patches for terminals that no longer exist", () => {
-    enqueueActivityUpdate("ghost", "Phantom", "working", "interactive", 100, undefined);
+    enqueueActivityUpdate("ghost", "Phantom", "working", "interactive", undefined);
     raf.flushAll();
     expect(usePanelStore.getState().panelsById["ghost"]).toBeUndefined();
   });
@@ -229,7 +226,7 @@ describe("panelStatusBuffer — combined flush", () => {
     seedPanel("term-2", { isVisible: true });
     const setSpy = vi.spyOn(usePanelStore, "setState");
 
-    enqueueActivityUpdate("term-1", "Doing", "working", "interactive", 100, undefined);
+    enqueueActivityUpdate("term-1", "Doing", "working", "interactive", undefined);
     enqueueFlowStatusUpdate("term-2", "paused-resource-governor", 100);
 
     raf.flushAll();
@@ -244,7 +241,7 @@ describe("panelStatusBuffer — combined flush", () => {
     // into a single merged terminal record; the flow-status pass reads from
     // the activity-merged draft, not the original state snapshot.
     seedPanel("term-1", { isVisible: true, runtimeStatus: "running" });
-    enqueueActivityUpdate("term-1", "Compiling", "working", "interactive", 100, "npm run dev");
+    enqueueActivityUpdate("term-1", "Compiling", "working", "interactive", "npm run dev");
     enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
     raf.flushAll();
     const t = getPtyPanel("term-1");
@@ -260,7 +257,7 @@ describe("panelStatusBuffer — combined flush", () => {
 describe("panelStatusBuffer — lifecycle", () => {
   it("cancelPanelStatusBuffer is idempotent and clears pending patches", () => {
     seedPanel("term-1");
-    enqueueActivityUpdate("term-1", "Pending", "working", "interactive", 100, undefined);
+    enqueueActivityUpdate("term-1", "Pending", "working", "interactive", undefined);
     cancelPanelStatusBuffer();
     cancelPanelStatusBuffer();
     raf.flushAll();
@@ -270,9 +267,9 @@ describe("panelStatusBuffer — lifecycle", () => {
 
   it("enqueue after cancel schedules a fresh RAF", () => {
     seedPanel("term-1");
-    enqueueActivityUpdate("term-1", "First", "working", "interactive", 100, undefined);
+    enqueueActivityUpdate("term-1", "First", "working", "interactive", undefined);
     cancelPanelStatusBuffer();
-    enqueueActivityUpdate("term-1", "Second", "working", "interactive", 200, undefined);
+    enqueueActivityUpdate("term-1", "Second", "working", "interactive", undefined);
     raf.flushAll();
     const t = getPtyPanel("term-1");
     expect(t?.activityHeadline).toBe("Second");
@@ -288,8 +285,8 @@ describe("panelStatusBuffer — lifecycle", () => {
     seedPanel("term-1");
     seedPanel("term-2");
 
-    enqueueActivityUpdate("term-1", "A", "working", "interactive", 100, undefined);
-    enqueueActivityUpdate("term-2", "B", "working", "interactive", 100, undefined);
+    enqueueActivityUpdate("term-1", "A", "working", "interactive", undefined);
+    enqueueActivityUpdate("term-2", "B", "working", "interactive", undefined);
     enqueueFlowStatusUpdate("term-1", "paused-resource-governor", 100);
 
     expect(raf.callbacks).toHaveLength(1);
@@ -342,7 +339,7 @@ describe("panelStatusBuffer — held-duration batching", () => {
 
   it("combines with activity + flow-status in a single flush", () => {
     seedPanel("term-1", { isVisible: true });
-    enqueueActivityUpdate("term-1", "Working", "working", "interactive", 100, "cmd");
+    enqueueActivityUpdate("term-1", "Working", "working", "interactive", "cmd");
     enqueueFlowStatusUpdate("term-1", "paused-backpressure", 100);
     enqueueHeldDurationUpdate("term-1", 6000);
     const setSpy = vi.spyOn(usePanelStore, "setState");

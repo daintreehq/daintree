@@ -5,12 +5,18 @@ import {
   closestCenter,
   useSensor,
   useSensors,
+  KeyboardSensor,
   PointerSensor,
   TouchSensor,
   type DragEndEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
-import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
 import { ChevronDown, CopyPlus } from "lucide-react";
@@ -128,6 +134,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   const moveToDestination = useDockPanelPortal();
   const portalContainerElementRef = useRef<HTMLDivElement | null>(null);
+  const prevActivePanelIdRef = useRef<string | undefined>(undefined);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
 
   const portalContainerRef = useCallback((node: HTMLDivElement | null) => {
@@ -143,6 +150,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   useEffect(() => {
     if (!activePanelId) return;
 
+    // Track the previously-active panel so a tab switch (activePanelId change
+    // while the group stays open) can downgrade the panel that just lost
+    // visibility. Update the ref on every valid-activePanelId path — including
+    // the early returns below — so it never goes stale across close/reopen.
+    const prevId = prevActivePanelIdRef.current;
+    prevActivePanelIdRef.current = activePanelId;
+
     if (!isOpen) {
       try {
         terminalInstanceService.applyRendererPolicy(activePanelId, TerminalRefreshTier.BACKGROUND);
@@ -150,6 +164,17 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         console.warn(`Failed to apply dock state for panel ${activePanelId}:`, error);
       }
       return;
+    }
+
+    // On a tab switch the previous panel is no longer visible behind the new
+    // one — drop it to BACKGROUND so it stops painting at the visible tier.
+    // The policy's downgrade hysteresis absorbs rapid tab-flips (t1→t2→t1).
+    if (prevId && prevId !== activePanelId) {
+      try {
+        terminalInstanceService.applyRendererPolicy(prevId, TerminalRefreshTier.BACKGROUND);
+      } catch (error) {
+        console.warn(`Failed to background previous dock panel ${prevId}:`, error);
+      }
     }
 
     if (!portalContainer) return;
@@ -271,8 +296,19 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 150, tolerance: 5 },
-    })
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  // While a tab drag is live (keyboard pickup), the tablist arrow handler must
+  // not also move focus — dnd-kit's sensor owns the arrow keys.
+  const isTabDragActiveRef = useRef(false);
+  const handleTabDragStart = useCallback(() => {
+    isTabDragActiveRef.current = true;
+  }, []);
+  const handleTabDragCancel = useCallback(() => {
+    isTabDragActiveRef.current = false;
+  }, []);
 
   // Tab IDs for sortable context
   const tabIds = useMemo(() => panels.map((p) => p.id), [panels]);
@@ -287,6 +323,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
+      isTabDragActiveRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
@@ -344,6 +381,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // do not handle those keys here — doing so would double-activate.
   const handleTabListKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isTabDragActiveRef.current) return;
       if (panels.length < 2) return;
 
       // Anchor arrow movement to the currently focused tab when one is
@@ -402,19 +440,28 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const handleAddTab = useCallback(async () => {
     if (!activePanel) return;
 
+    let newPanelId: string | null = null;
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "dock");
       // `activateDockOnCreate` folds dock activation into the panel commit so
       // the watchdog effect cannot collapse the just-created tab. See #6590.
-      const newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
+      newPanelId = await addPanel({ ...options, activateDockOnCreate: true });
       if (!newPanelId) return;
 
-      addPanelToGroup(group.id, newPanelId);
+      // If the add is rejected (worktree mismatch, group vanished), trash the
+      // freshly created panel so it isn't orphaned outside any group, and skip
+      // activation since it never joined the group (#10441).
+      if (!addPanelToGroup(group.id, newPanelId)) {
+        trashPanel(newPanelId);
+        return;
+      }
       setActiveTab(group.id, newPanelId);
     } catch (error) {
       logError("Failed to add tab", error);
+      // Trash a created-but-unjoined panel so a mid-flight throw can't orphan it.
+      if (newPanelId) trashPanel(newPanelId);
     }
-  }, [activePanel, group.id, addPanel, addPanelToGroup, setActiveTab]);
+  }, [activePanel, group.id, addPanel, addPanelToGroup, trashPanel, setActiveTab]);
 
   const groupBlockedState = getGroupBlockedAgentState(panels);
   const blockedState = useDockBlockedState(groupBlockedState);
@@ -605,7 +652,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           <DndContext
             sensors={tabSensors}
             collisionDetection={closestCenter}
+            onDragStart={handleTabDragStart}
             onDragEnd={handleTabDragEnd}
+            onDragCancel={handleTabDragCancel}
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
             autoScroll={tabAutoScroll}
             accessibility={{ announcements: tabAnnouncements }}

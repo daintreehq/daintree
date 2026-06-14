@@ -149,6 +149,15 @@ function FileStageRowComponent({
         isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5",
         viewed && "opacity-60"
       )}
+      // The staging lists render every changed file with no windowing; a big
+      // changeset (lockfiles, codegen) mounts thousands of tooltip-wrapped
+      // rows. Off-screen rows skip layout/paint; the intrinsic-size hint keeps
+      // the scrollbar stable and roving-focus scrollIntoView still works
+      // because scrolling renders the target row.
+      style={{
+        contentVisibility: "auto",
+        containIntrinsicSize: density === "compact" ? "auto 24px" : "auto 32px",
+      }}
     >
       {isSelected && (
         <div

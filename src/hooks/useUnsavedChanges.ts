@@ -1,18 +1,19 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 export interface UseUnsavedChangesOptions {
   isDirty: boolean;
-  confirmMessage?: string;
 }
 
-export function useUnsavedChanges({
-  isDirty,
-  confirmMessage = "You have unsaved changes. Are you sure you want to close?",
-}: UseUnsavedChangesOptions) {
+export function useUnsavedChanges({ isDirty }: UseUnsavedChangesOptions) {
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+
   const onBeforeClose = useCallback(() => {
     if (!isDirty) return true;
-    return window.confirm(confirmMessage);
-  }, [isDirty, confirmMessage]);
+    setIsConfirmOpen(true);
+    return false;
+  }, [isDirty]);
 
-  return { onBeforeClose, isDirty };
+  const closeConfirm = useCallback(() => setIsConfirmOpen(false), []);
+
+  return { onBeforeClose, isConfirmOpen, closeConfirm, isDirty };
 }

@@ -322,7 +322,7 @@ export const SEL = {
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',
   },
   actionPalette: {
-    dialog: '[role="dialog"][aria-label="Action palette"]',
+    dialog: '[role="dialog"][aria-label="Command palette"]',
     searchInput: '[aria-label="Search actions"]',
     list: "#action-palette-list",
     options: '#action-palette-list [role="option"]',
@@ -376,9 +376,11 @@ export const SEL = {
     testButton: '[aria-label="Test token"]',
     saveButton: '[aria-label="Save token"]',
     connectedBadge: 'text="GitHub connected"',
-    // Toolbar stat pills (open the issue/PR dropdowns)
-    statPillIssues: '[data-testid="github-stat-pill-issues"]',
-    statPillPrs: '[data-testid="github-stat-pill-prs"]',
+    // Toolbar stat pills (open the issue/PR dropdowns; commits renders even
+    // with no forge provider — local git data)
+    statPillIssues: '[data-testid="forge-stat-pill-issues"]',
+    statPillPrs: '[data-testid="forge-stat-pill-prs"]',
+    statPillCommits: '[data-testid="forge-stat-pill-commits"]',
     // Resource dropdown (issues / pull requests)
     searchIssues: '[aria-label="Search issues"]',
     searchPrs: '[aria-label="Search pull requests"]',
@@ -394,7 +396,7 @@ export const SEL = {
     bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
     bulkClearButton: '[aria-label="Clear selection"]',
     bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',
-    // Token-health banner (GlobalBannerCoordinator slot github-token)
+    // Token-health banner (GlobalBannerCoordinator slot forge-token)
     tokenExpiredBanner: 'text="GitHub token expired"',
   },
   plugin: {
@@ -482,7 +484,7 @@ export const SEL = {
     // Footer affordance listing the @/#/:/> prefixes; rendered only on empty query.
     discoverabilityRow: '[aria-label="Prefix shortcuts"]',
     // Mode chip (e.g. "Commands") rendered as the action-palette input prefix.
-    modeChip: '[role="dialog"][aria-label="Action palette"] [role="status"][aria-live="polite"]',
+    modeChip: '[role="dialog"][aria-label="Command palette"] [role="status"][aria-live="polite"]',
     // Sectioned-body header in the action palette MRU rail.
     recentlyUsedHeader: '#action-palette-list [aria-label="Recently used"]',
     // Non-divider rows in the action-palette listbox (excludes aria-disabled headers).

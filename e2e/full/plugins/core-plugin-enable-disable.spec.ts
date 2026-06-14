@@ -10,11 +10,9 @@ import {
 
 /**
  * Plugin enable/disable lifecycle + restart gating (#9284, #9558). Toggling a
- * plugin is restart-gated: the desired state flips optimistically (the row moves
- * to the "Disabled" group) but the running plugin keeps its contributions until
- * the app relaunches, so a "Restart required" banner surfaces. This spec asserts
- * that gating — and that the restart itself is guarded behind a confirm dialog —
- * without ever relaunching (which would tear down the app mid-suite).
+ * plugin is built in, so disabling it transitions the live plugin registry in
+ * place (#9304): the row dims in place and gains a "Disabled" badge, but no
+ * restart gate is needed.
  */
 test.describe.serial("Core: Plugin enable/disable", () => {
   let ctx: AppContext;
@@ -31,27 +29,27 @@ test.describe.serial("Core: Plugin enable/disable", () => {
     fixtureCleanup?.();
   });
 
-  test("disabling moves the plugin to Disabled and surfaces the restart banner", async () => {
+  test("disabling a built-in plugin dims the row in place without a restart banner", async () => {
     const { window } = ctx;
     await openPluginManager(window);
 
-    const list = window.locator(SEL.plugin.list);
     const toggle = window.getByRole("switch", { name: `Enable ${SAMPLE_PLUGIN_LABEL}` });
     await expect(toggle).toBeChecked();
 
-    // No restart pending and no Disabled group on a clean start.
-    await expect(list.getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
+    // No restart pending and no Disabled badge on a clean start.
+    const sampleRow = window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL });
+    await expect(sampleRow.getByText("Disabled", { exact: true })).toHaveCount(0);
 
     await toggle.click();
 
-    // Desired state flips: the row re-groups under Disabled.
-    await expect(list.getByRole("option", { name: "Disabled", exact: true })).toBeVisible({
+    // Desired state flips: the row stays in its category section (disabled
+    // plugins dim in place, never relocate) and gains the Disabled badge.
+    await expect(sampleRow.getByText("Disabled", { exact: true })).toBeVisible({
       timeout: T_MEDIUM,
     });
     await expect(toggle).not.toBeChecked();
 
-    // Running contributions persist until relaunch, so the gate banner appears.
-    await expect(window.getByText("Restart required to apply plugin changes")).toBeVisible({
+    await expect(window.getByText("Restart required to apply plugin changes")).not.toBeVisible({
       timeout: T_MEDIUM,
     });
 
@@ -63,7 +61,7 @@ test.describe.serial("Core: Plugin enable/disable", () => {
     });
   });
 
-  test("the restart banner action is guarded by a confirm dialog", async () => {
+  test("re-enabling a built-in plugin does not require a restart confirmation", async () => {
     const { window } = ctx;
     // Self-contained: open() is idempotent, so this is safe whether or not the
     // previous serial test left the manager open.
@@ -71,23 +69,14 @@ test.describe.serial("Core: Plugin enable/disable", () => {
     const toggle = window.getByRole("switch", { name: `Enable ${SAMPLE_PLUGIN_LABEL}` });
     await toggle.click();
 
-    const banner = window.getByText("Restart required to apply plugin changes");
-    await expect(banner).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.getByText("Restart required to apply plugin changes")).not.toBeVisible({
+      timeout: T_MEDIUM,
+    });
 
-    await window.getByRole("button", { name: "Restart", exact: true }).click();
-
-    // Restart is destructive (kills terminals + agent work), so it confirms.
-    await expect(window.getByText("Restart Daintree now?")).toBeVisible({ timeout: T_MEDIUM });
-
-    // Cancel — never relaunch in-suite. The app stays alive and the manager open.
-    await window.getByRole("button", { name: "Not now" }).click();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
     await expect(window.getByText("Restart Daintree now?")).not.toBeVisible({
       timeout: T_SHORT,
     });
-    await expect(window.locator(SEL.plugin.manager)).toBeVisible();
-
-    // Leave the plugin enabled for a tidy teardown.
-    await toggle.click();
-    await expect(toggle).toBeChecked();
   });
 });

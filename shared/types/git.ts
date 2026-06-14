@@ -184,3 +184,35 @@ export interface CreateWorktreeOptions {
    */
   sourcePrLinkedIssueNumber?: number;
 }
+
+/** Git commit author */
+export interface GitCommitAuthor {
+  name: string;
+  email: string;
+}
+
+/** Git commit representation */
+export interface GitCommit {
+  hash: string;
+  shortHash: string;
+  message: string;
+  body?: string;
+  author: GitCommitAuthor;
+  date: string;
+}
+
+/** Git commit list options */
+export interface GitCommitListOptions {
+  cwd: string;
+  search?: string;
+  branch?: string;
+  skip?: number;
+  limit?: number;
+}
+
+/** Git commit list response */
+export interface GitCommitListResponse {
+  items: GitCommit[];
+  hasMore: boolean;
+  total: number;
+}

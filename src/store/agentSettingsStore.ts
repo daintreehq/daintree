@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { AgentSettings, AgentSettingsEntry, CliAvailability } from "@shared/types";
 import { agentSettingsClient } from "@/clients";
+import { getSafeBootPromise } from "@/lib/bootPromise";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds";
@@ -222,6 +223,12 @@ interface AgentSettingsActions {
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
   setAgentPinned: (agentId: string, pinned: boolean) => Promise<void>;
   /**
+   * Set the global skip-permissions override (#10432). Writes the root-level
+   * `globalSkipPermissions` field only — does not mutate any per-agent
+   * `dangerousEnabled`. Optimistic with rollback on IPC failure.
+   */
+  setGlobalSkipPermissions: (value: boolean) => Promise<void>;
+  /**
    * Set or clear the worktree-scoped preset override for an agent. Reads the
    * current `worktreePresets` map, spreads sibling keys, then writes the merged
    * map — bypasses the IPC handler's shallow-merge clobber on the submap.
@@ -265,7 +272,21 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       try {
         set({ isLoading: true, error: null });
 
-        const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+        // Seed from the in-flight `app:boot` payload instead of firing a
+        // duplicate `agentSettings:get` round-trip — the payload carries the
+        // same `store.get("agentSettings")` snapshot. BootResult types
+        // `agentSettings` as non-optional, but `releaseBootPayload()` nulls it
+        // at runtime after hydration — treat it as possibly undefined. The
+        // live-IPC fallback intentionally covers three cases: boot failure
+        // ({ ok: false }), a re-initialize after `releaseBootPayload()`, and
+        // fresh installs where the persisted store has no `agentSettings` key
+        // (the payload field is undefined, so the fallback IPC fires — same
+        // cost as the old path, not a regression).
+        const boot = await getSafeBootPromise();
+        const fromBoot = boot.ok
+          ? (boot.result.agentSettings as AgentSettings | undefined)
+          : undefined;
+        const raw = fromBoot ?? (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
         if (myEpoch !== normalizeEpoch) {
           // A concurrent refresh/update bumped the epoch — its result is
           // authoritative. Flip `isInitialized` anyway so the store exits the
@@ -318,6 +339,10 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     const myEpoch = ++normalizeEpoch;
     set({ error: null });
     try {
+      // refresh() exists to re-pull external changes (cross-window writes,
+      // config reloads) — drop the client's value cache so this read and
+      // every later get() see post-change data, not a pre-change snapshot.
+      agentSettingsClient.invalidate();
       const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
       if (myEpoch !== normalizeEpoch) return;
       const { availability, hasRealData } = readAvailabilitySnapshot();
@@ -394,6 +419,32 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     return get().updateAgent(agentId, { pinned });
   },
 
+  setGlobalSkipPermissions: async (value: boolean) => {
+    const myEpoch = ++normalizeEpoch;
+    set({ error: null });
+    const previous = get().settings;
+    // Optimistic top-level spread — never route through updateAgent (which
+    // merges into the agents record and would not touch this root field, #5514).
+    // This must not mutate any per-agent `dangerousEnabled`; it is a live
+    // override OR-ed in at flag-generation time (#10432).
+    if (previous) {
+      set({ settings: { ...previous, globalSkipPermissions: value } });
+    }
+    try {
+      await agentSettingsClient.setGlobal(value);
+      if (myEpoch !== normalizeEpoch) return;
+      // The IPC response echoes the persisted value; the optimistic state
+      // already reflects it, and the renderer-normalized agents record is the
+      // source of truth for per-agent state, so keep it rather than overwriting
+      // from the raw response.
+    } catch (e) {
+      if (myEpoch !== normalizeEpoch) return;
+      if (previous) set({ settings: previous });
+      set({ error: formatErrorMessage(e, "Failed to update global skip-permissions setting") });
+      throw e;
+    }
+  },
+
   updateWorktreePreset: async (
     agentId: string,
     worktreeId: string,
@@ -454,6 +505,7 @@ export function getPinnedAgents(): string[] {
 export function cleanupAgentSettingsStore() {
   normalizeEpoch++;
   initPromise = null;
+  agentSettingsClient.invalidate();
   useAgentSettingsStore.setState({
     settings: DEFAULT_AGENT_SETTINGS,
     isLoading: true,

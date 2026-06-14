@@ -27,7 +27,7 @@ import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
-import { AgentTrayButton } from "./AgentTrayButton";
+import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -73,21 +73,18 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import {
-  getDominantAgentState,
-  agentStateDotColor,
-} from "@/components/Worktree/AgentStatusIndicator";
-import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
-import { isPtyPanel } from "@shared/types/panel";
+import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { notify } from "@/lib/notify";
-import type { CliAvailability, AgentSettings, AgentState, RepositoryStats } from "@shared/types";
+import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
+import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
-import { GitHubStatsToolbarButton, type GitHubStatsHandle } from "./GitHubStatsToolbarButton";
+import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -109,7 +106,7 @@ type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?:
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 // These controls are project-only visually, but their no-drag rectangles must
 // exist on first paint so secondary windows don't cache them as titlebar drag.
-const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "github-stats"]);
+const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "forge-stats"]);
 
 // Hardware-privacy indicators stay out of the overflow dropdown while their
 // signal is active — collapsing them under `…` would hide the only visual
@@ -125,17 +122,7 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 // short enough that re-clicks don't feel stuck.
 const COPY_TREE_FEEDBACK_RESET_MS = 2000;
 
-// Agent states that count as an "active session" when deriving the per-agent
-// dominant state for the overflow menu dot. Mirrors AgentButton's own set so
-// the dot shown in overflow matches what the visible agent button would show.
-const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
-  "idle",
-  "working",
-  "waiting",
-  "directing",
-]);
-
-function GitHubStatsPlaceholder() {
+function ForgeStatsPlaceholder() {
   return (
     <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
       <div className="h-8 flex-1" />
@@ -217,7 +204,11 @@ interface OverflowMenuProps {
   notificationUnreadCount: number;
   agentDominantStates: Map<string, AgentState | null>;
   hasActiveWorktree: boolean;
-  githubStatsRef: React.RefObject<GitHubStatsHandle | null>;
+  forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
+  // Display name of the resolved forge provider, or null when none resolves
+  // (no matching plugin / owning plugin disabled) — the stats group is
+  // skipped entirely in that case.
+  forgeProviderName: string | null;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
   pluginOverflowMeta: Record<string, OverflowMenuMeta>;
   // Shortcut display strings keyed by toolbar button id, so each overflow item
@@ -239,20 +230,21 @@ function OverflowMenu({
   notificationUnreadCount,
   agentDominantStates,
   hasActiveWorktree,
-  githubStatsRef,
+  forgeStatsRef,
+  forgeProviderName,
   overflowActions,
   pluginOverflowMeta,
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
-  // Snapshot of the GitHub stats taken when the menu opens. The stats live in
-  // GitHubStatsToolbarButton's hook and are exposed through its imperative
+  // Snapshot of the repo stats taken when the menu opens. The stats live in
+  // ForgeStatsToolbarButton's hook and are exposed through its imperative
   // handle, so they can't be read during render (refs aren't reactive — the
   // menu wouldn't re-render on updates anyway). Reading in the open handler
   // captures them at the only moment they're about to become visible.
-  const [ghStats, setGhStats] = useState<RepositoryStats | null>(null);
+  const [repoStats, setRepoStats] = useState<ForgeRepositoryStats | null>(null);
   const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) setGhStats(githubStatsRef.current?.stats ?? null);
+    if (nextOpen) setRepoStats(forgeStatsRef.current?.stats ?? null);
     setOpen(nextOpen);
   };
   const isEmpty = overflowIds.length === 0;
@@ -337,31 +329,48 @@ function OverflowMenu({
         }}
       >
         {overflowIds.flatMap((id, idx) => {
-          if (id === "github-stats") {
+          if (id === "forge-stats") {
             const isLast = idx === overflowIds.length - 1;
+            // Without a resolved forge provider the visible slot is the
+            // commits-only pill — mirror that here: a local-git group with
+            // just the commit count (issues/PRs are forge data). The commits
+            // dropdown view is provider-supplied, so the no-forge item shows
+            // the count without an open action.
+            if (!forgeProviderName) {
+              return [
+                <DropdownMenuGroup key="forge-group">
+                  <DropdownMenuLabel>Git</DropdownMenuLabel>
+                  <DropdownMenuItem key="forge-commits" disabled>
+                    <GitCommit className="mr-2 h-3.5 w-3.5" />
+                    Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>,
+                ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
+              ];
+            }
             return [
-              <DropdownMenuGroup key="gh-group">
-                <DropdownMenuLabel>GitHub</DropdownMenuLabel>
+              <DropdownMenuGroup key="forge-group">
+                <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
                 <DropdownMenuItem
-                  key="gh-issues"
-                  onClick={() => githubStatsRef.current?.openIssues()}
+                  key="forge-issues"
+                  onClick={() => forgeStatsRef.current?.openIssues()}
                 >
-                  <CircleDot className="mr-2 h-4 w-4 text-pr-open" />
-                  Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
+                  <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
+                  Issues {repoStats?.issueCount != null ? `(${repoStats.issueCount})` : ""}
                 </DropdownMenuItem>
-                <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
-                  <GitPullRequest className="mr-2 h-4 w-4 text-pr-merged" />
-                  Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
+                <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
+                  <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
+                  Pull Requests {repoStats?.prCount != null ? `(${repoStats.prCount})` : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  key="gh-commits"
-                  onClick={() => githubStatsRef.current?.openCommits()}
+                  key="forge-commits"
+                  onClick={() => forgeStatsRef.current?.openCommits()}
                 >
-                  <GitCommit className="mr-2 h-4 w-4" />
-                  Commits {ghStats?.commitCount != null ? `(${ghStats.commitCount})` : ""}
+                  <GitCommit className="mr-2 h-3.5 w-3.5" />
+                  Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
-              ...(isLast ? [] : [<DropdownMenuSeparator key="gh-sep" />]),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
@@ -388,7 +397,7 @@ function OverflowMenu({
           const disabled = id === "copy-tree" && !hasActiveWorktree;
           return [
             <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
-              <Icon className="mr-2 h-4 w-4" />
+              <Icon className="mr-2 h-3.5 w-3.5" />
               <span className="flex-1">
                 {meta.label}
                 {countSuffix(id)}
@@ -423,8 +432,8 @@ function AgentOverflowItem({
   const shortcut = useKeybindingDisplay(`agent.${id}`);
   return (
     <DropdownMenuItem onClick={onSelect}>
-      <span className="relative mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-4 w-4" />
+      <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
+        <Icon className="h-3.5 w-3.5" />
         {dotColor && (
           <span
             aria-hidden="true"
@@ -469,6 +478,8 @@ export function Toolbar({
   const currentProject = useProjectStore((state) => state.currentProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
+  const { entry: forgeProviderEntry } = useResolvedForgeProvider(currentProject?.id ?? null);
+  const forgeProviderName = forgeProviderEntry?.contribution.name ?? null;
   const projectSwitcher = projectSwitcherPalette;
 
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -485,12 +496,35 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
-  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
+  // Per-agent dominant state across panels in the active worktree, used to draw
+  // the agent-state dot on overflow menu items. Shares AgentTrayButton's
+  // derivation so the overflow dot matches the visible agent button; computed
+  // inside useShallow so agent ticks that don't change a dominant state don't
+  // re-render the whole toolbar (issue #7451 pattern).
+  const agentDominantStates = usePanelStore(
+    useShallow((s) => deriveAgentDominantStates(s.panelsById, s.panelIds, activeWorktreeId))
+  );
 
   useEffect(() => {
-    loadProjects();
-    getCurrentProject();
+    // When the boot payload already seeded the store (#10390), skip the
+    // redundant initial getAll/getCurrent pair and only run the background
+    // missing-directory validation that boot data can't replace. The
+    // getCurrentProject() escape hatch covers project-scoped views that boot
+    // before main binds them to a project (retry loop in projectStore).
+    const {
+      isBootstrapped,
+      currentProject: seededProject,
+      checkMissingProjects,
+    } = useProjectStore.getState();
+    if (isBootstrapped) {
+      if (!seededProject) {
+        void getCurrentProject();
+      }
+      void checkMissingProjects();
+    } else {
+      loadProjects();
+      getCurrentProject();
+    }
 
     const cleanup = projectClient.onSwitch(() => {
       getCurrentProject();
@@ -537,7 +571,7 @@ export function Toolbar({
   // focus to document.body, and we redirect it to the overflow trigger or
   // nearest visible item to preserve keyboard navigation (WCAG 2.4.3).
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
-  const githubStatsRef = useRef<GitHubStatsHandle>(null);
+  const forgeStatsRef = useRef<ForgeStatsHandle>(null);
 
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
@@ -611,15 +645,16 @@ export function Toolbar({
     };
   }, []);
 
-  const handleCopyTreeClick = useCallback(async () => {
+  // Promise-method cleanup instead of try/finally: a statement-level finally
+  // clause bails React Compiler memoization for the whole Toolbar component.
+  const handleCopyTreeClick = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
 
     setIsCopyingTree(true);
 
-    try {
-      const resultMessage = await handleCopyTree(activeWorktree);
-
-      if (resultMessage) {
+    return handleCopyTree(activeWorktree)
+      .then((resultMessage) => {
+        if (!resultMessage) return;
         setTreeCopied(true);
         setCopyFeedback(resultMessage);
         shortcutHintStore.getState().hide();
@@ -633,10 +668,10 @@ export function Toolbar({
           setCopyFeedback("");
           treeCopyTimeoutRef.current = null;
         }, COPY_TREE_FEEDBACK_RESET_MS);
-      }
-    } finally {
-      setIsCopyingTree(false);
-    }
+      })
+      .finally(() => {
+        setIsCopyingTree(false);
+      });
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
   // Copy-tree invoked from the overflow menu. The visible toolbar button shows
@@ -644,12 +679,12 @@ export function Toolbar({
   // overflow — so the overflow path surfaces a transient success toast instead
   // (issue #9821). `transient: true` keeps it out of the inbox: the result is
   // already on the clipboard, so no durable record is warranted.
-  const handleCopyTreeOverflow = useCallback(async () => {
+  const handleCopyTreeOverflow = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
     setIsCopyingTree(true);
-    try {
-      const resultMessage = await handleCopyTree(activeWorktree);
-      if (resultMessage) {
+    return handleCopyTree(activeWorktree)
+      .then((resultMessage) => {
+        if (!resultMessage) return;
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "success",
@@ -657,41 +692,11 @@ export function Toolbar({
           message: resultMessage,
           transient: true,
         });
-      }
-    } finally {
-      setIsCopyingTree(false);
-    }
+      })
+      .finally(() => {
+        setIsCopyingTree(false);
+      });
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
-
-  // Per-agent dominant state across panels in the active worktree, used to draw
-  // the agent-state dot on overflow menu items. Mirrors the derivation in
-  // AgentTrayButton so the overflow dot matches the visible agent button.
-  const agentDominantStates = useMemo(() => {
-    const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
-    for (const pid of panelIds) {
-      const p = panelsById[pid];
-      if (
-        !p ||
-        !isPtyPanel(p) ||
-        p.location === "trash" ||
-        p.location === "background" ||
-        p.location === "overlay"
-      )
-        continue;
-      const agentId = getRuntimeOrBootAgentId(p);
-      if (!agentId) continue;
-      if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
-      if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      const arr = statesPerAgent.get(agentId) ?? [];
-      arr.push(p.agentState);
-      statesPerAgent.set(agentId, arr);
-    }
-    const result = new Map<string, AgentState | null>();
-    for (const [agentId, states] of statesPerAgent) {
-      result.set(agentId, getDominantAgentState(states));
-    }
-    return result;
-  }, [panelsById, panelIds, activeWorktreeId]);
 
   const getToolbarItems = useCallback(
     () =>
@@ -929,17 +934,22 @@ export function Toolbar({
         render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
         isAvailable: true,
       },
-      "github-stats": {
+      "forge-stats": {
+        // The button owns its own shape now: full three-segment pill with a
+        // resolved forge provider, commits-only without one (commit count is
+        // local git data). Placeholder (not removal) when no project: the
+        // slot's no-drag rectangle must exist on first paint regardless
+        // (PROJECT_SCOPED_TOOLBAR_IDS).
         render: () =>
           currentProject ? (
-            <GitHubStatsToolbarButton
-              key="github-stats"
-              ref={githubStatsRef}
+            <ForgeStatsToolbarButton
+              key="forge-stats"
+              ref={forgeStatsRef}
               currentProject={currentProject}
               data-toolbar-item=""
             />
           ) : (
-            <GitHubStatsPlaceholder />
+            <ForgeStatsPlaceholder />
           ),
         isAvailable: true,
       },
@@ -1170,8 +1180,8 @@ export function Toolbar({
   // Close open dropdowns when their buttons move into overflow
   useEffect(() => {
     const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
-    if (overflowSet.has("github-stats")) {
-      githubStatsRef.current?.closeAll();
+    if (overflowSet.has("forge-stats")) {
+      forgeStatsRef.current?.closeAll();
     }
     if (overflowSet.has("notification-center")) {
       useUIStore.getState().closeNotificationCenter();
@@ -1336,7 +1346,8 @@ export function Toolbar({
       notificationUnreadCount={notificationUnreadCount}
       agentDominantStates={agentDominantStates}
       hasActiveWorktree={!!activeWorktree}
-      githubStatsRef={githubStatsRef}
+      forgeStatsRef={forgeStatsRef}
+      forgeProviderName={forgeProviderName}
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
       shortcutById={overflowShortcutById}
@@ -1450,6 +1461,7 @@ export function Toolbar({
                 onHoverProject={projectSwitcher.onHoverProject}
                 onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
                 onClose={handlePillDropdownClose}
+                onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
                 onAddProject={projectSwitcher.addProject}
                 onCloneRepo={projectSwitcher.cloneRepo}
                 onStopProject={handleStopProject}

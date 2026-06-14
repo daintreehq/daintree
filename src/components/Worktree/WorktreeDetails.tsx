@@ -13,6 +13,8 @@ import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
+const MAX_VISIBLE_FILES = 100;
+
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;
   homeDir?: string;
@@ -148,7 +150,7 @@ export function WorktreeDetails({
                       href={segment.content}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-status-info underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                      className="text-text-link underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                       onClick={(e) => handleLinkClick(e, segment.content)}
                     >
                       {segment.content}
@@ -186,7 +188,7 @@ export function WorktreeDetails({
               <FileChangeList
                 changes={worktree.worktreeChanges.changes}
                 rootPath={worktree.worktreeChanges.rootPath}
-                maxVisible={worktree.worktreeChanges.changes.length}
+                maxVisible={MAX_VISIBLE_FILES}
                 groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
                 isStale={isStale}
               />

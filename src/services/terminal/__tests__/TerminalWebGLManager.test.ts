@@ -1381,6 +1381,156 @@ describe("TerminalWebGLManager", () => {
     });
   });
 
+  describe("focus pin (single context in dom mode)", () => {
+    beforeEach(async () => {
+      const mod = await import("../TerminalWebGLManager");
+      mod.TerminalWebGLManager.setWebglThresholds(3, 2);
+    });
+
+    function fillToDomMode(): ManagedTerminal[] {
+      const terms = Array.from({ length: 4 }, () => makeManagedTerminal());
+      terms.forEach((t, i) => manager.ensureContext(`t${i}`, t));
+      expect(manager.getMode()).toBe("dom");
+      return terms;
+    }
+
+    it("keeps the pinned terminal's context through a flip to dom mode", () => {
+      const pinned = makeManagedTerminal();
+      manager.ensureContext("pinned", pinned);
+      manager.pinFocus("pinned", pinned);
+      manager.ensureContext("a", makeManagedTerminal());
+      manager.ensureContext("b", makeManagedTerminal());
+      expect(manager.isActive("pinned")).toBe(true);
+
+      // Fourth want crosses upper (3) → dom mode; pin survives.
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("pinned")).toBe(true);
+      expect(manager.isActive("a")).toBe(false);
+      expect(manager.isActive("b")).toBe(false);
+    });
+
+    it("attaches a context for a terminal pinned while already in dom mode", () => {
+      const terms = fillToDomMode();
+      expect(manager.isActive("t1")).toBe(false);
+
+      manager.pinFocus("t1", terms[1]!);
+
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.getMode()).toBe("dom");
+    });
+
+    it("moving the pin releases the previous context and attaches the new one", () => {
+      const terms = fillToDomMode();
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.pinFocus("t2", terms[2]!);
+
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.isActive("t2")).toBe(true);
+      expect(manager.getPinnedId()).toBe("t2");
+    });
+
+    it("pinning does not change the wants count or trigger a mode flip", () => {
+      const terms = fillToDomMode();
+      const before = manager.getWantsSize();
+
+      manager.pinFocus("t0", terms[0]!);
+      manager.pinFocus("t1", terms[1]!);
+
+      expect(manager.getWantsSize()).toBe(before);
+      expect(manager.getMode()).toBe("dom");
+    });
+
+    it("releaseContext on the pinned terminal clears the pin and its context", () => {
+      const terms = fillToDomMode();
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      // Drop one want first so the release below cannot flip the mode back.
+      manager.releaseContext("t3");
+      manager.releaseContext("t1");
+
+      expect(manager.getPinnedId()).toBe(null);
+      expect(manager.isActive("t1")).toBe(false);
+    });
+
+    it("onTerminalDestroyed clears the pin", () => {
+      const terms = fillToDomMode();
+      manager.pinFocus("t1", terms[1]!);
+
+      manager.onTerminalDestroyed("t1");
+
+      expect(manager.getPinnedId()).toBe(null);
+      expect(manager.isActive("t1")).toBe(false);
+    });
+
+    it("does not attach for a pin that is not (yet) a want, then attaches on ensure", () => {
+      fillToDomMode();
+      const newcomer = makeManagedTerminal();
+
+      manager.pinFocus("t9", newcomer);
+      expect(manager.isActive("t9")).toBe(false);
+
+      manager.ensureContext("t9", newcomer);
+      expect(manager.isActive("t9")).toBe(true);
+    });
+
+    it("ignores the pin attach when hardware is unavailable", () => {
+      const terms = fillToDomMode();
+      manager.setHardwareAvailable(false);
+
+      manager.pinFocus("t1", terms[1]!);
+
+      expect(manager.isActive("t1")).toBe(false);
+    });
+
+    it("hardware loss drops the pinned context — no exemption survives the breaker", () => {
+      const terms = fillToDomMode();
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.setHardwareAvailable(false);
+
+      expect(manager.isActive("t1")).toBe(false);
+      expect(manager.getPinnedId()).toBe(null);
+    });
+
+    it("flip back to webgl reattaches every want including the pin exactly once", () => {
+      const terms = fillToDomMode();
+      manager.pinFocus("t1", terms[1]!);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.releaseContext("t0");
+      manager.releaseContext("t3");
+      expect(manager.getMode()).toBe("webgl");
+
+      expect(manager.isActive("t1")).toBe(true);
+      expect(manager.isActive("t2")).toBe(true);
+    });
+
+    it("pin set before the flip keeps its context out of the paced release queue", () => {
+      const pinned = makeManagedTerminal();
+      manager.ensureContext("pinned", pinned);
+      manager.pinFocus("pinned", pinned);
+      manager.ensureContext("a", makeManagedTerminal());
+      manager.ensureContext("b", makeManagedTerminal());
+
+      rafMode = "queued";
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+
+      // Drain every queued release frame — the pin must survive all of them.
+      while (flushRafFrame()) {
+        // drain
+      }
+      expect(manager.isActive("pinned")).toBe(true);
+      expect(manager.isActive("a")).toBe(false);
+      expect(manager.isActive("b")).toBe(false);
+    });
+  });
+
   describe("lazy WebglAddon loading", () => {
     // These tests exercise the dynamic-import path. They reset loader state in
     // beforeEach so the queue behavior runs against a real (mocked) import().

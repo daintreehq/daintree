@@ -85,13 +85,13 @@ Each project gets its own `WebContentsView` with an independent V8 context, mana
 
 ### IPC Bridge (`window.electron`)
 
-Native features are exposed as a namespaced API via `contextBridge` in `electron/preload.cts`. Methods return Promises or Cleanups. Representative namespaces: `worktree`, `terminal`, `files`, `system`, `app`, `project`, `github`, `git`, `portal`, `commands`, `appAgent`, `agentCapabilities`, `mcpServer`, `plugin`.
+Native features are exposed as a namespaced API via `contextBridge` in `electron/preload.cts`. Methods return Promises or Cleanups. Representative namespaces: `worktree`, `terminal`, `files`, `system`, `app`, `project`, `forge`, `git`, `portal`, `commands`, `appAgent`, `agentCapabilities`, `mcpServer`, `plugin`.
 
 ## Key Features & Implementation
 
 - **Panels:** `PtyManager` (Main) manages node-pty processes; `terminalInstanceService` (Renderer) manages xterm.js instances.
 - **Worktrees:** `WorkspaceService` polls git status; `WorktreeMonitor` tracks individual worktrees; per-view stores are backed by dedicated MessagePorts (`WorktreePortBroker`).
-- **Agent State:** `AgentStateMachine` tracks idle/working/running/waiting/directing/completed/exited via output heuristics.
+- **Agent State:** `AgentStateMachine` tracks idle/working/waiting/directing/completed/exited via output heuristics. `running` is a terminal runtime status, not an agent state.
 - **Context:** `CopyTreeService` generates agent context and injects it into terminals.
 - **Resource Profiles:** `ResourceProfileService` adaptively selects Performance/Balanced/Efficiency based on memory pressure, event-loop lag, battery state, and worktree count.
 

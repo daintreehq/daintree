@@ -49,6 +49,7 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
+import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
@@ -134,6 +135,8 @@ interface MockProjectViewManager {
   setEfficiencyFreeze: Mock;
   setPaintGateTimeoutMs: Mock;
   setPaintGateHardTimeoutMs: Mock;
+  setWarmPaintGateTimeoutMs: Mock;
+  setWarmPaintGateHardTimeoutMs: Mock;
 }
 interface MockProjectStatsService {
   updatePollInterval: Mock;
@@ -157,6 +160,8 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
+    setWarmPaintGateTimeoutMs: vi.fn(),
+    setWarmPaintGateHardTimeoutMs: vi.fn(),
   };
   const mockProjectStatsService: MockProjectStatsService = {
     updatePollInterval: vi.fn(),
@@ -180,6 +185,8 @@ function makeMockPvm(): MockProjectViewManager {
     setEfficiencyFreeze: vi.fn(),
     setPaintGateTimeoutMs: vi.fn(),
     setPaintGateHardTimeoutMs: vi.fn(),
+    setWarmPaintGateTimeoutMs: vi.fn(),
+    setWarmPaintGateHardTimeoutMs: vi.fn(),
   };
 }
 
@@ -191,6 +198,9 @@ describe("ResourceProfileService", () => {
     // Pin total RAM so threshold-crossing tests behave identically across CI hosts.
     // 8 GB yields ~1229 MB HIGH / ~655 MB LOW, matching the originally-tuned constants.
     vi.spyOn(os, "totalmem").mockReturnValue(EIGHT_GB);
+    // Module-level snapshot cache would otherwise serve a previous test's
+    // mocked metrics within the TTL window.
+    resetAppMetricsSnapshotForTesting();
     mockGetAppMetrics.mockReturnValue([]);
     mockIsOnBatteryPower.mockReturnValue(false);
     mockGetCurrentThermalState.mockReturnValue("unknown" as const);
@@ -298,6 +308,23 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("balanced");
     vi.advanceTimersByTime(30_000);
     expect(service.getProfile()).toBe("performance");
+
+    service.stop();
+  });
+
+  it("renderer saturation contributes pressure — blocks the performance upgrade", () => {
+    const deps = createDeps({ hasSustainedRendererSaturation: () => true });
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Identical low-load conditions to the performance-upgrade test above;
+    // the only difference is the sustained renderer-saturation signal.
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    // Past warmup + first eval + full 90s upgrade hold
+    vi.advanceTimersByTime(60_000 + 30_000 + 3 * 30_000);
+    expect(service.getProfile()).toBe("balanced");
 
     service.stop();
   });
@@ -683,6 +710,51 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
+  describe("applyCurrentProfileTo (late-created PVM)", () => {
+    it("pushes the current efficiency settings to a PVM registered after the transition", () => {
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+      service._forceProfileForTesting("efficiency");
+
+      const latePvm = makeMockPvm();
+      service.applyCurrentProfileTo(latePvm as unknown as ProjectViewManager);
+
+      expect(latePvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
+      expect(latePvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.lowMemoryFreeThresholdMb
+      );
+      expect(latePvm.setPaintGateTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.paintGateTimeoutMs
+      );
+      expect(latePvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
+      );
+      // Forced transition carries no memory score — the cached-view clamp
+      // must stay off, matching applyProfile's gating.
+      expect(latePvm.setCachedViewLimit).not.toHaveBeenCalled();
+
+      service.stop();
+    });
+
+    it("does not freeze or clamp a late PVM while the profile is balanced", () => {
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      const latePvm = makeMockPvm();
+      service.applyCurrentProfileTo(latePvm as unknown as ProjectViewManager);
+
+      expect(latePvm.setEfficiencyFreeze).not.toHaveBeenCalled();
+      expect(latePvm.setCachedViewLimit).not.toHaveBeenCalled();
+      expect(latePvm.setLowMemoryFreeThresholdMb).toHaveBeenCalledWith(
+        RESOURCE_PROFILE_CONFIGS.balanced.lowMemoryFreeThresholdMb
+      );
+
+      service.stop();
+    });
+  });
+
   it("pushes the balanced profile's threshold on start() even without a transition", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
@@ -711,6 +783,12 @@ describe("ResourceProfileService", () => {
     expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.paintGateHardTimeoutMs
     );
+    expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
+    );
 
     service.stop();
   });
@@ -731,6 +809,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.paintGateHardTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.efficiency.warmPaintGateHardTimeoutMs
     );
 
     service.stop();
@@ -767,6 +851,12 @@ describe("ResourceProfileService", () => {
     );
     expect(pvm.setPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
       RESOURCE_PROFILE_CONFIGS.balanced.paintGateHardTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateTimeoutMs
+    );
+    expect(pvm.setWarmPaintGateHardTimeoutMs).toHaveBeenLastCalledWith(
+      RESOURCE_PROFILE_CONFIGS.balanced.warmPaintGateHardTimeoutMs
     );
 
     service.stop();
@@ -1047,6 +1137,49 @@ describe("ResourceProfileService", () => {
     await flushAsync();
 
     // Only 7 live agents (below FLEET_COUNT_HIGH=8) — fleet score 0.
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("performance");
+
+    service.stop();
+  });
+
+  it("scales fleet tiers with device RAM — 31 agents on 64 GB contribute zero pressure", async () => {
+    // 64 GB → high tier boundary = ceil(64 × 8/16) = 32, so 31 agents sit
+    // below it and the service can still reach performance. On the 8 GB
+    // baseline the same fleet would score +2 (≥16).
+    vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 * 1024 * 1024);
+
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(31));
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("performance");
+
+    service.stop();
+  });
+
+  it("fleet tiers never drop below the 8/16/24 floors on small-RAM devices", async () => {
+    // 4 GB → ceil(4 × 8/16) = 2 unclamped; the floor keeps the boundary at 8,
+    // so 7 agents still contribute zero pressure.
+    vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 * 1024 * 1024);
+
+    const deps = createDeps();
+    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
+    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(7));
+    const service = new ResourceProfileService(deps);
+    service.start();
+    await flushAsync();
+
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
     mockIsOnBatteryPower.mockReturnValue(false);
 

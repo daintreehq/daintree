@@ -39,6 +39,7 @@ let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> =
 let mockMergedPresetsFn: (
   agentId: string
 ) => Array<{ id: string; name: string; color?: string }> = () => [];
+let mockExternalLinks: Array<{ label: string; url: string }> | undefined;
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
@@ -108,6 +109,11 @@ vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ worktrees: mockWorktrees }),
 }));
 
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map(mockWorktrees.map((wt) => [wt.id, wt])) }),
+}));
+
 vi.mock("@/hooks", () => ({
   useKeybindingDisplay: () => null,
   useAriaKeyshortcuts: () => undefined,
@@ -125,6 +131,7 @@ vi.mock("@/config/agents", () => ({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     icon: () => null,
+    externalLinks: mockExternalLinks,
   }),
   getMergedPresets: (agentId: string) => mockMergedPresetsFn(agentId),
 }));
@@ -351,6 +358,7 @@ vi.mock("@/components/ui/context-menu", () => ({
 
 vi.mock("lucide-react", () => ({
   ChevronDown: () => <span data-testid="chevron-icon" />,
+  ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
   // terminalStateConfig.tsx (imported transitively for STATE_LABELS — #9823)
@@ -383,6 +391,7 @@ describe("AgentButton preset UX", () => {
     mockPanelIds = [];
     mockPanelIdsByWorktreeId = {};
     mockWorktrees = [];
+    mockExternalLinks = undefined;
     dropdownCloseAutoFocusSpy = null;
     dropdownPointerDownOutsideSpy = null;
   });
@@ -1596,6 +1605,7 @@ describe("AgentButton right-click unpin — issue #9825", () => {
     mockPanelIds = [];
     mockPanelIdsByWorktreeId = {};
     mockWorktrees = [];
+    mockExternalLinks = undefined;
   });
 
   it("routes the no-presets branch's unpin to setAgentPinned (not pinnedButtons)", () => {
@@ -1646,5 +1656,66 @@ describe("AgentButton right-click unpin — issue #9825", () => {
       el.textContent?.includes("Customize toolbar")
     );
     expect(customizeHasPresets, "Customize entry missing in has-presets branch").toBeTruthy();
+  });
+});
+
+describe("AgentButton external links — issue #10350", () => {
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    mockSettings = null;
+    mockActiveWorktreeId = null;
+    mockCcrPresetsByAgent = {};
+    mockMergedPresetsFn = () => [];
+    mockCliDetails = {};
+    mockDominantState = null;
+    mockDotColor = "";
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockPanelIdsByWorktreeId = {};
+    mockWorktrees = [];
+    mockExternalLinks = [{ label: "View usage", url: "https://example.com/usage" }];
+  });
+
+  function findLinkItem() {
+    const items = screen.getAllByTestId("context-menu-item");
+    return items.find((el) => el.textContent?.includes("View usage"));
+  }
+
+  it("renders the link in the no-presets context menu and dispatches system.openExternal", () => {
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const link = findLinkItem();
+    expect(link, "external link missing in no-presets branch").toBeTruthy();
+    fireEvent.click(link!);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://example.com/usage" },
+      expect.objectContaining({ source: "user" })
+    );
+  });
+
+  it("renders the link in the has-presets context menu too", () => {
+    mockMergedPresetsFn = (id: string) => [{ id: `${id}-blue`, name: "Blue" }];
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    const link = findLinkItem();
+    expect(link, "external link missing in has-presets branch").toBeTruthy();
+    fireEvent.click(link!);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://example.com/usage" },
+      expect.objectContaining({ source: "user" })
+    );
+  });
+
+  it("renders no link item or icon when the agent declares no externalLinks", () => {
+    mockExternalLinks = undefined;
+    render(
+      <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+    );
+    expect(findLinkItem()).toBeUndefined();
+    expect(screen.queryByTestId("external-link-icon")).toBeNull();
   });
 });

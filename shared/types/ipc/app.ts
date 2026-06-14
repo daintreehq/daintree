@@ -104,6 +104,14 @@ export interface AppVersionInfo {
   os: string;
 }
 
+/**
+ * Why hardware acceleration is disabled: "crash" is the automatic fallback
+ * after repeated GPU crashes; "user" is the Settings > Troubleshooting toggle.
+ * Legacy timestamp-only flag files (written before reason tracking) report
+ * "crash" so the version-change auto-retry can recover them.
+ */
+export type GpuDisabledReason = "crash" | "user";
+
 /** Describes how the settings store recovered from corruption at startup */
 export type SettingsRecovery =
   | { kind: "restored-from-backup"; quarantinedPath?: string }
@@ -131,6 +139,14 @@ export interface BootResult extends HydrateResult {
   crashPending: import("./crashRecovery.js").PendingCrash | null;
   /** Live crash recovery configuration (auto-restore toggle, thresholds). */
   crashConfig: import("./crashRecovery.js").CrashRecoveryConfig;
+  /**
+   * Persisted app theme config folded into the boot payload so the renderer
+   * seeds custom schemes, accent override, and color-vision mode without a
+   * post-mount `app-theme:get` round-trip. Undefined when the stored config
+   * still needs first-run defaulting or legacy customSchemes migration — the
+   * renderer falls back to the live IPC call, which performs both.
+   */
+  appTheme?: import("../appTheme.js").AppThemeConfig;
 }
 
 /** Result from app hydration */
@@ -141,6 +157,12 @@ export interface HydrateResult {
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
+  /**
+   * Why hardware acceleration is disabled, or null when it is enabled. Lets
+   * the renderer suppress the "disabled after repeated GPU crashes" boot
+   * notification when the user disabled acceleration deliberately.
+   */
+  gpuDisabledReason: GpuDisabledReason | null;
   /**
    * True when the app is running with ANGLE/Vulkan fallback rendering after a
    * prior GPU crash (the `gpu-angle-fallback.flag` file exists in userData).
@@ -155,6 +177,16 @@ export interface HydrateResult {
    * the main process and is `false` for NSIS installs and non-Windows builds.
    */
   isWindowsStore: boolean;
+  /**
+   * True when this is an x64 build translated by Rosetta on an Apple Silicon
+   * Mac. Darwin-only by construction — the equivalent Windows-ARM translation
+   * is deliberately excluded so the renderer's "download the Apple Silicon
+   * build" warning never shows on Windows. Optional for backward compat with
+   * older main processes.
+   */
+  runningUnderRosetta?: boolean;
+  /** True when the user permanently dismissed the Rosetta translation warning. */
+  rosettaWarningDismissed?: boolean;
   /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
   skippedPanelCount?: number;
   /**
@@ -186,4 +218,47 @@ export interface HydrateResult {
    * React 19 `use()` safe-boot fallback), the renderer falls back to the IPC call.
    */
   systemTmpDir?: string;
+  /**
+   * Per-project layout state folded into the hydrate payload so the renderer
+   * skips the standalone `getTabGroups`/`getTerminalSizes`/`getDraftInputs`
+   * round-trips on the panel-restore critical path. Populated (with the same
+   * null-state defaults as the standalone handlers) whenever a project is
+   * resolved; undefined on the no-project fallback branch and older payloads,
+   * where the renderer falls back to the standalone IPC calls.
+   */
+  tabGroups?: import("../panel.js").TabGroup[];
+  terminalSizes?: Record<string, { cols: number; rows: number }>;
+  draftInputs?: Record<string, string>;
+  /**
+   * In-repo agent presets (`.daintree/presets/`) folded into the hydrate
+   * payload so the renderer skips the standalone `project:get-inrepo-presets`
+   * round-trip + repo disk read on the panel-restore critical path. Populated
+   * whenever a project is resolved; undefined on the no-project fallback
+   * branch and older payloads, where the renderer falls back to the
+   * standalone IPC call.
+   */
+  projectPresets?: Record<string, import("../../config/agentRegistry.js").AgentPreset[]>;
+  /**
+   * Full project list folded into the hydrate payload so the Toolbar's mount
+   * effect skips its `project:get-all` + `project:get-current` round-trips
+   * during the boot window. Optional for backward compatibility: when absent
+   * (older main process, or the safe-boot fallback), the renderer falls back
+   * to the standalone IPC calls.
+   */
+  projects?: import("../project.js").Project[];
+  /**
+   * Persisted keybinding overrides folded into the hydrate payload so the
+   * hydration bootstrap skips the standalone `keybinding:get-overrides`
+   * round-trip. Same validation as the standalone handler. Undefined on older
+   * payloads and the safe-boot fallback, where the renderer falls back to IPC.
+   */
+  keybindingOverrides?: Record<string, string[]>;
+  /**
+   * Sanitized user-agent registry folded into the hydrate payload so the
+   * hydration bootstrap skips the standalone `user-agent-registry:get`
+   * round-trip. Same sanitization as the standalone handler. Undefined on
+   * older payloads and the safe-boot fallback, where the renderer falls back
+   * to IPC.
+   */
+  userAgentRegistry?: import("../userAgentRegistry.js").UserAgentRegistry;
 }

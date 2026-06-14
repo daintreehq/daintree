@@ -6,7 +6,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { ConsoleDrawer } from "../ConsoleDrawer";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
+import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -81,6 +81,7 @@ function seedConsoleRow(overrides: Partial<SerializedConsoleRow> = {}): void {
     ...overrides,
   };
   useConsoleCaptureStore.getState().addStructuredMessage(row);
+  flushConsoleCaptureBuffer();
 }
 
 describe("ConsoleDrawer", () => {

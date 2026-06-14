@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/mini";
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
@@ -53,6 +53,8 @@ import {
 import type { IBufferCell, IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
+  isSessionPersistSuppressed,
+  persistSessionSnapshotSync,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
 import { SessionSnapshotter, type SessionSnapshotterHost } from "./SessionSnapshotter.js";
@@ -92,6 +94,11 @@ import {
   AGENT_OUTPUT_ACTIVITY_LINE_COUNT,
   AgentActivityTemperature,
 } from "./AgentActivityTemperature.js";
+
+// Coalescing window for host→main agent:output forwarding. Pending output is
+// flushed synchronously before any agent state transition (and on exit) so
+// turn-outcome classification still sees the tail in order.
+const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
 
 type CursorBufferLine = {
   translateToString: (trimRight?: boolean) => string;
@@ -155,6 +162,10 @@ export class TerminalProcess {
   private sessionSnapshotter!: SessionSnapshotter;
   private readonly agentOutputTemperature = new AgentActivityTemperature();
   private agentOutputContentSnapshot: VisibleContentSnapshot | undefined;
+
+  private pendingAgentOutput = "";
+  private pendingAgentOutputAgentId: string | null = null;
+  private agentOutputFlushTimer: NodeJS.Timeout | null = null;
 
   private readonly terminalInfo: TerminalInfo;
 
@@ -361,6 +372,7 @@ export class TerminalProcess {
       lastInputTime: spawnedAt,
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
+      contentEpoch: 0,
       semanticBuffer: [],
       headlessTerminal,
       serializeAddon,
@@ -463,6 +475,7 @@ export class TerminalProcess {
             );
             return;
           }
+          this.flushAgentOutput();
           deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
         {
@@ -473,6 +486,7 @@ export class TerminalProcess {
           }),
           processStateValidator,
           onWaitingTimeout: (_id, _spawnedAt) => {
+            this.flushAgentOutput();
             deps.agentStateService.updateAgentState(
               this.terminalInfo,
               { type: "watchdog-timeout" },
@@ -552,6 +566,61 @@ export class TerminalProcess {
   }
 
   /**
+   * Preserved exited terminals don't need a live headless xterm — the buffer
+   * is final. Serialize it once, cache the string on `terminalInfo`, and
+   * dispose the headless instance (Unicode11 + SerializeAddon + scrollback
+   * CircularList, ~15-30 MB per exited terminal). Serialization runs inside a
+   * sentinel `write("")` callback so xterm's async parser queue is fully
+   * drained first — the tail of the output must land in the buffer, and
+   * disposing with queued writes throws against the torn-down core.
+   *
+   * On serialize failure the live headless instance is kept: serving the
+   * existing buffer beats serving nothing, at the cost of the memory.
+   */
+  private snapshotAndDisposePreserved(): void {
+    const terminal = this.terminalInfo;
+    const headless = terminal.headlessTerminal;
+    if (!headless || !terminal.serializeAddon) {
+      return;
+    }
+    headless.write("", () => {
+      if (terminal.headlessTerminal !== headless || !terminal.serializeAddon) {
+        return;
+      }
+      let snapshot: string;
+      try {
+        snapshot = terminal.serializeAddon.serialize();
+      } catch (error) {
+        console.error(`[TerminalProcess] Failed to snapshot preserved terminal ${this.id}:`, error);
+        return;
+      }
+      // sessionSnapshotter.dispose() already ran in the onExit handler,
+      // cancelling any debounced write — flush the final state to disk
+      // directly so crash recovery sees the post-exit buffer (#3177).
+      // Banner-aware like flushSyncOnKill; same gates (agent sessions are
+      // never replayed by crash recovery).
+      if (
+        TERMINAL_SESSION_PERSISTENCE_ENABLED &&
+        !isSessionPersistSuppressed() &&
+        !terminal.launchAgentId
+      ) {
+        try {
+          persistSessionSnapshotSync(this.id, this.serializeForPersistence() ?? snapshot);
+        } catch {
+          // best-effort only
+        }
+      }
+      terminal.preservedSnapshot = snapshot;
+      // The buffer is final from here on: bump the epoch so the next wake
+      // serves the preserved snapshot, and zero the parse counter (disposed
+      // headless write callbacks never fire) so that serve can serve-mark.
+      terminal.contentEpoch++;
+      terminal.pendingHeadlessWrites = 0;
+      this.disposeHeadless();
+    });
+  }
+
+  /**
    * Mechanical resource cleanup shared by `kill()`, `dispose()`, and the
    * natural PTY `onExit` handler. Idempotent — the first caller transitions
    * `alive → shutting-down` and clears collaborators/timers; later callers
@@ -579,6 +648,7 @@ export class TerminalProcess {
     this.stopActivityMonitor();
     this.identityWatcher.stop();
     this.semanticBufferManager.flush();
+    this.flushAgentOutput();
 
     if (this.ptyDataDisposable) {
       try {
@@ -625,6 +695,7 @@ export class TerminalProcess {
    * forensics buffer, since fallback classification scans the tail.
    */
   private emitTerminalExited(args: TerminalExitArgs): void {
+    this.flushAgentOutput();
     this.exitObservers.emit(args);
   }
 
@@ -966,7 +1037,11 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     if (terminal.isExited) {
       try {
-        terminal.headlessTerminal?.resize(cols, rows);
+        if (terminal.headlessTerminal) {
+          terminal.headlessTerminal.resize(cols, rows);
+          // Reflow rewraps the buffer — invalidate any wake no-change skip.
+          terminal.contentEpoch++;
+        }
       } catch (error) {
         console.error(`Failed to resize terminal ${this.id}:`, error);
       }
@@ -984,6 +1059,8 @@ export class TerminalProcess {
 
       if (terminal.headlessTerminal) {
         terminal.headlessTerminal.resize(cols, rows);
+        // Reflow rewraps the buffer — invalidate any wake no-change skip.
+        terminal.contentEpoch++;
       }
 
       // Notify activity monitor so reflow bytes are suppressed. Issue #2364.
@@ -1102,13 +1179,13 @@ export class TerminalProcess {
   }
 
   getVisibleActivitySnapshot(n: number): VisibleContentSnapshot | undefined {
-    const cells = this.getVisibleActivityCells();
+    const cells = this.getVisibleActivityCells(n);
     return cells
       ? createVisibleCellContentSnapshot(cells)
       : createVisibleContentSnapshot(this.getVisibleActivityLines(n));
   }
 
-  private getVisibleActivityCells(): VisibleContentCell[][] | undefined {
+  private getVisibleActivityCells(n: number): VisibleContentCell[][] | undefined {
     const terminal = this.terminalInfo.headlessTerminal;
     if (!terminal) return undefined;
 
@@ -1124,7 +1201,14 @@ export class TerminalProcess {
     const viewportTop = buffer.baseY;
     const viewportBottom = buffer.baseY + terminal.rows;
     const end = viewportBottom;
-    const start = viewportTop;
+    // Bottom-n window, extended upward to include the cursor row: on a fresh
+    // or just-cleared screen the agent draws near the top of the viewport, and
+    // a purely bottom-anchored window would scan only blank rows there —
+    // blinding the sustained-change recovery path. Steady-state terminals
+    // (cursor at the bottom) keep the cheap n-row scan.
+    const cursorAbs =
+      viewportTop + (typeof buffer.cursorY === "number" ? buffer.cursorY : terminal.rows - 1);
+    const start = Math.max(viewportTop, Math.min(end - n, cursorAbs));
     const reusableCell = buffer.getNullCell();
 
     const rows: VisibleContentCell[][] = [];
@@ -1137,9 +1221,15 @@ export class TerminalProcess {
       const row: VisibleContentCell[] = [];
       for (let x = 0; x < terminal.cols; x += 1) {
         const cell = line.getCell(x, reusableCell);
-        if (cell) {
-          row.push(this.createVisibleContentCell(cell));
-        }
+        if (!cell) continue;
+        // Same predicate as visibleCellUnit (SustainedChangeTracker): blank
+        // cells never contribute a unit, so skip before allocating — most of
+        // an idle viewport is whitespace.
+        const width = cell.getWidth();
+        if (width === 0) continue;
+        const chars = cell.getChars();
+        if (chars.length === 0 || /^\s*$/u.test(chars)) continue;
+        row.push(this.createVisibleContentCell(cell, chars, width));
       }
       rows.push(row);
     }
@@ -1147,7 +1237,11 @@ export class TerminalProcess {
     return rows;
   }
 
-  private createVisibleContentCell(cell: IBufferCell): VisibleContentCell {
+  private createVisibleContentCell(
+    cell: IBufferCell,
+    chars: string,
+    width: number
+  ): VisibleContentCell {
     const attributes =
       (cell.isBold() ? 1 : 0) |
       (cell.isItalic() ? 1 << 1 : 0) |
@@ -1160,15 +1254,12 @@ export class TerminalProcess {
       (cell.isOverline() ? 1 << 8 : 0);
 
     return {
-      chars: cell.getChars(),
+      chars,
       code: cell.getCode(),
-      width: cell.getWidth(),
+      width,
       fgColorMode: cell.getFgColorMode(),
       fgColor: cell.getFgColor(),
-      bgColorMode: cell.getBgColorMode(),
-      bgColor: cell.getBgColor(),
       attributes,
-      defaultVisual: cell.isFgDefault() && cell.isBgDefault() && attributes === 0,
     };
   }
 
@@ -1340,6 +1431,7 @@ export class TerminalProcess {
             );
             return;
           }
+          this.flushAgentOutput();
           this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
         {
@@ -1352,6 +1444,7 @@ export class TerminalProcess {
           initialState,
           skipInitialStateEmit: preserveState,
           onWaitingTimeout: (_id, _spawnedAt) => {
+            this.flushAgentOutput();
             this.deps.agentStateService.updateAgentState(
               this.terminalInfo,
               { type: "watchdog-timeout" },
@@ -1497,6 +1590,7 @@ export class TerminalProcess {
       return;
     }
     if (result.stateHint === "busy" && this.terminalInfo.agentState === state) {
+      this.flushAgentOutput();
       this.deps.agentStateService.handleActivityState(this.terminalInfo, "busy", {
         trigger: "output",
       });
@@ -1580,7 +1674,10 @@ export class TerminalProcess {
     terminal.lastOutputTime = now;
 
     if (terminal.headlessTerminal) {
-      terminal.headlessTerminal.write(prelude);
+      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
+      terminal.headlessTerminal.write(prelude, () => {
+        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+      });
     }
     this.sessionSnapshotter.schedule();
     this.emitData(prelude);
@@ -1601,9 +1698,17 @@ export class TerminalProcess {
       terminal.firstByteAt = now;
     }
     terminal.lastOutputTime = now;
-    const beforeContentSnapshot = this.isAgentLive
-      ? this.getAgentOutputContentSnapshot()
-      : undefined;
+    // noteAgentOutputActivity only acts on waiting/idle/completed — skip the
+    // full-viewport extraction in other states (it would be computed and
+    // discarded on every chunk during "working", the heaviest output phase).
+    // If the state flips before the async write callback, the
+    // `beforeSnapshot ?? this.agentOutputContentSnapshot` fallback covers it.
+    const agentState = terminal.agentState;
+    const beforeContentSnapshot =
+      this.isAgentLive &&
+      (agentState === "waiting" || agentState === "idle" || agentState === "completed")
+        ? this.getAgentOutputContentSnapshot()
+        : undefined;
 
     // Tap OSC 9;4 progress sequences upstream of the rest of the pipeline so
     // the agent-state signal is viewport-independent (#8701). The parser is
@@ -1638,7 +1743,12 @@ export class TerminalProcess {
     }
 
     if (terminal.headlessTerminal) {
+      // Outstanding-parse counter: the wake path only trusts a serialized
+      // snapshot to cover the current contentEpoch when no headless writes
+      // are still queued in xterm's async parser.
+      terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       terminal.headlessTerminal.write(data, () => {
+        terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
         this.noteAgentOutputActivity(beforeContentSnapshot);
       });
     } else {
@@ -1661,15 +1771,50 @@ export class TerminalProcess {
 
       const liveId = getLiveAgentId(terminal);
       if (liveId) {
-        events.emit("agent:output", {
-          agentId: liveId,
-          data,
-          timestamp: Date.now(),
-          traceId: terminal.traceId,
-          terminalId: this.id,
-        });
+        this.queueAgentOutput(liveId, data);
       }
     }
+  }
+
+  private queueAgentOutput(agentId: string, data: string): void {
+    if (this.pendingAgentOutputAgentId !== null && this.pendingAgentOutputAgentId !== agentId) {
+      this.flushAgentOutput();
+    }
+    this.pendingAgentOutputAgentId = agentId;
+    this.pendingAgentOutput += data;
+
+    if (this.pendingAgentOutput.length >= OUTPUT_BUFFER_SIZE) {
+      this.flushAgentOutput();
+      return;
+    }
+    if (this.agentOutputFlushTimer) {
+      return;
+    }
+    this.agentOutputFlushTimer = setTimeout(() => {
+      this.agentOutputFlushTimer = null;
+      this.flushAgentOutput();
+    }, AGENT_OUTPUT_FLUSH_INTERVAL_MS);
+  }
+
+  private flushAgentOutput(): void {
+    if (this.agentOutputFlushTimer) {
+      clearTimeout(this.agentOutputFlushTimer);
+      this.agentOutputFlushTimer = null;
+    }
+    if (!this.pendingAgentOutput || this.pendingAgentOutputAgentId === null) {
+      return;
+    }
+    const agentId = this.pendingAgentOutputAgentId;
+    const data = this.pendingAgentOutput;
+    this.pendingAgentOutput = "";
+    this.pendingAgentOutputAgentId = null;
+    events.emit("agent:output", {
+      agentId,
+      data,
+      timestamp: Date.now(),
+      traceId: this.terminalInfo.traceId,
+      terminalId: this.id,
+    });
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty, dataHandoff?: PooledPtyDataHandoff): void {
@@ -1746,6 +1891,7 @@ export class TerminalProcess {
         terminal.exitCode = exitCode ?? 0;
         terminal.isExited = true;
         this.lifecycle.setExited({ code: exitCode ?? 0, signal, reason: reasonForEvent });
+        this.snapshotAndDisposePreserved();
         return;
       }
 
@@ -1764,6 +1910,7 @@ export class TerminalProcess {
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
+    this.flushAgentOutput();
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     runHandleAgentDetection(

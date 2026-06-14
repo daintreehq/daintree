@@ -66,15 +66,16 @@ describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () =>
       behindCount: 0,
       fetchAuthFailed: true,
       hasAuthFailedSignIn: true,
+      authProviderId: "daintree.github.github",
     });
-    const button = screen.getByRole("button", { name: /GitHub authentication failed/ });
+    const button = screen.getByRole("button", { name: /Forge authentication failed/ });
     expect(button.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(button.textContent).toContain("—");
     fireEvent.click(button);
     expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "app.settings.openTab",
-      { tab: "code-forge", subtab: "daintree.github.github", sectionId: "github-token" },
+      { tab: "code-forge", subtab: "daintree.github.github" },
       { source: "user" }
     );
   });

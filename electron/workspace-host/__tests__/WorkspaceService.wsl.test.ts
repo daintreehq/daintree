@@ -40,18 +40,13 @@ vi.mock("../../utils/git.js", () => ({
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
 vi.mock("../../services/issueExtractor.js", () => ({
   extractIssueNumberSync: vi.fn().mockReturnValue(null),
   extractIssueNumber: vi.fn().mockResolvedValue(null),
   deriveIssueTitleFromBranch: vi.fn().mockReturnValue(undefined),
-}));
-
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
 }));
 
 vi.mock("../../services/PullRequestService.js", () => ({

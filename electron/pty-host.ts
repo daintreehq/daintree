@@ -58,6 +58,7 @@ import {
   type HostContext,
   type RendererConnection,
 } from "./pty-host/handlers/index.js";
+import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
@@ -129,6 +130,10 @@ const terminalResourceMonitor = new TerminalResourceMonitor(
   sendEvent
 );
 let ptyPool: PtyPool | null = null;
+// True when the boot-time homedir pool warm was deferred because main
+// signalled an imminent project restore (DAINTREE_PTY_DEFER_POOL_WARM).
+// Consumed by the first set-active-project / project-switch handler.
+let initialPoolWarmDeferred = false;
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
 // Visual buffers: consumed by renderer (xterm.js) - critical path, sharded for isolation
@@ -138,6 +143,7 @@ let visualSignalView: Int32Array | null = null;
 let analysisBuffer: SharedRingBuffer | null = null;
 const packetFramer = new PacketFramer();
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
 
 // Throughput-rate gauge: accumulates per-terminal raw PTY byte/packet counts
 // between ResourceGovernor ticks. Double-buffer swap at tick boundary avoids
@@ -468,6 +474,12 @@ function disconnectWindow(windowId: number, reason: string): void {
   }
 
   rendererConnections.delete(windowId);
+  // Drop this window's wake-sync epochs: chunks accepted by the disposed
+  // batcher may never have reached the renderer, so a reconnecting window
+  // must not be served a no-change wake against them.
+  for (const terminal of ptyManager.getAll()) {
+    terminal.wakeSyncedEpochByWindow?.delete(windowId);
+  }
   // Keep the active project mapping across transient renderer-port failures.
   // Without it, a multi-view window whose MessagePort just failed falls back
   // to the single-consumer SAB path and another cached view can consume/drop
@@ -483,7 +495,7 @@ function disconnectWindow(windowId: number, reason: string): void {
 const resourceGovernor = new ResourceGovernor({
   getTerminalIds: () => ptyManager.getAll().map((t) => t.id),
   getPauseCoordinator,
-  getTerminalPids: () => ptyManager.getAll().map((t) => ({ id: t.id, pid: t.ptyProcess.pid })),
+  getTerminalCount: () => ptyManager.getActiveTerminalIds().length,
   incrementPauseCount: (count) => {
     backpressureManager.stats.pauseCount += count;
   },
@@ -618,6 +630,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   const isSuspended = backpressureManager.isSuspended(id);
   const terminalInfo = ptyManager.getTerminal(id);
 
+  // Every chunk mutates the headless buffer regardless of routing — bump the
+  // epoch unconditionally so a suppressed/suspended/dropped chunk invalidates
+  // the wake no-change skip for every window.
+  if (terminalInfo) {
+    terminalInfo.contentEpoch++;
+  }
+
   // Background tier: suppress visual streaming entirely (wake snapshots will resync state)
   // Analysis buffer writes still occur for agent state detection
   const activityTier = backpressureManager.getActivityTier(id);
@@ -638,70 +657,92 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     rendererConnections.size > 0 &&
     !isSmokeTestTerminalId(id)
   ) {
-    // Carry raw bytes on the hot MessagePort path so the renderer receives a
-    // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
-    // Wrap with `new Uint8Array(...)` to escape node-pty's Buffer pool slab —
-    // each batcher will copy these chunks into a fresh isolated buffer at
-    // flush time before they land in the postMessage transfer list.
-    const chunk =
-      typeof data === "string" ? new Uint8Array(Buffer.from(data, "utf8")) : new Uint8Array(data);
-    const byteCount = chunk.byteLength;
-
     const termProject = terminalInfo?.projectId ?? null;
-    const targets: RendererConnection[] = [];
+    const targets: Array<{ windowId: number; conn: RendererConnection }> = [];
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
       const filtered = windowProject !== null && termProject !== windowProject;
       if (filtered) continue;
-      targets.push(conn);
+      targets.push({ windowId, conn });
     }
 
-    // The chunk's ArrayBuffer can only be transferred zero-copy when exactly one
-    // batcher receives it: a transfer detaches the buffer, and per-batcher flush
-    // timing is independent, so with 2+ targets any flush would neuter the chunk
-    // out from under siblings still waiting to copy it. Sole target → owned.
-    const owned = targets.length === 1;
-    const saturated: RendererConnection[] = [];
-    for (const conn of targets) {
-      if (conn.batcher.write(id, chunk, byteCount, owned)) {
-        visualWritten = true;
-      } else {
-        saturated.push(conn);
+    // Encode only when a target window remains after project filtering — a
+    // fully-filtered chunk falls through to the IPC fallback's original string.
+    if (targets.length > 0) {
+      // Carry raw bytes on the hot MessagePort path so the renderer receives a
+      // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
+      // TextEncoder encodes strings into a standalone, exactly-sized buffer in
+      // one pass; the `new Uint8Array(...)` wrap on the bytes branch escapes
+      // node-pty's Buffer pool slab — each batcher will copy these chunks into
+      // a fresh isolated buffer at flush time before they land in the
+      // postMessage transfer list.
+      const chunk = typeof data === "string" ? textEncoder.encode(data) : new Uint8Array(data);
+      const byteCount = chunk.byteLength;
+
+      // The chunk's ArrayBuffer can only be transferred zero-copy when exactly one
+      // batcher receives it: a transfer detaches the buffer, and per-batcher flush
+      // timing is independent, so with 2+ targets any flush would neuter the chunk
+      // out from under siblings still waiting to copy it. Sole target → owned.
+      const owned = targets.length === 1;
+      // Output landing within the input window is likely keystroke echo — let
+      // the batcher accelerate a pending throughput flush so typing into a
+      // flooding terminal isn't held a frame behind the flood.
+      const interactive =
+        terminalInfo !== undefined &&
+        Date.now() - terminalInfo.lastInputTime < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
+      const saturated: RendererConnection[] = [];
+      for (const { windowId, conn } of targets) {
+        if (conn.batcher.write(id, chunk, byteCount, owned, interactive)) {
+          visualWritten = true;
+          // Port-clean delivery: this window's view now tracks the buffer
+          // through this chunk (the port is FIFO, so any wake-result for the
+          // terminal is ordered behind it). Anything less — saturation,
+          // IPC/SAB fallback, suppression — leaves the synced epoch stale and
+          // forces the next wake to serialize.
+          if (terminalInfo) {
+            (terminalInfo.wakeSyncedEpochByWindow ??= new Map()).set(
+              windowId,
+              terminalInfo.contentEpoch
+            );
+          }
+        } else {
+          saturated.push(conn);
+        }
       }
-    }
 
-    // A window whose batcher rejected this chunk only truly loses it when a
-    // SIBLING window's batcher accepted it — i.e. `visualWritten` is now true,
-    // which suppresses the shared SAB/IPC fallback below. If NO window accepted,
-    // `visualWritten` stays false and the IPC fallback broadcasts the chunk to
-    // every window (the renderer's onData subscribes to both the MessagePort and
-    // the IPC path), so nothing is actually lost — no pulse needed there.
-    //
-    // For the genuinely-starved windows we can't lean on the IPC fallback:
-    // `sendEvent` broadcasts to every window and would falsely flag the ones
-    // that received the data on their own port (issue #9891). So account the
-    // loss and deliver a `data-loss` pulse on each starved window's own port,
-    // FIFO-ordered with its data, letting the next wake snapshot resync it.
-    //
-    // Skip mirrored terminals: the IPC data mirror below broadcasts the chunk to
-    // every window (the renderer's onData also listens on IPC), so a starved
-    // window still receives it — a pulse here would be a spurious discontinuity.
-    if (visualWritten && saturated.length > 0 && !ipcDataMirrorTerminals.has(id)) {
-      for (const conn of saturated) {
-        // Counter is unconditional — regression detection must work even when
-        // metrics are gated off (mirrors the IPC at-capacity path).
-        dropAccumulator.droppedBytes += byteCount;
-        dropAccumulator.dataLossCount += 1;
-        try {
-          conn.port.postMessage({
-            type: "terminal-status",
-            id,
-            status: "data-loss",
-            droppedBytes: byteCount,
-            timestamp: Date.now(),
-          });
-        } catch {
-          // Port closing between iteration and post — disconnect handles cleanup.
+      // A window whose batcher rejected this chunk only truly loses it when a
+      // SIBLING window's batcher accepted it — i.e. `visualWritten` is now true,
+      // which suppresses the shared SAB/IPC fallback below. If NO window accepted,
+      // `visualWritten` stays false and the IPC fallback broadcasts the chunk to
+      // every window (the renderer's onData subscribes to both the MessagePort and
+      // the IPC path), so nothing is actually lost — no pulse needed there.
+      //
+      // For the genuinely-starved windows we can't lean on the IPC fallback:
+      // `sendEvent` broadcasts to every window and would falsely flag the ones
+      // that received the data on their own port (issue #9891). So account the
+      // loss and deliver a `data-loss` pulse on each starved window's own port,
+      // FIFO-ordered with its data, letting the next wake snapshot resync it.
+      //
+      // Mirrored terminals are no exception: the IPC data mirror below is
+      // Main-process-only (`data-mirror` is never re-broadcast to renderers),
+      // so a starved window really does lose the chunk and needs the pulse.
+      if (visualWritten && saturated.length > 0) {
+        for (const conn of saturated) {
+          // Counter is unconditional — regression detection must work even when
+          // metrics are gated off (mirrors the IPC at-capacity path).
+          dropAccumulator.droppedBytes += byteCount;
+          dropAccumulator.dataLossCount += 1;
+          try {
+            conn.port.postMessage({
+              type: "terminal-status",
+              id,
+              status: "data-loss",
+              droppedBytes: byteCount,
+              timestamp: Date.now(),
+            });
+          } catch {
+            // Port closing between iteration and post — disconnect handles cleanup.
+          }
         }
       }
     }
@@ -866,12 +907,18 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
-  // IPC Data Mirror: Always send data via IPC for terminals that need main-process
-  // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB
-  // write succeeded. Background terminals still need this low-volume mirror
-  // because their visual stream is intentionally suppressed.
+  // IPC Data Mirror: send a Main-process-only copy for terminals that need
+  // main-process monitoring (e.g., UrlDetector for dev preview URL detection),
+  // even when the visual path already delivered the chunk. Background
+  // terminals still need this mirror because their visual stream is
+  // intentionally suppressed. Sent as `data-mirror`, not `data`: the renderer
+  // already has the chunk (or the background gate suppressed it on purpose),
+  // so a `data` event here would be re-broadcast to every WebContents and
+  // dispatched into the same xterm a second time. The genuinely-undelivered
+  // case (visualWritten false, not backgrounded) falls through to the
+  // accounted IPC fallback below, which UrlDetector also receives.
   if (ipcDataMirrorTerminals.has(id) && !isSuspended && (visualWritten || isBackgrounded)) {
-    sendEvent({ type: "data", id, data: toStringForIpc(data) });
+    sendEvent({ type: "data-mirror", id, data: toStringForIpc(data) });
   }
 
   // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
@@ -1280,6 +1327,12 @@ const hostContext: HostContext = {
   set ptyPool(value: PtyPool | null) {
     ptyPool = value;
   },
+  get initialPoolWarmDeferred() {
+    return initialPoolWarmDeferred;
+  },
+  set initialPoolWarmDeferred(value: boolean) {
+    initialPoolWarmDeferred = value;
+  },
   sendEvent,
   getPauseCoordinator,
   getOrCreatePauseCoordinator,
@@ -1374,17 +1427,26 @@ async function initialize(): Promise<void> {
 
     if (shouldEnablePtyPool()) {
       ptyPool = getPtyPool({ poolSize: 2, maxEntries: 8 });
-      const homedir = os.homedir();
 
-      // Warm pool in background
-      ptyPool
-        .warmPool(homedir)
-        .then(() => {
-          console.log("[PtyHost] PTY pool warmed in background");
-        })
-        .catch((err) => {
-          console.error("[PtyHost] Failed to warm pool:", err);
-        });
+      if (process.env.DAINTREE_PTY_DEFER_POOL_WARM === "1") {
+        // Project-restoring boot: the set-active-project that follows ready
+        // drains the pool to the project path, so a homedir warm here would
+        // only spawn shells for the drain to kill. The set-active-project
+        // handler performs the warm instead — project drain, or a homedir
+        // fallback when the restore fell through (#10393).
+        initialPoolWarmDeferred = true;
+        console.log("[PtyHost] Initial pool warm deferred to set-active-project");
+      } else {
+        // Warm pool in background
+        ptyPool
+          .warmPool(os.homedir())
+          .then(() => {
+            console.log("[PtyHost] PTY pool warmed in background");
+          })
+          .catch((err) => {
+            console.error("[PtyHost] Failed to warm pool:", err);
+          });
+      }
 
       ptyManager.setPtyPool(ptyPool);
     } else {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   Plus,
   Trash2,
@@ -47,7 +48,15 @@ export function RecipesTab({
     exportRecipe,
     importRecipe,
     isLoading: recipesLoading,
-  } = useRecipeStore();
+  } = useRecipeStore(
+    useShallow((s) => ({
+      recipes: s.recipes,
+      loadRecipes: s.loadRecipes,
+      exportRecipe: s.exportRecipe,
+      importRecipe: s.importRecipe,
+      isLoading: s.isLoading,
+    }))
+  );
 
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<TerminalRecipe | undefined>(undefined);

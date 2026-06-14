@@ -15,8 +15,8 @@ import {
   getWorktreePortBrokerRef,
 } from "./window/windowServices.js";
 import { distributePortsToView } from "./window/portDistribution.js";
-import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import type { UpdateMenuState } from "./services/AutoUpdaterService.js";
+import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
@@ -44,7 +44,7 @@ const UPDATE_MENU_ITEM_IDS = ["check-for-updates-mac", "check-for-updates-help"]
 const UPDATE_MENU_STATE_LABELS: Record<UpdateMenuState, { label: string; enabled: boolean }> = {
   idle: { label: "Check for Updates…", enabled: true },
   checking: { label: "Checking…", enabled: false },
-  ready: { label: "Restart to install update", enabled: true },
+  ready: { label: "Restart to Install Update", enabled: true },
 };
 
 function applyUpdateMenuState(state: UpdateMenuState): void {
@@ -63,13 +63,19 @@ function applyUpdateMenuState(state: UpdateMenuState): void {
 // handler reads the current state at invocation time and branches: Ready
 // triggers quitAndInstall; everything else (Idle, Checking) initiates a
 // manual check. Checking is also disabled, so the click only fires for the
-// other two anyway.
+// other two anyway. AutoUpdaterService is dynamically imported so the
+// electron-updater module graph stays off the boot path; clicks before the
+// deferred initialize() remain no-ops via the service's !initialized guard.
 function handleUpdateMenuClick(): void {
-  if (autoUpdaterService.getMenuState() === "ready") {
-    autoUpdaterService.quitAndInstallIfReady();
-  } else {
-    autoUpdaterService.checkForUpdatesManually();
-  }
+  void import("./services/AutoUpdaterService.js")
+    .then(({ autoUpdaterService }) => {
+      if (autoUpdaterService.getMenuState() === "ready") {
+        autoUpdaterService.quitAndInstallIfReady();
+      } else {
+        autoUpdaterService.checkForUpdatesManually();
+      }
+    })
+    .catch((err) => console.error("[MAIN] Failed to load AutoUpdaterService for menu click:", err));
 }
 
 // Each createApplicationMenu rebuild allocates new MenuItem instances, so the
@@ -145,12 +151,18 @@ export function createApplicationMenu(
     return items;
   };
 
+  const agentMenuItems = buildAgentMenuItems();
+  const filePluginItems = buildPluginMenuItems("file");
+  const viewPluginItems = buildPluginMenuItems("view");
+  const terminalPluginItems = buildPluginMenuItems("terminal");
+  const helpPluginItems = buildPluginMenuItems("help");
+
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
       submenu: [
         {
-          label: "Open Directory...",
+          label: "Open Directory…",
           accelerator: "CommandOrControl+O",
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
@@ -167,7 +179,7 @@ export function createApplicationMenu(
           },
         },
         {
-          label: "Clone Repository...",
+          label: "Clone Repository…",
           click: (_item, browserWindow) =>
             sendAction("project.cloneRepo", getTargetBrowserWindow(browserWindow)),
         },
@@ -178,7 +190,7 @@ export function createApplicationMenu(
             sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "New Worktree...",
+          label: "New Worktree…",
           accelerator: "CommandOrControl+N",
           click: (_item, browserWindow) =>
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
@@ -191,13 +203,13 @@ export function createApplicationMenu(
         ...(process.platform !== "darwin"
           ? [
               {
-                label: "Settings...",
+                label: "Settings…",
                 accelerator: "CommandOrControl+,",
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
               {
-                label: "Plugin Manager...",
+                label: "Plugin Manager…",
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
               },
@@ -208,9 +220,7 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },
-        ...(buildPluginMenuItems("file").length > 0
-          ? [{ type: "separator" as const }, ...buildPluginMenuItems("file")]
-          : []),
+        ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
         {
           label: "Close Project",
@@ -376,9 +386,7 @@ export function createApplicationMenu(
             win.setSimpleFullScreen(!isSimpleFullScreen);
           },
         },
-        ...(buildPluginMenuItems("view").length > 0
-          ? [{ type: "separator" as const }, ...buildPluginMenuItems("view")]
-          : []),
+        ...(viewPluginItems.length > 0 ? [{ type: "separator" as const }, ...viewPluginItems] : []),
       ],
     },
     {
@@ -396,24 +404,20 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("terminal.new", getTargetBrowserWindow(browserWindow)),
         },
-        ...(buildAgentMenuItems().length > 0
-          ? [
-              { type: "separator" as const },
-              ...buildAgentMenuItems(),
-              { type: "separator" as const },
-            ]
+        ...(agentMenuItems.length > 0
+          ? [{ type: "separator" as const }, ...agentMenuItems, { type: "separator" as const }]
           : [{ type: "separator" as const }]),
-        ...(buildPluginMenuItems("terminal").length > 0
-          ? [...buildPluginMenuItems("terminal"), { type: "separator" as const }]
+        ...(terminalPluginItems.length > 0
+          ? [...terminalPluginItems, { type: "separator" as const }]
           : []),
         {
-          label: "Quick Switcher...",
+          label: "Quick Switcher…",
           accelerator: "CommandOrControl+P",
           click: (_item, browserWindow) =>
             sendAction("nav.quickSwitcher", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "Command Palette...",
+          label: "Command Palette…",
           accelerator: "CommandOrControl+Shift+P",
           click: (_item, browserWindow) =>
             sendAction("action.palette.open", getTargetBrowserWindow(browserWindow)),
@@ -498,9 +502,7 @@ export function createApplicationMenu(
               },
             ]
           : []),
-        ...(buildPluginMenuItems("help").length > 0
-          ? [{ type: "separator" as const }, ...buildPluginMenuItems("help")]
-          : []),
+        ...(helpPluginItems.length > 0 ? [{ type: "separator" as const }, ...helpPluginItems] : []),
         ...(process.platform !== "darwin"
           ? [{ type: "separator" as const }, { role: "about" as const }]
           : []),
@@ -524,13 +526,13 @@ export function createApplicationMenu(
           : []),
         { type: "separator" },
         {
-          label: "Settings...",
+          label: "Settings…",
           accelerator: "CommandOrControl+,",
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "Plugin Manager...",
+          label: "Plugin Manager…",
           click: (_item, browserWindow) =>
             sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
         },
@@ -549,12 +551,23 @@ export function createApplicationMenu(
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 
-  unsubscribeUpdateMenuState?.();
-  unsubscribeUpdateMenuState = autoUpdaterService.onMenuStateChange(applyUpdateMenuState);
-  // Apply the current state immediately so a rebuild that completes mid-check
-  // (or with a downloaded update already staged) doesn't snap items back to
-  // the default "Check for Updates…" label.
-  applyUpdateMenuState(autoUpdaterService.getMenuState());
+  wireUpdateMenuState();
+}
+
+// Wire the update-state listener against the deferred-loaded singleton. A
+// no-op until the auto-updater deferred task sets the serviceRef — that task
+// calls this directly so the first wiring happens when the service loads,
+// keeping electron-updater off the menu-build path. Rebuilds after that find
+// the ref set and apply the current state synchronously, so a rebuild that
+// completes mid-check (or with a downloaded update already staged) doesn't
+// snap items back to the default "Check for Updates…" label.
+export function wireUpdateMenuState(): void {
+  const svc = getAutoUpdaterServiceRef();
+  if (svc) {
+    unsubscribeUpdateMenuState?.();
+    unsubscribeUpdateMenuState = svc.onMenuStateChange(applyUpdateMenuState);
+    applyUpdateMenuState(svc.getMenuState());
+  }
 }
 
 function buildRecentProjectsMenu(

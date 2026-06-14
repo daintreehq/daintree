@@ -147,7 +147,7 @@ async function openPresetSelector(window: Page) {
     if (await listbox.isVisible({ timeout: 2_000 }).catch(() => false)) {
       return listbox;
     }
-    await window.keyboard.press("Escape").catch(() => undefined);
+    await trigger.click({ force: true, noWaitAfter: true, timeout: 2_000 }).catch(() => undefined);
     await window.waitForTimeout(250);
   }
 
@@ -372,7 +372,7 @@ export async function countPresetOptions(window: import("@playwright/test").Page
     async () => {
       const listbox = await openPresetSelector(window);
       const n = await listbox.locator('[role="option"]').count();
-      await window.keyboard.press("Escape");
+      await window.locator(SEL.preset.selectorTrigger).click({ force: true, noWaitAfter: true });
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
       return n;
     },
@@ -479,7 +479,7 @@ export async function getPresetOptionLabels(
     async () => {
       const listbox = await openPresetSelector(window);
       const labels = await listbox.locator('[role="option"]').allTextContents();
-      await window.keyboard.press("Escape");
+      await window.locator(SEL.preset.selectorTrigger).click({ force: true, noWaitAfter: true });
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
       return labels.map((s) => s.trim());
     },

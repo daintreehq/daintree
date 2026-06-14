@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { forwardRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useState, type ReactNode } from "react";
 
 let mockObserverInstances: MockIntersectionObserver[] = [];
 
@@ -97,46 +97,69 @@ const { mockDiffViewerControl } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/Worktree/DiffViewer", () => ({
-  DiffViewer: forwardRef<HTMLDivElement, { onRetry?: () => void; onToggleCollapse?: () => void }>(
-    ({ onRetry, onToggleCollapse }, ref) => {
-      // Mirrors the real DiffViewer: when a file is collapsed by default, its
-      // hunk rows are absent from the DOM until the user expands, at which point
-      // it fires onToggleCollapse so the modal can re-scan. Collapsing again
-      // removes the rows and fires the callback once more. See #10013.
-      const [expanded, setExpanded] = useState(!mockDiffViewerControl.startCollapsed);
-      return (
-        <div ref={ref} data-testid="diff-viewer" data-has-retry={onRetry ? "true" : "false"}>
-          <button
-            type="button"
-            data-testid="collapse-toggle"
-            onClick={() => {
-              onToggleCollapse?.();
-              setExpanded((prev) => !prev);
-            }}
-          >
-            {expanded ? "Hide diff" : "Show diff"}
-          </button>
-          {expanded && (
-            // Two stub hunk rows so hunk-nav tests have predictable targets.
-            // Each tbody must contain a tr:first-child for the IntersectionObserver
-            // to observe (tbody alone collapses to 0 height in Chromium).
-            <table>
-              <tbody className="diff-hunk" data-testid="hunk-0">
-                <tr>
-                  <td>hunk 0</td>
-                </tr>
-              </tbody>
-              <tbody className="diff-hunk" data-testid="hunk-1">
-                <tr>
-                  <td>hunk 1</td>
-                </tr>
-              </tbody>
-            </table>
-          )}
-        </div>
-      );
+  DiffViewer: forwardRef<
+    HTMLDivElement,
+    {
+      onRetry?: () => void;
+      onToggleCollapse?: () => void;
+      searchQuery?: string;
+      onTokensRendered?: () => void;
     }
-  ),
+  >(({ onRetry, onToggleCollapse, searchQuery, onTokensRendered }, ref) => {
+    // Mirrors the real DiffViewer: when a file is collapsed by default, its
+    // hunk rows are absent from the DOM until the user expands, at which point
+    // it fires onToggleCollapse so the modal can re-scan. Collapsing again
+    // removes the rows and fires the callback once more. See #10013.
+    const [expanded, setExpanded] = useState(!mockDiffViewerControl.startCollapsed);
+    // Mirrors the real DiffViewer's token pass: search marks land in the DOM
+    // and onTokensRendered fires so the modal re-scans for matches.
+    useEffect(() => {
+      onTokensRendered?.();
+    }, [searchQuery, onTokensRendered]);
+    return (
+      <div ref={ref} data-testid="diff-viewer" data-has-retry={onRetry ? "true" : "false"}>
+        <button
+          type="button"
+          data-testid="collapse-toggle"
+          onClick={() => {
+            onToggleCollapse?.();
+            setExpanded((prev) => !prev);
+          }}
+        >
+          {expanded ? "Hide diff" : "Show diff"}
+        </button>
+        {expanded && (
+          // Two stub hunk rows so hunk-nav tests have predictable targets.
+          // Each tbody must contain a tr:first-child for the IntersectionObserver
+          // to observe (tbody alone collapses to 0 height in Chromium).
+          <table>
+            <tbody className="diff-hunk" data-testid="hunk-0">
+              <tr>
+                <td>hunk 0</td>
+              </tr>
+            </tbody>
+            <tbody className="diff-hunk" data-testid="hunk-1">
+              <tr>
+                <td>hunk 1</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+        {expanded && searchQuery && (
+          // Two stub match spans, standing in for the token-pass highlights
+          // (gone while collapsed, like the real token spans).
+          <>
+            <span className="diff-search-match" data-testid="match-0">
+              m0
+            </span>
+            <span className="diff-search-match" data-testid="match-1">
+              m1
+            </span>
+          </>
+        )}
+      </div>
+    );
+  }),
 }));
 
 const setDiffViewTypeMock = vi.fn();
@@ -559,6 +582,21 @@ describe("FileViewerModal", () => {
 
   describe("keyboard hunk navigation in diff mode", () => {
     const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+
+    // jsdom has no matchMedia; without it prefersReducedMotion() defaults to
+    // true and hunk nav falls back to instant scrolling.
+    beforeEach(() => {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onchange: null,
+      }));
+    });
 
     it("scrolls to the first hunk on initial `n`", async () => {
       render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
@@ -1095,6 +1133,114 @@ describe("FileViewerModal", () => {
         expect(screen.queryByTestId("hunk-0")).toBeNull();
         expect(screen.queryByTestId("hunk-position-indicator")).toBeNull();
       });
+    });
+  });
+
+  describe("in-diff search", () => {
+    const diff = "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new";
+
+    async function openSearch() {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      return await screen.findByPlaceholderText("Find in diff");
+    }
+
+    it("opens the find bar on find-in-panel, counts matches, and steps with Enter", async () => {
+      const input = await openSearch();
+
+      fireEvent.change(input, { target: { value: "ne" } });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-search-count").textContent).toBe("2 matches");
+      });
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-search-count").textContent).toBe("1 of 2");
+      });
+      expect(scrollIntoViewCalls.at(-1)).toBe(screen.getByTestId("match-0"));
+      await waitFor(() => {
+        expect(screen.getByTestId("match-0").classList.contains("diff-search-current")).toBe(true);
+      });
+      expect(screen.getByTestId("match-1").classList.contains("diff-search-current")).toBe(false);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-search-count").textContent).toBe("2 of 2");
+      });
+      expect(scrollIntoViewCalls.at(-1)).toBe(screen.getByTestId("match-1"));
+
+      // Shift+Enter steps backwards.
+      fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-search-count").textContent).toBe("1 of 2");
+      });
+    });
+
+    it("shows No matches when the query has no hits", async () => {
+      const input = await openSearch();
+
+      // The stub renders match spans for any query, so simulate the no-hit
+      // case through the real scan path: a query while the diff is collapsed
+      // (no spans in the DOM).
+      fireEvent.click(screen.getByTestId("collapse-toggle"));
+      fireEvent.change(input, { target: { value: "zzz" } });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-search-count").textContent).toBe("No matches");
+      });
+      expect(screen.getByLabelText("Next match").hasAttribute("disabled")).toBe(true);
+    });
+
+    it("Escape closes the find bar without closing the dialog", async () => {
+      const onClose = vi.fn();
+      render(
+        <FileViewerModal {...defaultProps} onClose={onClose} diff={diff} defaultMode="diff" />
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      const input = await screen.findByPlaceholderText("Find in diff");
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText("Find in diff")).toBeNull();
+      });
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("the footer toggle opens and closes the find bar", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="diff" />);
+      await waitFor(() => {
+        expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Find in diff" }));
+      expect(await screen.findByPlaceholderText("Find in diff")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Find in diff" }));
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText("Find in diff")).toBeNull();
+      });
+    });
+
+    it("routes find-in-panel to CodeViewer search in view mode, not the find bar", async () => {
+      render(<FileViewerModal {...defaultProps} diff={diff} defaultMode="view" />);
+      await waitFor(() => {
+        expect(screen.getByTestId("code-viewer")).toBeTruthy();
+      });
+
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+
+      expect(screen.queryByPlaceholderText("Find in diff")).toBeNull();
     });
   });
 

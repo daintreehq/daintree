@@ -3,6 +3,11 @@ import type { TerminalInfo } from "./types.js";
 import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 
 export function serializeTerminal(id: string, terminalInfo: TerminalInfo): string | null {
+  // Preserved exited terminal — the headless xterm is disposed and the final
+  // buffer lives as a cached string. Empty string is a valid snapshot.
+  if (terminalInfo.preservedSnapshot !== undefined) {
+    return terminalInfo.preservedSnapshot;
+  }
   try {
     return terminalInfo.serializeAddon!.serialize();
   } catch (error) {
@@ -15,6 +20,9 @@ export async function serializeTerminalAsync(
   id: string,
   terminalInfo: TerminalInfo
 ): Promise<string | null> {
+  if (terminalInfo.preservedSnapshot !== undefined) {
+    return terminalInfo.preservedSnapshot;
+  }
   try {
     const lineCount = terminalInfo.headlessTerminal!.buffer.active.length;
     const serializerService = getTerminalSerializerService();

@@ -329,8 +329,6 @@ export interface PtyPanelData extends BasePanelData {
   activityStatus?: "working" | "waiting" | "success" | "failure";
   /** Terminal task type (interactive, background, idle) */
   activityType?: "interactive" | "background" | "idle";
-  /** Timestamp when activity was last updated */
-  activityTimestamp?: number;
   /** Last detected command for this terminal (e.g., 'npm run dev') */
   lastCommand?: string;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
@@ -608,7 +606,6 @@ export interface TerminalInstance {
   activityHeadline?: string;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   activityType?: "interactive" | "background" | "idle";
-  activityTimestamp?: number;
   lastCommand?: string;
   location: PanelLocation;
   command?: string;

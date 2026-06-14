@@ -169,21 +169,6 @@ export type {
   BulkProjectStats,
   ProjectStatusEntry,
   ProjectStatusMap,
-  // GitHub IPC types
-  RepositoryStats,
-  RepoStatsAndPagePayload,
-  RepoCountsUpdatedPayload,
-  GitHubFirstPageCachePayload,
-  ProjectHealthData,
-  GitHubCliStatus,
-  GitHubTokenConfig,
-  GitHubTokenValidation,
-  GitHubRateLimitPayload,
-  GitHubRateLimitKind,
-  GitHubRateLimitBucket,
-  GitHubRateLimitDetails,
-  GitHubTokenHealthPayload,
-  GitHubTokenHealthStatus,
   ForgeRateLimitKind,
   ForgeRateLimitChangedPayload,
   ForgeTokenHealthChangedPayload,
@@ -311,6 +296,7 @@ export type { BuiltInKeyAction, KeyAction, KeymapPreset, KeyMapConfig } from "./
 export type {
   AgentSettingsEntry,
   AgentSettings,
+  DangerousMode,
   GenerateAgentCommandOptions,
   GenerateAgentFlagsOptions,
 } from "./agentSettings.js";
@@ -327,6 +313,11 @@ export {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  isAgentBypassSupported,
+  resolveEffectiveBypass,
+  resolveDangerousMode,
+  combineDangerousModes,
+  reconcileBypassFlags,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration
@@ -409,15 +400,6 @@ export type {
   TerminalActivity,
   TerminalActivityPayload,
 } from "./terminal.js";
-
-// GitHub types - issues and pull requests
-export type {
-  GitHubUser,
-  GitHubIssue,
-  GitHubPR,
-  GitHubListOptions,
-  GitHubListResponse,
-} from "./github.js";
 
 // Pty Host types - IPC protocol for terminal management
 export type {

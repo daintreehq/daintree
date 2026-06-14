@@ -1,18 +1,23 @@
 import { useState, useEffect, useRef } from "react";
-import type { ProjectHealthData } from "../types";
-// eslint-disable-next-line no-restricted-imports
-import { githubClient, projectClient } from "@/clients";
+import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
+import { projectClient } from "@/clients";
+import { forgeClient } from "@/clients/forgeClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePollingLifecycle } from "@/hooks/usePollingLifecycle";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { useProjectStore } from "@/store/projectStore";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
-import { useGitHubRateLimitStore } from "@/store/githubRateLimitStore";
+import {
+  useForgeProviderHealthStore,
+  DEFAULT_PROVIDER_HEALTH,
+} from "@/store/forgeProviderHealthStore";
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
 const ERROR_BACKOFF_INTERVAL = 2 * 60 * 1000;
 
 export interface UseProjectHealthReturn {
-  health: ProjectHealthData | null;
+  health: ForgeProjectHealthPayload | null;
   loading: boolean;
   // True while a refetch is in flight regardless of whether health is already
   // available. Distinct from `loading`, which narrows to the first-fetch
@@ -25,7 +30,7 @@ export interface UseProjectHealthReturn {
 }
 
 export function useProjectHealth(): UseProjectHealthReturn {
-  const [health, setHealth] = useState<ProjectHealthData | null>(null);
+  const [health, setHealth] = useState<ForgeProjectHealthPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,12 +52,22 @@ export function useProjectHealth(): UseProjectHealthReturn {
     };
   }, []);
 
-  // Worker instances suppress automatic background polling to conserve
-  // GitHub GraphQL quota (#10123) — on-demand `refresh()` stays functional.
+  // Worker instances suppress automatic background polling to conserve the
+  // provider's API quota (#10123) — on-demand `refresh()` stays functional.
   const isWorkerInstance = window.__DAINTREE_INSTANCE_ROLE__?.role === "worker";
+  // No resolved forge provider (no matching plugin, or the owning plugin is
+  // disabled) means the gated health IPC rejects anyway — don't poll into a
+  // wall of FORGE_PROVIDER_UNAVAILABLE errors.
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const { entry: providerEntry, providerId } = useResolvedForgeProvider(currentProjectId);
+  const providerResolved = providerEntry !== null;
+  const providerIdRef = useRef<string | null>(providerId);
+  useEffect(() => {
+    providerIdRef.current = providerId;
+  }, [providerId]);
 
   const polling = usePollingLifecycle({
-    enabled: !isWorkerInstance,
+    enabled: !isWorkerInstance && providerResolved,
     fetchFn: async ({ force, isInvalidated }) => {
       try {
         const project = await projectClient.getCurrent();
@@ -75,7 +90,7 @@ export function useProjectHealth(): UseProjectHealthReturn {
           if (!hasAppliedResultRef.current) setLoading(true);
         }
 
-        const result = await githubClient.getProjectHealth(project.path, force);
+        const result = await forgeClient.getProjectHealth(project.path, force);
 
         if (!mountedRef.current) return;
         if (isInvalidated()) return;
@@ -114,7 +129,11 @@ export function useProjectHealth(): UseProjectHealthReturn {
     calculateNextInterval: ({ isVisible }) => {
       if (lastErrorRef.current) return ERROR_BACKOFF_INTERVAL;
       if (isVisible) return ACTIVE_POLL_INTERVAL;
-      const multiplier = useGitHubRateLimitStore.getState().throttleMultiplier ?? 1;
+      const resolvedId = providerIdRef.current;
+      const multiplier = resolvedId
+        ? (useForgeProviderHealthStore.getState().providers[resolvedId] ?? DEFAULT_PROVIDER_HEALTH)
+            .rateLimitMultiplier
+        : 1;
       return IDLE_POLL_INTERVAL * multiplier;
     },
     onProjectSwitch: () => {

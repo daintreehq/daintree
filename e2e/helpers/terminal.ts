@@ -227,13 +227,14 @@ async function runWindowsEchoGuardedCommand(
 export async function runTerminalCommand(
   page: Page,
   panelLocator: Locator,
-  command: string
+  command: string,
+  options: { readyTimeout?: number } = {}
 ): Promise<void> {
   await expect(panelLocator).toBeVisible({ timeout: 5_000 });
   const panelId = await getPanelId(panelLocator);
   if (!panelId) throw new Error("Could not resolve panel ID for terminal command");
 
-  await waitForTerminalReady(page, panelLocator);
+  await waitForTerminalPty(page, panelLocator, options.readyTimeout);
   await activateTerminal(page, panelId);
 
   if (await runWindowsEchoGuardedCommand(page, panelLocator, command)) {

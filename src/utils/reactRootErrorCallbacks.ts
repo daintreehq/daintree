@@ -1,4 +1,4 @@
-import * as Sentry from "@sentry/electron/renderer";
+import { captureRendererException } from "@/utils/rendererSentry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { useErrorStore } from "@/store/errorStore";
 import { getErrorMessage } from "@/utils/errorContext";
@@ -18,19 +18,12 @@ export function onCaughtError(error: unknown, errorInfo: { componentStack?: stri
 
 export function onUncaughtError(error: unknown, errorInfo: { componentStack?: string }): void {
   try {
-    try {
-      const sentryError = error instanceof Error ? error : new Error(getErrorMessage(error));
-      Sentry.captureException(sentryError, {
-        tags: { source: "react-uncaught" },
-        contexts: errorInfo.componentStack
-          ? { react: { componentStack: errorInfo.componentStack } }
-          : undefined,
-      });
-    } catch (sentryError) {
-      // Last-resort sink: Sentry capture failed.
-      // eslint-disable-next-line no-console
-      console.error("[React] Failed to report uncaught error to Sentry:", sentryError);
-    }
+    captureRendererException(error, {
+      tags: { source: "react-uncaught" },
+      contexts: errorInfo.componentStack
+        ? { react: { componentStack: errorInfo.componentStack } }
+        : undefined,
+    });
 
     try {
       useErrorStore.getState().addError({

@@ -618,6 +618,7 @@ export function McpServerSettingsTab() {
                       className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
                     >
                       <ChevronRight
+                        data-animated-chevron
                         className={cn(
                           "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
                           bearersExpanded && "rotate-90"
@@ -670,6 +671,7 @@ export function McpServerSettingsTab() {
                       className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
                     >
                       <ChevronRight
+                        data-animated-chevron
                         className={cn(
                           "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
                           helpBearersExpanded && "rotate-90"
@@ -731,7 +733,7 @@ export function McpServerSettingsTab() {
                 }}
                 placeholder="45454"
                 aria-label="MCP server port"
-                className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               />
               <button
                 onClick={handlePortSave}
@@ -861,7 +863,7 @@ export function McpServerSettingsTab() {
                     if (e.key === "Enter") void handleMaxRecordsSave();
                   }}
                   placeholder={MCP_AUDIT_DEFAULT_MAX_RECORDS.toString()}
-                  className="w-24 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-daintree-text/40 font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="w-24 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 />
                 <button
                   type="button"

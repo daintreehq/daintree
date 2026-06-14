@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "displayName": "GitHub",
   "description": "First-party GitHub forge provider — issues, pull requests, reviews, CI status, and rate-limit handling for github.com repositories.",
+  "tagline": "Pull requests, issues, and CI checks for github.com repositories",
+  "category": "forge",
   "main": "main/index.js",
   "engines": {
     "daintree": ">=0.11.0"
@@ -23,8 +25,16 @@
           "assignees",
           "releases",
           "batch-branch-prs",
-          "identity"
-        ]
+          "identity",
+          "clone"
+        ],
+        "slots": {
+          "settingsTab": "github.forgeSettingsTab",
+          "icon": "github.providerIcon",
+          "statsDropdown": "github.statsDropdown",
+          "bulkCreateWorktreeDialog": "github.bulkCreateWorktreeDialog",
+          "issueSelector": "github.issueSelector"
+        }
       }
     ],
     "fileDecorationProviders": [

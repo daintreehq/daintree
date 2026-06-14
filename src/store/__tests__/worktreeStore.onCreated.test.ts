@@ -101,11 +101,18 @@ describe("worktreeStore createDialog.onCreated", () => {
     store.getState().openCreateDialogForPR({
       number: 1,
       title: "test",
+      body: "",
       url: "",
-      state: "OPEN",
+      state: "open",
+      rawState: "OPEN",
       isDraft: false,
-      updatedAt: new Date().toISOString(),
-      author: { login: "test", avatarUrl: "" },
+      merged: false,
+      author: { login: "test", avatarUrl: "", rawData: null },
+      baseRef: "main",
+      headRef: "feature/test",
+      createdAt: 0,
+      updatedAt: 0,
+      rawData: null,
     });
 
     expect(store.getState().createDialog.onCreated).toBeUndefined();

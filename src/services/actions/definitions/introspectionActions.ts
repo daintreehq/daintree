@@ -232,13 +232,13 @@ export function registerIntrospectionActions(
     }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { query, limit = 20 } = args as { query: string; limit?: number };
-      const manifest = actionService.list(ctx);
+      const manifest = actionService.list(ctx, { includeSchemas: false });
 
       const q = query.toLowerCase();
       const qTerms = q.split(/\s+/).filter((t) => t.length > 0);
 
       interface ScoredEntry {
-        entry: Omit<ActionManifestEntry, "inputSchema" | "outputSchema">;
+        entry: ActionManifestEntry;
         score: number;
       }
 
@@ -276,8 +276,7 @@ export function registerIntrospectionActions(
         }
 
         if (score > 0) {
-          const { inputSchema: _, outputSchema: __, ...lightweight } = entry;
-          scored.push({ entry: lightweight, score });
+          scored.push({ entry, score });
         }
       }
 

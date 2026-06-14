@@ -6,6 +6,7 @@ import { SEL } from "../../helpers/selectors";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { openTerminal } from "../../helpers/panels";
+import { T_SHORT, T_MEDIUM } from "../../helpers/timeouts";
 import type { ElectronApplication } from "@playwright/test";
 
 /* ---------- helpers ---------- */
@@ -99,9 +100,8 @@ async function clearErrorsAndCloseDock(window: Page) {
     if (await closeBtn.isVisible().catch(() => false)) {
       await closeBtn.click();
     }
+    await expect(window.locator(SEL.diagnostics.dock)).not.toBeVisible({ timeout: T_SHORT });
   }
-  // Brief settle for React state updates
-  await window.waitForTimeout(200);
 }
 
 async function openRecoveryMenu(window: Page, banner: Locator): Promise<Locator> {
@@ -110,11 +110,15 @@ async function openRecoveryMenu(window: Page, banner: Locator): Promise<Locator>
   await trigger.focus();
   await window.keyboard.press("Enter");
 
-  const menu = window.locator("[data-radix-popper-content-wrapper]").last();
-  if (!(await menu.isVisible({ timeout: 1000 }).catch(() => false))) {
+  // Scope to the popper that contains at least one recovery button so we never
+  // accidentally latch onto a concurrently open Radix dropdown from elsewhere.
+  const menu = window
+    .locator("[data-radix-popper-content-wrapper]")
+    .filter({ has: window.locator("button[aria-label]") });
+  if (!(await menu.isVisible({ timeout: T_SHORT }).catch(() => false))) {
     await trigger.click({ force: true });
   }
-  await expect(menu).toBeVisible({ timeout: 5000 });
+  await expect(menu).toBeVisible({ timeout: T_MEDIUM });
   return menu;
 }
 
@@ -183,9 +187,9 @@ test.describe.serial("Core: IPC Error Propagation", () => {
       source: "GitHubService",
     });
 
-    // The bell badge should show the notification count
+    // The bell aria-label includes "unread" when the error was routed to the inbox
     const bell = ctx.window.locator(SEL.notifications.bellButton);
-    await expect(bell).toBeVisible();
+    await expect(bell).toHaveAttribute("aria-label", /unread/, { timeout: T_SHORT });
 
     // Click the bell to open notification center
     await bell.click();
@@ -266,12 +270,8 @@ test.describe.serial("Core: IPC Error Propagation", () => {
       { basePayload: payload }
     );
 
-    // Wait for the errors to be processed
-    await ctx.window.waitForTimeout(300);
-
-    // Should have exactly 1 error in the store (deduplication)
-    const count = await getErrorStoreCount(ctx.window);
-    expect(count).toBe(1);
+    // Poll until the store settles — deduplication collapses 5 identical messages to 1
+    await expect.poll(() => getErrorStoreCount(ctx.window), { timeout: T_MEDIUM }).toBe(1);
 
     // Only 1 row visible in the problems panel
     const panel = ctx.window.locator(SEL.diagnostics.panel("problems"));
@@ -288,9 +288,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
       retryability: "none",
     });
 
-    await ctx.window.waitForTimeout(300);
-    const countAfter = await getErrorStoreCount(ctx.window);
-    expect(countAfter).toBe(2);
+    await expect.poll(() => getErrorStoreCount(ctx.window), { timeout: T_MEDIUM }).toBe(2);
   });
 
   test("ENOENT spawn error shows SpawnErrorBanner with retry and trash", async () => {
@@ -330,7 +328,10 @@ test.describe.serial("Core: IPC Error Propagation", () => {
 
   test("ENOTDIR spawn error shows Change directory action", async () => {
     // AC 4: Terminal spawn ENOTDIR renders SpawnErrorBanner with "Change directory"
-    // Project is already open from previous test
+    // Project must be open from previous test — fail fast if not
+    await expect(ctx.window.locator(SEL.panel.gridPanel).first()).toBeVisible({
+      timeout: T_SHORT,
+    });
     await openTerminal(ctx.window);
 
     const gridPanel = ctx.window.locator(SEL.panel.gridPanel);

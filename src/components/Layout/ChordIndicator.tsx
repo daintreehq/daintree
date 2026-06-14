@@ -90,7 +90,7 @@ export function ChordIndicator() {
     >
       <div
         className={cn(
-          "rounded-[var(--radius-lg)] bg-daintree-sidebar/95 border border-[var(--border-overlay)] shadow-xl",
+          "rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
           "transition duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.96]"

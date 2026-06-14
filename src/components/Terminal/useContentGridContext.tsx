@@ -98,6 +98,66 @@ const GRID_CONTEXT_MENU_COMPONENTS: DockLaunchMenuComponents = {
   Separator: ContextMenuSeparator,
 };
 
+// Module-level so the try/catch stays outside useContentGridContext — a
+// statement-level try block inside the hook bails React Compiler memoization
+// for the whole hook. Store actions are read at call time (see issue #8593).
+export async function addTabForPanel(panel: PanelInstance): Promise<void> {
+  const {
+    getPanelGroup,
+    createTabGroup,
+    addPanelToGroup,
+    deleteTabGroup,
+    addPanel,
+    trashPanel,
+    setActiveTab,
+    setFocused,
+  } = panelStoreApi.getState();
+  let groupId: string | undefined;
+  let createdNewGroup = false;
+  let newPanelId: string | null = null;
+
+  try {
+    const existingGroup = getPanelGroup(panel.id);
+    if (existingGroup) {
+      groupId = existingGroup.id;
+    } else {
+      const location = panel.location === "dock" ? "dock" : "grid";
+      groupId = createTabGroup(location, panel.worktreeId, [panel.id], panel.id);
+      createdNewGroup = true;
+    }
+
+    const options = await buildPanelDuplicateOptions(panel, "grid");
+    newPanelId = await addPanel(options);
+    if (!newPanelId) {
+      if (createdNewGroup && groupId) deleteTabGroup(groupId);
+      return;
+    }
+
+    // A failed add (worktree mismatch, group vanished) would otherwise leave the
+    // freshly-created duplicate orphaned outside any group. Trash it first so no
+    // reconciler ever sees a panel pointing at a deleted/empty group (#6596),
+    // then tear down the group this call created. Skip activation/focus — the
+    // panel isn't a member, so setActiveTab would no-op and setFocused would
+    // focus an orphan.
+    if (!addPanelToGroup(groupId, newPanelId)) {
+      trashPanel(newPanelId);
+      if (createdNewGroup && groupId) deleteTabGroup(groupId);
+      return;
+    }
+    setActiveTab(groupId, newPanelId);
+    setFocused(newPanelId);
+  } catch (error) {
+    logError("Failed to add tab", error);
+    // Mirror the rejection path's cleanup: if a panel was created before the
+    // throw, trash it before tearing down a group this call created, so a
+    // mid-flight failure never leaves an orphaned panel behind (#10441).
+    if (newPanelId) trashPanel(newPanelId);
+    if (createdNewGroup && groupId) {
+      deleteTabGroup(groupId);
+    }
+  }
+}
+
 export function pixelSnapTransform({ x, y }: TransformProperties): string {
   const tx = typeof x === "number" ? x : parseFloat(x ?? "0") || 0;
   const ty = typeof y === "number" ? y : parseFloat(y ?? "0") || 0;
@@ -194,6 +254,17 @@ export function useContentGridContext({
   agentAvailability,
   emptyContent,
 }: ContentGridProps): ContentGridResult {
+  // Deliberately excluded from React Compiler memoization. This hook is built
+  // on the #8593 pattern — subscribe to narrow structural triggers, then read
+  // the full panel map via `panelStoreApi.getState()` at evaluation time. The
+  // compiler cannot see those untracked store reads, so compiling the hook
+  // caches derivations against stale state: in a compiled build, freshly
+  // spawned panels never appeared in the grid (verified against the core E2E
+  // suite). The statement-level try/catch hoist (addTabForPanel) stays — it
+  // keeps this opt-out the hook's only remaining compiler obstacle if the
+  // evaluation-time reads are ever migrated to tracked selectors.
+  "use no memo";
+
   "use memo";
   // Subscribe only to structural fields. `panelsById` itself is intentionally
   // excluded — `updateAgentState`/`updateActivity` spread it on every agent
@@ -343,11 +414,6 @@ export function useContentGridContext({
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
   const getPanelGroup = usePanelStore((state) => state.getPanelGroup);
-  const createTabGroup = usePanelStore((state) => state.createTabGroup);
-  const addPanelToGroup = usePanelStore((state) => state.addPanelToGroup);
-  const deleteTabGroup = usePanelStore((state) => state.deleteTabGroup);
-  const addPanel = usePanelStore((state) => state.addPanel);
-  const setActiveTab = usePanelStore((state) => state.setActiveTab);
 
   const tabGroups = useMemo(() => {
     // Structural-change triggers:
@@ -383,48 +449,7 @@ export function useContentGridContext({
     return filtered.length === 0 ? EMPTY_TAB_GROUPS : filtered;
   }, [getTabGroups, activeWorktreeId, gridPanelIds, storeTabGroups, trashedTerminals, closingIds]);
 
-  const handleAddTabForPanel = useCallback(
-    async (panel: PanelInstance) => {
-      let groupId: string;
-      let createdNewGroup = false;
-
-      try {
-        const existingGroup = getPanelGroup(panel.id);
-        if (existingGroup) {
-          groupId = existingGroup.id;
-        } else {
-          const location = panel.location === "dock" ? "dock" : "grid";
-          groupId = createTabGroup(location, panel.worktreeId, [panel.id], panel.id);
-          createdNewGroup = true;
-        }
-
-        const options = await buildPanelDuplicateOptions(panel, "grid");
-        const newPanelId = await addPanel(options);
-        if (!newPanelId) {
-          if (createdNewGroup && groupId!) deleteTabGroup(groupId);
-          return;
-        }
-
-        addPanelToGroup(groupId, newPanelId);
-        setActiveTab(groupId, newPanelId);
-        setFocused(newPanelId);
-      } catch (error) {
-        logError("Failed to add tab", error);
-        if (createdNewGroup && groupId!) {
-          deleteTabGroup(groupId);
-        }
-      }
-    },
-    [
-      getPanelGroup,
-      createTabGroup,
-      addPanelToGroup,
-      deleteTabGroup,
-      addPanel,
-      setActiveTab,
-      setFocused,
-    ]
-  );
+  const handleAddTabForPanel = useCallback((panel: PanelInstance) => addTabForPanel(panel), []);
 
   const layoutConfig = useLayoutConfigStore((state) => state.layoutConfig);
   const setGridDimensions = useLayoutConfigStore((state) => state.setGridDimensions);
@@ -909,10 +934,17 @@ export function useContentGridContext({
   ]);
 
   const allGroupsAreSinglePanel = tabGroups.every((g) => g.panelIds.length === 1);
+  // Virtual singletons use `id === panelId` (see getTabGroups in tabGroups.ts);
+  // explicit groups always use `tabgroup-${uuid}`. Requiring all groups to be
+  // virtual prevents split mode from activating during the transient window in
+  // addTabForPanel where an explicit singleton group exists before the new panel
+  // has been folded into it — which otherwise crashes the app (issue #10438).
+  const allGroupsAreVirtual = tabGroups.every((g) => g.id === (g.panelIds[0] ?? ""));
   const useTwoPaneSplitMode =
     twoPaneSplitEnabled &&
     tabGroups.length === 2 &&
     allGroupsAreSinglePanel &&
+    allGroupsAreVirtual &&
     !maximizedId &&
     !showPlaceholder;
 

@@ -47,6 +47,7 @@ export function AddPresetDialog({
             env: currentPreset.env ? { ...currentPreset.env } : {},
             args: currentPreset.args ? [...currentPreset.args] : undefined,
             dangerousEnabled: currentPreset.dangerousEnabled,
+            dangerousMode: currentPreset.dangerousMode,
             customFlags: currentPreset.customFlags,
             inlineMode: currentPreset.inlineMode,
             color: currentPreset.color,
@@ -64,6 +65,7 @@ export function AddPresetDialog({
             env: selectedTemplate.env ? { ...selectedTemplate.env } : {},
             args: selectedTemplate.args ? [...selectedTemplate.args] : undefined,
             dangerousEnabled: selectedTemplate.dangerousEnabled,
+            dangerousMode: selectedTemplate.dangerousMode,
             customFlags: selectedTemplate.customFlags,
             inlineMode: selectedTemplate.inlineMode,
           });
@@ -125,7 +127,7 @@ export function AddPresetDialog({
             <select
               value={selectedTemplateId}
               onChange={(e) => setSelectedTemplateId(e.target.value)}
-              className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
+              className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
               data-testid="template-select"
             >
               {templates.map((t) => (

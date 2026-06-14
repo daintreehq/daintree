@@ -10,6 +10,7 @@ interface MockWebContents {
   executeJavaScript: ReturnType<typeof vi.fn>;
   loadURL: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  invalidate: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   reload: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
@@ -36,6 +37,7 @@ function createMockWebContents(options?: { autoFinishLoad?: boolean }): MockWebC
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
+    invalidate: vi.fn(),
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
@@ -98,6 +100,8 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterWebContents: vi.fn(),
   registerProjectView: vi.fn(),
   unregisterProjectView: vi.fn(),
+  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -137,6 +141,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   INSTANCE_ROLE_ARG: "--daintree-instance-role",
   resolveInstanceRole: vi.fn(() => "attended"),
+  resolveE2EPreloadArgs: vi.fn(() => []),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
@@ -161,6 +166,8 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+
+const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function createMockWindow() {
   return {
@@ -253,6 +260,7 @@ describe("ProjectViewManager adversarial", () => {
 
     // Switch to C — evicts A (LRU, cache limit 2)
     await manager.switchTo("proj-c", "/c");
+    await flushImmediates();
 
     expect(initialWc.close).toHaveBeenCalledTimes(1);
     // executeJavaScript was already called during deactivation — not called again on eviction

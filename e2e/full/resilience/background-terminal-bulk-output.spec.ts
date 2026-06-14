@@ -115,7 +115,7 @@ test.describe
   });
 
   test("resize observed while BACKGROUND propagates to xterm on restore", async () => {
-    test.setTimeout(60_000);
+    test.setTimeout(6 * T_LONG);
     const { window } = ctx;
 
     // Ensure the shell is ready so xterm's cell metrics are populated; the
@@ -158,56 +158,71 @@ test.describe
     // repaints into the buffer.
     const restored = await applyTierAndReadDimensions(window, panelId, "FOCUSED");
     expect(restored.applied).toBe(true);
-    expect(restored.dims).toEqual(observed);
-    await window.waitForTimeout(T_SETTLE);
 
+    // The wake transition must leave xterm at a coherent geometry. On Linux
+    // CI, the real foreground ResizeObserver can supersede the deferred
+    // background size before the test bridge reads dimensions, so accept
+    // either the captured background size or a larger foreground remeasure.
+    expect(restored.dims).not.toBeNull();
+    expect(restored.dims!.cols).toBeGreaterThanOrEqual(observed!.cols);
+    expect(restored.dims!.rows).toBeGreaterThanOrEqual(observed!.rows);
     const afterRestore = await getTerminalDimensions(terminalPanel);
     expect(afterRestore).not.toBeNull();
-    expect(afterRestore!.cols).toBeGreaterThan(2);
-    expect(afterRestore!.rows).toBeGreaterThan(1);
+    expect(afterRestore!.cols).toBeGreaterThanOrEqual(observed!.cols);
+    expect(afterRestore!.rows).toBeGreaterThanOrEqual(observed!.rows);
+    await window.waitForTimeout(T_SETTLE);
   });
 
   test("bulk output during BACKGROUND survives restore without garbling", async () => {
-    test.setTimeout(60_000);
+    test.setTimeout(6 * T_LONG);
     const { window } = ctx;
 
     const panelId = await getPanelId(terminalPanel);
 
     // Bring back to FOCUSED for a clean starting point.
-    await applyTier(window, panelId, "FOCUSED");
+    expect(await applyTier(window, panelId, "FOCUSED")).toBe(true);
     await window.waitForTimeout(T_SETTLE);
 
+    const initial = await getTerminalDimensions(terminalPanel);
+    expect(initial).not.toBeNull();
+
     // Start a bounded stream so PTY output continues across the visibility
-    // cycle without leaving a runaway process behind.
+    // cycle without leaving a runaway process behind. Sleep between echoes so
+    // the loop stays mid-flight long enough to span the visibility cycle.
     await runTerminalCommand(
       window,
       terminalPanel,
-      "for i in $(seq 1 200); do echo BG_LINE_${i}; done; echo BG_DONE"
+      "for i in $(seq 1 200); do echo BG_LINE_${i}; sleep 0.02; done; echo BG_DONE"
     );
-    await waitForTerminalText(terminalPanel, "BG_LINE_1", T_LONG);
+    // Poll a mid-stream sentinel so we switch to BACKGROUND only once output is
+    // confirmed in-flight — independent of machine speed.
+    await waitForTerminalText(terminalPanel, "BG_LINE_50", T_LONG);
 
     // Switch to BACKGROUND tier while output is mid-flight.
-    await applyTier(window, panelId, "BACKGROUND");
-    await window.waitForTimeout(200);
+    expect(await applyTier(window, panelId, "BACKGROUND")).toBe(true);
 
     // Capture a slightly narrower geometry while the container is hidden.
-    const dims = await getTerminalDimensions(terminalPanel);
-    expect(dims).not.toBeNull();
-    const narrower = Math.max(200, Math.floor(dims!.cols * 8 * 0.7));
-    await simulateResize(window, panelId, narrower, 240);
+    const narrower = Math.max(200, Math.floor(initial!.cols * 8 * 0.7));
+    const resized = await simulateResize(window, panelId, narrower, 240);
+    expect(resized).not.toBeNull();
+    expect(resized!.cols).toBeLessThan(initial!.cols);
 
     // Restore visibility — the wake path runs applyDeferredResize before
     // refresh, so the final repaint targets the narrower grid.
-    await applyTier(window, panelId, "FOCUSED");
+    expect(await applyTier(window, panelId, "FOCUSED")).toBe(true);
     await window.waitForTimeout(T_SETTLE);
 
     // Output must finish and the DONE sentinel must be present in the buffer —
     // proves the visibility transition didn't drop or corrupt PTY data.
     await waitForTerminalText(terminalPanel, "BG_DONE", T_LONG);
 
+    // The narrower geometry captured during background must have reached xterm
+    // on the wake path — the final grid must match the resized cols, not the
+    // wider starting geometry.
+    await expect
+      .poll(async () => (await getTerminalDimensions(terminalPanel))?.cols, { timeout: T_LONG })
+      .toBe(resized!.cols);
     const finalDims = await getTerminalDimensions(terminalPanel);
-    expect(finalDims).not.toBeNull();
-    expect(finalDims!.cols).toBeGreaterThan(2);
-    expect(finalDims!.rows).toBeGreaterThan(1);
+    expect(finalDims!.cols).toBeLessThan(initial!.cols);
   });
 });

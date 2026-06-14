@@ -1,0 +1,279 @@
+import fs from "node:fs";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+
+const forgeClientMock = vi.hoisted(() => ({
+  openIssues: vi.fn(),
+  openPRs: vi.fn(),
+  openCommits: vi.fn(),
+  openIssue: vi.fn(),
+  openPR: vi.fn(),
+  getIssueUrl: vi.fn(),
+  assignIssue: vi.fn(),
+  unassignIssue: vi.fn(),
+  validateToken: vi.fn(),
+  getRepoStats: vi.fn(),
+  listIssues: vi.fn(),
+  listPRs: vi.fn(),
+  getIssue: vi.fn(),
+}));
+
+const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+
+vi.mock("@/clients", () => ({ forgeClient: forgeClientMock }));
+vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
+
+import { registerForgeActions } from "../forgeActions";
+
+function setupActions() {
+  const actions: ActionRegistry = new Map();
+  const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
+  registerForgeActions(actions, callbacks);
+  return (id: string) => {
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    return factory() as AnyActionDefinition;
+  };
+}
+
+async function runAction(
+  id: string,
+  args?: unknown,
+  ctx?: Record<string, unknown>
+): Promise<unknown> {
+  const def = setupActions()(id);
+  return def.run(args, (ctx ?? {}) as never);
+}
+
+function setCurrentProject(project: { path?: string } | null) {
+  projectStoreMock.getState.mockReturnValue({ currentProject: project });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  for (const fn of Object.values(forgeClientMock)) fn.mockResolvedValue(undefined);
+});
+
+describe("forge.* navigation adversarial", () => {
+  it("openIssues falls back to current project path when no arg is given", async () => {
+    setCurrentProject({ path: "/repo" });
+    const def = setupActions()("forge.openIssues");
+    await def.run({}, {} as never);
+    expect(forgeClientMock.openIssues).toHaveBeenCalledWith("/repo", undefined, undefined);
+  });
+
+  it("openIssues throws loudly when neither arg nor current project has a path", async () => {
+    setCurrentProject(null);
+    const def = setupActions()("forge.openIssues");
+    await expect(def.run({}, {} as never)).rejects.toThrow(/No project path/);
+    expect(forgeClientMock.openIssues).not.toHaveBeenCalled();
+  });
+
+  it("openPRs also throws loudly without a path", async () => {
+    setCurrentProject(null);
+    const def = setupActions()("forge.openPRs");
+    await expect(def.run({}, {} as never)).rejects.toThrow(/No project path/);
+  });
+
+  it("openCommits also throws loudly without a path", async () => {
+    setCurrentProject(null);
+    const def = setupActions()("forge.openCommits");
+    await expect(def.run({}, {} as never)).rejects.toThrow(/No project path/);
+  });
+
+  it("openIssues: explicit projectPath takes precedence over current project", async () => {
+    setCurrentProject({ path: "/stale" });
+    const def = setupActions()("forge.openIssues");
+    await def.run({ projectPath: "/explicit", query: "bug", state: "open" }, {} as never);
+    expect(forgeClientMock.openIssues).toHaveBeenCalledWith("/explicit", "bug", "open");
+  });
+
+  it("openIssues schema accepts arbitrary state strings (runtime gap vs list schema)", async () => {
+    // ForgeListOptionsSchema restricts state to an enum, but openIssues uses
+    // z.string().optional() — mismatch. Documenting the gap.
+    setCurrentProject({ path: "/repo" });
+    const def = setupActions()("forge.openIssues");
+    await def.run({ state: "wat" }, {} as never);
+    expect(forgeClientMock.openIssues).toHaveBeenCalledWith("/repo", undefined, "wat");
+  });
+
+  it("openIssue forwards cwd + issueNumber positionally", async () => {
+    const def = setupActions()("forge.openIssue");
+    await def.run({ cwd: "/repo", issueNumber: 42 }, {} as never);
+    expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 42);
+  });
+
+  it("openIssue falls back to ctx.activeWorktreePath", async () => {
+    await runAction("forge.openIssue", { issueNumber: 7 }, { activeWorktreePath: "/repo" });
+    expect(forgeClientMock.openIssue).toHaveBeenCalledWith("/repo", 7);
+  });
+
+  it("openPR forwards cwd + prNumber positionally", async () => {
+    const def = setupActions()("forge.openPR");
+    await def.run({ cwd: "/repo", prNumber: 12 }, {} as never);
+    expect(forgeClientMock.openPR).toHaveBeenCalledWith("/repo", 12);
+  });
+
+  it("openPR falls back to ctx.activeWorktreePath", async () => {
+    await runAction("forge.openPR", { prNumber: 3 }, { activeWorktreePath: "/repo" });
+    expect(forgeClientMock.openPR).toHaveBeenCalledWith("/repo", 3);
+  });
+
+  it("openPR throws when no cwd and no ctx.activeWorktreePath", async () => {
+    await expect(runAction("forge.openPR", { prNumber: 3 })).rejects.toThrow("No active worktree");
+    expect(forgeClientMock.openPR).not.toHaveBeenCalled();
+  });
+
+  it("validateToken forwards providerId + token positionally (including whitespace)", async () => {
+    const def = setupActions()("forge.validateToken");
+    await def.run({ providerId: "daintree.github.github", token: "  ghp_123  " }, {} as never);
+    expect(forgeClientMock.validateToken).toHaveBeenCalledWith(
+      "daintree.github.github",
+      "  ghp_123  "
+    );
+  });
+
+  it("assignIssue forwards cwd, issueNumber, and username positionally", async () => {
+    const def = setupActions()("forge.assignIssue");
+    await def.run({ cwd: "/repo", issueNumber: 42, username: "bob" }, {} as never);
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 42, "bob");
+  });
+
+  it("assignIssue falls back to ctx.activeWorktreePath when cwd omitted", async () => {
+    await runAction(
+      "forge.assignIssue",
+      { issueNumber: 7, username: "alice" },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 7, "alice");
+  });
+
+  it("assignIssue throws when no cwd and no ctx.activeWorktreePath", async () => {
+    await expect(
+      runAction("forge.assignIssue", { issueNumber: 7, username: "bob" })
+    ).rejects.toThrow("No active worktree");
+  });
+});
+
+describe("forge.* query adversarial", () => {
+  it("listIssues forwards cwd positionally and the filters as options", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    const def = setupActions()("forge.listIssues");
+    await def.run({ cwd: "/repo", search: "q", state: "open", cursor: "c1" }, {} as never);
+    expect(forgeClientMock.listIssues).toHaveBeenCalledWith("/repo", {
+      search: "q",
+      state: "open",
+      cursor: "c1",
+    });
+  });
+
+  it("listIssues falls back to ctx.activeWorktreePath when cwd omitted", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" });
+    expect(forgeClientMock.listIssues).toHaveBeenCalledWith("/repo", expect.any(Object));
+  });
+
+  it("listIssues throws when no cwd and no ctx.activeWorktreePath", async () => {
+    await expect(runAction("forge.listIssues", {})).rejects.toThrow("No active worktree");
+  });
+
+  it("listIssues prefers explicit cwd over ctx", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", { cwd: "/explicit" }, { activeWorktreePath: "/ctx" });
+    expect(forgeClientMock.listIssues).toHaveBeenCalledWith("/explicit", expect.any(Object));
+  });
+
+  it("listPRs preserves all filter fields when falling back to ctx", async () => {
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction(
+      "forge.listPRs",
+      { search: "q", state: "all", cursor: "c1" },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(forgeClientMock.listPRs).toHaveBeenCalledWith("/repo", {
+      search: "q",
+      state: "all",
+      cursor: "c1",
+    });
+  });
+
+  it("getRepoStats forwards cwd + bypassCache", async () => {
+    const def = setupActions()("forge.getRepoStats");
+    await def.run({ cwd: "/repo", bypassCache: true }, {} as never);
+    expect(forgeClientMock.getRepoStats).toHaveBeenCalledWith("/repo", true);
+  });
+
+  it("getRepoStats falls back to ctx.activeWorktreePath", async () => {
+    await runAction("forge.getRepoStats", {}, { activeWorktreePath: "/repo" });
+    expect(forgeClientMock.getRepoStats).toHaveBeenCalledWith("/repo", undefined);
+  });
+
+  it("getIssue forwards cwd + issueNumber and returns null when issue is missing", async () => {
+    forgeClientMock.getIssue.mockResolvedValue(null);
+    const def = setupActions()("forge.getIssue");
+    const result = await def.run({ cwd: "/repo", issueNumber: 42 }, {} as never);
+    expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 42);
+    expect(result).toBeNull();
+  });
+
+  it("getIssue falls back to ctx.activeWorktreePath", async () => {
+    forgeClientMock.getIssue.mockResolvedValue(null);
+    await runAction("forge.getIssue", { issueNumber: 5 }, { activeWorktreePath: "/repo" });
+    expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 5);
+  });
+});
+
+describe("githubClient import boundary", () => {
+  const rootDir = path.resolve(import.meta.dirname, "../../../../..");
+
+  function collectSrcFiles(dir: string): string[] {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const files: string[] = [];
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "__tests__") continue;
+        files.push(...collectSrcFiles(full));
+      } else if (/\.(ts|tsx)$/.test(entry.name) && !entry.name.includes(".test.")) {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+
+  const importPattern =
+    /import\s+(?:type\s+)?\{[^}]*\bgithubClient\b[^}]*\}\s+from\s+['"]([^'"]+)['"]/;
+
+  function extractImportPath(importSource: string): string | null {
+    if (importSource === "@/clients" || importSource === "@/clients/githubClient") {
+      return importSource;
+    }
+    return null;
+  }
+
+  // The legacy GitHub client is retired from host code — every host consumer
+  // now routes through forgeClient. Only the GitHub plugin's renderer may
+  // still import it (plugin-internal usage of its own provider's surface).
+  it("no production file under src/ imports githubClient", () => {
+    const srcDir = path.join(rootDir, "src");
+    const allFiles = collectSrcFiles(srcDir);
+    const violations: string[] = [];
+
+    for (const filePath of allFiles) {
+      const relPath = path.relative(rootDir, filePath).replace(/\\/g, "/");
+      if (relPath.startsWith("src/clients/")) continue;
+
+      const content = fs.readFileSync(filePath, "utf-8");
+      for (const line of content.split("\n")) {
+        const m = line.match(importPattern);
+        const importSource = m?.[1];
+        if (importSource && extractImportPath(importSource)) {
+          violations.push(`${relPath}: imports githubClient from "${importSource}"`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+});

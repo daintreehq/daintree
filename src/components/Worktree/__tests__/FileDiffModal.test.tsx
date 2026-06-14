@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { GitStatus } from "@shared/types";
-import { FileDiffModal } from "../FileDiffModal";
+import { FileDiffModal, _resetDiffCacheForTests } from "../FileDiffModal";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 // Capture the `diff` prop the lazy FileViewerModal receives so we can assert
 // what `fetchDiff` resolves to for each dispatch outcome.
@@ -54,6 +55,7 @@ const baseProps = {
 
 describe("FileDiffModal", () => {
   beforeEach(() => {
+    _resetDiffCacheForTests();
     mockDispatch.mockReset();
     capturedProps.diff = undefined;
     capturedProps.restoreFocusTo = undefined;
@@ -70,7 +72,7 @@ describe("FileDiffModal", () => {
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "git.getFileDiff",
-      { cwd: "/repo", filePath: "src/index.ts", status: "modified" },
+      { cwd: "/repo", filePath: "src/index.ts", status: "modified", ignoreWhitespace: false },
       { source: "user" }
     );
   });
@@ -122,5 +124,34 @@ describe("FileDiffModal", () => {
     expect(capturedProps.currentFileIndex).toBe(2);
     expect(capturedProps.totalFileCount).toBe(5);
     expect(capturedProps.onNavigateFile).toBe(onNavigateFile);
+  });
+
+  it("purges stale cache entries when the ignore-whitespace preference toggles", async () => {
+    mockDispatch.mockResolvedValue({ ok: true, result: { content: "diff text" } });
+    render(<FileDiffModal {...baseProps} />);
+    await waitFor(() => {
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      usePreferencesStore.getState().setDiffIgnoreWhitespace(true);
+    });
+    await waitFor(() => {
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    // Toggling back must hit git again: the entry built without the flag was
+    // purged on the first toggle, not kept warm in the cache.
+    act(() => {
+      usePreferencesStore.getState().setDiffIgnoreWhitespace(false);
+    });
+    await waitFor(() => {
+      expect(mockDispatch).toHaveBeenCalledTimes(3);
+    });
+    expect(mockDispatch).toHaveBeenLastCalledWith(
+      "git.getFileDiff",
+      { cwd: "/repo", filePath: "src/index.ts", status: "modified", ignoreWhitespace: false },
+      { source: "user" }
+    );
   });
 });

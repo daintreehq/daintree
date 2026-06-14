@@ -237,7 +237,7 @@ describe("deriveBand", () => {
   });
 
   it("returns external-effect for safe + open-world category", () => {
-    expect(deriveBand({ danger: "safe", category: "github" })).toBe("external-effect");
+    expect(deriveBand({ danger: "safe", category: "forge" })).toBe("external-effect");
   });
 
   it("returns destructive-local for confirm + non-open-world category", () => {
@@ -262,7 +262,7 @@ describe("deriveBand", () => {
   });
 
   it("returns external-effect for restricted + open-world category", () => {
-    expect(deriveBand({ danger: "restricted", category: "github" })).toBe("external-effect");
+    expect(deriveBand({ danger: "restricted", category: "forge" })).toBe("external-effect");
   });
 });
 

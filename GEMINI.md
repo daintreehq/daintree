@@ -1,6 +1,6 @@
 # Daintree
 
-**Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Orchestrates AI-assisted development: spawn agents, inject codebase context, monitor worktrees. **Stack:** Electron 33, React 19, Vite 6, TypeScript, Tailwind CSS v4, Zustand, node-pty, simple-git.
+**Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Orchestrates AI-assisted development: spawn agents, inject codebase context, monitor worktrees. **Stack:** Electron 42, React 19, Vite 8, TypeScript 6, Tailwind CSS v4, Zustand 5, node-pty, simple-git, @xterm/xterm 6.1 beta.
 
 ## Critical Rules
 
@@ -22,8 +22,9 @@ npm run rebuild      # Rebuild node-pty
 
 ## Architecture
 
-- **Main (`electron/`):** Node.js. Handles node-pty, git, services, IPC.
-- **Renderer (`src/`):** React 19. Communicates via `window.electron`.
+- **Main (`electron/`):** Electron main process. Handles windows, service registration, IPC, native OS access, and UtilityProcess lifecycle.
+- **Utility hosts:** `electron/pty-host.ts` owns node-pty; `electron/workspace-host.ts` owns git/worktree monitoring; `electron/watchdog-host.ts` watches main-process liveness.
+- **Renderer (`src/`):** React 19. Communicates via `window.electron` and direct MessagePorts brokered by main.
 - **Shared (`shared/`):** Types and config shared between processes.
 
 ### Actions System
@@ -33,15 +34,16 @@ Central orchestration layer for all UI operations. Provides unified API for menu
 - `ActionService` (`src/services/ActionService.ts`) - Registry and dispatcher
 - `dispatch(actionId, args?)` - Execute any action
 - `list()` / `get(id)` - Introspect actions (MCP-compatible manifest)
-- Action definitions in `src/services/actions/definitions/` (17 domain files)
+- Action definitions in `src/services/actions/definitions/`, registered through `src/services/actions/actionDefinitions.ts`
 - Types in `shared/types/actions.ts`
 
 ### Panel Architecture
 
 Panels are visual units in the grid/dock. Uses discriminated unions:
 
-- `PanelInstance = PtyPanelData | BrowserPanelData`
-- Kinds: `"terminal"` | `"agent"` | `"browser"`
+- `PanelInstance = PtyPanelData | BrowserPanelData | DevPreviewPanelData | ReviewPanelData`
+- Built-in kinds: `"terminal"` | `"browser"` | `"dev-preview"` | `"review"`
+- Agent identity is runtime state inside a PTY-backed terminal, not a separate panel kind.
 - `panelKindHasPty(kind)` - Check if panel needs PTY
 - Registry: `shared/config/panelKindRegistry.ts`
 
@@ -52,14 +54,15 @@ Namespaced API exposed via `electron/preload.cts`:
 - `worktree`: getAll, refresh, setActive, create, delete, onUpdate
 - `terminal`: spawn, write, resize, kill, trash, restore, onData, onExit
 - `app`: getState, setState, hydrate, onMenuAction
-- `copyTree`: generate, injectToTerminal, onProgress
+- `forge`: provider-routed issue/PR/CI operations
 - `system`: openExternal, openPath, checkCommand
 - `project`: getAll, getCurrent, add, switch, onSwitch
+- `mcpServer`, `plugin`, `appAgent`, `agentCapabilities`: agent and extension control surfaces
 - `events`: emit (action tracking)
 
 ## Key Features
 
-- **Panels:** `PtyManager` (Main) + xterm.js (Renderer). Supports terminal, agent, and browser panels.
+- **Panels:** PTY host + xterm.js power terminal panels; browser, dev-preview, and review panels are non-PTY panel kinds.
 - **Worktrees:** `WorkspaceService` polls git status, tracks file changes.
 - **Agent State:** `AgentStateMachine` detects idle/working/waiting/completed from output.
 - **Context Injection:** `CopyTreeService` generates context, pastes into terminal.
@@ -80,7 +83,9 @@ electron/
 shared/
 ├── types/
 │   ├── actions.ts       # Action system types
-│   ├── domain.ts        # Panel, Worktree types
+│   ├── panel.ts         # Panel types
+│   ├── project.ts       # Project types
+│   ├── worktree.ts      # Worktree types
 │   └── keymap.ts        # Keybinding types
 └── config/
     ├── panelKindRegistry.ts  # Panel configuration
@@ -110,5 +115,5 @@ src/
 
 **Adding action:**
 
-1. Add ID to `shared/types/actions.ts`
+1. Add ID to `shared/config/actionIds.ts`
 2. Create definition in `src/services/actions/definitions/`

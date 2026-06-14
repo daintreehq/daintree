@@ -1,6 +1,7 @@
 import { events } from "./events.js";
 import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
-import { store } from "../store.js";
+import { store, type StoreSchema } from "../store.js";
+import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -29,6 +30,8 @@ const SPAWN_GRACE_PERIOD_MS = 5_000;
  * which would otherwise produce unwanted notification sounds.
  */
 const BOOT_GRACE_PERIOD_MS = 8_000;
+
+type TerminalSnapshot = StoreSchema["appState"]["terminals"];
 
 interface PendingNotification {
   title: string;
@@ -106,13 +109,9 @@ class AgentNotificationService {
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
-      if (
-        store.get("notificationSettings").uiFeedbackSoundEnabled &&
-        !this.isWithinBootGrace() &&
-        !this.isSessionMuted()
-      ) {
-        const quietSettings = projectStore.getEffectiveNotificationSettings();
-        if (!isScheduledQuietNow(quietSettings)) {
+      const settings = projectStore.getEffectiveNotificationSettings();
+      if (settings.uiFeedbackSoundEnabled && !this.isWithinBootGrace() && !this.isSessionMuted()) {
+        if (!isScheduledQuietNow(settings)) {
           soundService.play("agent-spawned");
         }
       }
@@ -171,9 +170,11 @@ class AgentNotificationService {
    * gesture; that is acceptable because the fallback (undefined) simply means
    * notifications aren't suppressed, not that they fire wrongly.
    */
-  private resolveWorktreeIdForTerminal(terminalId?: string): string | undefined {
+  private resolveWorktreeIdForTerminal(
+    terminals: TerminalSnapshot,
+    terminalId?: string
+  ): string | undefined {
     if (!terminalId) return undefined;
-    const terminals = store.get("appState").terminals;
     const entry = terminals.find((t) => t.id === terminalId);
     return entry?.worktreeId;
   }
@@ -188,11 +189,15 @@ class AgentNotificationService {
     waitingReason?: string;
   }): void {
     const { state, previousState, terminalId, agentId } = payload;
+    // Snapshot store-backed state once — each store.get() re-reads the full
+    // store file from disk, so the helpers below take these as parameters.
+    const terminals = store.get("appState").terminals;
+    const settings = projectStore.getEffectiveNotificationSettings();
     // Backend no longer emits worktreeId on agent events (#5139). Resolve it
     // from persisted renderer state so focus suppression, dedup keying, and
     // notification context still work correctly.
-    const worktreeId = payload.worktreeId ?? this.resolveWorktreeIdForTerminal(terminalId);
-    const settings = projectStore.getEffectiveNotificationSettings();
+    const worktreeId =
+      payload.worktreeId ?? this.resolveWorktreeIdForTerminal(terminals, terminalId);
 
     // Clear spawn grace tracking once the agent starts doing real work
     // (waiting→working means the user gave input, so future waiting sounds are legitimate)
@@ -202,7 +207,7 @@ class AgentNotificationService {
     }
 
     // All-clear tracking runs regardless of notification settings
-    this.checkAllClear(state, previousState);
+    this.checkAllClear(state, previousState, terminals);
 
     if (state === previousState) return;
 
@@ -270,12 +275,12 @@ class AgentNotificationService {
     // Suppress during spawn grace period — agents that initialize directly into waiting
     // should not trigger escalation sounds.
     if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
-      this.scheduleWaitingEscalation(terminalId, worktreeId, agentId);
+      this.scheduleWaitingEscalation(terminalId, settings, terminals, worktreeId, agentId);
     }
 
     // Schedule working pulse for watched/docked agents entering working state
     if (state === "working" && previousState !== "working" && terminalId) {
-      this.scheduleWorkingPulse(terminalId, worktreeId, agentId);
+      this.scheduleWorkingPulse(terminalId, settings, terminals);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -310,21 +315,18 @@ class AgentNotificationService {
     }
   }
 
-  private countActiveAgents(): number {
-    const terminals = store.get("appState").terminals;
-    return terminals.filter(
-      (t: { agentState?: string }) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
-    ).length;
+  private countActiveAgents(terminals: TerminalSnapshot): number {
+    return terminals.filter((t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)).length;
   }
 
-  private checkAllClear(state: string, previousState: string): void {
+  private checkAllClear(state: string, previousState: string, terminals: TerminalSnapshot): void {
     const wasActive = ACTIVE_AGENT_STATES.has(previousState);
     const isActive = ACTIVE_AGENT_STATES.has(state);
 
     // Track when agents start working
     if (!wasActive && isActive) {
       this.hasEverGoneWorking = true;
-      const activeCount = this.countActiveAgents();
+      const activeCount = this.countActiveAgents(terminals);
       this.peakConcurrentWorking = Math.max(this.peakConcurrentWorking, activeCount);
 
       // Cancel any pending all-clear — a new agent just started
@@ -338,7 +340,7 @@ class AgentNotificationService {
     // Only consider transitions OUT of active states
     if (!wasActive || isActive) return;
 
-    const activeCount = this.countActiveAgents();
+    const activeCount = this.countActiveAgents(terminals);
 
     // All conditions must hold to schedule the all-clear
     if (!this.hasEverGoneWorking || this.peakConcurrentWorking < 2 || activeCount > 0) return;
@@ -352,7 +354,7 @@ class AgentNotificationService {
       this.allClearTimer = null;
 
       // Re-check after debounce — an agent may have started during the window
-      const currentActive = this.countActiveAgents();
+      const currentActive = this.countActiveAgents(store.get("appState").terminals);
       if (currentActive > 0) return;
 
       // Fire the all-clear
@@ -472,6 +474,8 @@ class AgentNotificationService {
 
   private scheduleWaitingEscalation(
     terminalId: string,
+    settings: NotificationSettings,
+    terminals: TerminalSnapshot,
     worktreeId?: string,
     agentId?: string
   ): void {
@@ -479,11 +483,9 @@ class AgentNotificationService {
       clearTimeout(this.waitingEscalationTimers.get(terminalId)!);
     }
 
-    const settings = projectStore.getEffectiveNotificationSettings();
     if (!settings.waitingEscalationEnabled || !settings.waitingEnabled) return;
 
     // Only escalate for docked terminals
-    const terminals = store.get("appState").terminals;
     const terminal = terminals.find((t) => t.id === terminalId);
     if (!terminal || terminal.location !== "dock") return;
 
@@ -544,16 +546,18 @@ class AgentNotificationService {
     this.clearWorkingPulse(terminalId);
   }
 
-  private scheduleWorkingPulse(terminalId: string, _worktreeId?: string, _agentId?: string): void {
+  private scheduleWorkingPulse(
+    terminalId: string,
+    settings: NotificationSettings,
+    terminals: TerminalSnapshot
+  ): void {
     this.clearWorkingPulse(terminalId);
 
-    const settings = projectStore.getEffectiveNotificationSettings();
     if (!settings.workingPulseEnabled || !settings.soundEnabled) return;
 
     // Eligibility: watched OR (docked + escalation enabled)
     const isWatched = this.watchedTerminals.has(terminalId);
     if (!isWatched) {
-      const terminals = store.get("appState").terminals;
       const terminal = terminals.find((t) => t.id === terminalId);
       if (!terminal || terminal.location !== "dock" || !settings.waitingEscalationEnabled) return;
     }

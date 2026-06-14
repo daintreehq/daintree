@@ -15,9 +15,10 @@ import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
-import type { GitHubIssue, GitHubPR, GitHubLabel } from "@shared/types/github";
+import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getPRCIStatusVisual, getPRCIStatusTooltip } from "../utils/prCIStatus";
+import { toGitHubCIStatus } from "../utils/forgeRowAdapters";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -29,9 +30,9 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 interface GitHubListItemProps {
-  item: GitHubIssue | GitHubPR;
+  item: Issue | PR;
   type: "issue" | "pr";
-  onCreateWorktree?: (item: GitHubIssue | GitHubPR) => void;
+  onCreateWorktree?: (item: Issue | PR) => void;
   onSwitchToWorktree?: (worktreeId: string) => void;
   optionId?: string;
   isActive?: boolean;
@@ -42,22 +43,21 @@ interface GitHubListItemProps {
 
 function getStateIcon(state: string, type: "issue" | "pr") {
   if (type === "issue") {
-    return state === "OPEN" ? CircleDot : CheckCircle2;
+    return state === "open" ? CircleDot : CheckCircle2;
   }
-  if (state === "MERGED") return GitMerge;
-  if (state === "OPEN") return GitPullRequest;
+  if (state === "merged") return GitMerge;
+  if (state === "open") return GitPullRequest;
   return GitPullRequestClosed;
 }
 
 function getStateColor(state: string, isDraft?: boolean): string {
   if (isDraft) return "text-pr-draft";
-  if (state === "OPEN") return "text-pr-open";
-  if (state === "MERGED") return "text-pr-merged";
-  if (state === "CLOSED") return "text-pr-closed";
-  return "text-muted-foreground";
+  if (state === "open") return "text-pr-open";
+  if (state === "merged") return "text-pr-merged";
+  return "text-pr-closed";
 }
 
-function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
+function isPR(item: Issue | PR): item is PR {
   return "isDraft" in item;
 }
 
@@ -116,7 +116,7 @@ export function GitHubListItem({
     }
   };
 
-  const issueLabels: GitHubLabel[] = !isItemPR && "labels" in item ? (item.labels ?? []) : [];
+  const issueLabels: ForgeLabel[] = !isItemPR && "labels" in item ? (item.labels ?? []) : [];
 
   return (
     <div
@@ -190,11 +190,11 @@ export function GitHubListItem({
             </button>
 
             {isItemPR &&
-              item.state === "OPEN" &&
+              item.state === "open" &&
               item.ciStatus &&
               (() => {
-                const ciVisual = getPRCIStatusVisual(item.ciStatus);
-                const ciTooltip = getPRCIStatusTooltip(item.ciStatus, item.ciSummary);
+                const ciVisual = getPRCIStatusVisual(toGitHubCIStatus(item.ciStatus));
+                const ciTooltip = getPRCIStatusTooltip(toGitHubCIStatus(item.ciStatus));
                 if (!ciVisual || !ciTooltip) return null;
                 return (
                   <Tooltip>
@@ -236,14 +236,14 @@ export function GitHubListItem({
 
           {/* Metadata row: author, time, branch/labels, worktree, menu */}
           <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground flex-nowrap overflow-hidden">
-            <span className="shrink-0">{item.author.login}</span>
+            <span className="shrink-0">{item.author?.login ?? "unknown"}</span>
             <span className="shrink-0">&middot;</span>
             <span className="whitespace-nowrap shrink-0">{formatTimeAgo(item.updatedAt)}</span>
 
-            {isItemPR && (item as GitHubPR).headRefName && (
+            {isItemPR && item.headRef && (
               <>
                 <span className="shrink-0">&middot;</span>
-                <span className="truncate max-w-[120px]">{(item as GitHubPR).headRefName}</span>
+                <span className="truncate max-w-[120px]">{item.headRef}</span>
               </>
             )}
 
@@ -253,10 +253,12 @@ export function GitHubListItem({
                 <span className="inline-flex items-center gap-1 min-w-0 shrink max-w-[180px]">
                   {issueLabels.slice(0, 2).map((label) => (
                     <span key={label.name} className="inline-flex items-center gap-1 min-w-0">
-                      <span
-                        className="w-2 h-2 rounded-full shrink-0"
-                        style={{ backgroundColor: `#${label.color}` }}
-                      />
+                      {label.color ? (
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: `#${label.color}` }}
+                        />
+                      ) : null}
                       <span className="truncate min-w-0 max-w-[80px]">{label.name}</span>
                     </span>
                   ))}
@@ -304,7 +306,7 @@ export function GitHubListItem({
 
             {!isItemPR && item.assignees.length > 0 && (
               <Avatar
-                src={item.assignees[0]!.avatarUrl}
+                src={item.assignees[0]!.avatarUrl ?? ""}
                 alt={item.assignees[0]!.login}
                 title={`Assigned to ${item.assignees[0]!.login}`}
                 className="w-4 h-4 shrink-0"
@@ -344,7 +346,7 @@ export function GitHubListItem({
                       : "Has worktree"}
                 </TooltipContent>
               </Tooltip>
-            ) : item.state === "OPEN" && onCreateWorktree ? (
+            ) : item.state === "open" && onCreateWorktree ? (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -395,7 +397,7 @@ export function GitHubListItem({
                   </>
                 )}
 
-                {!hasWorktree && onCreateWorktree && item.state === "OPEN" && (
+                {!hasWorktree && onCreateWorktree && item.state === "open" && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { Issue, PR } from "@shared/types/forge";
 import { actionService } from "@/services/ActionService";
 
 vi.mock("react-dom", async () => {
@@ -40,26 +40,37 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-const baseIssue: GitHubIssue = {
+const baseIssue: Issue = {
   number: 42,
   title: "Fix the thing",
+  body: "",
   url: "https://github.com/test/repo/issues/42",
-  state: "OPEN",
-  updatedAt: "2026-01-01",
-  author: { login: "testuser", avatarUrl: "" },
+  state: "open",
+  rawState: "OPEN",
+  updatedAt: 1001,
+  createdAt: 1000,
+  author: { login: "testuser", avatarUrl: "", rawData: null },
   assignees: [],
+  labels: [],
   commentCount: 3,
+  rawData: null,
 };
 
-const basePR: GitHubPR = {
+const basePR: PR = {
   number: 99,
   title: "Add new feature",
+  body: "",
   url: "https://github.com/test/repo/pull/99",
-  state: "OPEN",
+  state: "open",
+  rawState: "OPEN",
   isDraft: false,
-  updatedAt: "2026-01-02",
-  author: { login: "prauthor", avatarUrl: "" },
-  headRefName: "feature/new-thing",
+  merged: false,
+  updatedAt: 1002,
+  createdAt: 1000,
+  author: { login: "prauthor", avatarUrl: "", rawData: null },
+  baseRef: "main",
+  headRef: "feature/new-thing",
+  rawData: null,
 };
 
 beforeEach(() => {
@@ -101,9 +112,9 @@ describe("GitHubListItem", () => {
   });
 
   it("clicking linked PR dispatches system.openExternal with PR URL", () => {
-    const issueWithPR: GitHubIssue = {
+    const issueWithPR: Issue = {
       ...baseIssue,
-      linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
+      linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
     fireEvent.click(screen.getByRole("button", { name: "Linked PR #55" }));
@@ -117,7 +128,7 @@ describe("GitHubListItem", () => {
   it("renders author and time in metadata row", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
     expect(screen.getByText("testuser")).toBeTruthy();
-    expect(screen.getByText("time:2026-01-01")).toBeTruthy();
+    expect(screen.getByText("time:1001")).toBeTruthy();
   });
 
   it("renders branch name for PRs", () => {
@@ -126,7 +137,7 @@ describe("GitHubListItem", () => {
   });
 
   it("renders labels for issues", () => {
-    const issueWithLabels: GitHubIssue = {
+    const issueWithLabels: Issue = {
       ...baseIssue,
       labels: [
         { name: "bug", color: "d73a4a" },
@@ -215,7 +226,7 @@ describe("GitHubListItem", () => {
   });
 
   it("renders CI status check icon for successful PRs", () => {
-    const prWithCI: GitHubPR = { ...basePR, ciStatus: "SUCCESS" };
+    const prWithCI: PR = { ...basePR, ciStatus: "success" };
     render(<GitHubListItem item={prWithCI} type="pr" />);
     const indicator = screen.getByLabelText("All checks passed");
     expect(indicator.querySelector("svg")).not.toBeNull();
@@ -224,7 +235,7 @@ describe("GitHubListItem", () => {
   });
 
   it("renders CI status X icon for failing PRs", () => {
-    const prWithCI: GitHubPR = { ...basePR, ciStatus: "FAILURE" };
+    const prWithCI: PR = { ...basePR, ciStatus: "failure" };
     render(<GitHubListItem item={prWithCI} type="pr" />);
     const indicator = screen.getByLabelText("Checks failing");
     expect(indicator.querySelector("svg")).not.toBeNull();
@@ -232,34 +243,34 @@ describe("GitHubListItem", () => {
     expect(indicator.querySelector(".rounded-full")).toBeNull();
   });
 
-  it("renders CI status X icon for error PRs", () => {
-    const prWithCI: GitHubPR = { ...basePR, ciStatus: "ERROR" };
+  it("renders no CI indicator for a neutral roll-up", () => {
+    const prWithCI: PR = { ...basePR, ciStatus: "neutral" };
     render(<GitHubListItem item={prWithCI} type="pr" />);
-    const indicator = screen.getByLabelText("Checks failing");
-    expect(indicator.querySelector("svg")).not.toBeNull();
-    expect(indicator.querySelector(".text-status-error")).not.toBeNull();
+    expect(screen.queryByLabelText("All checks passed")).toBeNull();
+    expect(screen.queryByLabelText("Checks failing")).toBeNull();
+    expect(screen.queryByLabelText("Checks pending")).toBeNull();
   });
 
   it("renders CI status dot for pending PRs", () => {
-    const prWithCI: GitHubPR = { ...basePR, ciStatus: "PENDING" };
+    const prWithCI: PR = { ...basePR, ciStatus: "pending" };
     render(<GitHubListItem item={prWithCI} type="pr" />);
     const indicator = screen.getByLabelText("Checks pending");
     expect(indicator.querySelector("svg")).toBeNull();
     expect(indicator.querySelector(".bg-status-warning")).not.toBeNull();
   });
 
-  it("renders CI status dot for expected PRs", () => {
-    const prWithCI: GitHubPR = { ...basePR, ciStatus: "EXPECTED" };
+  it("renders no CI indicator for an unknown roll-up", () => {
+    const prWithCI: PR = { ...basePR, ciStatus: "unknown" };
     render(<GitHubListItem item={prWithCI} type="pr" />);
-    const indicator = screen.getByLabelText("Checks pending");
-    expect(indicator.querySelector("svg")).toBeNull();
-    expect(indicator.querySelector(".bg-status-warning")).not.toBeNull();
+    expect(screen.queryByLabelText("All checks passed")).toBeNull();
+    expect(screen.queryByLabelText("Checks failing")).toBeNull();
+    expect(screen.queryByLabelText("Checks pending")).toBeNull();
   });
 
   it("renders linked PR icon button for issues", () => {
-    const issueWithPR: GitHubIssue = {
+    const issueWithPR: Issue = {
       ...baseIssue,
-      linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
+      linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
     const prButton = screen.getByRole("button", { name: "Linked PR #55" });
@@ -268,14 +279,14 @@ describe("GitHubListItem", () => {
   });
 
   it("renders labels and linked PR together without conflict", () => {
-    const issueWithBoth: GitHubIssue = {
+    const issueWithBoth: Issue = {
       ...baseIssue,
       labels: [
         { name: "bug", color: "d73a4a" },
         { name: "high-priority", color: "e11d48" },
       ],
-      linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
-      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png" }],
+      linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
+      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png", rawData: null }],
     };
     render(<GitHubListItem item={issueWithBoth} type="issue" />);
     expect(screen.getByText("bug")).toBeTruthy();
@@ -382,9 +393,9 @@ describe("GitHubListItem", () => {
   });
 
   it("renders assignee avatar for issues with assignees", () => {
-    const issueWithAssignee: GitHubIssue = {
+    const issueWithAssignee: Issue = {
       ...baseIssue,
-      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png" }],
+      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png", rawData: null }],
     };
     render(<GitHubListItem item={issueWithAssignee} type="issue" />);
     const avatar = screen.getByAltText("alice");
@@ -393,11 +404,11 @@ describe("GitHubListItem", () => {
   });
 
   it("renders only first assignee avatar when multiple assignees", () => {
-    const issueWithMultiple: GitHubIssue = {
+    const issueWithMultiple: Issue = {
       ...baseIssue,
       assignees: [
-        { login: "alice", avatarUrl: "https://example.com/alice.png" },
-        { login: "bob", avatarUrl: "https://example.com/bob.png" },
+        { login: "alice", avatarUrl: "https://example.com/alice.png", rawData: null },
+        { login: "bob", avatarUrl: "https://example.com/bob.png", rawData: null },
       ],
     };
     render(<GitHubListItem item={issueWithMultiple} type="issue" />);
@@ -436,13 +447,13 @@ describe("GitHubListItem", () => {
   });
 
   it("does not show create worktree for closed issues", () => {
-    const closedIssue: GitHubIssue = { ...baseIssue, state: "CLOSED" };
+    const closedIssue: Issue = { ...baseIssue, state: "closed" };
     render(<GitHubListItem item={closedIssue} type="issue" onCreateWorktree={vi.fn()} />);
     expect(screen.queryByLabelText("Create worktree")).toBeNull();
   });
 
   it("shows create worktree for fork PRs", () => {
-    const forkPR: GitHubPR = { ...basePR, isFork: true };
+    const forkPR: PR = { ...basePR, rawData: { isFork: true } };
     render(<GitHubListItem item={forkPR} type="pr" onCreateWorktree={vi.fn()} />);
     expect(screen.getByLabelText("Create worktree")).toBeTruthy();
   });

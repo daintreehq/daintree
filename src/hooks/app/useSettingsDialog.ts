@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SettingsTab, SettingsNavTarget } from "@/components/Settings";
-import { isSettingsTab } from "@/components/Settings/settingsTabRegistry";
+import { isSettingsTab } from "@/components/Settings/settingsTabIds";
 import { BUILTIN_GITHUB_PROVIDER_ID, normalizeProviderId } from "@shared/utils/forgeProviderIds";
 
 export function useSettingsDialog() {
@@ -18,8 +18,11 @@ export function useSettingsDialog() {
 
   const handleOpenSettingsTab = useCallback((target: SettingsNavTarget) => {
     // TODO(#8329): remove stale-ID normalization after 1 release
+    // Legacy callers can still emit ids outside the SettingsTab union at
+    // runtime; compare through `string` until the normalization window closes.
+    const rawTab: string = target.tab;
     let normalized = target;
-    if (target.tab === "github") {
+    if (rawTab === "github") {
       if (import.meta.env.DEV) {
         console.warn(
           "[useSettingsDialog] stale tab ID 'github' normalized to 'code-forge' — update the call site"
@@ -30,7 +33,7 @@ export function useSettingsDialog() {
         subtab: target.subtab ?? BUILTIN_GITHUB_PROVIDER_ID,
         sectionId: target.sectionId,
       };
-    } else if (target.tab === "forge") {
+    } else if (rawTab === "forge") {
       if (import.meta.env.DEV) {
         console.warn(
           "[useSettingsDialog] stale tab ID 'forge' normalized to 'code-forge' — update the call site"

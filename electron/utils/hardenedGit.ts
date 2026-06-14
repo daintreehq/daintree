@@ -1,11 +1,24 @@
 import path from "path";
-import { simpleGit } from "simple-git";
 import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
 import { detectWslPath } from "./wsl.js";
 
+// Deferred import keeps simple-git out of the eager pre-paint main bundle —
+// esbuild's `splitting: true` emits it as a lazy chunk (issue #10395). Kicked
+// off at module evaluation so the chunk is typically loaded before the first
+// git call; each factory awaits the same promise and surfaces load errors at
+// call time. The no-op catch marks the prefetch handled so a broken install
+// can't fire an unhandled rejection before any factory runs.
+const simpleGitModule = import("simple-git");
+void simpleGitModule.catch(() => {});
+
 const SAFE_GIT_CONFIG = [
   "core.fsmonitor=false",
-  "core.untrackedCache=false",
+  // keep reads an existing untracked-cache without creating one and without
+  // stripping the extension on the next index write. fsmonitor (the daemon/
+  // exec-surface risk) stays false; the untracked cache is a per-worktree
+  // index extension with no shared state, so keep is safe under concurrent
+  // multi-worktree polling.
+  "core.untrackedCache=keep",
   "core.pager=cat",
   "protocol.ext.allow=never",
   "core.gitProxy=",
@@ -146,11 +159,12 @@ export function buildHardenedGitEnv(
   };
 }
 
-export function createHardenedGit(
+export async function createHardenedGit(
   cwd: string,
   signal?: AbortSignal,
   platform: NodeJS.Platform = process.platform
-): SimpleGit {
+): Promise<SimpleGit> {
+  const { simpleGit } = await simpleGitModule;
   return simpleGit({
     baseDir: cwd,
     config: [...HARDENED_GIT_CONFIG],
@@ -202,10 +216,10 @@ export interface WslGitInvocation {
  *
  * Windows-only: throws on other platforms.
  */
-export function createWslHardenedGit(
+export async function createWslHardenedGit(
   invocation: WslGitInvocation,
   signal?: AbortSignal
-): SimpleGit {
+): Promise<SimpleGit> {
   if (process.platform !== "win32") {
     throw new Error("createWslHardenedGit is only available on Windows");
   }
@@ -229,6 +243,7 @@ export function createWslHardenedGit(
     throw new Error("WSL posix path does not match parsed UNC");
   }
 
+  const { simpleGit } = await simpleGitModule;
   return simpleGit({
     baseDir: uncPath,
     binary: ["wsl.exe", "git"],
@@ -265,8 +280,12 @@ export interface AuthenticatedGitOptions {
   extraConfig?: string[];
 }
 
-export function createAuthenticatedGit(cwd: string, opts: AuthenticatedGitOptions = {}): SimpleGit {
+export async function createAuthenticatedGit(
+  cwd: string,
+  opts: AuthenticatedGitOptions = {}
+): Promise<SimpleGit> {
   const { signal, progress, extraConfig } = opts;
+  const { simpleGit } = await simpleGitModule;
   return simpleGit({
     baseDir: cwd,
     config: [...AUTHENTICATED_GIT_CONFIG, ...(extraConfig ?? [])],
@@ -330,9 +349,12 @@ export interface BackgroundFetchGitOptions {
  * The signal is required: every background fetch must carry an
  * AbortController so a stalled connection can be cancelled.
  */
-export function createBackgroundFetchGit(cwd: string, opts: BackgroundFetchGitOptions): SimpleGit {
+export async function createBackgroundFetchGit(
+  cwd: string,
+  opts: BackgroundFetchGitOptions
+): Promise<SimpleGit> {
   const { signal, progress, extraConfig, platform = process.platform } = opts;
-  const git = createAuthenticatedGit(cwd, {
+  const git = await createAuthenticatedGit(cwd, {
     signal,
     progress,
     extraConfig: [...BACKGROUND_FETCH_CONFIG, ...(extraConfig ?? [])],

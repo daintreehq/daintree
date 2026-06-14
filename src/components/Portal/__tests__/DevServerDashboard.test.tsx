@@ -3,8 +3,21 @@ import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 
-const useAllDevSessions = vi.fn<() => DevPreviewSessionState[]>();
+const useAllDevSessions =
+  vi.fn<() => { sessions: DevPreviewSessionState[]; hydrated: boolean; fetchError: boolean }>();
 const useWorktreeStore = vi.fn();
+
+function mockSessions(
+  sessions: DevPreviewSessionState[],
+  overrides: { hydrated?: boolean; fetchError?: boolean } = {}
+) {
+  useAllDevSessions.mockReturnValue({
+    sessions,
+    hydrated: true,
+    fetchError: false,
+    ...overrides,
+  });
+}
 
 vi.mock("@/store/allDevSessionsStore", () => ({
   useAllDevSessions: () => useAllDevSessions(),
@@ -54,13 +67,27 @@ afterEach(() => {
 
 describe("DevServerDashboard", () => {
   it("shows the empty state when no active sessions", () => {
-    useAllDevSessions.mockReturnValue([]);
+    mockSessions([]);
     render(<DevServerDashboard />);
     expect(screen.getByText("No active dev servers")).toBeTruthy();
   });
 
+  it("renders no body before the store hydrates", () => {
+    mockSessions([], { hydrated: false });
+    render(<DevServerDashboard />);
+    expect(screen.queryByText("No active dev servers")).toBeNull();
+    expect(screen.queryByText("Couldn't load dev servers")).toBeNull();
+  });
+
+  it("shows a distinct message when the session fetch fails", () => {
+    mockSessions([], { fetchError: true });
+    render(<DevServerDashboard />);
+    expect(screen.getByText("Couldn't load dev servers")).toBeTruthy();
+    expect(screen.queryByText("No active dev servers")).toBeNull();
+  });
+
   it("hides plain stopped sessions but keeps restored-stopped", () => {
-    useAllDevSessions.mockReturnValue([
+    mockSessions([
       session({ panelId: "p-stopped", status: "stopped", worktreeId: "wt-stopped" }),
       session({ panelId: "p-restored", status: "restored-stopped", worktreeId: "wt-1" }),
     ]);
@@ -70,9 +97,7 @@ describe("DevServerDashboard", () => {
   });
 
   it("renders worktree label, port and last output", () => {
-    useAllDevSessions.mockReturnValue([
-      session({ url: "http://localhost:4321", lastOutput: "ready in 200ms" }),
-    ]);
+    mockSessions([session({ url: "http://localhost:4321", lastOutput: "ready in 200ms" })]);
     render(<DevServerDashboard />);
     expect(screen.getByText("feature-foo")).toBeTruthy();
     expect(screen.getByText(":4321")).toBeTruthy();
@@ -80,15 +105,13 @@ describe("DevServerDashboard", () => {
   });
 
   it("uses predictedUrl for the port when url is null", () => {
-    useAllDevSessions.mockReturnValue([
-      session({ url: null, predictedUrl: "http://localhost:5050" }),
-    ]);
+    mockSessions([session({ url: null, predictedUrl: "http://localhost:5050" })]);
     render(<DevServerDashboard />);
     expect(screen.getByText(":5050")).toBeTruthy();
   });
 
   it("omits the port when neither url has one", () => {
-    useAllDevSessions.mockReturnValue([session({ url: "http://localhost", predictedUrl: null })]);
+    mockSessions([session({ url: "http://localhost", predictedUrl: null })]);
     const { container } = render(<DevServerDashboard />);
     expect(container.textContent).not.toContain(":");
   });
@@ -97,27 +120,53 @@ describe("DevServerDashboard", () => {
     useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
       selector({ worktrees: new Map() })
     );
-    useAllDevSessions.mockReturnValue([session({ worktreeId: "wt-unknown" })]);
+    mockSessions([session({ worktreeId: "wt-unknown" })]);
     render(<DevServerDashboard />);
     expect(screen.getByText("wt-unknown")).toBeTruthy();
   });
 
   it("restarts the worktree dev server on click", () => {
-    useAllDevSessions.mockReturnValue([session()]);
+    mockSessions([session()]);
     render(<DevServerDashboard />);
     fireEvent.click(screen.getByLabelText("Restart dev server for feature-foo"));
     expect(restartByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
   });
 
   it("stops the worktree dev server on click", () => {
-    useAllDevSessions.mockReturnValue([session()]);
+    mockSessions([session()]);
     render(<DevServerDashboard />);
     fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo"));
     expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
   });
 
-  it("disables stop for non-running sessions", () => {
-    useAllDevSessions.mockReturnValue([session({ status: "error" })]);
+  it("enables stop for errored sessions and fires the stop call", () => {
+    mockSessions([session({ status: "error", terminalId: null, url: null })]);
+    render(<DevServerDashboard />);
+    const stopButton = screen.getByLabelText(
+      "Stop dev server for feature-foo"
+    ) as HTMLButtonElement;
+    expect(stopButton.disabled).toBe(false);
+    fireEvent.click(stopButton);
+    expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+  });
+
+  it("disables both buttons when the session has no worktreeId", () => {
+    mockSessions([session({ status: "error", worktreeId: undefined })]);
+    render(<DevServerDashboard />);
+    const stopButton = screen.getByLabelText("Stop dev server for panel-1") as HTMLButtonElement;
+    const restartButton = screen.getByLabelText(
+      "Restart dev server for panel-1"
+    ) as HTMLButtonElement;
+    expect(stopButton.disabled).toBe(true);
+    expect(restartButton.disabled).toBe(true);
+    fireEvent.click(stopButton);
+    fireEvent.click(restartButton);
+    expect(stopDevServerByWorktree).not.toHaveBeenCalled();
+    expect(restartByWorktree).not.toHaveBeenCalled();
+  });
+
+  it("disables stop for restored-stopped sessions", () => {
+    mockSessions([session({ status: "restored-stopped" })]);
     render(<DevServerDashboard />);
     const stopButton = screen.getByLabelText(
       "Stop dev server for feature-foo"

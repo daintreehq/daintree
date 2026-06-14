@@ -40,9 +40,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
   };
+  "agent-settings:set-global": {
+    args: [value: boolean];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };
+  };
+  "app:dismiss-rosetta-warning": {
+    args: [];
+    result: void;
   };
   "app:get-version-info": {
     args: [];
@@ -311,6 +319,54 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: { enabled: boolean; maxRecords: number };
   };
+  "forge:get-first-page-cache": {
+    args: [payload: { cwd: string }];
+    result: import("./forge.js").ForgeFirstPageCachePayload | null;
+  };
+  "forge:get-issue-tooltip": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: import("../forge.js").IssueTooltipData | null;
+  };
+  "forge:get-issues-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: import("../forge.js").Issue[];
+  };
+  "forge:get-pr-review-threads": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../forge.js").ReviewThread[];
+  };
+  "forge:get-pr-tooltip": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../forge.js").PRTooltipData | null;
+  };
+  "forge:get-project-health": {
+    args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
+    result: import("./forge.js").ForgeProjectHealthPayload;
+  };
+  "forge:get-prs-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: import("../forge.js").PR[];
+  };
+  "forge:get-rate-limit-details": {
+    args: [payload: { cwd: string }];
+    result: import("../forge.js").RateLimitDetails | null;
+  };
+  "forge:get-repo-stats": {
+    args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
+    result: import("./forge.js").ForgeRepositoryStats;
+  };
+  "forge:get-token-health": {
+    args: [payload: { providerId: string }];
+    result: import("../forge.js").ForgeTokenHealthState | null;
+  };
+  "forge:open-pr": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: void;
+  };
+  "forge:resolve-author-avatar": {
+    args: [payload: { cwd: string; email: string }];
+    result: string | null;
+  };
   "forge:unassign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: void;
@@ -322,10 +378,6 @@ export interface GeneratedIpcInvokeMap {
   "gemini:get-status": {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
-  };
-  "github:unassign-issue": {
-    args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
   };
   "global-env:get": {
     args: [];
@@ -981,6 +1033,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "system:get-resource-profile": {
+    args: [];
+    result: import("../resourceProfile.js").ResourceProfilePayload;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };
@@ -1116,6 +1172,10 @@ export interface GeneratedIpcInvokeMap {
   "terminal:reconnect": {
     args: [terminalId: string];
     result: import("./terminal.js").TerminalReconnectResult;
+  };
+  "terminal:reconnect-bulk": {
+    args: [terminalIds: string[]];
+    result: Record<string, import("./terminal.js").TerminalReconnectResult>;
   };
   "terminal:replay-history": {
     args: [__0: { terminalId: string; maxLines: number }];

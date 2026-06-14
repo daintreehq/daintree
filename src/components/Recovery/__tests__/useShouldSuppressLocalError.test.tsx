@@ -7,8 +7,9 @@ import { LOCAL_ERROR_SETTLE_MS } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
-import { useGitHubTokenHealthStore } from "@/store/githubTokenHealthStore";
+import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 
 function resetStores() {
   usePanelStore.setState({
@@ -25,11 +26,9 @@ function resetStores() {
     lastCrashAt: undefined,
   });
   useRestoreConfirmationStore.setState({ visible: false, suspectCount: 0, crashCount: 0 });
-  // `githubTokenHealthStore` is a shim over `forgeProviderHealthStore`; its
-  // `setState({ isUnhealthy })` delegates to the backing keyed store, so this
-  // is required to clear leaked GitHub token state between tests.
-  useGitHubTokenHealthStore.setState({ isUnhealthy: false });
+  useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
+  useRosettaBannerStore.setState({ visible: false });
 }
 
 beforeEach(() => {
@@ -253,18 +252,18 @@ describe("useShouldSuppressLocalError", () => {
     });
   });
 
-  // The two advisory slots (github-token, cloud-sync) win a global banner slot
+  // The two advisory slots (forge-token, cloud-sync) win a global banner slot
   // while the backend is still connected, so pane-local spawn/reconnect/restart
   // banners remain independently actionable and must NOT be suppressed (#10038).
   // These tests pin the suppression domain to recovery slots so it can't
   // silently widen if a future advisory slot is added.
   describe("advisory causes do not suppress", () => {
-    it("does not suppress backend-dependent banners when the GitHub token is unhealthy", () => {
+    it("does not suppress backend-dependent banners when a forge token is unhealthy", () => {
       const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
       expect(result.current).toBe(false);
 
       act(() => {
-        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+        useForgeProviderHealthStore.getState().setTokenUnhealthy("daintree.github.github", true);
       });
       expect(result.current).toBe(false);
     });
@@ -279,8 +278,18 @@ describe("useShouldSuppressLocalError", () => {
       expect(result.current).toBe(false);
     });
 
+    it("does not suppress backend-dependent banners when the Rosetta warning is active", () => {
+      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
+      expect(result.current).toBe(false);
+
+      act(() => {
+        useRosettaBannerStore.setState({ visible: true });
+      });
+      expect(result.current).toBe(false);
+    });
+
     it("does not suppress when an advisory cause is already active at mount", () => {
-      useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+      useForgeProviderHealthStore.getState().setTokenUnhealthy("daintree.github.github", true);
       const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
       expect(result.current).toBe(false);
     });
@@ -294,14 +303,14 @@ describe("useShouldSuppressLocalError", () => {
 
       act(() => {
         usePanelStore.setState({ backendStatus: "recovering" });
-        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+        useForgeProviderHealthStore.getState().setTokenUnhealthy("daintree.github.github", true);
       });
       expect(result.current).toBe(true); // host-crash (recovery) wins; suppressed
 
       act(() => {
         usePanelStore.setState({ backendStatus: "connected" });
       });
-      // Slot is now github-token (advisory). Suppression drops without advancing
+      // Slot is now forge-token (advisory). Suppression drops without advancing
       // the settle timer.
       expect(result.current).toBe(false);
     });
@@ -310,14 +319,14 @@ describe("useShouldSuppressLocalError", () => {
       const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
 
       act(() => {
-        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+        useForgeProviderHealthStore.getState().setTokenUnhealthy("daintree.github.github", true);
       });
       expect(result.current).toBe(false); // advisory, not suppressed
 
       act(() => {
         usePanelStore.setState({ watchdogStatus: "disabled" });
       });
-      // watchdog-disabled (recovery) outranks github-token; sticky-on is sync.
+      // watchdog-disabled (recovery) outranks forge-token; sticky-on is sync.
       expect(result.current).toBe(true);
     });
 
@@ -326,9 +335,9 @@ describe("useShouldSuppressLocalError", () => {
 
       act(() => {
         useRestoreConfirmationStore.setState({ visible: true, suspectCount: 1, crashCount: 1 });
-        useGitHubTokenHealthStore.setState({ isUnhealthy: true });
+        useForgeProviderHealthStore.getState().setTokenUnhealthy("daintree.github.github", true);
       });
-      // restore-confirmation outranks github-token in priority and is a recovery
+      // restore-confirmation outranks forge-token in priority and is a recovery
       // slot, so suppression holds — precedence can't flip to advisory-first.
       expect(result.current).toBe(true);
     });

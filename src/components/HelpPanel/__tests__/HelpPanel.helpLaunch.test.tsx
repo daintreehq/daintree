@@ -2138,6 +2138,172 @@ describe("HelpPanel — + New session destructive reset", () => {
   });
 });
 
+// The footer "pinned terminal dead" danger indicator must track real tool-call
+// reachability — a live grid terminal to dispatch into — not whether the
+// frozen provision-time pinned terminal id still exists (#10431). Tool calls
+// re-resolve their target at dispatch time, so the pinned id going stale is not
+// a failure; only the absence of any live grid terminal is.
+describe("HelpPanel — pinned-terminal danger tracks live grid reachability (#10431)", () => {
+  const DANGER_BUTTON_TITLE = "No open terminal to receive tool calls — start a new session";
+
+  function dockAssistantTerminal() {
+    // The assistant runs in the dock; it is never a tool-call target, so it must
+    // not count toward "a live terminal exists to reach".
+    return {
+      id: "assistant-term",
+      kind: "terminal",
+      spawnStatus: "ready",
+      cwd: "/help",
+      command: "claude",
+      location: "dock",
+      agentState: "idle",
+    };
+  }
+
+  function setupPinnedSession(panels: Record<string, unknown>) {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    helpPanelState.terminalId = "assistant-term";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "sess-pinned";
+    panelStoreState.panelIds = Object.keys(panels);
+    panelStoreState.panelsById = panels;
+    window.electron.help.getPinnedActionContext = vi.fn().mockResolvedValue({
+      terminalId: "pinned-grid-term",
+      worktreeId: "wt-1",
+      worktreeName: "main",
+      worktreeBranch: "main",
+    });
+  }
+
+  async function renderResolved() {
+    let result!: ReturnType<typeof render>;
+    await act(async () => {
+      result = render(<HelpPanel width={380} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return result;
+  }
+
+  it("does not flag danger when the pinned terminal is gone but another live grid terminal exists", async () => {
+    setupPinnedSession({
+      "assistant-term": dockAssistantTerminal(),
+      // A different, live grid terminal — the pinned id ("pinned-grid-term") is
+      // absent, but this one is a valid dispatch target.
+      "grid-term": {
+        id: "grid-term",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/repo",
+        location: "grid",
+        agentState: "idle",
+      },
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(".text-status-danger")).toBeNull();
+  });
+
+  it("flags danger and offers a new session when no live grid terminal remains", async () => {
+    setupPinnedSession({
+      // Only the dock assistant terminal exists — no grid target to reach.
+      "assistant-term": dockAssistantTerminal(),
+    });
+
+    const { container } = await renderResolved();
+
+    const button = container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`);
+    expect(button).not.toBeNull();
+    expect(button!.textContent).toContain("Start new session");
+    expect(container.querySelector(".text-status-danger")).not.toBeNull();
+  });
+
+  it("does not flag danger when a dead and a live grid terminal both exist", async () => {
+    setupPinnedSession({
+      "assistant-term": dockAssistantTerminal(),
+      // A grid terminal that has exited is not a live dispatch target...
+      "dead-grid": {
+        id: "dead-grid",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/repo",
+        location: "grid",
+        runtimeStatus: "exited",
+        exitCode: 0,
+      },
+      // ...but this live one is, so danger must not fire.
+      "live-grid": {
+        id: "live-grid",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/repo",
+        location: "grid",
+        agentState: "idle",
+      },
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+  });
+
+  it("flags danger when the only grid terminal has exited", async () => {
+    setupPinnedSession({
+      "assistant-term": dockAssistantTerminal(),
+      "dead-grid": {
+        id: "dead-grid",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/repo",
+        location: "grid",
+        runtimeStatus: "exited",
+        exitCode: 137,
+      },
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+  });
+
+  it("flags danger when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
+    setupPinnedSession({
+      "assistant-term": dockAssistantTerminal(),
+      // A `missing-cli` gate panel looks otherwise live (no exitCode/runtimeStatus)
+      // but has no PTY behind it, so it can't receive a dispatched command.
+      "gate-grid": {
+        id: "gate-grid",
+        kind: "terminal",
+        spawnStatus: "missing-cli",
+        cwd: "/repo",
+        location: "grid",
+      },
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).not.toBeNull();
+  });
+
+  it("does not flag danger when pinnedContext has no terminal id", async () => {
+    // No terminal was pinned at provision time — the danger guard must stay off
+    // regardless of grid reachability.
+    setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
+    window.electron.help.getPinnedActionContext = vi.fn().mockResolvedValue({
+      terminalId: null,
+      worktreeId: "wt-1",
+      worktreeName: "main",
+      worktreeBranch: "main",
+    });
+
+    const { container } = await renderResolved();
+
+    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
+  });
+});
+
 // The renderer no longer tears down the assistant on visibility-hidden.
 // PTY/MCP lifecycle is owned by main; hibernation capture for true LRU
 // eviction happens in `HelpSessionService.revokeByWebContentsId`. These

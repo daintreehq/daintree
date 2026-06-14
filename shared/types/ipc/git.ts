@@ -23,6 +23,8 @@ export interface GitGetFileDiffPayload {
   filePath: string;
   /** Git status of the file */
   status: GitStatus;
+  /** When true, passes --ignore-all-space so whitespace-only changes are omitted */
+  ignoreWhitespace?: boolean;
 }
 
 /** Single file entry in a cross-worktree comparison */
@@ -89,4 +91,6 @@ export interface GitCompareWorktreesPayload {
   filePath?: string;
   /** When true, uses merge-base (three-dot) diff range for PR-accurate comparison */
   useMergeBase?: boolean;
+  /** When true, passes --ignore-all-space so whitespace-only changes are omitted */
+  ignoreWhitespace?: boolean;
 }

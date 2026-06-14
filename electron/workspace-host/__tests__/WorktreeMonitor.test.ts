@@ -58,12 +58,12 @@ vi.mock("../../services/issueExtractor.js", () => ({
 vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue(null),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
-const mockIsRepoOperationInProgress = vi.fn().mockReturnValue(false);
 const mockGetRepoOperationStateSync = vi.fn().mockReturnValue(undefined);
 vi.mock("../../utils/gitRepoOperationState.js", () => ({
-  isRepoOperationInProgress: (...args: unknown[]) => mockIsRepoOperationInProgress(...args),
+  isRepoOperationInProgress: vi.fn().mockReturnValue(false),
   getRepoOperationStateSync: (...args: unknown[]) => mockGetRepoOperationStateSync(...args),
   OPERATION_SENTINEL_NAMES: [
     "MERGE_HEAD",
@@ -211,7 +211,7 @@ describe("WorktreeMonitor", () => {
     capturedOnEmfileLimitReached = undefined;
     capturedWatcherOptions = undefined;
     capturedWatcherOptionsHistory.length = 0;
-    mockIsRepoOperationInProgress.mockReturnValue(false);
+    mockGetRepoOperationStateSync.mockReturnValue(undefined);
     vi.mocked(getGitDir).mockReturnValue(null);
   });
 
@@ -235,6 +235,26 @@ describe("WorktreeMonitor", () => {
     mockGetWorktreeChangesWithStats.mockClear();
     await vi.advanceTimersByTimeAsync(TEST_CONFIG.pollIntervalMax * 2);
     expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+  });
+
+  it("calculateStateHash is a deterministic, order-insensitive numeric digest sensitive to content", () => {
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+    const hashOf = (changes: unknown[]) =>
+      monitor["calculateStateHash"]({ changes } as Parameters<
+        (typeof monitor)["calculateStateHash"]
+      >[0]);
+
+    const a = { path: "/w/a.ts", status: "modified", insertions: 1, deletions: 2 };
+    const b = { path: "/w/b.ts", status: "untracked", insertions: 5, deletions: 0 };
+
+    const hash = hashOf([a, b]);
+    expect(typeof hash).toBe("number");
+    expect(hashOf([a, b])).toBe(hash);
+    expect(hashOf([b, a])).toBe(hash);
+    expect(hashOf([a])).not.toBe(hash);
+    expect(hashOf([a, { ...b, insertions: 6 }])).not.toBe(hash);
+
+    monitor.stop();
   });
 
   it("calls onUpdate on successful git status", async () => {
@@ -459,11 +479,11 @@ describe("WorktreeMonitor", () => {
       prNumber: 42,
       prUrl: "https://github.com/test/pr/42",
       prState: "open",
-      prCiStatus: "SUCCESS",
+      prCiStatus: "success",
     });
 
     const snapshot = monitor.getSnapshot();
-    expect(snapshot.prCiStatus).toBe("SUCCESS");
+    expect(snapshot.prCiStatus).toBe("success");
   });
 
   it("setPRInfo with no prCiStatus clears any prior CI value (full-replace semantics)", () => {
@@ -473,9 +493,9 @@ describe("WorktreeMonitor", () => {
       prNumber: 42,
       prUrl: "url",
       prState: "open",
-      prCiStatus: "FAILURE",
+      prCiStatus: "failure",
     });
-    expect(monitor.getSnapshot().prCiStatus).toBe("FAILURE");
+    expect(monitor.getSnapshot().prCiStatus).toBe("failure");
 
     monitor.setPRInfo({ prNumber: 42, prUrl: "url", prState: "open" });
     expect(monitor.getSnapshot().prCiStatus).toBeUndefined();
@@ -488,7 +508,7 @@ describe("WorktreeMonitor", () => {
       prNumber: 42,
       prUrl: "url",
       prState: "open",
-      prCiStatus: "PENDING",
+      prCiStatus: "pending",
     });
     monitor.clearPRInfo();
 
@@ -588,7 +608,7 @@ describe("WorktreeMonitor", () => {
       );
       expect(snapshot.prState).toBe("open");
       expect(snapshot.prTitle).toBe("Add widget");
-      expect(snapshot.prCiStatus).toBe("FAILURE");
+      expect(snapshot.prCiStatus).toBe("failure");
       expect(snapshot.issueNumber).toBe(88);
       expect(snapshot.issueTitle).toBe("Widget request");
       // The canonical owner/repo survive on the linked projection itself.
@@ -855,6 +875,77 @@ describe("WorktreeMonitor", () => {
       await flushInitialStatus();
 
       expect(monitor.getSnapshot().baseBranchName).toBe("develop");
+
+      monitor.stop();
+    });
+
+    it("falls back to the local base ref when origin/<base> can't be resolved", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(
+        cleanChangesWith({ tracking: "origin/test-branch", ahead: 1, behind: 0 })
+      );
+      mockGitRaw.mockImplementation((args: string[]) => {
+        if (args[0] === "rev-parse") return Promise.resolve("abc\nabc\n");
+        if (args.includes("origin/main...HEAD")) {
+          return Promise.reject(new Error("unknown revision"));
+        }
+        return Promise.resolve("1\t4\n");
+      });
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(mockGitRaw).toHaveBeenCalledWith([
+        "rev-list",
+        "--count",
+        "--left-right",
+        "main...HEAD",
+      ]);
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.baseBranchName).toBe("main");
+      expect(snapshot.baseBehindCount).toBe(1);
+      expect(snapshot.baseAheadCount).toBe(4);
+      expect(snapshot.baseMatchesUpstream).toBe(true);
+      expect(mockGitRaw).toHaveBeenCalledWith(["rev-parse", "@{u}", "main"]);
+
+      monitor.stop();
+    });
+
+    it("reuses cached divergence on forced passes until a tracked ref's stat changes", async () => {
+      vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
+      vi.mocked(readFile).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      vi.mocked(stat).mockResolvedValue({ mtimeMs: 1_000 } as unknown as Awaited<
+        ReturnType<typeof stat>
+      >);
+      mockGetWorktreeChangesWithStats.mockResolvedValue(cleanChangesWith({ tracking: null }));
+      mockGitRaw.mockResolvedValue("2\t5\n");
+
+      const revListCalls = () =>
+        mockGitRaw.mock.calls.filter((c) => Array.isArray(c[0]) && c[0][0] === "rev-list").length;
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+      expect(revListCalls()).toBe(1);
+      expect(monitor.getSnapshot().baseAheadCount).toBe(5);
+      expect(monitor.getSnapshot().baseBehindCount).toBe(2);
+
+      // Forced pass with unchanged refs: divergence comes from the cache.
+      await monitor.updateGitStatus(true);
+      expect(revListCalls()).toBe(1);
+      expect(monitor.getSnapshot().baseAheadCount).toBe(5);
+
+      // A background fetch writes the loose remote base ref without touching
+      // packed-refs — the cache key must notice and recompute.
+      vi.mocked(stat).mockImplementation(async (p) => {
+        const normalizedPath = String(p).replace(/\\/g, "/");
+        const mtimeMs = normalizedPath.endsWith("origin/main") ? 2_000 : 1_000;
+        return { mtimeMs } as unknown as Awaited<ReturnType<typeof stat>>;
+      });
+      mockGitRaw.mockResolvedValue("0\t5\n");
+      await monitor.updateGitStatus(true);
+      expect(revListCalls()).toBe(2);
+      expect(monitor.getSnapshot().baseBehindCount).toBe(0);
 
       monitor.stop();
     });
@@ -2547,7 +2638,7 @@ describe("WorktreeMonitor", () => {
   describe("git operation skip (rebase / merge / cherry-pick)", () => {
     it("skips getWorktreeChangesWithStats while a git operation is in progress", async () => {
       vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
-      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
@@ -2555,7 +2646,7 @@ describe("WorktreeMonitor", () => {
       await monitor.start();
       await flushInitialStatus();
 
-      expect(mockIsRepoOperationInProgress).toHaveBeenCalledWith("/test/worktree/.git");
+      expect(mockGetRepoOperationStateSync).toHaveBeenCalledWith("/test/worktree/.git");
       expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
 
       monitor.stop();
@@ -2563,7 +2654,7 @@ describe("WorktreeMonitor", () => {
 
     it("runs git status normally once the operation finishes", async () => {
       vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
-      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetRepoOperationStateSync.mockReturnValue("MERGING");
       mockGetWorktreeChangesWithStats.mockResolvedValue({
         worktreeId: "/test/worktree",
         rootPath: "/test",
@@ -2586,7 +2677,7 @@ describe("WorktreeMonitor", () => {
 
       // Simulate the rebase/merge finishing — sentinels disappear, then a
       // subsequent updateGitStatus call exercises the normal flow.
-      mockIsRepoOperationInProgress.mockReturnValue(false);
+      mockGetRepoOperationStateSync.mockReturnValue(undefined);
       await monitor.updateGitStatus(true);
 
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
@@ -2597,7 +2688,7 @@ describe("WorktreeMonitor", () => {
 
     it("emits an initial snapshot when start() is skipped mid-operation", async () => {
       vi.mocked(getGitDir).mockReturnValue("/test/worktree/.git");
-      mockIsRepoOperationInProgress.mockReturnValue(true);
+      mockGetRepoOperationStateSync.mockReturnValue("REBASING");
 
       const callbacks = makeCallbacks();
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
@@ -2614,7 +2705,7 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
-    it("does not call isRepoOperationInProgress when getGitDir returns null", async () => {
+    it("does not check operation sentinels when getGitDir returns null", async () => {
       vi.mocked(getGitDir).mockReturnValue(null);
       mockGetWorktreeChangesWithStats.mockResolvedValue({
         worktreeId: "/test/worktree",
@@ -2635,7 +2726,7 @@ describe("WorktreeMonitor", () => {
       await monitor.start();
       await flushInitialStatus();
 
-      expect(mockIsRepoOperationInProgress).not.toHaveBeenCalled();
+      expect(mockGetRepoOperationStateSync).not.toHaveBeenCalled();
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled();
 
       monitor.stop();
@@ -2813,29 +2904,29 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
-    it("setIsGitHubRemote mirrors into the snapshot and is idempotent", async () => {
+    it("setMatchedForgeProviderId mirrors into the snapshot and is idempotent", async () => {
       const onUpdate = vi.fn();
       const callbacks = makeCallbacks({ onUpdate });
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
       await monitor.start();
       await flushInitialStatus();
 
-      // Default is false (undefined-on-the-wire) until set.
-      expect(monitor.getSnapshot().isGitHubRemote).toBeFalsy();
+      // Default is null (undefined-on-the-wire) until set.
+      expect(monitor.getSnapshot().matchedForgeProviderId).toBeUndefined();
 
       onUpdate.mockClear();
-      monitor.setIsGitHubRemote(true);
-      expect(monitor.getSnapshot().isGitHubRemote).toBe(true);
+      monitor.setMatchedForgeProviderId("daintree.github.github");
+      expect(monitor.getSnapshot().matchedForgeProviderId).toBe("daintree.github.github");
       expect(onUpdate).toHaveBeenCalled();
 
       onUpdate.mockClear();
-      monitor.setIsGitHubRemote(true);
+      monitor.setMatchedForgeProviderId("daintree.github.github");
       expect(onUpdate).not.toHaveBeenCalled();
 
       monitor.stop();
     });
 
-    it("setIsGitHubRemote / setFetchState do not emit after stop()", async () => {
+    it("setMatchedForgeProviderId / setFetchState do not emit after stop()", async () => {
       const onUpdate = vi.fn();
       const callbacks = makeCallbacks({ onUpdate });
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
@@ -2845,7 +2936,7 @@ describe("WorktreeMonitor", () => {
       onUpdate.mockClear();
       // Late-resolving probe / coordinator fan-out must not re-add a ghost
       // card to the renderer after the monitor has been torn down.
-      monitor.setIsGitHubRemote(true);
+      monitor.setMatchedForgeProviderId("daintree.github.github");
       monitor.setFetchState(1700000000000, false, false);
       monitor.setFetchState(1700000000000, true, false);
 

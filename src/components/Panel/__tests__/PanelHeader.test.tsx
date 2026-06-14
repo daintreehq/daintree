@@ -68,9 +68,12 @@ let mockStoreState: Record<string, unknown> = {
   panelIds: [] as string[],
 };
 
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) => selector(mockStoreState),
-}));
+vi.mock("@/store/panelStore", () => {
+  const usePanelStore = (selector: (s: Record<string, unknown>) => unknown) =>
+    selector(mockStoreState);
+  usePanelStore.getState = () => mockStoreState;
+  return { usePanelStore };
+});
 
 let mockHasPty = false;
 
@@ -203,6 +206,39 @@ describe("PanelHeader", () => {
       const tooltips = screen.getAllByTestId("tooltip-content");
       const overflowTooltip = tooltips.find((el) => el.textContent === "More panel actions");
       expect(overflowTooltip).toBeDefined();
+    });
+  });
+
+  describe("headerContent slot", () => {
+    it("defaults to trailing placement — slot renders after the close button", () => {
+      render(
+        <PanelHeader
+          {...makeProps({ headerContent: <div data-testid="custom-header-content" /> })}
+        />
+      );
+      const content = screen.getByTestId("custom-header-content");
+      const closeButton = screen.getByTestId("panel-close");
+      // Trailing keeps the slot (e.g. the terminal Activity Indicator) all the
+      // way right, so the close button precedes it in document order.
+      expect(
+        closeButton.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    it("renders before the overflow menu when placement is leading", () => {
+      render(
+        <PanelHeader
+          {...makeProps({
+            headerContent: <div data-testid="custom-header-content" />,
+            headerContentPlacement: "leading",
+          })}
+        />
+      );
+      const content = screen.getByTestId("custom-header-content");
+      const overflowButton = screen.getByLabelText("More panel actions");
+      expect(
+        content.compareDocumentPosition(overflowButton) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
     });
   });
 

@@ -1,6 +1,8 @@
 import { useEffect, useCallback, useState, useRef } from "react";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { FileViewerModal } from "@/components/FileViewer/FileViewerModal";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 interface BaseBranchDiffModalProps {
   isOpen: boolean;
@@ -9,6 +11,14 @@ interface BaseBranchDiffModalProps {
   mainBranch: string;
   currentBranch: string;
   onClose: () => void;
+  /** Element to focus when the dialog closes and its trigger was unmounted. */
+  restoreFocusTo?: RestoreFocusTarget;
+  /** Zero-based position of the current file within the navigable set. */
+  currentFileIndex?: number;
+  /** Total number of files the user can step through. */
+  totalFileCount?: number;
+  /** Step to the previous (-1) or next (1) file in the set. */
+  onNavigateFile?: (delta: -1 | 1) => void;
 }
 
 export function BaseBranchDiffModal({
@@ -18,10 +28,15 @@ export function BaseBranchDiffModal({
   mainBranch,
   currentBranch,
   onClose,
+  restoreFocusTo,
+  currentFileIndex,
+  totalFileCount,
+  onNavigateFile,
 }: BaseBranchDiffModalProps) {
   const [diff, setDiff] = useState<string | undefined>(undefined);
   const requestRef = useRef(0);
   const branch = useBranchForPath(worktreePath);
+  const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
 
   const absoluteFilePath = worktreePath.endsWith("/")
     ? worktreePath + filePath
@@ -36,7 +51,8 @@ export function BaseBranchDiffModal({
         mainBranch,
         currentBranch,
         filePath,
-        true
+        true,
+        ignoreWhitespace
       );
       if (requestRef.current !== requestId) return;
       if (typeof result === "string") {
@@ -48,7 +64,7 @@ export function BaseBranchDiffModal({
       if (requestRef.current !== requestId) return;
       setDiff("ERROR");
     }
-  }, [worktreePath, mainBranch, currentBranch, filePath]);
+  }, [worktreePath, mainBranch, currentBranch, filePath, ignoreWhitespace]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -69,6 +85,10 @@ export function BaseBranchDiffModal({
       defaultMode="diff"
       onRetryDiff={fetchDiff}
       onClose={onClose}
+      restoreFocusTo={restoreFocusTo}
+      currentFileIndex={currentFileIndex}
+      totalFileCount={totalFileCount}
+      onNavigateFile={onNavigateFile}
     />
   );
 }

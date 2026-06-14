@@ -15,6 +15,63 @@ function cloneConfig(config: UserAgentConfig): UserAgentConfig {
   return structuredClone(config);
 }
 
+/**
+ * Read + sanitize the persisted user-agent registry from the store. Shared by
+ * the service's own load path and the batched `app:boot` hydrate payload so
+ * both surfaces apply identical validation to the raw store bytes.
+ */
+export function loadSanitizedUserAgentRegistry(): UserAgentRegistry {
+  try {
+    const stored = store.get("userAgentRegistry", {});
+    if (typeof stored !== "object" || stored === null || Array.isArray(stored)) {
+      console.warn("[UserAgentRegistryService] Stored registry is not an object, resetting");
+      return {};
+    }
+
+    const sanitized: UserAgentRegistry = {};
+    for (const [id, config] of Object.entries(stored)) {
+      if (RESERVED_REGISTRY_KEYS.has(id)) {
+        console.warn(`[UserAgentRegistryService] Skipping reserved registry key: ${id}`);
+        continue;
+      }
+      if (!SAFE_AGENT_ID_PATTERN.test(id)) {
+        console.warn(`[UserAgentRegistryService] Skipping registry entry with invalid id: ${id}`);
+        continue;
+      }
+      if (isBuiltInAgent(id)) {
+        console.warn(
+          `[UserAgentRegistryService] Skipping built-in agent ID in user registry: ${id}`
+        );
+        continue;
+      }
+
+      const entryValidation = UserAgentConfigSchema.safeParse(config);
+      if (!entryValidation.success) {
+        console.warn(
+          `[UserAgentRegistryService] Skipping invalid registry entry "${id}":`,
+          entryValidation.error.message
+        );
+        continue;
+      }
+
+      const validated = entryValidation.data;
+      if (validated.id !== id) {
+        console.warn(
+          `[UserAgentRegistryService] Skipping registry entry with mismatched id: key=${id}, config.id=${validated.id}`
+        );
+        continue;
+      }
+
+      sanitized[id] = cloneConfig(validated);
+    }
+
+    return sanitized;
+  } catch (error) {
+    console.error("[UserAgentRegistryService] Failed to load registry:", error);
+    return {};
+  }
+}
+
 export class UserAgentRegistryService {
   private registry: UserAgentRegistry = {};
 
@@ -24,56 +81,7 @@ export class UserAgentRegistryService {
   }
 
   private loadRegistry(): void {
-    try {
-      const stored = store.get("userAgentRegistry", {});
-      if (typeof stored !== "object" || stored === null || Array.isArray(stored)) {
-        console.warn("[UserAgentRegistryService] Stored registry is not an object, resetting");
-        this.registry = {};
-        return;
-      }
-
-      const sanitized: UserAgentRegistry = {};
-      for (const [id, config] of Object.entries(stored)) {
-        if (RESERVED_REGISTRY_KEYS.has(id)) {
-          console.warn(`[UserAgentRegistryService] Skipping reserved registry key: ${id}`);
-          continue;
-        }
-        if (!SAFE_AGENT_ID_PATTERN.test(id)) {
-          console.warn(`[UserAgentRegistryService] Skipping registry entry with invalid id: ${id}`);
-          continue;
-        }
-        if (isBuiltInAgent(id)) {
-          console.warn(
-            `[UserAgentRegistryService] Skipping built-in agent ID in user registry: ${id}`
-          );
-          continue;
-        }
-
-        const entryValidation = UserAgentConfigSchema.safeParse(config);
-        if (!entryValidation.success) {
-          console.warn(
-            `[UserAgentRegistryService] Skipping invalid registry entry "${id}":`,
-            entryValidation.error.message
-          );
-          continue;
-        }
-
-        const validated = entryValidation.data;
-        if (validated.id !== id) {
-          console.warn(
-            `[UserAgentRegistryService] Skipping registry entry with mismatched id: key=${id}, config.id=${validated.id}`
-          );
-          continue;
-        }
-
-        sanitized[id] = cloneConfig(validated);
-      }
-
-      this.registry = sanitized;
-    } catch (error) {
-      console.error("[UserAgentRegistryService] Failed to load registry:", error);
-      this.registry = {};
-    }
+    this.registry = loadSanitizedUserAgentRegistry();
   }
 
   private saveRegistry(nextRegistry: UserAgentRegistry): { success: boolean; error?: string } {

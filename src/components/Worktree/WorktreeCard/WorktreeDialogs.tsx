@@ -1,11 +1,31 @@
+import { Suspense, lazy } from "react";
 import type { WorktreeState } from "@/types";
 import type { Issue } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
-import { IssuePickerDialog } from "../IssuePickerDialog";
-import { ReviewHub } from "../ReviewHub/ReviewHub";
-import { PlanFileViewer } from "@/components/FileViewer/PlanFileViewer";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
+
+const LazyWorktreeDeleteDialog = lazy(() =>
+  import("../WorktreeDeleteDialog").then((m) => ({ default: m.WorktreeDeleteDialog }))
+);
+
+const LazyIssuePickerDialog = lazy(() =>
+  import("../IssuePickerDialog").then((m) => ({ default: m.IssuePickerDialog }))
+);
+
+// Lazy boundary keeps ReviewHubContent/DiffViewer (~50KB gz) out of App's
+// first-paint eval closure — the hub only renders when a card opens it. The
+// chunk stays modulepreloaded via the ReviewPane seed, so the null fallback
+// covers eval-only time on first open.
+const LazyReviewHub = lazy(() =>
+  import("../ReviewHub/ReviewHub").then((m) => ({ default: m.ReviewHub }))
+);
+
+// This was the last static path to CodeViewer's CodeMirror closure
+// (vendor-editor, ~443KB raw) — lazy keeps it out of the eager entry chunk.
+const LazyPlanFileViewer = lazy(() =>
+  import("@/components/FileViewer/PlanFileViewer").then((m) => ({ default: m.PlanFileViewer }))
+);
 
 export interface WorktreeDialogsProps {
   worktree: WorktreeState;
@@ -42,6 +62,13 @@ export function WorktreeDialogs({
   showPlanViewer,
   onClosePlanViewer,
 }: WorktreeDialogsProps) {
+  // Keep-mounted is NOT for a close animation (ReviewHub returns null when
+  // !isOpen) — it avoids re-suspending on reopen and keeps focus-restore
+  // cleanup semantics identical to the previously-static mount.
+  const reviewHubMounted = useKeepMounted(showReviewHub);
+  const planViewerMounted = useKeepMounted(showPlanViewer);
+  const deleteDialogMounted = useKeepMounted(showDeleteDialog);
+  const issuePickerMounted = useKeepMounted(showIssuePicker);
   return (
     <>
       <ConfirmDialog
@@ -56,35 +83,51 @@ export function WorktreeDialogs({
         {confirmDialog.isOpen ? confirmDialog.children : undefined}
       </ConfirmDialog>
 
-      <WorktreeDeleteDialog
-        isOpen={showDeleteDialog}
-        onClose={onCloseDeleteDialog}
-        worktree={worktree}
-      />
+      {deleteDialogMounted && (
+        <Suspense fallback={null}>
+          <LazyWorktreeDeleteDialog
+            isOpen={showDeleteDialog}
+            onClose={onCloseDeleteDialog}
+            worktree={worktree}
+          />
+        </Suspense>
+      )}
 
-      <IssuePickerDialog
-        isOpen={showIssuePicker}
-        onClose={onCloseIssuePicker}
-        worktree={worktree}
-        currentIssueNumber={worktree.issueNumber}
-        onAttach={onAttachIssue}
-        onDetach={onDetachIssue}
-      />
+      {issuePickerMounted && (
+        <Suspense fallback={null}>
+          <LazyIssuePickerDialog
+            isOpen={showIssuePicker}
+            onClose={onCloseIssuePicker}
+            worktree={worktree}
+            currentIssueNumber={worktree.issueNumber}
+            onAttach={onAttachIssue}
+            onDetach={onDetachIssue}
+          />
+        </Suspense>
+      )}
 
-      <ReviewHub
-        isOpen={showReviewHub}
-        worktreePath={worktree.path}
-        onClose={onCloseReviewHub}
-        initialCommitMessage={reviewHubInitialCommitMessage}
-        autoStageOnOpen={reviewHubAutoStageOnOpen}
-      />
+      {reviewHubMounted && (
+        <Suspense fallback={null}>
+          <LazyReviewHub
+            isOpen={showReviewHub}
+            worktreePath={worktree.path}
+            onClose={onCloseReviewHub}
+            initialCommitMessage={reviewHubInitialCommitMessage}
+            autoStageOnOpen={reviewHubAutoStageOnOpen}
+          />
+        </Suspense>
+      )}
 
-      <PlanFileViewer
-        isOpen={showPlanViewer}
-        filePath={worktree.planFilePath}
-        rootPath={worktree.path}
-        onClose={onClosePlanViewer}
-      />
+      {planViewerMounted && (
+        <Suspense fallback={null}>
+          <LazyPlanFileViewer
+            isOpen={showPlanViewer}
+            filePath={worktree.planFilePath}
+            rootPath={worktree.path}
+            onClose={onClosePlanViewer}
+          />
+        </Suspense>
+      )}
     </>
   );
 }

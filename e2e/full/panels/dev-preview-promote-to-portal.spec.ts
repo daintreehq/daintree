@@ -5,6 +5,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount } from "../../helpers/panels";
+import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -47,15 +48,7 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir, PROJECT_NAME);
 
-    await ctx.window.evaluate(async () => {
-      const current = await window.electron.project.getCurrent();
-      if (!current?.id) return;
-      const settings = await window.electron.project.getSettings(current.id);
-      await window.electron.project.saveSettings(current.id, {
-        ...settings,
-        devServerCommand: "node dev-server.cjs",
-      });
-    });
+    await saveCurrentProjectSettings(ctx.window, { devServerCommand: "node dev-server.cjs" });
   });
 
   test.afterAll(async () => {

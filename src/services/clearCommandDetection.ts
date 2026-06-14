@@ -1,6 +1,13 @@
 // Commands that trigger visual terminal clear (AI agents + standard shell)
 export const CLEAR_COMMANDS = new Set(["/clear", "/new", "/reset", "clear", "cls"]);
 
+// Cap the tracked input so a multi-MB paste doesn't build (and retain) a
+// multi-MB string via per-char concatenation. Dropped characters are counted
+// in `overflow` so backspace stays in sync with the real line and isClear is
+// only ever true when the full command is represented; the kept prefix still
+// populates the lastCommand UI for long commands.
+export const MAX_TRACKED_INPUT_LENGTH = 4096;
+
 export interface InputResult {
   isClear: boolean;
   command: string | null;
@@ -12,6 +19,7 @@ export interface InputResult {
  */
 export class InputTracker {
   private buffer = "";
+  private overflow = 0;
   private inBracketedPaste = false;
   private results: InputResult[] = [];
 
@@ -38,18 +46,27 @@ export class InputTracker {
 
       // Ignore newlines inside bracketed paste (multi-line paste should not trigger commands)
       if (this.inBracketedPaste && (char === "\r" || char === "\n")) {
-        this.buffer += char;
+        if (this.buffer.length < MAX_TRACKED_INPUT_LENGTH) {
+          this.buffer += char;
+        } else {
+          this.overflow++;
+        }
         continue;
       }
 
       // Handle Enter (CR or LF) - processing point
       if (char === "\r" || char === "\n") {
         const cmd = this.buffer.trim();
+        // A truncated line can't be a ≤6-char clear command even when the
+        // retained prefix happens to be one (e.g. "clear" + 5000 chars
+        // backspaced down to the cap boundary).
+        const complete = this.overflow === 0;
         this.buffer = "";
+        this.overflow = 0;
 
         if (cmd) {
           this.results.push({
-            isClear: CLEAR_COMMANDS.has(cmd),
+            isClear: complete && CLEAR_COMMANDS.has(cmd),
             command: cmd,
           });
         }
@@ -58,13 +75,18 @@ export class InputTracker {
 
       // Handle Backspace (DEL - 0x7f or BS - 0x08)
       if (char === "\x7f" || char === "\b") {
-        this.buffer = this.buffer.slice(0, -1);
+        if (this.overflow > 0) {
+          this.overflow--;
+        } else {
+          this.buffer = this.buffer.slice(0, -1);
+        }
         continue;
       }
 
       // Handle escape sequences (arrows, home/end) -> Reset buffer and skip sequence
       if (char === "\x1b" && !this.inBracketedPaste) {
         this.buffer = "";
+        this.overflow = 0;
         // Skip the rest of the escape sequence (commonly ESC[A, ESC[B, etc.)
         // Look ahead for common patterns and skip them
         if (i + 1 < data.length && data[i + 1] === "[") {
@@ -83,11 +105,16 @@ export class InputTracker {
       // Handle other control characters (Ctrl+C, Ctrl+D, etc) -> Reset buffer
       if (code < 32) {
         this.buffer = "";
+        this.overflow = 0;
         continue;
       }
 
-      // Accumulate printable characters
-      this.buffer += char;
+      // Accumulate printable characters (bounded — see MAX_TRACKED_INPUT_LENGTH)
+      if (this.buffer.length < MAX_TRACKED_INPUT_LENGTH) {
+        this.buffer += char;
+      } else {
+        this.overflow++;
+      }
     }
 
     return this.results;
@@ -95,6 +122,7 @@ export class InputTracker {
 
   reset(): void {
     this.buffer = "";
+    this.overflow = 0;
     this.inBracketedPaste = false;
     this.results = [];
   }

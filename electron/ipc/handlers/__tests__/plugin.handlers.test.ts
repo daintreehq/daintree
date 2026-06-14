@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const mockDispatchHandler = vi.fn();
-const mockRegisterHandler = vi.fn();
-const mockRemoveHandlers = vi.fn();
 const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
 const mockInstallPlugin = vi.fn();
@@ -23,8 +21,6 @@ vi.mock("../../../services/PluginService.js", () => ({
     uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
     checkForUpdate: (...args: unknown[]) => mockCheckForUpdate(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
-    registerHandler: (...args: unknown[]) => mockRegisterHandler(...args),
-    removeHandlers: (...args: unknown[]) => mockRemoveHandlers(...args),
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
@@ -92,7 +88,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { registerPluginHandlers, registerPluginHandler, removePluginHandlers } from "../plugin.js";
+import { registerPluginHandlers } from "../plugin.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 
 beforeEach(() => {
@@ -241,6 +237,50 @@ describe("registerPluginHandlers", () => {
 
     await setEnabledHandler({}, "acme.my-plugin", false);
     expect(mockSetEnabled).toHaveBeenCalledWith("acme.my-plugin", false);
+  });
+
+  it("PLUGIN_LIST answers only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    registerPluginHandlers();
+    const listHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:list"
+    )![1] as (...args: unknown[]) => unknown;
+    const inFlight = listHandler() as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockListPlugins).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockListPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_SET_ENABLED applies only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    registerPluginHandlers();
+    const setEnabledHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:set-enabled"
+    )![1] as (...args: unknown[]) => unknown;
+    const inFlight = setEnabledHandler({}, "daintree.github", true) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockSetEnabled).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockSetEnabled).toHaveBeenCalledWith("daintree.github", true);
   });
 
   function getHandler(channel: string) {
@@ -1465,6 +1505,26 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     const result = await handler({});
     expect(result).toEqual([]);
   });
+
+  it("reads the registry only after waitForInit() resolves", async () => {
+    const { pluginService } = await import("../../../services/PluginService.js");
+    const waitForInit = vi.mocked(pluginService.waitForInit);
+    let releaseGate: () => void = () => {};
+    waitForInit.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      })
+    );
+    mockGetRegisteredForgeProviders.mockReturnValue([]);
+    const handler = getHandler();
+    const inFlight = handler({}) as Promise<unknown>;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockGetRegisteredForgeProviders).not.toHaveBeenCalled();
+    releaseGate();
+    await inFlight;
+    expect(mockGetRegisteredForgeProviders).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
@@ -1834,20 +1894,5 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("registerPluginHandler", () => {
-  it("delegates to pluginService.registerHandler", () => {
-    const handler = vi.fn();
-    registerPluginHandler("acme.my-plugin", "my-channel", handler);
-    expect(mockRegisterHandler).toHaveBeenCalledWith("acme.my-plugin", "my-channel", handler);
-  });
-});
-
-describe("removePluginHandlers", () => {
-  it("delegates to pluginService.removeHandlers", () => {
-    removePluginHandlers("acme.my-plugin");
-    expect(mockRemoveHandlers).toHaveBeenCalledWith("acme.my-plugin");
   });
 });

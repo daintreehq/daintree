@@ -569,12 +569,12 @@ code.hljs {
 
 .hljs-addition {
   color: var(--color-syntax-string);
-  background: color-mix(in oklch, var(--color-syntax-string) 15%, transparent);
+  background: color-mix(in srgb, var(--color-syntax-string) 15%, transparent);
 }
 
 .hljs-deletion {
   color: var(--color-syntax-keyword);
-  background: color-mix(in oklch, var(--color-status-danger) 15%, transparent);
+  background: color-mix(in srgb, var(--color-status-danger) 15%, transparent);
 }
 
 .hljs-emphasis {
@@ -626,18 +626,18 @@ code.hljs {
    * bevel. */
   --shadow-overlay:
     0 1px 0 var(--theme-overlay-soft) inset,
-    0 12px 40px color-mix(in oklch, var(--theme-shadow-color) 89%, transparent);
+    0 12px 40px color-mix(in srgb, var(--theme-shadow-color) 89%, transparent);
   --shadow-modal:
     0 1px 0 var(--theme-overlay-medium) inset,
-    0 20px 56px color-mix(in oklch, var(--theme-shadow-color) 81%, transparent);
+    0 20px 56px color-mix(in srgb, var(--theme-shadow-color) 81%, transparent);
   --shadow-dock-popover:
     0 1px 0 var(--theme-overlay-strong) inset,
-    0 25px 70px -10px color-mix(in oklch, var(--theme-shadow-color) 97%, transparent);
+    0 25px 70px -10px color-mix(in srgb, var(--theme-shadow-color) 97%, transparent);
   --shadow-dock-panel-popover:
     0 1px 0 var(--theme-overlay-strong) inset,
-    0 10px 40px -10px color-mix(in oklch, var(--theme-shadow-color) 78%, transparent),
-    0 20px 60px -15px color-mix(in oklch, var(--theme-shadow-color) 56%, transparent),
-    0 30px 80px -20px color-mix(in oklch, var(--theme-shadow-color) 75%, transparent);
+    0 10px 40px -10px color-mix(in srgb, var(--theme-shadow-color) 78%, transparent),
+    0 20px 60px -15px color-mix(in srgb, var(--theme-shadow-color) 56%, transparent),
+    0 30px 80px -20px color-mix(in srgb, var(--theme-shadow-color) 75%, transparent);
   --border-overlay: var(--theme-border-strong);
   --border-dock-popup: color-mix(
     in oklab,
@@ -653,6 +653,11 @@ code.hljs {
   --dock-padding-y: 0.375rem;
   --dock-gap: 0.375rem;
   --dock-item-height: 2rem;
+  /* dock-item-bg / dock-item-bg-active / dock-item-border-active are OPTIONAL
+     extension keys (shared/theme/extensionRegistry.ts). Themes override them
+     via inline vars on <html>, which beat these :root fallbacks in the
+     cascade; a self-referential var() fallback here would be an invalid
+     custom-property cycle. Omission keeps these exact values. */
   --dock-item-bg: var(--theme-overlay-subtle);
   --dock-item-bg-hover: var(--theme-overlay-medium);
   --dock-item-bg-active: color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
@@ -1071,10 +1076,14 @@ code.hljs {
     content: "";
     position: absolute;
     inset: 0;
-    background-image: url("./assets/noise.png");
+    /* The noise.png fallback must stay here: a relative url() inside a :root
+       custom property resolves against the document, not this stylesheet, so
+       themes swap the texture via --grain-image (data-URI or `none`) and the
+       bundled asset remains the unset/"fine" default. */
+    background-image: var(--grain-image, url("./assets/noise.png"));
     background-repeat: repeat;
-    opacity: 0.02;
-    mix-blend-mode: overlay;
+    opacity: var(--theme-grain-opacity, 0.02);
+    mix-blend-mode: var(--theme-grain-blend, overlay);
     pointer-events: none;
     z-index: 0;
   }
@@ -1281,14 +1290,17 @@ body,
   will-change: opacity;
 }
 
-/* Agent status working state - pulsing gradient animation */
+/* Agent status working state - pulsing animation. Animates opacity, not
+   color: color keyframes tick style-recalc + paint on the main thread for
+   every visible working badge — the steady state of this app, often across
+   many worktree cards at once — while opacity runs on the compositor. */
 @keyframes status-pulse {
   0%,
   100% {
-    color: var(--color-state-working);
+    opacity: 1;
   }
   50% {
-    color: color-mix(in oklab, var(--color-state-working) 70%, var(--color-daintree-text));
+    opacity: 0.7;
   }
 }
 
@@ -1619,7 +1631,7 @@ body,
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 35%, transparent);
   animation: fleet-exit-pulse 220ms var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
@@ -1655,7 +1667,7 @@ body,
    * overlay invisible when the animation is killed (data-performance-mode
    * wildcard sets `animation: none`), avoiding a frozen static tint. */
   opacity: 0;
-  background-color: color-mix(in oklch, var(--theme-tint) 20%, transparent);
+  background-color: color-mix(in srgb, var(--theme-tint) 20%, transparent);
   animation: fleet-preview-enter 150ms var(--ease-out-expo) 1 both;
   will-change: opacity;
   z-index: 2;
@@ -1925,13 +1937,22 @@ body,
   }
 }
 
-/* Terminal Selection State */
+/* Terminal Selection State.
+   panel-focus-border / panel-focus-shadow / panel-selected-bg are OPTIONAL
+   extension keys; the fallbacks are the pre-extension recipes verbatim. The
+   high-contrast `prefers-contrast: more` and `forced-colors: active` blocks
+   below keep their own hardcoded recipes and continue to win. */
 .terminal-selected {
-  border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-  background-color: var(--color-surface-highlight);
-  box-shadow:
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+  box-shadow: var(
+    --panel-focus-shadow,
     inset 0 0 0 1px var(--theme-overlay-soft),
-    0 0 0 1px var(--theme-overlay-strong);
+    0 0 0 1px var(--theme-overlay-strong)
+  );
 }
 
 /* Ensure header separator uses overlay token for consistency */
@@ -1946,10 +1967,15 @@ body,
    state, and any future no-terminal content with the lift, so the chrome is
    scoped here to edges only. */
 .assistant-focused {
-  border-left-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-  box-shadow:
+  border-left-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  box-shadow: var(
+    --panel-focus-shadow,
     inset 0 0 0 1px var(--theme-overlay-soft),
-    0 0 0 1px var(--theme-overlay-strong);
+    0 0 0 1px var(--theme-overlay-strong)
+  );
 }
 
 /* Panel Agent State Borders — grid panel container state-driven styling */
@@ -2090,11 +2116,16 @@ body,
 
 /* Backwards compatibility for older selection class */
 .terminal-focused {
-  border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));
-  background-color: var(--color-surface-highlight);
-  box-shadow:
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary))
+  );
+  background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+  box-shadow: var(
+    --panel-focus-shadow,
     inset 0 0 0 1px var(--theme-overlay-medium),
-    0 0 0 1px var(--theme-overlay-emphasis);
+    0 0 0 1px var(--theme-overlay-emphasis)
+  );
 }
 
 /* Terminal Pane Ping Animation
@@ -2137,13 +2168,13 @@ body,
 
 @keyframes terminal-ping-border {
   0% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
   35% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 25%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 25%, transparent);
   }
   100% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
 }
 
@@ -2153,7 +2184,7 @@ body,
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  background: color-mix(in oklch, var(--theme-tint) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-tint) 12%, transparent);
   animation: terminal-ping-overlay var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
   will-change: opacity;
 }
@@ -2178,17 +2209,25 @@ body,
   }
   35% {
     /* Overshoot: selected + extra brightness */
-    background-color: var(--color-surface-highlight);
-    border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));
+    background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+    border-color: var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary))
+    );
     box-shadow: inset 0 0 0 1px var(--theme-overlay-medium);
   }
   100% {
     /* Settled: matches .terminal-selected exactly */
-    background-color: var(--color-surface-highlight);
-    border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
-    box-shadow:
+    background-color: var(--panel-selected-bg, var(--color-surface-highlight));
+    border-color: var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    );
+    box-shadow: var(
+      --panel-focus-shadow,
       inset 0 0 0 1px var(--theme-overlay-soft),
-      0 0 0 1px var(--theme-overlay-strong);
+      0 0 0 1px var(--theme-overlay-strong)
+    );
   }
 }
 
@@ -2200,13 +2239,13 @@ body,
 
 @keyframes terminal-header-border {
   0% {
-    border-bottom-color: color-mix(in oklch, var(--theme-tint) 5%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 5%, transparent);
   }
   35% {
-    border-bottom-color: color-mix(in oklch, var(--theme-tint) 25%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 25%, transparent);
   }
   100% {
-    border-bottom-color: color-mix(in oklch, var(--theme-tint) 5%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--theme-tint) 5%, transparent);
   }
 }
 
@@ -2219,13 +2258,13 @@ body,
 /* Title glow - same animation for both variants */
 @keyframes title-glow {
   0% {
-    text-shadow: 0 0 0 color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    text-shadow: 0 0 0 color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
   35% {
-    text-shadow: 0 0 8px color-mix(in oklch, var(--theme-tint) 30%, transparent);
+    text-shadow: 0 0 8px color-mix(in srgb, var(--theme-tint) 30%, transparent);
   }
   100% {
-    text-shadow: 0 0 0 color-mix(in oklch, var(--theme-tint) 0%, transparent);
+    text-shadow: 0 0 0 color-mix(in srgb, var(--theme-tint) 0%, transparent);
   }
 }
 
@@ -2268,7 +2307,7 @@ body,
  */
 
 /* Loading shimmer - left to right sweep */
-@keyframes github-status-shimmer {
+@keyframes forge-status-shimmer {
   0% {
     transform: translateX(-100%);
   }
@@ -2277,11 +2316,11 @@ body,
   }
 }
 
-.github-status-loading {
+.forge-status-loading {
   background: color-mix(in oklab, var(--color-daintree-accent) 20%, transparent);
 }
 
-.github-status-loading::after {
+.forge-status-loading::after {
   content: "";
   position: absolute;
   top: 0;
@@ -2294,7 +2333,7 @@ body,
     color-mix(in oklab, var(--color-daintree-accent) 80%, transparent),
     transparent
   );
-  animation: github-status-shimmer 1.5s ease-in-out infinite;
+  animation: forge-status-shimmer 1.5s ease-in-out infinite;
   will-change: transform;
 }
 
@@ -2336,7 +2375,7 @@ body,
 }
 
 /* Success fade - scale in then fade out */
-@keyframes github-status-success-fade {
+@keyframes forge-status-success-fade {
   0% {
     opacity: 0;
     transform: scaleX(0);
@@ -2351,15 +2390,15 @@ body,
   }
 }
 
-.github-status-success {
+.forge-status-success {
   background: var(--color-status-success);
   transform-origin: left;
-  animation: github-status-success-fade 500ms ease-out forwards;
+  animation: forge-status-success-fade 500ms ease-out forwards;
   will-change: opacity, transform;
 }
 
 /* Error pulse - subtle breathing animation */
-@keyframes github-status-error-pulse {
+@keyframes forge-status-error-pulse {
   0%,
   100% {
     opacity: 0.8;
@@ -2369,29 +2408,29 @@ body,
   }
 }
 
-.github-status-error {
+.forge-status-error {
   background: var(--color-status-error);
-  animation: github-status-error-pulse 2s ease-in-out infinite;
+  animation: forge-status-error-pulse 2s ease-in-out infinite;
   will-change: opacity;
 }
 
 /* Respect user's motion preferences */
 @variant reduce-motion {
-  .github-status-loading::after {
+  .forge-status-loading::after {
     display: none;
   }
 
-  .github-status-loading {
+  .forge-status-loading {
     background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent);
   }
 
-  .github-status-success {
+  .forge-status-success {
     animation: none;
     opacity: 1;
     transform: scaleX(1);
   }
 
-  .github-status-error {
+  .forge-status-error {
     animation: none;
     opacity: 1;
   }
@@ -2404,11 +2443,11 @@ body,
 }
 
 /* Disable in performance mode */
-body[data-performance-mode="true"] .github-status-loading::after {
+body[data-performance-mode="true"] .forge-status-loading::after {
   display: none !important;
 }
 
-body[data-performance-mode="true"] .github-status-loading {
+body[data-performance-mode="true"] .forge-status-loading {
   background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent) !important;
 }
 
@@ -2418,12 +2457,12 @@ body[data-performance-mode="true"] .palette-loading-bar__sweep {
   background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent) !important;
 }
 
-body[data-performance-mode="true"] .github-status-success {
+body[data-performance-mode="true"] .forge-status-success {
   opacity: 1 !important;
   transform: scaleX(1) !important;
 }
 
-body[data-performance-mode="true"] .github-status-error {
+body[data-performance-mode="true"] .forge-status-error {
   opacity: 1 !important;
 }
 
@@ -2465,286 +2504,6 @@ body[data-performance-mode="true"] .github-status-error {
   -webkit-app-region: no-drag;
   pointer-events: auto; /* Allow OS to catch resize events */
   cursor: ns-resize; /* Show vertical resize cursor */
-}
-
-/* React-Diff-View Tokyo Night Theme Overrides */
-.diff-viewer {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-/* Base diff table styling */
-.diff-viewer .diff {
-  background: var(--color-daintree-bg);
-  color: var(--color-daintree-text);
-  table-layout: auto;
-  width: max-content;
-  min-width: 100%;
-}
-
-/* Gutter (line numbers) styling */
-.diff-viewer .diff-gutter {
-  background: var(--color-daintree-sidebar);
-  color: var(--color-state-idle);
-  padding: 0 8px;
-  /* width acts as a hint under table-layout:auto; min-width keeps it from
-     shrinking under content-heavy code columns. */
-  width: 50px;
-  min-width: 50px;
-  text-align: right;
-  user-select: none;
-  border-right: 1px solid var(--color-daintree-border);
-}
-
-/* Code content styling */
-.diff-viewer .diff-code {
-  background: var(--color-daintree-bg);
-  padding: 0 12px;
-  white-space: pre;
-}
-
-/* Added lines. The :root values below are the ORIGINAL hardcoded status-based
- * fills and are the dark-mode source of truth (byte-for-byte unchanged). D1a
- * wires the previously-dead per-palette diff-* tokens ONLY on light (in the
- * `.light .diff-viewer` overrides below), where they unblock D1b's light alpha
- * tuning. (Wiring on dark too would shift dark from the hardcoded 12/20/30% to
- * the engine's intended 0.18/full/0.28 — a real dark change deferred pending
- * confirmation that the dark diff token values are intended; see report.) */
-.diff-viewer .diff-code-insert {
-  background: color-mix(in oklab, var(--color-status-success) 12%, transparent);
-}
-
-.diff-viewer .diff-gutter-insert {
-  background: color-mix(in oklab, var(--color-status-success) 20%, transparent);
-  color: var(--color-status-success);
-}
-
-/* Deleted lines */
-.diff-viewer .diff-code-delete {
-  background: color-mix(in oklab, var(--color-status-danger) 12%, transparent);
-}
-
-.diff-viewer .diff-gutter-delete {
-  background: color-mix(in oklab, var(--color-status-danger) 20%, transparent);
-  color: var(--color-status-danger);
-}
-
-/* Word-level change highlighting */
-.diff-viewer .diff-code-edit .diff-code-insert-edit {
-  background: color-mix(in oklab, var(--color-status-success) 30%, transparent);
-  border-radius: var(--radius-xs);
-}
-
-.diff-viewer .diff-code-edit .diff-code-delete-edit {
-  background: color-mix(in oklab, var(--color-status-danger) 30%, transparent);
-  border-radius: var(--radius-xs);
-}
-
-/* D1a (light) — wire the per-palette diff-* tokens. The line fills consume
- * --color-diff-{insert,delete}-background / -edit; the gutter backgrounds use a
- * stronger mix of the same line-fill token so the gutter reads as a denser band
- * of the line color (the raw --color-diff-gutter-* token is full-opacity
- * status color — usable as the glyph color, not as a legible background under
- * same-color glyph text). This unblocks D1b light alpha tuning. */
-.light .diff-viewer .diff-code-insert {
-  background: var(--color-diff-insert-background);
-}
-
-.light .diff-viewer .diff-gutter-insert {
-  background: color-mix(in oklab, var(--color-diff-insert-background) 70%, var(--color-surface));
-  color: var(--color-diff-gutter-insert);
-}
-
-.light .diff-viewer .diff-code-delete {
-  background: var(--color-diff-delete-background);
-}
-
-.light .diff-viewer .diff-gutter-delete {
-  background: color-mix(in oklab, var(--color-diff-delete-background) 70%, var(--color-surface));
-  color: var(--color-diff-gutter-delete);
-}
-
-.light .diff-viewer .diff-code-edit .diff-code-insert-edit {
-  background: var(--color-diff-insert-edit-background);
-}
-
-.light .diff-viewer .diff-code-edit .diff-code-delete-edit {
-  background: var(--color-diff-delete-edit-background);
-}
-
-/* Hunk header styling */
-.diff-viewer .diff-hunk-header {
-  background: var(--color-surface);
-  color: var(--color-status-info);
-  padding: 4px 12px;
-  font-size: 11px;
-  border-top: 1px solid var(--color-daintree-border);
-  border-bottom: 1px solid var(--color-daintree-border);
-}
-
-/* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
-   header when scrollIntoView lands a hunk at block: "start". */
-.diff-viewer tbody.diff-hunk {
-  scroll-margin-top: 56px;
-}
-
-.diff-viewer .diff-hunk-header-gutter {
-  background: var(--color-surface);
-}
-
-.diff-viewer .diff-hunk-header-content {
-  background: var(--color-surface);
-}
-
-/* Split view specific styling */
-.diff-viewer .diff[data-view-type="split"] .diff-gutter {
-  min-width: 40px;
-}
-
-/* Line number hover effect */
-.diff-viewer .diff-gutter:hover {
-  background: var(--color-surface);
-}
-
-/* Selection styling */
-.diff-viewer .diff-code::selection,
-.diff-viewer .diff-code *::selection {
-  background: color-mix(in oklch, var(--color-accent-primary) 30%, transparent);
-}
-
-/* Scrollbar styling for diff viewer */
-.diff-viewer::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.diff-viewer::-webkit-scrollbar-track {
-  background: var(--color-daintree-bg);
-}
-
-.diff-viewer::-webkit-scrollbar-thumb {
-  background: var(--color-state-idle);
-  border-radius: var(--radius-sm);
-}
-
-.diff-viewer::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
-}
-
-/* D1a (light) — diff scrollbars consume the shared --scrollbar-* tokens so
- * per-theme scrollbar tuning applies. Dark keeps the original hardcoded values
- * above (byte-for-byte unchanged). */
-.light .diff-viewer::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-}
-
-.light .diff-viewer::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-}
-
-.light .diff-viewer::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-}
-
-/* Syntax highlighting overrides for Tokyo Night palette */
-.diff-viewer .token.comment,
-.diff-viewer .token.prolog,
-.diff-viewer .token.doctype,
-.diff-viewer .token.cdata {
-  color: var(--color-syntax-comment);
-}
-
-.diff-viewer .token.punctuation {
-  color: var(--color-syntax-punctuation);
-}
-
-.diff-viewer .token.property,
-.diff-viewer .token.tag,
-.diff-viewer .token.boolean,
-.diff-viewer .token.number,
-.diff-viewer .token.constant,
-.diff-viewer .token.symbol {
-  color: var(--color-syntax-number);
-}
-
-.diff-viewer .token.selector,
-.diff-viewer .token.attr-name,
-.diff-viewer .token.string,
-.diff-viewer .token.char,
-.diff-viewer .token.builtin {
-  color: var(--color-syntax-string);
-}
-
-.diff-viewer .token.operator,
-.diff-viewer .token.entity,
-.diff-viewer .token.url,
-.diff-viewer .language-css .token.string,
-.diff-viewer .style .token.string {
-  color: var(--color-syntax-operator);
-}
-
-.diff-viewer .token.atrule,
-.diff-viewer .token.attr-value,
-.diff-viewer .token.keyword {
-  color: var(--color-syntax-keyword);
-}
-
-.diff-viewer .token.function,
-.diff-viewer .token.class-name {
-  color: var(--color-syntax-function);
-}
-
-.diff-viewer .token.regex,
-.diff-viewer .token.important,
-.diff-viewer .token.variable {
-  color: var(--color-syntax-number);
-}
-
-/* Ensure proper table layout */
-.diff-viewer table.diff {
-  border-collapse: collapse;
-}
-
-/* Per-file horizontal scroll wrapper — gives each file its own scrollbar
-   so all rows scroll together instead of each <td> scrolling independently. */
-.diff-viewer .diff-file-scroll {
-  overflow-x: auto;
-}
-
-.diff-viewer .diff-file-scroll::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
-  background: var(--color-daintree-bg);
-}
-
-.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
-  background: var(--color-state-idle);
-  border-radius: var(--radius-sm);
-}
-
-.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
-}
-
-/* D1a (light) — see the .diff-viewer scrollbar note above. */
-.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-}
-
-.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-}
-
-.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-}
-
-.diff-viewer table.diff td {
-  vertical-align: top;
 }
 
 /* Performance Mode Overrides — narrow the transition kill-list to expensive
@@ -3016,6 +2775,9 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
     border: 1px solid CanvasText;
   }
+
+  /* Diff-viewer forced-colors rules live in src/components/Worktree/DiffViewer.css
+     (component-owned: the stylesheet rides the lazy diff chunk). */
 }
 
 /* Increased contrast mode — heavier borders for visibility.
@@ -3079,6 +2841,9 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-style: solid;
     border-color: var(--color-daintree-text);
   }
+
+  /* Diff-viewer increased-contrast rules live in src/components/Worktree/DiffViewer.css
+     (component-owned: the stylesheet rides the lazy diff chunk). */
 }
 
 @layer utilities {

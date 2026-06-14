@@ -172,7 +172,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
       } as WorktreeState,
       hasUpstreamDelta: false,
       hasAuthFailedSignIn: true,
@@ -207,7 +207,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
-        isGitHubRemote: true,
+        matchedForgeProviderId: "daintree.github.github",
         linked: ciFailureLinked(),
       } as WorktreeState,
       hasAuthFailedSignIn: true,

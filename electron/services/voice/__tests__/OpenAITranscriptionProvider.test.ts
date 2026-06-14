@@ -363,16 +363,18 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("sets transcription.prompt from frozen keyterms in session.update", async () => {
+  it("omits transcription.prompt even with keyterms (gpt-realtime-whisper rejects it)", async () => {
+    // `gpt-realtime-whisper` hard-rejects a `prompt` field and kills the session,
+    // so MODEL_SUPPORTS_PROMPT is false and keyterms must never reach session.update.
     const service = new OpenAITranscriptionProvider();
     void service.start({ ...BASE_SETTINGS, keyterms: ["Daintree", "xterm"] });
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
     const payload = JSON.parse(socket.sent[0]) as {
-      session: { audio: { input: { transcription: { prompt?: string } } } };
+      session: { audio: { input: { transcription: Record<string, unknown> } } };
     };
-    expect(payload.session.audio.input.transcription.prompt).toBe("Keywords: Daintree, xterm");
+    expect(payload.session.audio.input.transcription).not.toHaveProperty("prompt");
     service.stop();
   });
 
@@ -389,7 +391,7 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("reuses the frozen keyterm prompt on reconnect", async () => {
+  it("does not send a keyterm prompt on reconnect (model rejects it)", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service, {
@@ -404,9 +406,9 @@ describe("OpenAITranscriptionProvider", () => {
     socket2.simulateOpen();
 
     const payload = JSON.parse(socket2.sent[0]) as {
-      session: { audio: { input: { transcription: { prompt?: string } } } };
+      session: { audio: { input: { transcription: Record<string, unknown> } } };
     };
-    expect(payload.session.audio.input.transcription.prompt).toBe("Keywords: Daintree, xterm");
+    expect(payload.session.audio.input.transcription).not.toHaveProperty("prompt");
     service.stop();
   });
 

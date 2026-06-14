@@ -133,6 +133,27 @@ describe("useAudioDevices", () => {
     await waitFor(() => expect(enumerateSpy).toHaveBeenCalledTimes(1));
   });
 
+  it("does not accumulate devicechange listeners across remount cycles", async () => {
+    enumerateSpy.mockResolvedValue([]);
+
+    const first = renderHook(() => useAudioDevices());
+    await waitFor(() => expect(enumerateSpy).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    const second = renderHook(() => useAudioDevices());
+    expect(addEventListenerSpy).toHaveBeenCalledTimes(1);
+
+    const deviceChangeHandler = addEventListenerSpy.mock.calls[0]?.[1] as () => void;
+    enumerateSpy.mockClear();
+    act(() => {
+      deviceChangeHandler();
+    });
+
+    await waitFor(() => expect(enumerateSpy).toHaveBeenCalledTimes(1));
+    expect(enumerateSpy).toHaveBeenCalledTimes(1);
+    second.unmount();
+  });
+
   it("re-enumerates on manual refresh() call", async () => {
     enumerateSpy.mockResolvedValue([{ deviceId: "mic1", kind: "audioinput", label: "Mic 1" }]);
 

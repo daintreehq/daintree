@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProcessTreeCache, type ProcessInfo } from "../ProcessTreeCache.js";
 
-const { mockExec } = vi.hoisted(() => {
+const { mockExec, mockExecFile } = vi.hoisted(() => {
   const mockExec = vi.fn();
-  return { mockExec };
+  const mockExecFile = vi.fn();
+  return { mockExec, mockExecFile };
 });
 
 vi.mock("child_process", () => ({
   exec: mockExec,
+  execFile: mockExecFile,
 }));
 
 type CpuSnapshot = { kernelTicks: bigint; userTicks: bigint; wallMs: number };
@@ -492,11 +494,11 @@ describe("ProcessTreeCache command/env construction", () => {
 
   it("sets LC_ALL in env on Unix ps exec", async () => {
     // Pass {stdout, stderr} as the single callback success value so generic
-    // promisify (lost the exec-specific symbol via mocking) resolves to an
-    // object that destructures correctly.
-    mockExec.mockImplementation(
+    // promisify resolves to an object that destructures correctly.
+    mockExecFile.mockImplementation(
       (
-        _cmd: string,
+        _file: string,
+        _args: unknown,
         _opts: unknown,
         cb: (err: null, result: { stdout: string; stderr: string }) => void
       ) => {
@@ -515,8 +517,8 @@ describe("ProcessTreeCache command/env construction", () => {
     internals.isWindows = false;
     await internals.refreshUnix();
 
-    expect(mockExec).toHaveBeenCalledTimes(1);
-    const callOpts = mockExec.mock.calls[0][1] as { env?: Record<string, string> };
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    const callOpts = mockExecFile.mock.calls[0][2] as { env?: Record<string, string> };
     expect(callOpts.env).toBeDefined();
     expect(callOpts.env!.LC_ALL).toMatch(/^(en_US\.UTF-8|C\.UTF-8)$/);
     // LANG is inherited from process.env, not explicitly overridden

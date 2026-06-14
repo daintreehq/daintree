@@ -9,10 +9,10 @@ import { enableCompileCache, flushCompileCache, constants as moduleConstants } f
 import fs from "node:fs";
 import path from "node:path";
 import { app, dialog } from "electron";
-import { runBootMigrations } from "./boot/migrations/index.js";
+import { BOOT_MIGRATIONS, runBootMigrations } from "./boot/migrations/index.js";
 import { isSafeModeActive } from "./services/CrashLoopGuardService.js";
 import { setCompileCacheEnableStatus } from "./utils/hostPerformance.js";
-import { initializeStore, _peekStoreInstance } from "./store.js";
+import { initializeStore, _peekStoreInstance, runDeferredStoreBackup } from "./store.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 
 const cacheDir = path.join(app.getPath("userData"), "compile-cache");
@@ -44,11 +44,15 @@ const cacheDir = path.join(app.getPath("userData"), "compile-cache");
 }
 
 // Run forward-only boot migrations before anything in main.ts touches state.
+// Guarded on the registry so the common empty-registry boot skips the
+// safe-mode file read, the marker-file ENOENT read, and the awaited hop —
+// registering a migration in BOOT_MIGRATIONS reactivates this automatically.
 // Failures are logged but non-fatal — forward-only idempotency means the
-// failing migration retries on the next boot, and the app should still be
-// usable as long as existing state is intact.
+// failing migration retries on the next boot.
 try {
-  await runBootMigrations({ isSafeMode: isSafeModeActive() });
+  if (BOOT_MIGRATIONS.length > 0) {
+    await runBootMigrations({ isSafeMode: isSafeModeActive() });
+  }
 } catch (err) {
   console.error("[Bootstrap] Boot migrations failed — continuing with existing state:", err);
 }
@@ -83,6 +87,14 @@ try {
 }
 
 await import("./main.js");
+
+// Refresh the config.json.bak copy (and tighten its permissions) off the
+// boot-critical path. initializeStore() used to do this synchronously before
+// main.js loaded; the previous session's .bak stays valid for corrupt-config
+// recovery until this fires, so deferring loses nothing.
+setImmediate(() => {
+  runDeferredStoreBackup();
+});
 
 // Persist any compile-cache entries written during boot. enableCompileCache()
 // only flushes on a clean process exit, so a crash or SIGKILL before the first

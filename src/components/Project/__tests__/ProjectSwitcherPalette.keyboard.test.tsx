@@ -66,7 +66,20 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
     <div data-testid="palette-footer">{children}</div>
   );
 
-  const Dialog = () => null;
+  const Dialog = ({
+    isOpen,
+    children,
+    ariaLabel,
+  }: {
+    isOpen: boolean;
+    children: React.ReactNode;
+    ariaLabel: string;
+  }) =>
+    isOpen ? (
+      <div role="dialog" aria-modal="true" aria-label={ariaLabel}>
+        {children}
+      </div>
+    ) : null;
   Dialog.Header = Header;
   Dialog.Input = Input;
   Dialog.Body = Body;
@@ -209,53 +222,6 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(screen.queryByLabelText("Stop project")).toBeNull();
     expect(screen.queryByLabelText("Locate project folder")).toBeNull();
     expect(screen.queryByLabelText("Remove project")).toBeNull();
-  });
-
-  it("Tab from last footer button wraps focus to the input (focus trap)", () => {
-    const propsWithButtons = {
-      ...defaultProps,
-      onOpenProjectSettings: vi.fn(),
-      onAddProject: vi.fn(),
-      onCreateFolder: vi.fn(),
-    };
-    render(<ProjectSwitcherPalette {...propsWithButtons} />);
-
-    const dialog = document.querySelector('[role="dialog"]');
-    expect(dialog).toBeTruthy();
-
-    const focusable = dialog!.querySelectorAll<HTMLElement>(
-      'input, button, [tabindex]:not([tabindex="-1"])'
-    );
-    expect(focusable.length).toBeGreaterThanOrEqual(2);
-
-    const lastEl = focusable[focusable.length - 1]!;
-    lastEl.focus();
-    expect(document.activeElement).toBe(lastEl);
-
-    fireEvent.keyDown(window, { key: "Tab" });
-    expect(document.activeElement).toBe(focusable[0]);
-  });
-
-  it("Shift+Tab from input wraps focus to last footer button (focus trap)", () => {
-    const propsWithButtons = {
-      ...defaultProps,
-      onOpenProjectSettings: vi.fn(),
-      onAddProject: vi.fn(),
-      onCreateFolder: vi.fn(),
-    };
-    render(<ProjectSwitcherPalette {...propsWithButtons} />);
-
-    const dialog = document.querySelector('[role="dialog"]');
-    const focusable = dialog!.querySelectorAll<HTMLElement>(
-      'input, button, [tabindex]:not([tabindex="-1"])'
-    );
-
-    const firstEl = focusable[0]!;
-    firstEl.focus();
-    expect(document.activeElement).toBe(firstEl);
-
-    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 
   it("displays condensed footer with switch and right-click hints in modal mode", () => {

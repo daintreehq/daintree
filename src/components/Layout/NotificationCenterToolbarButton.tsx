@@ -1,18 +1,25 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, Suspense, lazy } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Bell, BellOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useUIStore } from "@/store/uiStore";
 import { actionService } from "@/services/ActionService";
 import { useShallow } from "zustand/react/shallow";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { isScheduledQuietNow } from "@shared/utils/quietHours";
 import { DURATION_200, DURATION_250 } from "@/lib/animationUtils";
+
+function preloadNotificationCenter() {
+  return import("@/components/Notifications/NotificationCenter");
+}
+const LazyNotificationCenter = lazy(() =>
+  preloadNotificationCenter().then((m) => ({ default: m.NotificationCenter }))
+);
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text";
 
@@ -33,6 +40,8 @@ export function NotificationCenterToolbarButton({
     }))
   );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
+  // Latch after first open so reopening never re-suspends.
+  const notificationCenterMounted = useKeepMounted(notificationCenterOpen);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const {
@@ -54,6 +63,14 @@ export function NotificationCenterToolbarButton({
       osDndActive: s.osDndActive,
     }))
   );
+
+  // Warm the chunk before the first click (React 19 lazy still shows the
+  // fallback for one frame on a cold chunk). Skipped while notifications are
+  // disabled — the bell never renders, so the chunk can't be needed.
+  useEffect(() => {
+    if (!notificationsEnabled) return;
+    void preloadNotificationCenter();
+  }, [notificationsEnabled]);
 
   // Force re-render at session-mute expiry and at scheduled quiet-hours
   // boundaries. Without this the icon stays in its old state until something
@@ -281,7 +298,14 @@ export function NotificationCenterToolbarButton({
         anchorRef={notificationCenterButtonRef}
         className="p-0"
       >
-        <NotificationCenter open={notificationCenterOpen} onClose={closeNotificationCenter} />
+        {notificationCenterMounted && (
+          <Suspense fallback={null}>
+            <LazyNotificationCenter
+              open={notificationCenterOpen}
+              onClose={closeNotificationCenter}
+            />
+          </Suspense>
+        )}
       </FixedDropdown>
       <span
         data-testid="notification-dnd-announcement"

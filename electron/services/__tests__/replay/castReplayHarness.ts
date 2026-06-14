@@ -287,10 +287,7 @@ function cellToVisibleContentCell(cell: IBufferCell): VisibleContentCell {
     width: cell.getWidth(),
     fgColorMode: cell.getFgColorMode(),
     fgColor: cell.getFgColor(),
-    bgColorMode: cell.getBgColorMode(),
-    bgColor: cell.getBgColor(),
     attributes,
-    defaultVisual: cell.isFgDefault() && cell.isBgDefault() && attributes === 0,
   };
 }
 
@@ -299,15 +296,15 @@ function cellToVisibleContentCell(cell: IBufferCell): VisibleContentCell {
  * `TerminalProcess.getVisibleActivitySnapshot`. Production always wires this so
  * the `AgentActivityTemperature` cell-snapshot path is exercised; the harness
  * previously passed only `getVisibleLines`/`getCursorLine`, leaving the cell
- * path on its text-only fallback. The `n` parameter is intentionally ignored:
- * production's `getVisibleActivityCells()` scans the full viewport
- * (`[baseY, baseY + rows)`), not the bottom-N rows. Returns `undefined` when the
- * cell API is unavailable so `ActivityMonitor` falls back to the text snapshot.
+ * path on its text-only fallback. The `n` parameter clamps the scan to the
+ * bottom-N rows, matching production's `getVisibleActivityCells(n)` behaviour.
+ * Returns `undefined` when the cell API is unavailable so `ActivityMonitor`
+ * falls back to the text snapshot.
  */
 function makeGetVisibleContentSnapshot(
   term: HeadlessTerminalType
 ): (n: number) => VisibleContentSnapshot | undefined {
-  return () => {
+  return (n: number) => {
     const buffer = term.buffer.active as unknown as SnapshotBuffer;
     if (
       !buffer ||
@@ -317,8 +314,8 @@ function makeGetVisibleContentSnapshot(
       return undefined;
     }
     const reusableCell = buffer.getNullCell();
-    const start = buffer.baseY;
     const end = buffer.baseY + term.rows;
+    const start = Math.max(buffer.baseY, end - n);
     const rows: VisibleContentCell[][] = [];
     for (let y = start; y < end; y++) {
       const line = buffer.getLine(y);

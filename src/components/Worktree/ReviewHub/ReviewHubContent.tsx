@@ -1,5 +1,8 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
+  useDeferredValue,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -36,11 +39,22 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
-import { FileDiffModal } from "../FileDiffModal";
-import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
+// Lazy: these modals statically reach the DiffViewer/CodeViewer/vendor-editor
+// chunks (~223 KB gzip), and ReviewPane is a first-render preload seed — a
+// static import drags the whole editor stack into every boot's modulepreload
+// list. The modals open only on row click, so the chunk fetch overlaps user
+// think-time; useKeepMounted gates the first mount so nothing is fetched (or
+// rendered) until a diff is actually opened.
+const LazyFileDiffModal = lazy(() =>
+  import("../FileDiffModal").then((m) => ({ default: m.FileDiffModal }))
+);
+const LazyBaseBranchDiffModal = lazy(() =>
+  import("./BaseBranchDiffModal").then((m) => ({ default: m.BaseBranchDiffModal }))
+);
 import { ForcePushConfirmDialog } from "./ForcePushConfirmDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -69,7 +83,6 @@ import {
   type PushErrorState,
   type SectionViewState,
   DEFAULT_SECTION_STATE,
-  FILTER_DEBOUNCE_MS,
   getPushBannerConfig,
   isDensity,
   isSortKey,
@@ -116,7 +129,7 @@ export interface ReviewHubContentProps {
 
 interface BaseBranchFileRowProps {
   file: CrossWorktreeFile;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   unresolvedDecoration?: FileDecoration;
   onBadgeClick?: () => void;
 }
@@ -251,7 +264,7 @@ export function ReviewHubContent({
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
   // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
-  // searchable code (e.g. GitHub's `GH###`); `forgeProviderId` is the resolved
+  // searchable code (e.g. `GH###`); `forgeProviderId` is the resolved
   // provider's contribution id, used to route the settings CTA. Both null when
   // no provider resolves or it doesn't recognize the stderr.
   const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
@@ -264,6 +277,7 @@ export function ReviewHubContent({
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
     status: GitStatus;
+    section: FileStageRowSection;
   } | null>(null);
   // Session-scoped per-file Viewed indicator. Keys are `staged:{path}` or
   // `unstaged:{path}` so that the same path appearing in both sections (valid
@@ -281,6 +295,11 @@ export function ReviewHubContent({
   const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
     null
   );
+  // First-open mount gates for the lazy diff modals (chunk fetch + mount are
+  // both deferred until a row is clicked; kept mounted after so the modal's
+  // own isOpen gate drives exit animations).
+  const mountFileDiffModal = useKeepMounted(selectedFile !== null);
+  const mountBaseBranchDiffModal = useKeepMounted(selectedBaseBranchFile !== null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
   const [selectionSection, setSelectionSection] = useState<FileStageRowSection | null>(null);
   // Keyboard-navigation focus across the flat staged+unstaged file list. -1 means
@@ -299,6 +318,9 @@ export function ReviewHubContent({
   const conflictSectionRef = useRef<HTMLDivElement>(null);
   const unstagedSectionRef = useRef<HTMLDivElement>(null);
   const selectionAnchorRef = useRef<string | null>(null);
+  // Row element that opened a diff modal; AppDialog falls back to it when the
+  // trigger unmounted (e.g. the file left the list while the modal was open).
+  const diffTriggerRef = useRef<HTMLElement | null>(null);
   const isBulkStagingRef = useRef(false);
   // One-shot guard for the auto-stage-on-open behavior. Resets in the close
   // branch of the isOpen effect so reopening re-arms the check.
@@ -316,59 +338,44 @@ export function ReviewHubContent({
   const [changesView, setChangesView] = useState<SectionViewState>(DEFAULT_SECTION_STATE);
   const stagedInputRef = useRef<HTMLInputElement | null>(null);
   const changesInputRef = useRef<HTMLInputElement | null>(null);
-  const stagedDebounceRef = useRef<{
-    (v: string): void;
-    cancel: () => void;
-    flush: () => Promise<void>;
-  } | null>(null);
-  const changesDebounceRef = useRef<{
-    (v: string): void;
-    cancel: () => void;
-    flush: () => Promise<void>;
-  } | null>(null);
 
-  useEffect(() => {
-    stagedDebounceRef.current = debounce((q: string) => {
-      setStagedView((prev) => ({ ...prev, filterQuery: q }));
-    }, FILTER_DEBOUNCE_MS);
-    changesDebounceRef.current = debounce((q: string) => {
-      setChangesView((prev) => ({ ...prev, filterQuery: q }));
-    }, FILTER_DEBOUNCE_MS);
-    return () => {
-      stagedDebounceRef.current?.cancel();
-      changesDebounceRef.current?.cancel();
-    };
+  const setStagedFilterQuery = useCallback((q: string) => {
+    setStagedView((prev) => ({ ...prev, filterQuery: q }));
+  }, []);
+
+  const setChangesFilterQuery = useCallback((q: string) => {
+    setChangesView((prev) => ({ ...prev, filterQuery: q }));
   }, []);
 
   const clearStagedFilter = useCallback(() => {
-    stagedDebounceRef.current?.cancel();
     if (stagedInputRef.current) stagedInputRef.current.value = "";
     setStagedView((prev) => ({ ...prev, filterQuery: "" }));
   }, []);
 
   const clearChangesFilter = useCallback(() => {
-    changesDebounceRef.current?.cancel();
     if (changesInputRef.current) changesInputRef.current.value = "";
     setChangesView((prev) => ({ ...prev, filterQuery: "" }));
   }, []);
+
+  const deferredStagedQuery = useDeferredValue(stagedView.filterQuery);
+  const deferredChangesQuery = useDeferredValue(changesView.filterQuery);
 
   const derivedStaged = useMemo(() => {
     if (!status) return [];
     let rows = status.staged;
     if (!stagedView.showGenerated) rows = rows.filter((f) => !isGeneratedFile(f.path));
-    if (stagedView.filterQuery)
-      rows = rows.filter((f) => matchesFilter(f.path, stagedView.filterQuery));
+    if (deferredStagedQuery) rows = rows.filter((f) => matchesFilter(f.path, deferredStagedQuery));
     return sortFiles(rows, stagedView.sortKey, stagedView.sortDir);
-  }, [status, stagedView]);
+  }, [status, stagedView, deferredStagedQuery]);
 
   const derivedUnstaged = useMemo(() => {
     if (!status) return [];
     let rows = status.unstaged;
     if (!changesView.showGenerated) rows = rows.filter((f) => !isGeneratedFile(f.path));
-    if (changesView.filterQuery)
-      rows = rows.filter((f) => matchesFilter(f.path, changesView.filterQuery));
+    if (deferredChangesQuery)
+      rows = rows.filter((f) => matchesFilter(f.path, deferredChangesQuery));
     return sortFiles(rows, changesView.sortKey, changesView.sortDir);
-  }, [status, changesView]);
+  }, [status, changesView, deferredChangesQuery]);
 
   // Flat keyboard-navigation list: staged rows first, then unstaged, matching
   // render order. Each entry carries its section so action keys (stage/unstage,
@@ -461,6 +468,77 @@ export function ReviewHubContent({
     [sortedBaseBranchFiles]
   );
 
+  // Position of the open working-tree diff within `navigableItems` (the flat
+  // staged-then-unstaged render order). Path-only fallback keeps the index
+  // alive when the open file moves between sections (stage/unstage) while the
+  // modal is up; null when the file left the list entirely.
+  const selectedFileIndex = useMemo(() => {
+    if (!selectedFile) return null;
+    const exact = navigableItems.findIndex(
+      (item) => item.section === selectedFile.section && item.file.path === selectedFile.path
+    );
+    if (exact !== -1) return exact;
+    const byPath = navigableItems.findIndex((item) => item.file.path === selectedFile.path);
+    return byPath === -1 ? null : byPath;
+  }, [selectedFile, navigableItems]);
+
+  const lastSelectedFileIndexRef = useRef(0);
+  useEffect(() => {
+    if (selectedFileIndex !== null) lastSelectedFileIndexRef.current = selectedFileIndex;
+  }, [selectedFileIndex]);
+
+  const navigateWorkingTreeFile = useCallback(
+    (delta: -1 | 1) => {
+      if (navigableItems.length === 0) return;
+      // Clamp against the live length — a refresh can shrink the list (or drop
+      // the open file) while the modal is open, leaving the index stale.
+      const current = Math.min(
+        selectedFileIndex ?? lastSelectedFileIndexRef.current,
+        navigableItems.length - 1
+      );
+      const next = Math.min(Math.max(current + delta, 0), navigableItems.length - 1);
+      const item = navigableItems[next];
+      if (item) {
+        setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
+      }
+    },
+    [navigableItems, selectedFileIndex]
+  );
+
+  const getAdjacentWorkingTreeFile = useCallback(
+    (delta: -1 | 1) => {
+      if (selectedFileIndex === null) return null;
+      const item = navigableItems[selectedFileIndex + delta];
+      return item ? { path: item.file.path, status: item.file.status } : null;
+    },
+    [navigableItems, selectedFileIndex]
+  );
+
+  const selectedBaseBranchIndex = useMemo(() => {
+    if (!selectedBaseBranchFile || !sortedBaseBranchFiles) return null;
+    const idx = sortedBaseBranchFiles.findIndex((f) => f.path === selectedBaseBranchFile.path);
+    return idx === -1 ? null : idx;
+  }, [selectedBaseBranchFile, sortedBaseBranchFiles]);
+
+  const lastBaseBranchIndexRef = useRef(0);
+  useEffect(() => {
+    if (selectedBaseBranchIndex !== null) lastBaseBranchIndexRef.current = selectedBaseBranchIndex;
+  }, [selectedBaseBranchIndex]);
+
+  const navigateBaseBranchFile = useCallback(
+    (delta: -1 | 1) => {
+      if (!sortedBaseBranchFiles || sortedBaseBranchFiles.length === 0) return;
+      const current = Math.min(
+        selectedBaseBranchIndex ?? lastBaseBranchIndexRef.current,
+        sortedBaseBranchFiles.length - 1
+      );
+      const next = Math.min(Math.max(current + delta, 0), sortedBaseBranchFiles.length - 1);
+      const file = sortedBaseBranchFiles[next];
+      if (file) setSelectedBaseBranchFile(file);
+    },
+    [sortedBaseBranchFiles, selectedBaseBranchIndex]
+  );
+
   const mainBranch = useWorktreeStore(
     (state) =>
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
@@ -485,7 +563,7 @@ export function ReviewHubContent({
   );
 
   // Per-file review-thread badges now come from the generic plugin
-  // file-decoration system (the built-in GitHub plugin contributes the
+  // file-decoration system (the active provider plugin contributes the
   // `worktree-diff:*` provider) rather than a direct `getPRReviewThreads`
   // call here. The scope is empty (→ no-op, no IPC) unless the base-branch
   // diff is showing for a worktree with a linked PR.
@@ -539,13 +617,12 @@ export function ReviewHubContent({
   }, [worktreePath]);
 
   const handleStageFiltered = useCallback(async () => {
+    const paths = derivedUnstaged.map((f) => f.path);
+    if (paths.length === 0) return;
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
-    const paths = derivedUnstaged.map((f) => f.path);
     try {
-      for (const path of paths) {
-        await window.electron.git.stageFile(worktreePath, path);
-      }
+      await window.electron.git.stageFiles(worktreePath, paths);
     } catch (err) {
       setActionError(formatErrorMessage(err, "Failed to stage files"));
     } finally {
@@ -554,13 +631,12 @@ export function ReviewHubContent({
   }, [worktreePath, refresh, derivedUnstaged]);
 
   const handleUnstageFiltered = useCallback(async () => {
+    const paths = derivedStaged.map((f) => f.path);
+    if (paths.length === 0) return;
     setActionError(null);
     debouncedBgRefreshRef.current?.cancel();
-    const paths = derivedStaged.map((f) => f.path);
     try {
-      for (const path of paths) {
-        await window.electron.git.unstageFile(worktreePath, path);
-      }
+      await window.electron.git.unstageFiles(worktreePath, paths);
     } catch (err) {
       setActionError(formatErrorMessage(err, "Failed to unstage files"));
     } finally {
@@ -670,10 +746,8 @@ export function ReviewHubContent({
       // Filter state lives in `stagedView`/`changesView` rather than refs, so the
       // modal-shell path (which unmounts on close) never noticed leftover
       // filters. Once mounted as a non-modal panel, the same component instance
-      // survives close→reopen — reset the filter, sort, density, and the
-      // pending debounced writes so the next open starts from defaults.
-      stagedDebounceRef.current?.cancel();
-      changesDebounceRef.current?.cancel();
+      // survives close→reopen — reset the filter, sort, and density so the
+      // next open starts from defaults.
       if (stagedInputRef.current) stagedInputRef.current.value = "";
       if (changesInputRef.current) changesInputRef.current.value = "";
       setStagedView(DEFAULT_SECTION_STATE);
@@ -787,8 +861,12 @@ export function ReviewHubContent({
     const debouncedBgRefresh = debounce(() => void backgroundRefresh(), 800);
     debouncedBgRefreshRef.current = debouncedBgRefresh;
 
-    const unsubscribe = window.electron.worktree.onUpdate((state) => {
-      if (state.path === worktreePath) {
+    // Per-view worktree MessagePort — the same delivery the worktree store
+    // consumes. The main-relayed events:push copy of worktree-update was
+    // removed (this component was its only subscriber).
+    const unsubscribe = window.electron.worktreePort.onEvent("worktree-update", (data) => {
+      const event = data as { worktree?: { path?: string } };
+      if (event?.worktree?.path === worktreePath) {
         debouncedBgRefresh();
       }
     });
@@ -1194,7 +1272,8 @@ export function ReviewHubContent({
       setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
       setSelectionSection((prev) => (prev === null ? prev : null));
       selectionAnchorRef.current = filePath;
-      setSelectedFile({ path: filePath, status: fileStatus });
+      diffTriggerRef.current = e.currentTarget instanceof HTMLElement ? e.currentTarget : null;
+      setSelectedFile({ path: filePath, status: fileStatus, section });
     },
     [status, selectionSection]
   );
@@ -1291,7 +1370,10 @@ export function ReviewHubContent({
         setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
         setSelectionSection((prev) => (prev === null ? prev : null));
         selectionAnchorRef.current = item.file.path;
-        setSelectedFile({ path: item.file.path, status: item.file.status });
+        diffTriggerRef.current =
+          fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`) ??
+          fileListRef.current;
+        setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
         return;
       }
       case " ": {
@@ -1470,7 +1552,7 @@ export function ReviewHubContent({
                         "inline-flex items-center justify-center p-0.5 rounded",
                         "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
                         "transition-colors cursor-pointer",
-                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
                       )}
                       aria-label={`View pull request #${worktreePR.prNumber}`}
                     >
@@ -1498,7 +1580,7 @@ export function ReviewHubContent({
                 onClick={() => handleDiffModeChange("working-tree")}
                 className={cn(
                   "px-2 py-1 transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                   diffMode === "working-tree"
                     ? "bg-filter-selected-bg-strong text-daintree-text"
                     : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
@@ -1512,7 +1594,7 @@ export function ReviewHubContent({
                 disabled={!status?.currentBranch || status.currentBranch === mainBranch}
                 className={cn(
                   "px-2 py-1 transition-colors border-l border-tint/[0.08]",
-                  "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                   "disabled:opacity-40 disabled:cursor-not-allowed",
                   diffMode === "base-branch"
                     ? "bg-filter-selected-bg-strong text-daintree-text"
@@ -1753,7 +1835,10 @@ export function ReviewHubContent({
                       <BaseBranchFileRow
                         key={`${file.status}:${file.path}`}
                         file={file}
-                        onClick={() => setSelectedBaseBranchFile(file)}
+                        onClick={(e) => {
+                          diffTriggerRef.current = e.currentTarget;
+                          setSelectedBaseBranchFile(file);
+                        }}
                         unresolvedDecoration={decoration}
                         onBadgeClick={
                           decoration?.url
@@ -1902,11 +1987,11 @@ export function ReviewHubContent({
                                 type="text"
                                 placeholder="Filter…"
                                 defaultValue={stagedView.filterQuery}
-                                onChange={(e) => stagedDebounceRef.current?.(e.target.value)}
+                                onChange={(e) => setStagedFilterQuery(e.target.value)}
                                 className={cn(
                                   "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
                                   "bg-tint/[0.04] border border-tint/[0.08]",
-                                  "text-daintree-text placeholder:text-daintree-text/25",
+                                  "text-daintree-text placeholder:text-text-placeholder",
                                   "focus:outline-hidden focus:border-daintree-accent/40",
                                   "hover:bg-tint/[0.06] transition-colors"
                                 )}
@@ -2140,11 +2225,11 @@ export function ReviewHubContent({
                                 type="text"
                                 placeholder="Filter…"
                                 defaultValue={changesView.filterQuery}
-                                onChange={(e) => changesDebounceRef.current?.(e.target.value)}
+                                onChange={(e) => setChangesFilterQuery(e.target.value)}
                                 className={cn(
                                   "w-[120px] h-5 pl-6 pr-1.5 rounded text-[11px]",
                                   "bg-tint/[0.04] border border-tint/[0.08]",
-                                  "text-daintree-text placeholder:text-daintree-text/25",
+                                  "text-daintree-text placeholder:text-text-placeholder",
                                   "focus:outline-hidden focus:border-daintree-accent/40",
                                   "hover:bg-tint/[0.06] transition-colors"
                                 )}
@@ -2396,23 +2481,40 @@ export function ReviewHubContent({
       </div>
 
       {/* File diff modal — working-tree mode */}
-      <FileDiffModal
-        isOpen={selectedFile !== null}
-        filePath={selectedFile?.path ?? ""}
-        status={selectedFile?.status ?? "modified"}
-        worktreePath={worktreePath}
-        onClose={() => setSelectedFile(null)}
-      />
+      {mountFileDiffModal && (
+        <Suspense fallback={null}>
+          <LazyFileDiffModal
+            isOpen={selectedFile !== null}
+            filePath={selectedFile?.path ?? ""}
+            status={selectedFile?.status ?? "modified"}
+            worktreePath={worktreePath}
+            onClose={() => setSelectedFile(null)}
+            restoreFocusTo={diffTriggerRef}
+            currentFileIndex={selectedFileIndex ?? undefined}
+            totalFileCount={navigableItems.length}
+            onNavigateFile={navigateWorkingTreeFile}
+            getAdjacentFile={getAdjacentWorkingTreeFile}
+          />
+        </Suspense>
+      )}
 
       {/* File diff modal — base-branch mode */}
-      <BaseBranchDiffModal
-        isOpen={selectedBaseBranchFile !== null}
-        filePath={selectedBaseBranchFile?.path ?? ""}
-        worktreePath={worktreePath}
-        mainBranch={mainBranch}
-        currentBranch={status?.currentBranch ?? "HEAD"}
-        onClose={() => setSelectedBaseBranchFile(null)}
-      />
+      {mountBaseBranchDiffModal && (
+        <Suspense fallback={null}>
+          <LazyBaseBranchDiffModal
+            isOpen={selectedBaseBranchFile !== null}
+            filePath={selectedBaseBranchFile?.path ?? ""}
+            worktreePath={worktreePath}
+            mainBranch={mainBranch}
+            currentBranch={status?.currentBranch ?? "HEAD"}
+            onClose={() => setSelectedBaseBranchFile(null)}
+            restoreFocusTo={diffTriggerRef}
+            currentFileIndex={selectedBaseBranchIndex ?? undefined}
+            totalFileCount={sortedBaseBranchFiles?.length ?? 0}
+            onNavigateFile={navigateBaseBranchFile}
+          />
+        </Suspense>
+      )}
 
       {pushError?.leaseSha && pushError.branchName && (
         <ForcePushConfirmDialog

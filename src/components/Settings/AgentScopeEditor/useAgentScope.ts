@@ -3,7 +3,14 @@ import { getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/age
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolveScopeKind, stripCcrPrefix } from "./scopeUtils";
-import type { AgentSettingsEntry } from "@shared/types";
+import {
+  isAgentBypassSupported,
+  resolveDangerousMode,
+  combineDangerousModes,
+  type AgentSettingsEntry,
+  type DangerousMode,
+} from "@shared/types";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
 interface UseAgentScopeProps {
   agentId: string;
@@ -59,16 +66,42 @@ export function useAgentScope({
   const agentCfg = getAgentConfig(agentId);
   const supportsInlineMode = !!agentCfg?.capabilities?.inlineModeFlag;
 
-  const agentDefaultDangerous = activeEntry.dangerousEnabled ?? false;
   const agentDefaultInline = activeEntry.inlineMode ?? true;
   const agentDefaultCustomFlags = activeEntry.customFlags ?? "";
 
-  const dangerousOverride = selectedPreset?.dangerousEnabled;
   const inlineOverride = selectedPreset?.inlineMode;
   const customFlagsOverride = selectedPreset?.customFlags;
 
+  // Tri-state bypass (#10432 follow-up). The control edits the *active scope's
+  // own* mode; "Default" (inherit) defers to its parent (preset → agent →
+  // global) and an explicit "off" vetoes a broader "on".
+  const agentMode = resolveDangerousMode(activeEntry);
+  const presetMode = selectedPreset ? resolveDangerousMode(selectedPreset) : undefined;
+  const dangerousMode: DangerousMode =
+    scopeKind === "custom" ? (presetMode ?? "inherit") : agentMode;
+
+  // True when the global skip-permissions override (#10432) is forcing bypass
+  // on for this bypass-supporting agent — the baseline an "inherit" resolves to.
+  const globalSkipPermissions = useAgentSettingsStore(
+    (s) => s.settings?.globalSkipPermissions ?? false
+  );
+  const globalBypassActive = globalSkipPermissions && isAgentBypassSupported(agentId);
+
+  const resolveMode = (mode: DangerousMode): boolean =>
+    mode === "on" ? true : mode === "off" ? false : globalBypassActive;
+
+  // What the "Default" (inherit) segment resolves to and where that comes from
+  // — drives the explanatory hint under the control.
+  const agentResolvedDangerous = resolveMode(agentMode);
+  const inheritResolvesToOn = scopeKind === "custom" ? agentResolvedDangerous : globalBypassActive;
+  const inheritOriginLabel = scopeKind === "custom" ? "agent default" : "global setting";
+
+  // Final resolved bypass for the active scope (incl. the global baseline) —
+  // drives the "<flag> added to command" chip.
   const effectiveSkipPerms =
-    scopeKind === "custom" ? (dangerousOverride ?? agentDefaultDangerous) : agentDefaultDangerous;
+    scopeKind === "custom"
+      ? resolveMode(combineDangerousModes(agentMode, presetMode))
+      : agentResolvedDangerous;
 
   const effectiveInlineMode =
     scopeKind === "custom" ? (inlineOverride ?? agentDefaultInline) : agentDefaultInline;
@@ -177,16 +210,23 @@ export function useAgentScope({
     setEditName("");
   };
 
-  const handleSkipPermsChange = () => {
+  const handleDangerousModeChange = (mode: DangerousMode) => {
     if (scopeKind === "default") {
       void (async () => {
         await updateAgent(agentId, {
-          dangerousEnabled: !agentDefaultDangerous,
+          dangerousMode: mode,
+          // Mirror the legacy boolean so badge / setup-wizard readers stay correct.
+          dangerousEnabled: mode === "on",
         } as Partial<AgentSettingsEntry>);
         onSettingsChange?.();
       })();
     } else if (scopeKind === "custom" && selectedPreset) {
-      handleUpdatePreset(selectedPreset.id, { dangerousEnabled: !effectiveSkipPerms });
+      // "Default" clears the override (both fields → undefined, dropped on
+      // serialize) so the preset inherits the agent's resolved mode.
+      handleUpdatePreset(selectedPreset.id, {
+        dangerousMode: mode === "inherit" ? undefined : mode,
+        dangerousEnabled: mode === "inherit" ? undefined : mode === "on",
+      });
     }
   };
 
@@ -208,12 +248,6 @@ export function useAgentScope({
       void updateAgent(agentId, { customFlags: value } as Partial<AgentSettingsEntry>);
     } else if (scopeKind === "custom" && selectedPreset) {
       handleUpdatePreset(selectedPreset.id, { customFlags: value });
-    }
-  };
-
-  const handleDangerousOverrideReset = () => {
-    if (scopeKind === "custom" && selectedPreset) {
-      handleUpdatePreset(selectedPreset.id, { dangerousEnabled: undefined });
     }
   };
 
@@ -240,16 +274,18 @@ export function useAgentScope({
     selectedIsCcr,
     isEditableScope,
     supportsInlineMode,
+    dangerousMode,
     effectiveSkipPerms,
+    globalBypassActive,
+    inheritResolvesToOn,
+    inheritOriginLabel,
     effectiveInlineMode,
     customArgsValue,
     customArgsPlaceholder,
     customArgsDescription,
     agentEnvSuggestions,
-    agentDefaultDangerous,
     agentDefaultInline,
     agentDefaultCustomFlags,
-    dangerousOverride,
     inlineOverride,
     customFlagsOverride,
     customPresets,
@@ -264,10 +300,9 @@ export function useAgentScope({
     handleStartEdit,
     handleCommitEdit,
     handleCancelEdit,
-    handleSkipPermsChange,
+    handleDangerousModeChange,
     handleInlineModeChange,
     handleCustomFlagsChange,
-    handleDangerousOverrideReset,
     handleInlineOverrideReset,
     handleCustomFlagsOverrideReset,
   };

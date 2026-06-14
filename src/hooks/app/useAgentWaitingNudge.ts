@@ -2,9 +2,28 @@ import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useNotificationStore } from "@/store/notificationStore";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { getOnboardingState } from "@/clients/onboardingClient";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "../useElectron";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+
+/**
+ * Resolves once the notification-settings store has hydrated. App kicks
+ * `hydrate()` at mount, so by the time `isStateLoaded` flips this is normally
+ * already settled and the wait is a microtask.
+ */
+function waitForNotificationSettingsHydrated(): Promise<void> {
+  if (useNotificationSettingsStore.getState().hydrated) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsubscribe = useNotificationSettingsStore.subscribe((state) => {
+      if (state.hydrated) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
 
 export function useAgentWaitingNudge(isStateLoaded: boolean): void {
   const removeNotification = useNotificationStore((s) => s.removeNotification);
@@ -70,16 +89,17 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
 
     async function hydrate() {
       try {
-        const [onboarding, notifSettings] = await Promise.all([
-          window.electron.onboarding.get(),
-          window.electron.notification.getSettings(),
-        ]);
-
+        // Shared same-tick onboarding fetch (deduped with the checklist
+        // hook's effect in the same flush); `waitingEnabled` comes from the
+        // settings store hydrated at App mount instead of a duplicate
+        // `notification:getSettings` round-trip.
+        const onboarding = await getOnboardingState();
         if (cancelled) return;
+        if (!onboarding.completed || onboarding.waitingNudgeSeen) return;
 
-        if (!onboarding.completed || onboarding.waitingNudgeSeen || notifSettings.waitingEnabled) {
-          return;
-        }
+        await waitForNotificationSettingsHydrated();
+        if (cancelled) return;
+        if (useNotificationSettingsStore.getState().waitingEnabled) return;
 
         eligibleRef.current = true;
 

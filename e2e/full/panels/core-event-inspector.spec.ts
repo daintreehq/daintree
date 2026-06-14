@@ -2,9 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { openTerminal } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -13,6 +12,42 @@ let fixtureCleanup: (() => void) | undefined;
 async function dispatchAction(page: Page, actionId: string): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await page.evaluate((id) => (window as any).__daintreeDispatchAction(id), actionId);
+}
+
+// Seed deterministic, uniquely-identifiable timeline rows. Dispatching
+// `actions.search` (a safe introspection action) with a marker query emits an
+// `action:dispatched` event whose recorded payload carries that query, so the
+// test can later filter the timeline down to exactly these rows — no real
+// backend agent or headful session required. Poll the EventBuffer (filtered by
+// the marker) so we don't proceed until the events are actually recorded.
+// Returns the marker so the caller can drive the UI search filter to the
+// seeded rows, making the row assertion unambiguous regardless of any other
+// events the prior tests left in the buffer.
+async function seedTimelineEvents(page: Page, count: number): Promise<string> {
+  const marker = `evinsp-seed-${Date.now()}`;
+  for (let i = 0; i < count; i++) {
+    await page.evaluate(
+      ([query, idx]) =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__daintreeDispatchAction("actions.search", { query: `${query}-${idx}` }),
+      [marker, String(i)] as const
+    );
+  }
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          (query) =>
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (window as any).electron.eventInspector
+              .getFiltered({ types: ["action:dispatched"], search: query })
+              .then((events: unknown[]) => events.length) as Promise<number>,
+          marker
+        ),
+      { timeout: T_MEDIUM }
+    )
+    .toBeGreaterThanOrEqual(count);
+  return marker;
 }
 
 async function openEventsDock(window: Page): Promise<void> {
@@ -28,10 +63,35 @@ async function openEventsDock(window: Page): Promise<void> {
   // Grow the dock to its max height. At the 256px default the tall filter
   // header consumes the panel and the timeline/detail area below collapses to
   // zero height. The resize handle maps `End` to "max height" (50% of the
-  // viewport), giving the lower content room to render. `locator.press` focuses
-  // the handle and dispatches the key in one step.
-  await window.locator(SEL.diagnostics.resizeHandle).press("End");
-  await window.waitForTimeout(T_SETTLE);
+  // viewport), giving the lower content room to render.
+  //
+  // The dock's max height is recomputed from the parent container via a
+  // ResizeObserver that fires asynchronously after layout, so the initial
+  // `aria-valuemax` reflects the module-load viewport (before the launch
+  // helper grew the window). Pressing `End` against that stale max only nudges
+  // the dock to a fraction of its real ceiling, starving the virtualized
+  // timeline of the height it needs to render rows. Wait for the post-layout
+  // max to land before pressing `End`, then wait for the height to actually
+  // reach it.
+  const resize = window.locator(SEL.diagnostics.resizeHandle);
+  await expect
+    .poll(async () => Number((await resize.getAttribute("aria-valuemax")) ?? 0), {
+      timeout: T_MEDIUM,
+    })
+    .toBeGreaterThan(400);
+  await resize.press("End");
+  await expect
+    .poll(
+      async () => {
+        const [now, max] = await Promise.all([
+          resize.getAttribute("aria-valuenow"),
+          resize.getAttribute("aria-valuemax"),
+        ]);
+        return Number(now ?? 0) >= Number(max ?? 0) - 1;
+      },
+      { timeout: T_MEDIUM }
+    )
+    .toBe(true);
 }
 
 test.describe.serial("Core: Event Inspector", () => {
@@ -42,12 +102,19 @@ test.describe.serial("Core: Event Inspector", () => {
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Event Inspector");
 
-    // Generate backend activity so the EventBuffer has events to stream into
-    // the timeline once the dock subscribes. Event availability is not
-    // guaranteed in a headless session, so the selection test below tolerates
-    // an empty timeline.
-    await openTerminal(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
+    // Wait for the action dispatch bridge and registry so seedTimelineEvents
+    // can emit events deterministically.
+    await expect
+      .poll(
+        () =>
+          ctx.window.evaluate(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dispatch = (window as any).__daintreeDispatchAction;
+            return typeof dispatch === "function" ? "ready" : "no-hook";
+          }),
+        { timeout: T_MEDIUM, message: "Action dispatch hook not available" }
+      )
+      .toBe("ready");
   });
 
   test.afterAll(async () => {
@@ -124,46 +191,68 @@ test.describe.serial("Core: Event Inspector", () => {
 
   test("selecting a timeline event populates the detail pane", async () => {
     const { window } = ctx;
+
+    let marker = "";
+    await test.step("Seed deterministic events into the timeline", async () => {
+      marker = await seedTimelineEvents(window, 3);
+    });
+
     await openEventsDock(window);
 
     const panel = window.locator(SEL.diagnostics.panel("events"));
     const rows = window.locator(SEL.events.row);
-    const timeline = window.locator(SEL.events.timeline);
-    const emptyState = window.locator(SEL.events.emptyState);
 
-    // The timeline streams real backend events, which a headless session may or
-    // may not have produced, and the virtualized list's height depends on the
-    // dock layout. Branch on what actually rendered so the test asserts
-    // something real without flaking on event availability:
-    //   - a visible row  → exercise the full selection → detail path
-    //   - the empty state → assert it (no events captured)
-    //   - otherwise       → the timeline at least mounted (events streamed)
-    const hasRow = await rows
-      .first()
-      .isVisible({ timeout: T_LONG })
-      .catch(() => false);
+    await test.step("Filter the timeline to the seeded events", async () => {
+      // Scope the timeline to the rows this test seeded so the assertion below
+      // is unaffected by any other events prior tests left in the buffer (and
+      // by any residual filter state). The search filter matches the recorded
+      // `action:dispatched` payload, which carries our marker query.
+      await panel.locator(SEL.events.traceInput).fill("");
+      await panel.locator(SEL.events.searchInput).fill(marker);
+    });
 
-    if (hasRow) {
-      await test.step("A row is selectable and populates the detail pane", async () => {
-        await expect(panel.locator(SEL.events.detailPlaceholder)).toBeVisible({ timeout: T_SHORT });
-        await rows.first().click();
-        await expect(panel.locator(SEL.events.detailPlaceholder)).toHaveCount(0, {
-          timeout: T_MEDIUM,
-        });
-        await expect(panel.getByText("Payload", { exact: true })).toBeVisible({
-          timeout: T_MEDIUM,
-        });
+    await test.step("Seeded events are captured and match the active filter", async () => {
+      // Backbone assertion (deterministic, headless-safe): exactly the three
+      // seeded markers flow through capture → filter. The event pipeline is
+      // verifiable through the inspector bridge even though the react-virtuoso
+      // timeline needs real composited height to paint rows — which a headless
+      // session does not reliably provide.
+      await expect
+        .poll(
+          () =>
+            window.evaluate(
+              (query) =>
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (window as any).electron.eventInspector
+                  .getFiltered({ types: ["action:dispatched"], search: query })
+                  .then((events: unknown[]) => events.length) as Promise<number>,
+              marker
+            ),
+          { timeout: T_MEDIUM }
+        )
+        .toBe(3);
+    });
+
+    await test.step("When the timeline paints, selecting a row populates the detail pane", async () => {
+      // Opportunistic UI coverage of the real selection → detail path. When the
+      // virtualized list does not materialize a row in this headless session,
+      // the capture/filter assertion above stands as the guarantee of record.
+      if (
+        !(await rows
+          .first()
+          .isVisible({ timeout: T_SHORT })
+          .catch(() => false))
+      )
+        return;
+      await expect(panel.locator(SEL.events.detailPlaceholder)).toBeVisible({ timeout: T_SHORT });
+      await rows.first().click();
+      await expect(panel.locator(SEL.events.detailPlaceholder)).toHaveCount(0, {
+        timeout: T_MEDIUM,
       });
-    } else if (await emptyState.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      await test.step("No events captured — the empty state is shown", async () => {
-        await expect(emptyState).toBeVisible({ timeout: T_SHORT });
-        await expect(panel.locator(SEL.events.detailPlaceholder)).toBeVisible({ timeout: T_SHORT });
+      await expect(panel.getByText("Payload", { exact: true })).toBeVisible({
+        timeout: T_MEDIUM,
       });
-    } else {
-      await test.step("The timeline mounted with streamed events", async () => {
-        await expect(timeline).toBeAttached({ timeout: T_SHORT });
-      });
-    }
+    });
 
     await test.step("Close the diagnostics dock", async () => {
       await window.locator(SEL.diagnostics.closeButton).click();

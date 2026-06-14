@@ -87,6 +87,21 @@ function scheduleBuildReadyMarker() {
   }, 100);
 }
 
+/**
+ * Discover each built-in plugin's main entry (`plugins/builtin/<name>/main/index.ts`)
+ * so adding a new built-in plugin needs no build-config edit. Mirrors
+ * `copyBuiltInPluginManifests`, which auto-discovers the same directories.
+ */
+function discoverBuiltInPluginMainEntries() {
+  const pluginsRoot = path.join(root, "plugins/builtin");
+  if (!fs.existsSync(pluginsRoot)) return [];
+  const entries = fs.readdirSync(pluginsRoot, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `plugins/builtin/${entry.name}/main/index.ts`)
+    .filter((rel) => fs.existsSync(path.join(root, rel)));
+}
+
 function copyBuiltInWorkflows() {
   const workflowsSrcDir = path.join(root, "electron/workflows");
   const workflowsDestDir = path.join(root, "dist-electron/workflows");
@@ -191,11 +206,15 @@ async function run() {
       "electron/workspace-host-bootstrap.ts",
       "electron/watchdog-host.ts",
       "electron/watchdog-host-bootstrap.ts",
+      // Plugin dev-mode hot-reload worker (#9304): runs a dev-symlinked plugin's
+      // code in a utilityProcess.fork child and respawns on each Vite rebuild.
+      "electron/plugin-dev-worker.ts",
+      "electron/plugin-dev-worker-bootstrap.ts",
       // VAD side-chain worker for OpenAI transcription (#9177). Loaded via
       // `new Worker()` from OpenAITranscriptionProvider; needs its own entry so
       // esbuild emits a standalone bundle at the resolved worker path.
       "electron/services/voice/openaiVadWorker.ts",
-      "plugins/builtin/github/main/index.ts",
+      ...discoverBuiltInPluginMainEntries(),
       // Sample plugin compiled for the host-contract e2e harness (#9286).
       // Sideloaded via `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR`; absent in prod
       // because no `pluginsRoot` defaults to this directory.

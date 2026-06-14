@@ -26,7 +26,11 @@ import { cn } from "@/lib/utils";
 import { isMac, isWindows } from "@/lib/platform";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
+import { PluginCatalog } from "./PluginCatalog";
+import { PluginIconTile } from "./pluginIcons";
+import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
+import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 
 const ROW_BADGE_CLASS =
@@ -38,48 +42,17 @@ const ROW_BADGE_CLASS =
 const SECTION_HEADER_CLASS =
   "px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none";
 
-// Below this many installed plugins the search box adds noise without value, so
-// it stays hidden and the grouped list is shown directly (#9557).
-const PLUGIN_SEARCH_MIN_ITEMS = 10;
-
-// Static operator chips surfaced below the search input so the filter syntax is
-// discoverable instead of hidden. `@cap:<value>` is omitted — its value set is
-// dynamic and would overflow the 288px pane — but stays typeable.
+// Operator chips surfaced below the search input so the filter syntax is
+// discoverable instead of hidden. Categories are the headline filters; the
+// provenance/state tokens (`@builtin`, `@installed`, `@enabled`) and
+// `@cap:<value>` stay typeable but don't earn a chip. "Other" is omitted —
+// chips advertise the catalog's shape, not its fallback bucket.
 const PLUGIN_FILTER_CHIPS: ReadonlyArray<{ token: string; label: string }> = [
-  { token: "@builtin", label: "Built-in" },
-  { token: "@installed", label: "Installed" },
-  { token: "@enabled", label: "Enabled" },
+  ...PLUGIN_CATEGORIES.filter((c) => c.id !== "other").map((c) => ({
+    token: `@cat:${c.id}`,
+    label: c.label,
+  })),
   { token: "@disabled", label: "Disabled" },
-];
-
-/**
- * Section grouping for the installed list (#9554). A disabled plugin always
- * lands in "Disabled" regardless of its source, so the section reads as a clean
- * list of everything that isn't currently running. Built-in and Installed only
- * hold enabled plugins. Order is the render order below; sections with no
- * matches are omitted. Within a section, rows inherit the alphabetical order of
- * `pm.plugins` (already sorted enabled-then-name by the hook).
- */
-const PLUGIN_GROUPS: ReadonlyArray<{
-  id: string;
-  label: string;
-  match: (plugin: LoadedPluginInfo) => boolean;
-}> = [
-  {
-    id: "plugin-group-builtin",
-    label: "Built-in",
-    match: (plugin) => !plugin.disabled && plugin.isBuiltin,
-  },
-  {
-    id: "plugin-group-installed",
-    label: "Installed",
-    match: (plugin) => !plugin.disabled && !plugin.isBuiltin,
-  },
-  {
-    id: "plugin-group-disabled",
-    label: "Disabled",
-    match: (plugin) => plugin.disabled === true,
-  },
 ];
 
 interface PluginRowProps {
@@ -96,9 +69,16 @@ interface PluginRowProps {
 
 /**
  * One installed-plugin row in the master list (#9555): a compact, selectable
- * entry showing name, version, provenance, and the enable toggle. Selecting it
- * populates the detail pane on the right — the full metadata, actions, and
- * settings live there now, so the row stays scannable and never shifts layout.
+ * entry showing the plugin's icon tile, name, version, tagline, and the enable
+ * toggle. Selecting it populates the detail pane on the right — the full
+ * metadata, actions, and settings live there now, so the row stays scannable
+ * and never shifts layout.
+ *
+ * A disabled plugin stays in its category section, dimmed in place with a
+ * "Disabled" badge — the dominant pattern (VS Code, JetBrains, browsers) and
+ * the one that preserves spatial memory; relocation to a quarantine section
+ * was the old #9554 behavior. Provenance only earns a badge when it differs
+ * from the catalog's default (non-builtin sources: file / URL / catalog).
  *
  * The selection target is a `<button role="option">` covering the info area;
  * the enable toggle is a sibling control (not nested) so it keeps its own click
@@ -123,6 +103,7 @@ function PluginRow({
   const enabled = plugin.disabled !== true;
   const restartRequired = plugin.pendingRestart === true;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
+  const tagline = plugin.manifest.tagline;
 
   return (
     <div
@@ -143,34 +124,49 @@ function PluginRow({
         onClick={onSelect}
         className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
       >
-        <Package
-          className={
-            enabled
-              ? "w-4 h-4 mt-0.5 text-daintree-text/70"
-              : "w-4 h-4 mt-0.5 text-daintree-text/40"
-          }
-          aria-hidden="true"
-        />
+        <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled} />
         <span className="min-w-0">
-          <span className="text-sm font-medium flex items-center gap-1.5 flex-wrap">
+          <span
+            className={cn(
+              "text-sm font-medium flex items-center gap-1.5 flex-wrap",
+              !enabled && "text-daintree-text/50"
+            )}
+          >
             <span className="truncate">{label}</span>
             <span className="text-[11px] font-normal text-daintree-text/40">
               v{plugin.manifest.version}
             </span>
           </span>
-          <span className="mt-1 flex items-center gap-1 flex-wrap">
-            <span className={ROW_BADGE_CLASS}>{sourceLabel}</span>
-            {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
-            {restartRequired && (
-              <span className={`${ROW_BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
-            )}
-            {plugin.loadError && (
-              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
-                <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                Failed
-              </span>
-            )}
-          </span>
+          {tagline && (
+            <span
+              className={cn(
+                "mt-0.5 block text-[11px] truncate",
+                enabled ? "text-daintree-text/50" : "text-daintree-text/35"
+              )}
+            >
+              {tagline}
+            </span>
+          )}
+          {(!enabled ||
+            !plugin.isBuiltin ||
+            plugin.devMode ||
+            restartRequired ||
+            plugin.loadError) && (
+            <span className="mt-1 flex items-center gap-1 flex-wrap">
+              {!enabled && <span className={ROW_BADGE_CLASS}>Disabled</span>}
+              {!plugin.isBuiltin && <span className={ROW_BADGE_CLASS}>{sourceLabel}</span>}
+              {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
+              {restartRequired && (
+                <span className={`${ROW_BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+              )}
+              {plugin.loadError && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                  Failed
+                </span>
+              )}
+            </span>
+          )}
         </span>
       </button>
 
@@ -216,12 +212,14 @@ const DEEP_LINK_HIGHLIGHT_MS = 2000;
  * lifecycle: install from file or URL (#9290), enable/disable (#9284),
  * uninstall, provenance, and the manual check-for-update flow (#9297). Graduated
  * out of the former `PluginManagerDialog` modal into a first-class full-screen
- * overlay modelled on VS Code's Extensions view: a master list of installed
- * plugins on the left, a tabbed detail pane on the right. It owns the full
- * management UI lifted out of the former Settings `PluginsTab`, which is now a
- * thin entry point. Files can be dropped anywhere on the body to install. The
- * browse/discovery catalog (#9305) ships separately — the master column reserves
- * a footer slot for it below the installed list.
+ * overlay modelled on VS Code's Extensions view: a master list on the left
+ * (grouped by catalog category — see `PLUGIN_CATEGORIES`), and on the right
+ * either the selected plugin's tabbed detail pane or the `PluginCatalog` home
+ * (category card grid). It owns the full management UI lifted out of the former
+ * Settings `PluginsTab`, which is now a thin entry point. Files can be dropped
+ * anywhere on the body to install. The network-backed browse/discovery catalog
+ * (#9305) ships separately — the master column reserves a footer slot for it
+ * below the installed list.
  *
  * Visibility is driven by `usePluginManagerStore` (mirrors `themeBrowserStore`);
  * `AppLayout` reads the `plugin-manager` overlay claim to mark its chrome
@@ -277,32 +275,53 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
-  const isSearchVisible = pm.plugins.length >= PLUGIN_SEARCH_MIN_ITEMS;
   const isSearchActive = useMemo(
-    () => isSearchVisible && isQueryActive(parsePluginQuery(deferredQuery)),
-    [isSearchVisible, deferredQuery]
+    () => isQueryActive(parsePluginQuery(deferredQuery)),
+    [deferredQuery]
   );
   const filteredPlugins = useMemo(
     () => (isSearchActive ? filterPlugins(pm.plugins, deferredQuery) : pm.plugins),
     [isSearchActive, pm.plugins, deferredQuery]
   );
+  // Category buckets for the section headers and the catalog pane. Disabled
+  // plugins stay in their category (dimmed in place) — see PluginRow.
+  const groupedPlugins = useMemo(() => groupPluginsByCategory(pm.plugins), [pm.plugins]);
 
-  const appendFilterToken = (token: string) => {
+  // Lowercased whitespace-split tokens of the live query, for chip active
+  // state. Derived from `query` (not the deferred value) so the chip highlight
+  // flips in the same frame as the click.
+  const queryTokens = useMemo(
+    () =>
+      query
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((t) => t.toLowerCase()),
+    [query]
+  );
+
+  // Chips are toggles: clicking adds the operator token, clicking again
+  // removes it (operators are case-insensitive, so match tokens that way too).
+  // The active chip is highlighted via aria-pressed + a neutral surface lift —
+  // multi-select state never takes the accent.
+  const toggleFilterToken = (token: string) => {
+    const lower = token.toLowerCase();
     setQuery((prev) => {
       const tokens = prev.split(/\s+/).filter(Boolean);
-      // Operators are case-insensitive, so dedup case-insensitively too.
-      if (tokens.some((t) => t.toLowerCase() === token.toLowerCase())) return prev;
+      if (tokens.some((t) => t.toLowerCase() === lower)) {
+        return tokens.filter((t) => t.toLowerCase() !== lower).join(" ");
+      }
       return prev.length === 0 ? token : `${prev.trim()} ${token}`;
     });
     searchInputRef.current?.focus();
   };
 
-  // Reset the query when the view closes (so a stale filter doesn't hide rows
-  // on reopen) or when the list drops back below the search threshold (so the
-  // filter can't silently reactivate if the count later climbs again).
+  // Reset the query when the view closes so a stale filter doesn't hide rows
+  // on reopen. Search is a permanent fixture of the catalog (the former
+  // 10-item visibility threshold from #9557 went with the marketplace
+  // redesign), so there's no threshold edge to reset on anymore.
   useEffect(() => {
-    if (!isOpen || !isSearchVisible) setQuery("");
-  }, [isOpen, isSearchVisible]);
+    if (!isOpen) setQuery("");
+  }, [isOpen]);
 
   // Move focus into the view when it opens. Unlike the former modal dialog, a
   // role="region" view doesn't trap focus, so without this the keyboard focus
@@ -530,31 +549,38 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 Install from URL
               </Button>
             </div>
-            {isSearchVisible && (
-              <div className="space-y-2">
-                <input
-                  ref={searchInputRef}
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Filter plugins"
-                  aria-label="Filter plugins"
-                  className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-daintree-text/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                />
-                <div className="flex flex-wrap gap-1">
-                  {PLUGIN_FILTER_CHIPS.map(({ token, label }) => (
+            <div className="space-y-2">
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search plugins"
+                aria-label="Search plugins"
+                className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              />
+              <div className="flex flex-wrap gap-1">
+                {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
+                  const active = queryTokens.includes(token.toLowerCase());
+                  return (
                     <button
                       key={token}
                       type="button"
-                      onClick={() => appendFilterToken(token)}
-                      className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-daintree-border transition-colors"
+                      aria-pressed={active}
+                      onClick={() => toggleFilterToken(token)}
+                      className={cn(
+                        "px-1.5 py-0.5 rounded-sm text-[10px] font-medium border transition-colors",
+                        active
+                          ? "bg-overlay-strong border-daintree-border text-daintree-text"
+                          : "bg-overlay-subtle border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-daintree-border"
+                      )}
                     >
                       {label}
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
             {pm.notice && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border">
                 <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
@@ -634,9 +660,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                       }}
                     />
                   ))
-                : PLUGIN_GROUPS.map(({ id, label, match }) => {
-                    const groupPlugins = pm.plugins.filter(match);
-                    if (groupPlugins.length === 0) return null;
+                : PLUGIN_CATEGORIES.map(({ id, label }) => {
+                    const groupPlugins = groupedPlugins.get(id);
+                    if (!groupPlugins || groupPlugins.length === 0) return null;
                     // role="presentation" makes this wrapper transparent to the
                     // accessibility tree, so its option children re-parent to the
                     // listbox. The header is a disabled option, not a role="group"
@@ -652,6 +678,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                           aria-label={label}
                         >
                           {label}
+                          <span className="ml-1.5 normal-case tracking-normal text-daintree-text/30">
+                            {groupPlugins.length}
+                          </span>
                         </div>
                         {groupPlugins.map((plugin) => (
                           <PluginRow
@@ -685,7 +714,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none">
               Browse
             </p>
-            <p className="text-[11px] text-daintree-text/40 mt-1">Plugin catalog coming soon.</p>
+            <p className="text-[11px] text-daintree-text/40 mt-1">
+              Online plugin catalog coming soon.
+            </p>
           </div>
         </div>
 
@@ -695,13 +726,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             re-initializing PluginSettingsForm drafts from the new plugin's
             stored values, and resetting the detail subtab to Overview. */}
         <ScrollShadow
-          key={selectedPlugin?.manifest.name ?? "empty"}
+          key={selectedPlugin?.manifest.name ?? "catalog"}
           className="flex-1 min-h-0"
-          // The `max-w-3xl` readable-width cap is left-pinned, which is right for
-          // the detail content but would push the centered empty-state placeholder
-          // off-center in the wide pane. Drop the cap when nothing is selected so
-          // the placeholder centers across the full pane.
-          scrollClassName={cn("p-6", selectedPlugin && "max-w-3xl")}
+          // The readable-width caps are left-pinned, which is right for the
+          // detail content and the catalog grid but would push the centered
+          // no-plugins placeholder off-center in the wide pane — so that case
+          // drops the cap. The catalog gets the wider cap; cards auto-fill it.
+          scrollClassName={cn("p-6", selectedPlugin ? "max-w-3xl" : hasPlugins && "max-w-4xl")}
         >
           {selectedPlugin ? (
             <PluginDetailPane
@@ -711,20 +742,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               onUninstall={() => pm.armUninstall(selectedPlugin)}
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
             />
+          ) : hasPlugins ? (
+            // Catalog home — the marketplace face of the manager. Clicking a
+            // card selects the plugin (same as its row); clicking the selected
+            // row again returns here. An active search narrows the storefront
+            // to the same filtered set as the master list.
+            <PluginCatalog
+              plugins={isSearchActive ? filteredPlugins : pm.plugins}
+              onSelect={setSelectedPluginId}
+            />
           ) : (
-            // Master-detail placeholder, not a "filtered-empty" state — it reads
-            // as a roomy, centered single column (icon + prompt) rather than the
-            // compact muted EmptyState, which looked cramped here. Click any row
-            // to fill it; clicking the selected row again returns to this prompt.
+            // No plugins at all — a roomy centered prompt rather than an empty
+            // catalog shell; the master column owns the install CTAs.
             <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
               <Package className="w-8 h-8 text-daintree-text/30" aria-hidden="true" />
-              <p className="text-base font-medium text-daintree-text/80">
-                {hasPlugins ? "Select a plugin" : "No plugin selected"}
-              </p>
+              <p className="text-base font-medium text-daintree-text/80">No plugin selected</p>
               <p className="text-sm text-daintree-text/50 max-w-sm">
-                {hasPlugins
-                  ? "Choose a plugin from the list to view its details and settings."
-                  : "Install a plugin to view its details and settings here."}
+                Install a plugin to view its details and settings here.
               </p>
             </div>
           )}
@@ -834,7 +868,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-daintree-text/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
             aria-label="Plugin URL"
           />
         </AppDialog.Body>

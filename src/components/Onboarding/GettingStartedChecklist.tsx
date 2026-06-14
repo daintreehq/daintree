@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Download, X } from "lucide-react";
 import { useReducedMotion } from "framer-motion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -130,9 +130,13 @@ export function GettingStartedChecklist({
   };
 
   const completedCount = Object.values(items).filter(Boolean).length;
-  const totalCount = CHECKLIST_ITEMS.length;
-  const allComplete = completedCount === totalCount;
-  const counterLabel = allComplete ? "All set" : `${completedCount}/${totalCount}`;
+  const allComplete = completedCount === CHECKLIST_ITEMS.length;
+  // Endowed-progress accounting (real items + always-complete "Install
+  // Daintree") mirrors WelcomeScreen's inline checklist so visible progress
+  // never regresses across the surface transition.
+  const counterLabel = allComplete
+    ? "All set"
+    : `${1 + completedCount}/${CHECKLIST_ITEMS.length + 1}`;
   const counterAnimateKey = allComplete ? "all-set" : String(completedCount);
 
   const panelRef = useRef<HTMLDivElement>(null);
@@ -192,7 +196,7 @@ export function GettingStartedChecklist({
                 className="flex items-center gap-2 text-left flex-1 min-w-0"
               >
                 <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-daintree-accent">
-                  Getting Started
+                  Getting started
                 </h4>
                 <AnimatedLabel
                   label={counterLabel}
@@ -228,7 +232,9 @@ export function GettingStartedChecklist({
                 <X className="h-3.5 w-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Hide checklist</TooltipContent>
+            <TooltipContent side="bottom">
+              Dismiss — reopen from Help → Getting Started
+            </TooltipContent>
           </Tooltip>
         </div>
 
@@ -243,6 +249,14 @@ export function GettingStartedChecklist({
           {...(collapsed ? { inert: true } : {})}
         >
           <div className="px-3 pb-3 space-y-1.5">
+            {/* Endowed progress: Install Daintree (always complete) */}
+            <div className="flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 opacity-60">
+              <div className="h-4 w-4 rounded-full bg-daintree-accent border border-daintree-accent flex items-center justify-center shrink-0">
+                <Check className="h-2.5 w-2.5 text-daintree-bg" />
+              </div>
+              <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
+              <span className="text-xs leading-snug text-daintree-text/40">Install Daintree</span>
+            </div>
             {CHECKLIST_ITEMS.map(
               ({ id, label, description, icon: Icon, actionId, actionArgs, markOnClick }) => {
                 const done = items[id];

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { RotateCw, Square } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
@@ -22,10 +23,14 @@ const STATUS_PRESENTATION: Record<DevPreviewSessionStatus, { label: string; dotC
 // A plain "stopped" session has no row; "restored-stopped" stays visible because
 // it is an explicit restart offer the dashboard should surface.
 const HIDDEN_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set(["stopped"]);
+// "error" is stoppable: errored sessions have no terminal, so stop() takes the
+// no-terminal branch — transitions to "stopped" and clears the error, which is
+// the only way to dismiss an errored row from the dashboard.
 const STOPPABLE_STATUSES: ReadonlySet<DevPreviewSessionStatus> = new Set([
   "starting",
   "installing",
   "running",
+  "error",
 ]);
 
 function extractPort(session: DevPreviewSessionState): string | null {
@@ -111,8 +116,21 @@ function DevServerRow({
 }
 
 export function DevServerDashboard() {
-  const allSessions = useAllDevSessions();
-  const worktrees = useWorktreeStore((s) => s.worktrees);
+  const { sessions: allSessions, hydrated, fetchError } = useAllDevSessions();
+  // Select only the names this dashboard renders: the worktrees Map identity
+  // changes on every polled git-status delta, but a flat Record of primitives
+  // lets useShallow skip the re-render unless a relevant name changes.
+  const worktreeNames = useWorktreeStore(
+    useShallow((s) => {
+      const names: Record<string, string> = {};
+      for (const session of allSessions) {
+        if (!session.worktreeId) continue;
+        const name = s.worktrees.get(session.worktreeId)?.name;
+        if (name !== undefined) names[session.worktreeId] = name;
+      }
+      return names;
+    })
+  );
 
   const visibleSessions = useMemo(
     () => allSessions.filter((s) => !HIDDEN_STATUSES.has(s.status)),
@@ -127,8 +145,10 @@ export function DevServerDashboard() {
       <header className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-daintree-text/55">
         Dev servers
       </header>
-      {visibleSessions.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-daintree-text/50">No active dev servers</p>
+      {!hydrated ? null : visibleSessions.length === 0 ? (
+        <p className="px-3 pb-3 text-xs text-daintree-text/50">
+          {fetchError ? "Couldn't load dev servers" : "No active dev servers"}
+        </p>
       ) : (
         <ul className="flex flex-col pb-1">
           {visibleSessions.map((session) => (
@@ -137,7 +157,7 @@ export function DevServerDashboard() {
               session={session}
               worktreeName={
                 session.worktreeId
-                  ? (worktrees.get(session.worktreeId)?.name ?? session.worktreeId)
+                  ? (worktreeNames[session.worktreeId] ?? session.worktreeId)
                   : session.panelId
               }
             />

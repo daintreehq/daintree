@@ -283,6 +283,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   });
 
   app.on("activate", () => {
+    // A Dock click during a slow startup fires `activate` before
+    // `app.whenReady()` resolves; creating a BrowserWindow then throws. The
+    // startup path in main.ts always creates the initial window once ready,
+    // so dropping a pre-ready activation loses nothing.
+    if (!app.isReady()) return;
     const hasWindows = opts.windowRegistry
       ? opts.windowRegistry.size > 0
       : BrowserWindow.getAllWindows().length > 0;

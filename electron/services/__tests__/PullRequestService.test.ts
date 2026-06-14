@@ -240,9 +240,6 @@ describe("PullRequestService", () => {
   });
 
   it("detects PRs for non-default branches without issue numbers", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const mockImpl = mockForgeProviderResolved();
 
     const { pullRequestService } = await import("../PullRequestService.js");
@@ -286,7 +283,6 @@ describe("PullRequestService", () => {
   });
 
   it("preserves the declined PR state through detection (#9981)", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
     mockForgeProviderResolved(async () =>
       makeMockForgePR({ state: "declined", rawState: "DECLINED" })
     );
@@ -316,7 +312,6 @@ describe("PullRequestService", () => {
   });
 
   it("re-emits a declined state when revalidation finds the PR declined (#9981)", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
     const mockImpl = mockForgeProviderResolved(async () => makeMockForgePR({ state: "open" }));
     const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
       const map = new Map<number, ForgePR | null>();
@@ -383,7 +378,6 @@ describe("PullRequestService", () => {
   });
 
   it("emits sys:issue:detected carrying the canonical owner/repo (#8452)", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
     const mockImpl = mockForgeProviderResolved();
     mockImpl.getIssue = vi.fn().mockResolvedValue({
       number: 88,
@@ -423,9 +417,6 @@ describe("PullRequestService", () => {
   });
 
   it("resolves the provider against the selected forgeRemote, not origin (#8456)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const getConfig = vi.fn(async (key: string) =>
       key === "remote.upstream.url"
         ? "https://github.com/upstreamowner/upstreamrepo.git"
@@ -454,9 +445,6 @@ describe("PullRequestService", () => {
   });
 
   it("falls back to origin when the selected forgeRemote has no URL (#8456)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const getConfig = vi.fn(async (key: string) =>
       key === "remote.origin.url" ? "https://github.com/originowner/originrepo.git" : null
     );
@@ -489,8 +477,6 @@ describe("PullRequestService", () => {
     // so PR detection was permanently skipped (#8870). The fix unwraps the
     // envelope; this test pins the envelope shape so a future change can't
     // silently regress it.
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
 
     const getConfig = vi.fn(async (key: string) => ({
       key,
@@ -521,8 +507,6 @@ describe("PullRequestService", () => {
   });
 
   it("does not track default branches like main/master", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
     const mockImpl = mockForgeProviderResolved();
 
     const { pullRequestService } = await import("../PullRequestService.js");
@@ -550,8 +534,6 @@ describe("PullRequestService", () => {
     // Without this clear, WorktreeMonitor._linked stays at its initial
     // `undefined` and the renderer's preservation rule keeps any prior
     // session's linked.pr visible indefinitely.
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
     mockForgeProviderResolved(async () => null);
 
     const { pullRequestService } = await import("../PullRequestService.js");
@@ -584,8 +566,6 @@ describe("PullRequestService", () => {
   });
 
   it("clears PR state only when branch changes (not when issue number changes)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
     mockForgeProviderResolved(async () =>
       makeMockForgePR({ number: 7, title: "Fix bug", url: "https://github.com/o/r/pull/7" })
     );
@@ -624,9 +604,6 @@ describe("PullRequestService", () => {
   });
 
   it("uses findPRsByBranches batch capability when present (single round-trip for many branches)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -687,9 +664,6 @@ describe("PullRequestService", () => {
   });
 
   it("fans out a single batched PR result to every worktree on the same branch", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -735,8 +709,6 @@ describe("PullRequestService", () => {
   });
 
   it("coalesces CI-status enrichment into one getCIStatuses batch when the capability is present", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -788,16 +760,14 @@ describe("PullRequestService", () => {
     const ciByWorktree = new Map(
       detected.filter((d) => d.prCiStatus).map((d) => [d.worktreeId, d.prCiStatus])
     );
-    expect(ciByWorktree.get("wt-1")).toBe("SUCCESS");
-    expect(ciByWorktree.get("wt-2")).toBe("SUCCESS");
+    expect(ciByWorktree.get("wt-1")).toBe("success");
+    expect(ciByWorktree.get("wt-2")).toBe("success");
 
     unsubscribe();
     pullRequestService.destroy();
   });
 
   it("flags the phase-1 emit as loading and lands the enriched status on phase-2 (#9551)", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches)
@@ -834,7 +804,7 @@ describe("PullRequestService", () => {
     expect(phase1?.prCiStatus).toBeUndefined();
 
     // Phase-2: enriched emit carries the resolved status and NOT the flag.
-    const phase2 = detected.find((d) => d.prCiStatus === "SUCCESS");
+    const phase2 = detected.find((d) => d.prCiStatus === "success");
     expect(phase2).toBeDefined();
     expect(phase2?.isCiStatusLoading).toBeFalsy();
 
@@ -843,8 +813,6 @@ describe("PullRequestService", () => {
   });
 
   it("emits a phase-2 clear when CI checks have genuinely disappeared (#9551)", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches)
@@ -891,8 +859,6 @@ describe("PullRequestService", () => {
   });
 
   it("does not bump consecutiveErrors when the provider is invalidated mid-check", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     let releaseBatch: (() => void) | undefined;
     const batchSpy = vi.fn(
       (_repo: RepoRef, branches: string[]) =>
@@ -946,8 +912,6 @@ describe("PullRequestService", () => {
   });
 
   it("falls back to per-PR getCIStatus when the batch CI capability is absent", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -984,8 +948,6 @@ describe("PullRequestService", () => {
   });
 
   it("coalesces revalidation getPR fan-out into one findPRsByNumbers batch when present", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -1035,8 +997,6 @@ describe("PullRequestService", () => {
   });
 
   it("skips the findPRsByNumbers revalidation batch when probeOpenPRList reports unchanged", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -1086,8 +1046,6 @@ describe("PullRequestService", () => {
   });
 
   it("re-fetches only the changed PR when probeOpenPRList reports a subset changed", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -1147,8 +1105,6 @@ describe("PullRequestService", () => {
   });
 
   it("seeds headSha/updatedAt from a changed probe so the next tick's snapshot is in sync", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches) {
@@ -1216,8 +1172,6 @@ describe("PullRequestService", () => {
   });
 
   it("keeps polling CI for in-flight PRs even when probeOpenPRList reports unchanged", async () => {
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       for (const branch of branches)
@@ -1271,9 +1225,6 @@ describe("PullRequestService", () => {
   });
 
   it("falls back to per-branch findPRByBranch when batch capability throws", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const batchSpy = vi.fn(async () => {
       throw new Error("transient batch failure");
     });
@@ -1310,9 +1261,6 @@ describe("PullRequestService", () => {
   });
 
   it("uses per-branch fallback for branches the batch result omits", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
       const map = new Map<string, ForgePR | null>();
       // Resolve only the first branch — omit the second to exercise the partial-result path.
@@ -1353,7 +1301,6 @@ describe("PullRequestService", () => {
 
   describe("transient lookup failures (#9994)", () => {
     it("preserves PR rows and counts one error when a per-branch lookup fails transiently", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved(async () => {
         throw new Error("network timeout");
       });
@@ -1391,7 +1338,6 @@ describe("PullRequestService", () => {
     });
 
     it("trips the circuit breaker after three consecutive failing cycles", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved(async () => {
         throw new Error("network timeout");
       });
@@ -1440,7 +1386,6 @@ describe("PullRequestService", () => {
     });
 
     it("resets consecutiveErrors once a cycle completes without lookup failures", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       let failing = true;
       mockForgeProviderResolved(async () => {
         if (failing) throw new Error("network timeout");
@@ -1485,7 +1430,6 @@ describe("PullRequestService", () => {
     });
 
     it("keeps an existing PR row when its branch lookup later fails transiently", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       let failing = false;
       mockForgeProviderResolved(async () => {
         if (failing) throw new Error("network timeout");
@@ -1525,7 +1469,6 @@ describe("PullRequestService", () => {
     });
 
     it("treats a non-Error rejection as transient, not confirmed absence", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved(() => Promise.reject({ code: "ETIMEDOUT" }));
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -1551,7 +1494,6 @@ describe("PullRequestService", () => {
     });
 
     it("clears the row and deletes the detectedPRs entry on a confirmed no-PR result", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       let prGone = false;
       mockForgeProviderResolved(async () => (prGone ? null : makeMockForgePR()));
 
@@ -1590,7 +1532,6 @@ describe("PullRequestService", () => {
     });
 
     it("handles a mixed cycle: detected, confirmed-absent, and failed branches independently", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       const mockImpl = mockForgeProviderResolved();
       mockImpl.findPRByBranch = vi.fn(async (_repo: RepoRef, branch: string) => {
         if (branch === "feature/a") return makeMockForgePR({ number: 1, headRef: branch });
@@ -1661,7 +1602,6 @@ describe("PullRequestService", () => {
     });
 
     it("routes mid-cycle failures to the rate-limit pause instead of the breaker when a limit is active", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       const mockImpl = mockForgeProviderResolved(async () => {
         throw new Error("API rate limit exceeded");
       });
@@ -1717,8 +1657,6 @@ describe("PullRequestService", () => {
   });
 
   it("no-ops when no forge provider is resolved (null linkage, no toast, no error)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
     mockForgeProviderUnresolved();
 
     const { pullRequestService } = await import("../PullRequestService.js");
@@ -1745,7 +1683,6 @@ describe("PullRequestService", () => {
 
   describe("no-match provider pause (#9997)", () => {
     it("keeps retrying on the 5s cold-start cap while resolution reports not-ready", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "not-ready" });
       const bridge = lastMockBridge!;
 
@@ -1773,7 +1710,6 @@ describe("PullRequestService", () => {
     });
 
     it("pauses polling entirely on a definitive no-match (no 5s spin)", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "no-match" });
       const bridge = lastMockBridge!;
 
@@ -1799,7 +1735,6 @@ describe("PullRequestService", () => {
     });
 
     it("re-arms a no-match pause when main pushes forge:provider-registry-updated", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "no-match" });
       const bridge = lastMockBridge!;
 
@@ -1837,8 +1772,11 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("leaves an already-resolved provider untouched on forge:provider-registry-updated", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
+    it("re-resolves an already-resolved provider on forge:provider-registry-updated", async () => {
+      // Registry updates now also signal provider REMOVAL (live built-in
+      // disable, #9304 follow-up), so a cached resolution can't be trusted —
+      // it must be dropped and re-resolved. In the still-registered case the
+      // re-resolution lands on the same provider.
       mockForgeProviderResolved();
       const bridge = lastMockBridge!;
 
@@ -1853,18 +1791,26 @@ describe("PullRequestService", () => {
 
       await pullRequestService.refresh();
       const callsAfterRefresh = bridge.resolveProvider.mock.calls.length;
+      expect(pullRequestService.getProviderContext()).not.toBeNull();
 
       pullRequestService.notifyForgeProviderRegistryUpdated();
-      await vi.advanceTimersByTimeAsync(1_000);
+      // Invalidation is immediate — the stale resolution must not survive
+      // even before any re-check fires. (When the provider was removed, this
+      // is what stops further RPCs against an unregistered provider.)
+      expect(pullRequestService.getProviderContext()).toBeNull();
 
-      expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterRefresh);
-      expect(pullRequestService.getProviderContext()).not.toBeNull();
+      // Next check re-resolves; with the provider still registered it lands
+      // back on the same provider.
+      await pullRequestService.refresh();
+      expect(bridge.resolveProvider.mock.calls.length).toBeGreaterThan(callsAfterRefresh);
+      expect(pullRequestService.getProviderContext()).toMatchObject({
+        providerId: "daintree.github.github",
+      });
 
       pullRequestService.destroy();
     });
 
     it("transitions from not-ready retries to a no-match pause when the scan settles mid-session", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "not-ready" });
       const bridge = lastMockBridge!;
 
@@ -1894,7 +1840,6 @@ describe("PullRequestService", () => {
     });
 
     it("is harmless when forge:provider-registry-updated arrives before start()", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "no-match" });
       const bridge = lastMockBridge!;
 
@@ -1917,7 +1862,6 @@ describe("PullRequestService", () => {
     });
 
     it("does not re-resolve when a worktree update fires while paused on no-match", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "no-match" });
       const bridge = lastMockBridge!;
 
@@ -1947,7 +1891,6 @@ describe("PullRequestService", () => {
     });
 
     it("re-resolves after a no-match when forge settings change (setForgeSettings + refresh)", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderUnresolved({ status: "no-match" });
       const bridge = lastMockBridge!;
 
@@ -1985,9 +1928,6 @@ describe("PullRequestService", () => {
   });
 
   it("skips polling when provider reports remaining: 0 with a future resetAt", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const futureReset = Date.now() + 30_000;
     const mockImpl = mockForgeProviderResolved();
     mockImpl.getRateLimit = vi.fn().mockResolvedValue({
@@ -2019,9 +1959,6 @@ describe("PullRequestService", () => {
   });
 
   it("skips polling when provider reports secondaryThrottled: true", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const mockImpl = mockForgeProviderResolved();
     mockImpl.getRateLimit = vi.fn().mockResolvedValue({
       limit: 5000,
@@ -2050,9 +1987,6 @@ describe("PullRequestService", () => {
   });
 
   it("proceeds normally when getRateLimit is absent from the provider", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const mockImpl = mockForgeProviderResolved();
     delete (mockImpl as unknown as Record<string, unknown>).getRateLimit;
 
@@ -2074,9 +2008,6 @@ describe("PullRequestService", () => {
   });
 
   it("proceeds normally when remaining is null (provider doesn't report that dimension)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const mockImpl = mockForgeProviderResolved();
     mockImpl.getRateLimit = vi.fn().mockResolvedValue({
       limit: null,
@@ -2102,9 +2033,6 @@ describe("PullRequestService", () => {
   });
 
   it("proceeds normally when getRateLimit rejects (fails open)", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const mockImpl = mockForgeProviderResolved();
     mockImpl.getRateLimit = vi.fn().mockRejectedValue(new Error("timeout"));
 
@@ -2126,9 +2054,6 @@ describe("PullRequestService", () => {
   });
 
   it("skips revalidation when provider reports rate-limited", async () => {
-    const clearPRCaches = vi.fn();
-    vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
     const mockImpl = mockForgeProviderResolved();
     // First call succeeds to get a resolved PR, then rate-limit kicks in
     // so revalidation blocks
@@ -2168,7 +2093,6 @@ describe("PullRequestService", () => {
 
   describe("issueTitle retry after PR resolved (#8851)", () => {
     it("retries getIssue on subsequent checkForPRs runs after a resolved PR's first issue fetch returns null", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       const mockImpl = mockForgeProviderResolved();
       const getIssue = vi
         .fn<() => Promise<{ number: number; title: string } | null>>()
@@ -2251,7 +2175,7 @@ describe("PullRequestService", () => {
     // detectedPRs directly in tests that access private helpers.
     function makeDetectedPR(overrides?: {
       number?: number;
-      ciStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      ciStatus?: "success" | "failure" | "pending";
       stagnantPollCount?: number;
     }) {
       return {
@@ -2267,49 +2191,45 @@ describe("PullRequestService", () => {
     }
 
     it("getBoostRevalidationIntervalMs: base 30s at count 0", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "PENDING" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
       pullRequestService.destroy();
     });
 
     it("getBoostRevalidationIntervalMs: 60s at count 10", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10, ciStatus: "PENDING" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 10, ciStatus: "pending" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(60_000);
       pullRequestService.destroy();
     });
 
     it("getBoostRevalidationIntervalMs: 120s at count 20", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "PENDING" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "pending" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(120_000);
       pullRequestService.destroy();
     });
 
     it("getBoostRevalidationIntervalMs: picks max across PENDING PRs only", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2319,12 +2239,12 @@ describe("PullRequestService", () => {
       // SUCCESS PR with high count — should be ignored
       svc.detectedPRs.set(
         "wt-1",
-        makeDetectedPR({ number: 1, stagnantPollCount: 20, ciStatus: "SUCCESS" })
+        makeDetectedPR({ number: 1, stagnantPollCount: 20, ciStatus: "success" })
       );
       // PENDING PR with lower count — this one counts
       svc.detectedPRs.set(
         "wt-2",
-        makeDetectedPR({ number: 2, stagnantPollCount: 12, ciStatus: "PENDING" })
+        makeDetectedPR({ number: 2, stagnantPollCount: 12, ciStatus: "pending" })
       );
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(60_000);
@@ -2332,21 +2252,19 @@ describe("PullRequestService", () => {
     });
 
     it("getBoostRevalidationIntervalMs: ignores non-PENDING PRs", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
       pullRequestService.initialize("/repo");
 
       const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "SUCCESS" }));
+      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "success" }));
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
       pullRequestService.destroy();
     });
 
     it("getBoostRevalidationIntervalMs: returns 30s when detectedPRs is empty", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2360,7 +2278,6 @@ describe("PullRequestService", () => {
     });
 
     it("clearStagnantPollCounts: resets all PRs to 0", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2379,7 +2296,6 @@ describe("PullRequestService", () => {
     });
 
     it("stop() clears stagnant counts", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2397,7 +2313,6 @@ describe("PullRequestService", () => {
     });
 
     it("refresh() clears stagnant counts", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2417,7 +2332,6 @@ describe("PullRequestService", () => {
     });
 
     it("reset() clears stagnant counts", async () => {
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2438,11 +2352,11 @@ describe("PullRequestService", () => {
       // fire-and-forget chain is not easily testable with vitest 4 fake timers,
       // but its behavior is exercised by scheduleRevalidation interval
       // selection in the tests above).
-      const pr = makeDetectedPR({ stagnantPollCount: 0, ciStatus: "PENDING" });
+      const pr = makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" });
 
       // Simulate unchanged CI result
       const prevSame = pr.ciStatus;
-      pr.ciStatus = "PENDING";
+      pr.ciStatus = "pending";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevSame === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
       }
@@ -2450,7 +2364,7 @@ describe("PullRequestService", () => {
 
       // Simulate another unchanged poll
       const prevSame2 = pr.ciStatus;
-      pr.ciStatus = "PENDING";
+      pr.ciStatus = "pending";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevSame2 === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
       }
@@ -2458,7 +2372,7 @@ describe("PullRequestService", () => {
 
       // Simulate CI transition
       const prevDiff = pr.ciStatus as string | undefined;
-      pr.ciStatus = "SUCCESS";
+      pr.ciStatus = "success";
       if (pr.ciStatus !== undefined) {
         pr.stagnantPollCount = prevDiff === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
       }
@@ -2466,9 +2380,6 @@ describe("PullRequestService", () => {
     });
 
     it("scheduleRevalidation sets a timer when boost is active", async () => {
-      const clearPRCaches = vi.fn();
-      vi.doMock("../GitHubService.js", () => ({ clearPRCaches }));
-
       mockForgeProviderResolved();
 
       const { pullRequestService } = await import("../PullRequestService.js");
@@ -2506,7 +2417,7 @@ describe("PullRequestService", () => {
 
     function makeDetectedPR(overrides?: {
       number?: number;
-      ciStatus?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+      ciStatus?: "success" | "failure" | "pending";
       stagnantPollCount?: number;
     }) {
       return {
@@ -2538,7 +2449,6 @@ describe("PullRequestService", () => {
 
     it("initializes enrichment disabled for the worker role", async () => {
       await withRole("worker", async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2551,7 +2461,6 @@ describe("PullRequestService", () => {
 
     it("initializes enrichment enabled for attended (non-worker) instances", async () => {
       await withRole(undefined, async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2564,8 +2473,6 @@ describe("PullRequestService", () => {
 
     it("skips the getCIStatuses batch entirely on worker instances", async () => {
       await withRole("worker", async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
         const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
           const map = new Map<string, ForgePR | null>();
           for (const branch of branches)
@@ -2613,7 +2520,6 @@ describe("PullRequestService", () => {
 
     it("clears in-flight CI and collapses the boost when enrichment is disabled", async () => {
       await withRole(undefined, async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2622,7 +2528,7 @@ describe("PullRequestService", () => {
 
         pullRequestService.initialize("/repo");
         svc.repoRef = makeMockRepoRef();
-        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "pending" }));
         svc.boostExpiresAt = Date.now() + 15 * 60 * 1000;
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
@@ -2650,7 +2556,6 @@ describe("PullRequestService", () => {
 
     it("leaves terminal CI states untouched and emits nothing for them on disable", async () => {
       await withRole(undefined, async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2659,7 +2564,7 @@ describe("PullRequestService", () => {
 
         pullRequestService.initialize("/repo");
         svc.repoRef = makeMockRepoRef();
-        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "SUCCESS" }));
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "success" }));
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
@@ -2667,7 +2572,7 @@ describe("PullRequestService", () => {
         pullRequestService.setCIEnrichmentEnabled(false);
 
         // SUCCESS is already correct for the renderer — no sweep, no noise emit.
-        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("SUCCESS");
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("success");
         expect(detected).toHaveLength(0);
 
         unsubscribe();
@@ -2677,7 +2582,6 @@ describe("PullRequestService", () => {
 
     it("is idempotent — a second disable does not re-sweep or re-emit", async () => {
       await withRole(undefined, async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2686,7 +2590,7 @@ describe("PullRequestService", () => {
 
         pullRequestService.initialize("/repo");
         svc.repoRef = makeMockRepoRef();
-        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "PENDING" }));
+        svc.detectedPRs.set("wt-1", makeDetectedPR({ number: 7, ciStatus: "pending" }));
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
@@ -2694,13 +2598,13 @@ describe("PullRequestService", () => {
         pullRequestService.setCIEnrichmentEnabled(false);
         const afterFirst = detected.length;
         // Re-seed a PENDING entry: if the second call still swept, it would emit.
-        svc.detectedPRs.get("wt-1").ciStatus = "PENDING";
+        svc.detectedPRs.get("wt-1").ciStatus = "pending";
         pullRequestService.setCIEnrichmentEnabled(false);
 
         expect(afterFirst).toBe(1);
         expect(detected).toHaveLength(afterFirst);
         // The re-seeded value is left alone — the no-op early-returns before sweep.
-        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("PENDING");
+        expect(svc.detectedPRs.get("wt-1").ciStatus).toBe("pending");
 
         unsubscribe();
         pullRequestService.destroy();
@@ -2709,8 +2613,6 @@ describe("PullRequestService", () => {
 
     it("does not write CI back when enrichment is disabled mid-flight", async () => {
       await withRole(undefined, async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
-
         let resolveCi: (m: Map<number, CIStatus | null>) => void = () => {};
         const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
           const map = new Map<string, ForgePR | null>();
@@ -2755,7 +2657,6 @@ describe("PullRequestService", () => {
 
     it("keeps worker instances disabled even when asked to re-enable", async () => {
       await withRole("worker", async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2771,7 +2672,6 @@ describe("PullRequestService", () => {
 
     it("does not blank a SUCCESS worktree that shares a PR number with a swept one", async () => {
       await withRole(undefined, async () => {
-        vi.doMock("../GitHubService.js", () => ({ clearPRCaches: vi.fn() }));
         mockForgeProviderResolved();
 
         const { pullRequestService } = await import("../PullRequestService.js");
@@ -2782,8 +2682,8 @@ describe("PullRequestService", () => {
         svc.repoRef = makeMockRepoRef();
         // Two distinct PR objects coincidentally numbered 42: one PENDING (to be
         // swept), one SUCCESS (must survive untouched).
-        svc.detectedPRs.set("wt-pending", makeDetectedPR({ number: 42, ciStatus: "PENDING" }));
-        svc.detectedPRs.set("wt-success", makeDetectedPR({ number: 42, ciStatus: "SUCCESS" }));
+        svc.detectedPRs.set("wt-pending", makeDetectedPR({ number: 42, ciStatus: "pending" }));
+        svc.detectedPRs.set("wt-success", makeDetectedPR({ number: 42, ciStatus: "success" }));
 
         const detected: DaintreeEventMap["sys:pr:detected"][] = [];
         const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
@@ -2791,7 +2691,7 @@ describe("PullRequestService", () => {
         pullRequestService.setCIEnrichmentEnabled(false);
 
         // The SUCCESS entry keeps its status and is never re-emitted as cleared.
-        expect(svc.detectedPRs.get("wt-success").ciStatus).toBe("SUCCESS");
+        expect(svc.detectedPRs.get("wt-success").ciStatus).toBe("success");
         expect(detected.some((d) => d.worktreeId === "wt-success")).toBe(false);
         // The PENDING entry was swept and re-emitted without a CI status.
         expect(svc.detectedPRs.get("wt-pending").ciStatus).toBeUndefined();

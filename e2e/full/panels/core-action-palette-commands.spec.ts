@@ -115,7 +115,11 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
     test("closes via Escape", async () => {
       const { window } = ctx;
-      await window.keyboard.press("Escape");
+      const searchInput = window.locator(SEL.actionPalette.searchInput);
+
+      await searchInput.press("Escape");
+      await expect(searchInput).toHaveValue("");
+      await searchInput.press("Escape");
 
       const dialog = window.locator(SEL.actionPalette.dialog);
       await expect(dialog).not.toBeVisible({ timeout: T_SHORT });

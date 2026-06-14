@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
-import type { RemoteInfo } from "@shared/types/ipc/github";
+import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
 
 interface CodeForgeTabProps {
@@ -56,26 +56,42 @@ export function CodeForgeTab({
 
   useEffect(() => {
     let cancelled = false;
-    setProvidersLoading(true);
-    setProvidersError(null);
+    // Sequence overlapping fetches: rapid enable/disable toggles can leave an
+    // older getForgeProviders() response resolving after a newer one, and the
+    // stale list must not win.
+    let requestSeq = 0;
 
-    window.electron.plugin
-      .getForgeProviders()
-      .then((result) => {
-        if (!cancelled) {
-          setProviders(result);
-          setProvidersLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setProvidersError(formatErrorMessage(err, "Failed to load forge providers"));
-          setProvidersLoading(false);
-        }
-      });
+    const loadProviders = () => {
+      const seq = ++requestSeq;
+      setProvidersLoading(true);
+      setProvidersError(null);
+
+      window.electron.plugin
+        .getForgeProviders()
+        .then((result) => {
+          if (!cancelled && seq === requestSeq) {
+            setProviders(result);
+            setProvidersLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled && seq === requestSeq) {
+            setProvidersError(formatErrorMessage(err, "Failed to load forge providers"));
+            setProvidersLoading(false);
+          }
+        });
+    };
+
+    loadProviders();
+    // Refetch when a plugin is enabled/disabled at runtime so the provider
+    // list reflects live forge-provider registry changes (e.g. toggling the
+    // built-in GitHub plugin) without a remount. `provenance-changed` is the
+    // same broadcast PluginsTab/usePluginManager listen to.
+    const unsubscribe = window.electron.plugin.onProvenanceChanged(loadProviders);
 
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

@@ -67,6 +67,9 @@ export class TerminalRestoreController {
       const restoreGeneration = ++managed.restoreGeneration;
       managed.isSerializedRestoreInProgress = true;
       managed.lastScrollbackRestoreError = undefined;
+      // Reset+replay invalidates the wake no-change claim; only a completed
+      // wake replay re-asserts it (TerminalWakeManager success path).
+      managed.wakeSynced = false;
 
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
@@ -109,6 +112,8 @@ export class TerminalRestoreController {
     const restoreGeneration = ++managed.restoreGeneration;
     managed.isSerializedRestoreInProgress = true;
     managed.lastScrollbackRestoreError = undefined;
+    // Reset+replay invalidates the wake no-change claim (see above).
+    managed.wakeSynced = false;
 
     const task = async (): Promise<boolean> => {
       const scrollBackOffset = managed.isUserScrolledBack

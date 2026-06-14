@@ -10,6 +10,7 @@ const getTmpDirMock = vi.fn().mockResolvedValue("/tmp");
 const terminalClientMock = {
   getForProject: vi.fn(),
   reconnect: vi.fn(),
+  reconnectBulk: vi.fn(),
   getSerializedStates: vi.fn(),
 };
 
@@ -22,6 +23,7 @@ const projectClientMock = {
   getTerminalSizes: vi.fn(),
   getDraftInputs: vi.fn(),
   setDraftInputs: vi.fn(),
+  getInRepoPresets: vi.fn(),
 };
 
 const terminalConfigClientMock = {
@@ -177,6 +179,7 @@ describe("hydrateAppState", () => {
     });
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
+    terminalClientMock.reconnectBulk.mockResolvedValue({});
     terminalClientMock.getSerializedStates.mockRejectedValue(
       new Error("Batch serialized state endpoint unavailable")
     );
@@ -184,6 +187,7 @@ describe("hydrateAppState", () => {
     projectClientMock.getTabGroups.mockResolvedValue([]);
     projectClientMock.getTerminalSizes.mockResolvedValue({});
     projectClientMock.getDraftInputs.mockResolvedValue({});
+    projectClientMock.getInRepoPresets.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -275,16 +279,101 @@ describe("hydrateAppState", () => {
     });
 
     const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as
-      | ((state: { projects: (typeof project)[]; currentProject: typeof project | null }) => {
+      | ((state: {
           projects: (typeof project)[];
           currentProject: typeof project | null;
+          isBootstrapped: boolean;
+        }) => {
+          projects: (typeof project)[];
+          currentProject: typeof project | null;
+          isBootstrapped: boolean;
         })
       | undefined;
 
     expect(updater).toBeTypeOf("function");
-    expect(updater?.({ projects: [], currentProject: null })).toEqual({
+    expect(updater?.({ projects: [], currentProject: null, isBootstrapped: false })).toEqual({
       projects: [project],
       currentProject: project,
+      // The payload carried no `projects` list (older main process), so the
+      // bootstrap flag stays down and the Toolbar's IPC fallback still fires.
+      isBootstrapped: false,
+    });
+  });
+
+  it("prefetches reconnect probes in one bulk IPC for saved PTY panels missing from the backend (#10390)", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          { id: "term-1", kind: "terminal", title: "T1", cwd: "/project", location: "grid" },
+          {
+            id: "browser-1",
+            kind: "browser",
+            title: "Browser",
+            cwd: "/project",
+            location: "grid",
+            browserUrl: "http://localhost:5173",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+    terminalClientMock.reconnectBulk.mockResolvedValue({
+      "term-1": { exists: false },
+    });
+
+    await hydrateAppState({
+      addPanel: vi.fn().mockResolvedValue("term-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Only the PTY-kind panel missing from the backend is probed; the
+    // non-PTY browser panel is excluded from the bulk payload.
+    expect(terminalClientMock.reconnectBulk).toHaveBeenCalledTimes(1);
+    expect(terminalClientMock.reconnectBulk).toHaveBeenCalledWith(["term-1"]);
+    // The prefetched result satisfies the probe — no per-panel reconnect IPC.
+    expect(terminalClientMock.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("seeds the full project list and bootstrap flag when the payload carries projects (#10390)", async () => {
+    const otherProject = { id: "project-2", path: "/other" };
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+      },
+      terminalConfig,
+      project,
+      projects: [project, otherProject],
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+
+    await hydrateAppState({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const updater = projectStoreSetStateMock.mock.calls[0]?.[0] as (state: {
+      projects: (typeof project)[];
+      currentProject: typeof project | null;
+      isBootstrapped: boolean;
+    }) => {
+      projects: (typeof project)[];
+      currentProject: typeof project | null;
+      isBootstrapped: boolean;
+    };
+
+    expect(updater({ projects: [], currentProject: null, isBootstrapped: false })).toEqual({
+      projects: [project, otherProject],
+      currentProject: project,
+      isBootstrapped: true,
     });
   });
 
@@ -1031,7 +1120,13 @@ describe("hydrateAppState", () => {
     ];
     projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
 
-    const addPanel = vi.fn().mockResolvedValue("terminal-id");
+    // Echo the requested id so each panel restores under its saved id (the
+    // clean cold-restart path). This keeps the saved→restored remap empty, so
+    // tab groups hydrate unchanged (#10440).
+    const addPanel = vi.fn(
+      async (args: { requestedId?: string; existingId?: string }) =>
+        args.requestedId ?? args.existingId ?? "terminal-id"
+    );
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
@@ -1051,6 +1146,160 @@ describe("hydrateAppState", () => {
     // Verify hydrateTabGroups was called with the persisted groups
     expect(hydrateTabGroups).toHaveBeenCalledTimes(1);
     expect(hydrateTabGroups).toHaveBeenCalledWith(persistedTabGroups);
+  });
+
+  it("remaps tab-group panel ids when a panel respawns with a generated id (#10440)", async () => {
+    // A persisted PTY panel whose reconnect times out respawns under a fresh
+    // generated id. The saved tab group still references the old id; without the
+    // remap, hydrateTabGroups would filter it out, shrink the group to one
+    // member, and discard it — permanently destroying the grouping.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "old-panel-id",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "stable-panel-id",
+            kind: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // Persisted group references the pre-restart saved ids.
+    const persistedTabGroups = [
+      {
+        id: "group-1",
+        location: "grid",
+        worktreeId: undefined,
+        activeTabId: "old-panel-id",
+        panelIds: ["old-panel-id", "stable-panel-id"],
+      },
+    ];
+    projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
+
+    // The first panel's reconnect times out (reconnectManager surfaces the
+    // 2000ms rejection as status "timeout"), so it respawns with requestedId
+    // undefined and the store assigns "new-panel-id". The second misses (not
+    // found) and respawns under its saved id.
+    terminalClientMock.reconnect.mockImplementation(async (id: string) => {
+      if (id === "old-panel-id") throw new Error("Reconnection timeout");
+      return { exists: false };
+    });
+    const addPanel = vi.fn(async (args: { requestedId?: string; existingId?: string }) =>
+      args.requestedId === undefined ? "new-panel-id" : args.requestedId
+    );
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+    const hydrateTabGroups = vi.fn();
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      hydrateTabGroups,
+    });
+
+    // hydrateTabGroups receives the group with the old id remapped to the new
+    // runtime id (both panelIds membership and the activeTabId pointer).
+    expect(hydrateTabGroups).toHaveBeenCalledTimes(1);
+    expect(hydrateTabGroups).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: "group-1",
+        activeTabId: "new-panel-id",
+        panelIds: ["new-panel-id", "stable-panel-id"],
+      }),
+    ]);
+  });
+
+  it("does not throw on a malformed group during remap, preserving valid groups (#10440)", async () => {
+    // A malformed persisted group (panelIds not an array) must pass through the
+    // remap untouched rather than throwing — otherwise the catch path would wipe
+    // every group for the session. Requires the remap to be active (size > 0).
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "old-panel-id",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "stable-panel-id",
+            kind: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    const persistedTabGroups = [
+      // Malformed — panelIds is not an array. Must survive the remap untouched.
+      { id: "bad", location: "grid", worktreeId: undefined, activeTabId: "x", panelIds: null },
+      {
+        id: "group-1",
+        location: "grid",
+        worktreeId: undefined,
+        activeTabId: "old-panel-id",
+        panelIds: ["old-panel-id", "stable-panel-id"],
+      },
+    ];
+    projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
+
+    terminalClientMock.reconnect.mockImplementation(async (id: string) => {
+      if (id === "old-panel-id") throw new Error("Reconnection timeout");
+      return { exists: false };
+    });
+    const addPanel = vi.fn(async (args: { requestedId?: string; existingId?: string }) =>
+      args.requestedId === undefined ? "new-panel-id" : args.requestedId
+    );
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+    const hydrateTabGroups = vi.fn();
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      hydrateTabGroups,
+    });
+
+    // The remap ran (no throw), the malformed group passed through unchanged,
+    // and the valid group was remapped. The catch path (which would call with
+    // [] + skipPersist) never fired.
+    expect(hydrateTabGroups).toHaveBeenCalledTimes(1);
+    expect(hydrateTabGroups).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "bad", panelIds: null }),
+      expect.objectContaining({
+        id: "group-1",
+        activeTabId: "new-panel-id",
+        panelIds: ["new-panel-id", "stable-panel-id"],
+      }),
+    ]);
   });
 
   it("clears tab groups when no persisted groups exist", async () => {
@@ -3054,6 +3303,136 @@ describe("hydrateAppState", () => {
 
       expect(beginHydrationBatch).toHaveBeenCalled();
       expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+    });
+  });
+
+  describe("per-project layout payload folding", () => {
+    const baseOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("uses tabGroups/terminalSizes/draftInputs from the hydrate payload and skips the standalone IPC calls", async () => {
+      const payloadTabGroups = [
+        {
+          id: "group-payload",
+          location: "grid",
+          activeTabId: "terminal-1",
+          panelIds: ["terminal-1"],
+        },
+      ];
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        tabGroups: payloadTabGroups,
+        terminalSizes: { "terminal-1": { cols: 100, rows: 30 } },
+        draftInputs: { "terminal-1": "payload draft" },
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+      expect(projectClientMock.getTerminalSizes).not.toHaveBeenCalled();
+      expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
+      expect(hydrateTabGroups).toHaveBeenCalledWith(payloadTabGroups);
+
+      const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+      expect(useTerminalInputStore.getState().draftInputs.get("project-1:terminal-1")).toBe(
+        "payload draft"
+      );
+    });
+
+    it("falls back to the standalone IPC calls when the payload fields are absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // tabGroups/terminalSizes/draftInputs intentionally omitted (older
+        // main process, or the safe-boot {ok:false} payload).
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
+      expect(projectClientMock.getTerminalSizes).toHaveBeenCalledWith("project-1");
+      expect(projectClientMock.getDraftInputs).toHaveBeenCalledWith("project-1");
+    });
+
+    it("treats empty payload fields as authoritative (no IPC fallback, stale groups cleared)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        tabGroups: [],
+        terminalSizes: {},
+        draftInputs: {},
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+      expect(projectClientMock.getTerminalSizes).not.toHaveBeenCalled();
+      expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
+      // Empty array still clears stale groups (mirrors the IPC path).
+      expect(hydrateTabGroups).toHaveBeenCalledWith([]);
+    });
+
+    it("uses projectPresets from the hydrate payload and skips the standalone IPC call", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        projectPresets: { claude: [{ id: "team-preset", name: "Team" }] },
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the standalone getInRepoPresets call when projectPresets is absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // projectPresets intentionally omitted (older main process, or the
+        // safe-boot {ok:false} payload).
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).toHaveBeenCalledWith("project-1");
+    });
+
+    it("treats an empty projectPresets payload as authoritative (no IPC fallback)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        projectPresets: {},
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
     });
   });
 

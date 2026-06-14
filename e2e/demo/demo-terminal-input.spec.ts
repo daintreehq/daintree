@@ -14,14 +14,12 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
-import { openProject, dismissTelemetryConsent } from "../helpers/project";
-import { dismissBlockingPalette } from "../helpers/overlays";
+import { openAndOnboardProject } from "../helpers/project";
 import { openTerminal, getFirstGridPanel } from "../helpers/panels";
 import { getTerminalText, waitForTerminalReady, waitForTerminalText } from "../helpers/terminal";
-
-const T_LONG = 30_000;
+import { T_LONG } from "../helpers/timeouts";
 
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
@@ -41,10 +39,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     const { dir, cleanup } = createFixtureRepo({ name: "demo-terminal-input" });
     fixtureCleanup = cleanup;
     ctx = await launchApp({ extraArgs: ["--demo-mode"] });
-    await openProject(ctx.app, ctx.window, dir);
-    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
-    await dismissTelemetryConsent(ctx.window);
-    await dismissBlockingPalette(ctx.window);
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir);
   });
 
   test.afterAll(async () => {
@@ -96,6 +91,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
     //    terminal must stay interactive afterwards, proven by running a fresh
     //    sentinel command. The sentinel is unique per run so the assertion is
     //    immune to anything already in the scrollback.
+    const hiCountBeforeCtrlC = countOccurrences(await getTerminalText(panel), "hi");
     const sentinel = `DAINTREE_DEMO_KEYS_OK_${Date.now()}`;
     await window.evaluate(
       async ({ sel, token }) => {
@@ -107,5 +103,7 @@ test.describe.serial("Demo mode — terminal typing and keys", () => {
       { sel: selector, token: sentinel }
     );
     await waitForTerminalText(panel, sentinel, T_LONG);
+    // Ctrl-C must not have executed the recalled `echo hi` — output count unchanged.
+    expect(countOccurrences(await getTerminalText(panel), "hi")).toBe(hiCountBeforeCtrlC);
   });
 });

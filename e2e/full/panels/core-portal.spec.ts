@@ -68,20 +68,7 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
       const { window } = ctx;
 
       const portalBtn = window.locator(SEL.toolbar.portalToggle);
-      if (
-        !(await portalBtn
-          .first()
-          .isVisible()
-          .catch(() => false))
-      ) {
-        test.info().annotations.push({
-          type: "conditional-skip",
-          description: "Required element or state not available in this launch",
-        });
-
-        test.skip();
-        return;
-      }
+      await expect(portalBtn.first()).toBeVisible({ timeout: T_LONG });
 
       await dispatchAction(window, "portal.openUrl", {
         url: `http://127.0.0.1:${port}/page-a`,
@@ -96,7 +83,7 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
       // Tab should be present and active
       const tab = portalContainer.locator('[role="tab"][aria-label="Page A"]');
       await expect(tab).toBeVisible({ timeout: T_MEDIUM });
-      await expect(tab).toHaveAttribute("aria-selected", "true");
+      await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
     });
 
     test("creates second tab with different URL", async () => {
@@ -117,8 +104,8 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
       await expect(tabB).toBeVisible({ timeout: T_SHORT });
 
       // Second tab should be active, first inactive
-      await expect(tabB).toHaveAttribute("aria-selected", "true");
-      await expect(tabA).toHaveAttribute("aria-selected", "false");
+      await expect(tabB).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
+      await expect(tabA).toHaveAttribute("aria-selected", "false", { timeout: T_SHORT });
     });
 
     test("clicking tab switches active tab", async () => {
@@ -161,7 +148,7 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
       });
       const tabA = portalContainer.locator('[role="tab"][aria-label="Page A"]');
       await expect(tabA).toBeVisible({ timeout: T_SHORT });
-      await expect(tabA).toHaveAttribute("aria-selected", "true");
+      await expect(tabA).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
     });
 
     test("closing last tab hides portal content", async () => {

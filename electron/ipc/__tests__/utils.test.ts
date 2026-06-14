@@ -7,6 +7,9 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const browserWindowFromWebContentsMock = vi.hoisted(() => vi.fn());
 const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+const isCachedViewWebContentsMock = vi.hoisted(() => vi.fn((_id: number) => false));
+const getWebContentsForProjectMock = vi.hoisted(() => vi.fn((_projectId: string) => [] as never[]));
+const hasRegisteredProjectViewsMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -34,6 +37,9 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
       .filter((w) => !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed())
       .map((w) => w.webContents);
   }),
+  isCachedViewWebContents: isCachedViewWebContentsMock,
+  getWebContentsForProject: getWebContentsForProjectMock,
+  hasRegisteredProjectViews: hasRegisteredProjectViewsMock,
 }));
 
 vi.mock("../../window/windowRef.js", () => ({
@@ -43,6 +49,8 @@ vi.mock("../../window/windowRef.js", () => ({
 import {
   sendToRenderer,
   broadcastToRenderer,
+  broadcastToProjectRenderers,
+  broadcastToVisibleRenderers,
   sendToRendererContext,
   typedHandle,
   typedHandleWithContext,
@@ -315,6 +323,157 @@ describe("broadcastToRenderer", () => {
 
     expect(() => broadcastToRenderer("channel:test")).not.toThrow();
     expect(send2).toHaveBeenCalledWith("channel:test");
+  });
+});
+
+describe("broadcastToVisibleRenderers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isCachedViewWebContentsMock.mockImplementation(() => false);
+  });
+
+  it("skips cached webContents and sends to visible ones", () => {
+    const sendVisible = vi.fn();
+    const sendCached = vi.fn();
+    const visible = {
+      isDestroyed: () => false,
+      webContents: { id: 1, isDestroyed: () => false, send: sendVisible },
+    };
+    const cached = {
+      isDestroyed: () => false,
+      webContents: { id: 2, isDestroyed: () => false, send: sendCached },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([visible, cached]);
+    isCachedViewWebContentsMock.mockImplementation((id: number) => id === 2);
+
+    broadcastToVisibleRenderers("logs:batch", [{ level: "info" }]);
+
+    expect(sendVisible).toHaveBeenCalledWith("logs:batch", [{ level: "info" }]);
+    expect(sendCached).not.toHaveBeenCalled();
+  });
+
+  it("resumes sending once the webContents is no longer cached", () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false,
+      webContents: { id: 3, isDestroyed: () => false, send },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win]);
+
+    isCachedViewWebContentsMock.mockImplementation(() => true);
+    broadcastToVisibleRenderers("logs:batch");
+    expect(send).not.toHaveBeenCalled();
+
+    isCachedViewWebContentsMock.mockImplementation(() => false);
+    broadcastToVisibleRenderers("logs:batch");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("broadcastToRenderer ignores the cached mark — state broadcasts reach cached views", () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false,
+      webContents: { id: 4, isDestroyed: () => false, send },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win]);
+    isCachedViewWebContentsMock.mockImplementation(() => true);
+
+    broadcastToRenderer("project:updated", { id: "p1" });
+    expect(send).toHaveBeenCalledWith("project:updated", { id: "p1" });
+  });
+
+  it("does not throw when webContents.send throws", () => {
+    const send1 = vi.fn(() => {
+      throw new Error("send failed");
+    });
+    const send2 = vi.fn();
+    const win1 = {
+      isDestroyed: () => false,
+      webContents: { id: 6, isDestroyed: () => false, send: send1 },
+    };
+    const win2 = {
+      isDestroyed: () => false,
+      webContents: { id: 7, isDestroyed: () => false, send: send2 },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win1, win2]);
+
+    expect(() => broadcastToVisibleRenderers("logs:batch")).not.toThrow();
+    expect(send2).toHaveBeenCalledWith("logs:batch");
+  });
+});
+
+describe("broadcastToProjectRenderers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hasRegisteredProjectViewsMock.mockReturnValue(false);
+    getWebContentsForProjectMock.mockReturnValue([]);
+  });
+
+  it("sends only to the owning project's views when registered", () => {
+    const sendOwn = vi.fn();
+    const sendOther = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    getWebContentsForProjectMock.mockImplementation((projectId: string) =>
+      projectId === "p1" ? ([{ send: sendOwn }] as never[]) : ([] as never[])
+    );
+    // A full broadcast would reach this window — it must NOT be used here.
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: sendOther } },
+    ]);
+
+    broadcastToProjectRenderers("p1", "terminal:status", { id: "t1" });
+
+    expect(sendOwn).toHaveBeenCalledWith("terminal:status", { id: "t1" });
+    expect(sendOther).not.toHaveBeenCalled();
+  });
+
+  it("drops the event when project views exist but none host the project", () => {
+    const sendOther = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    getWebContentsForProjectMock.mockReturnValue([]);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: sendOther } },
+    ]);
+
+    broadcastToProjectRenderers("closed-project", "terminal:status", { id: "t1" });
+
+    expect(sendOther).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a full broadcast when the project is unknown", () => {
+    const send = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send } },
+    ]);
+
+    broadcastToProjectRenderers(null, "terminal:status", { id: "t1" });
+
+    expect(send).toHaveBeenCalledWith("terminal:status", { id: "t1" });
+  });
+
+  it("falls back to a full broadcast when no project views are registered", () => {
+    const send = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(false);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send } },
+    ]);
+
+    broadcastToProjectRenderers("p1", "terminal:status", { id: "t1" });
+
+    expect(send).toHaveBeenCalledWith("terminal:status", { id: "t1" });
+  });
+
+  it("does not throw when a scoped webContents.send throws", () => {
+    const send1 = vi.fn(() => {
+      throw new Error("send failed");
+    });
+    const send2 = vi.fn();
+    hasRegisteredProjectViewsMock.mockReturnValue(true);
+    getWebContentsForProjectMock.mockReturnValue([{ send: send1 }, { send: send2 }] as never[]);
+
+    expect(() => broadcastToProjectRenderers("p1", "terminal:status")).not.toThrow();
+    expect(send2).toHaveBeenCalledWith("terminal:status");
   });
 });
 

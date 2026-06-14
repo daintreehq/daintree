@@ -72,7 +72,7 @@ describe("TerminalOutputIngestService", () => {
     // stopPolling flushes buffered data
     service.stopPolling();
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "buffered");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "buffered", 1);
 
     // Can reinitialize
     await service.initialize();
@@ -87,7 +87,7 @@ describe("TerminalOutputIngestService", () => {
     service.bufferData("term-1", "hello");
 
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "hello");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "hello", 1);
   });
 
   it("buffers when inFlightBytes exceed high watermark and drains on acknowledgment", () => {
@@ -106,7 +106,7 @@ describe("TerminalOutputIngestService", () => {
     // Acknowledge enough bytes to drop below LOW_WATERMARK (32,768)
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "buffered");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "buffered", 1);
   });
 
   it("coalesces queued string chunks into a single write on drain", () => {
@@ -127,7 +127,7 @@ describe("TerminalOutputIngestService", () => {
     // Acknowledge to trigger drain — queued chunks should coalesce
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "abc");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "abc", 3);
   });
 
   it("caps coalesced batch at 256 KB and drains remainder on next acknowledgment", () => {
@@ -187,7 +187,7 @@ describe("TerminalOutputIngestService", () => {
     // Acknowledge to drain — single chunk should pass through via the length===1 fast path
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", oversized);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", oversized, 1);
   });
 
   it("uses fast path when total queued bytes exactly equal the cap", () => {
@@ -243,7 +243,7 @@ describe("TerminalOutputIngestService", () => {
     expect(secondBatch.length).toBe(244 * 1024);
   });
 
-  it("forceDrain bypasses cap and writes all buffered data", () => {
+  it("forceDrain bypasses the watermark but flushes in cap-bounded batches", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
 
@@ -258,11 +258,85 @@ describe("TerminalOutputIngestService", () => {
     service.bufferData("term-1", chunk200k);
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
-    // forceDrain (via flushForTerminal) should write ALL data in one call
+    // forceDrain (via flushForTerminal) writes everything without waiting for
+    // acknowledgments, but never as a single over-cap write (#4853).
     service.flushForTerminal("term-1");
+    expect(writeToTerminal).toHaveBeenCalledTimes(3);
+    const flushedBytes = writeToTerminal.mock.calls
+      .slice(1)
+      .reduce((sum, call) => sum + (call[1] as string).length, 0);
+    expect(flushedBytes).toBe(400_000);
+    for (const call of writeToTerminal.mock.calls.slice(1)) {
+      expect((call[1] as string).length).toBeLessThanOrEqual(256 * 1024);
+    }
+  });
+
+  it("coalesces queued Uint8Array chunks into a single write with the merged chunk count", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    // Exceed watermark to start buffering
+    const largeData = "x".repeat(140_000);
+    service.bufferData("term-1", largeData);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    service.bufferData("term-1", new Uint8Array([1, 2]));
+    service.bufferData("term-1", new Uint8Array([3]));
+    service.bufferData("term-1", new Uint8Array([4, 5, 6]));
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    const flushed = writeToTerminal.mock.calls[1]![1] as string;
-    expect(flushed.length).toBe(400_000);
+    const [, merged, chunkCount] = writeToTerminal.mock.calls[1]!;
+    expect(merged).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]));
+    expect(chunkCount).toBe(3);
+  });
+
+  it("caps Uint8Array coalescing at 256 KB per batch", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    const largeData = "x".repeat(140_000);
+    service.bufferData("term-1", largeData);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    // 3 × 150 KB binary chunks — first batch takes one (150k + 150k > cap).
+    const chunk150k = new Uint8Array(150_000).fill(65);
+    service.bufferData("term-1", chunk150k);
+    service.bufferData("term-1", chunk150k);
+    service.bufferData("term-1", chunk150k);
+
+    service.notifyWriteComplete("term-1", 140_000);
+    expect(writeToTerminal).toHaveBeenCalledTimes(2);
+    expect((writeToTerminal.mock.calls[1]![1] as Uint8Array).byteLength).toBe(150_000);
+    expect(writeToTerminal.mock.calls[1]![2]).toBe(1);
+
+    service.notifyWriteComplete("term-1", 150_000);
+    expect(writeToTerminal).toHaveBeenCalledTimes(3);
+    expect((writeToTerminal.mock.calls[2]![1] as Uint8Array).byteLength).toBe(150_000);
+  });
+
+  it("merges only same-type prefixes from a mixed string/binary queue, preserving order", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    const largeData = "x".repeat(140_000);
+    service.bufferData("term-1", largeData);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    service.bufferData("term-1", "a");
+    service.bufferData("term-1", "b");
+    service.bufferData("term-1", new Uint8Array([1]));
+    service.bufferData("term-1", new Uint8Array([2]));
+    service.bufferData("term-1", "c");
+
+    service.notifyWriteComplete("term-1", 140_000);
+    // Drains as: "ab" (2 chunks), [1,2] (2 chunks), "c" (1 chunk).
+    expect(writeToTerminal).toHaveBeenCalledTimes(4);
+    expect(writeToTerminal).toHaveBeenNthCalledWith(2, "term-1", "ab", 2);
+    expect(writeToTerminal.mock.calls[2]![1]).toEqual(new Uint8Array([1, 2]));
+    expect(writeToTerminal.mock.calls[2]![2]).toBe(2);
+    expect(writeToTerminal).toHaveBeenNthCalledWith(4, "term-1", "c", 1);
   });
 
   it("defers drain via setTimeout for ink erase-line sequences", () => {
@@ -272,7 +346,7 @@ describe("TerminalOutputIngestService", () => {
 
     service.bufferData("term-1", "\x1b[2K");
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K", 1);
 
     // Acknowledge previous write
     service.notifyWriteComplete("term-1", 100);
@@ -283,7 +357,7 @@ describe("TerminalOutputIngestService", () => {
 
     vi.advanceTimersByTime(0);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[1Acontent");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[1Acontent", 1);
 
     vi.useRealTimers();
   });
@@ -309,7 +383,7 @@ describe("TerminalOutputIngestService", () => {
     // notifyParsed should drain because inFlightBytes (40,000) < HIGH_WATERMARK
     service.notifyParsed("term-1");
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "residual");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "residual", 1);
   });
 
   it("flushForTerminal writes pending buffer immediately regardless of watermark", () => {
@@ -324,7 +398,7 @@ describe("TerminalOutputIngestService", () => {
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
     service.flushForTerminal("term-1");
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "ab");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "ab", 2);
   });
 
   it("resetForTerminal drops pending buffer without writing", () => {
@@ -351,7 +425,7 @@ describe("TerminalOutputIngestService", () => {
     service.bufferData("term-1", data);
 
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", data);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", data, 1);
   });
 
   it("isolates queues per terminal", () => {
@@ -367,8 +441,8 @@ describe("TerminalOutputIngestService", () => {
     service.bufferData("term-2", "hello-2");
 
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", largeData);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-2", "hello-2");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", largeData, 1);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-2", "hello-2", 1);
   });
 
   it("respects watermark bounds during rapid sequential data delivery", () => {
@@ -389,12 +463,12 @@ describe("TerminalOutputIngestService", () => {
     // Rapid data on term-2 (separate queue, should write immediately)
     service.bufferData("term-2", "immediate");
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-2", "immediate");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-2", "immediate", 1);
 
     // Acknowledge to drain term-1's batch
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(3);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "batch-1batch-2batch-3");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "batch-1batch-2batch-3", 3);
   });
 
   it("notifyWriteComplete is a no-op for unknown terminals", () => {
@@ -455,7 +529,7 @@ describe("TerminalOutputIngestService", () => {
       service.resumeFlush("term-1");
 
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-aheld-b");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-aheld-b", 2);
     });
 
     it("resumeFlush respects the 256KB coalesce cap (never a single multi-MB write)", () => {
@@ -521,7 +595,7 @@ describe("TerminalOutputIngestService", () => {
 
       service.bufferData("term-1", "visible-output");
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "visible-output");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "visible-output", 1);
     });
 
     it("behaves as before when no tier provider is supplied", () => {
@@ -530,7 +604,7 @@ describe("TerminalOutputIngestService", () => {
 
       service.bufferData("term-1", "no-gate");
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "no-gate");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "no-gate", 1);
     });
 
     it("resumeFlush is a no-op when nothing is held", () => {
@@ -570,7 +644,7 @@ describe("TerminalOutputIngestService", () => {
       tiers.set("term-1", TerminalRefreshTier.FOCUSED);
       service.resumeFlush("term-1");
       expect(writeToTerminal).toHaveBeenCalledTimes(2);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-while-bg");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-while-bg", 1);
     });
 
     it("notifyParsed does not bypass the background gate", () => {
@@ -609,7 +683,7 @@ describe("TerminalOutputIngestService", () => {
       tiers.set("term-1", TerminalRefreshTier.FOCUSED);
       service.resumeFlush("term-1");
       expect(writeToTerminal).toHaveBeenCalledTimes(2);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[1Acontent");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[1Acontent", 1);
 
       vi.useRealTimers();
     });
@@ -638,7 +712,7 @@ describe("TerminalOutputIngestService", () => {
       tiers.set("term-1", TerminalRefreshTier.FOCUSED);
       service.resumeFlush("term-1");
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K\x1b[1Acontent");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K\x1b[1Acontent", 1);
 
       vi.useRealTimers();
     });
@@ -658,7 +732,7 @@ describe("TerminalOutputIngestService", () => {
       service.bufferData("fg", "live");
 
       expect(writeToTerminal).toHaveBeenCalledTimes(1);
-      expect(writeToTerminal).toHaveBeenCalledWith("fg", "live");
+      expect(writeToTerminal).toHaveBeenCalledWith("fg", "live", 1);
     });
   });
 
@@ -828,7 +902,7 @@ describe("TerminalOutputIngestService", () => {
 
       service.resumeFlush("term-1");
       expect(service.getStalledBytes("term-1")).toBe(0);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-bytes");
+      expect(writeToTerminal).toHaveBeenCalledWith("term-1", "held-bytes", 1);
     });
 
     it("getStalledBytes returns 0 under normal backpressure with writes in flight", () => {

@@ -113,12 +113,23 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const progressDone = 1 + completedCount; // endowed item always complete
 
   return (
-    <div className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500">
+    <div
+      className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500"
+      // Theme-authored wash layered over the existing canvas; `none` = today.
+      style={{ background: "var(--welcome-field-wash, none)" }}
+    >
       <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10">
         {/* Hero — suppressed for returning users; their recent projects are the relevant first thing */}
         {!hasProjects && (
           <div className="flex flex-col items-center text-center">
-            <DaintreeIcon className="h-16 w-16 text-tint/50 mb-6" />
+            <DaintreeIcon
+              className="h-16 w-16 mb-6"
+              // Fallback replicates the former `text-tint/50` utility exactly.
+              style={{
+                color:
+                  "var(--welcome-mark-color, color-mix(in oklab, var(--theme-tint) 50%, transparent))",
+              }}
+            />
             <h1 className="text-2xl font-semibold text-daintree-text tracking-tight mb-2">
               Welcome to Daintree
             </h1>
@@ -207,7 +218,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         {visibleShortcutTips.length > 0 && (
           <div className="w-full">
             <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
-              Keyboard Shortcuts
+              Keyboard shortcuts
             </h3>
             <div className="grid grid-cols-2 gap-x-8 gap-y-2">
               {visibleShortcutTips.map(({ label, actionId }) => {
@@ -331,7 +342,7 @@ function RecentProjects({
   return (
     <div className="w-full">
       <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
-        Recent Projects
+        Recent projects
       </h3>
       <div className="space-y-1">
         {projects.map((project) => (
@@ -576,7 +587,7 @@ function InlineChecklist({
     <div className="w-full">
       <div className="flex items-center gap-3 mb-3">
         <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider">
-          Getting Started
+          Getting started
         </h3>
         <span className="text-[10px] text-daintree-text/40 font-mono">
           {progressDone}/{progressTotal}

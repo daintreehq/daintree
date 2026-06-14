@@ -2,7 +2,8 @@ import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { readFile, access, cp, mkdir, readdir, unlink } from "fs/promises";
 import { join as pathJoin, basename, dirname } from "path";
 import os from "os";
-import { z } from "zod/v4";
+// zod/mini keeps full zod out of the workspace-host bundle (issue #10395).
+import { z } from "zod/mini";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
@@ -18,24 +19,27 @@ const OUTPUT_TAIL_BYTES = 8192;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TEARDOWN_LOGS_PER_WORKTREE = 10;
 
+const optionalPositiveNumber = z.optional(z.number().check(z.positive()));
+const optionalStringArray = z.optional(z.array(z.string()));
+
 const ResourceTimeoutsSchema = z.object({
-  provision: z.number().positive().optional(),
-  teardown: z.number().positive().optional(),
-  resume: z.number().positive().optional(),
-  pause: z.number().positive().optional(),
-  status: z.number().positive().optional(),
+  provision: optionalPositiveNumber,
+  teardown: optionalPositiveNumber,
+  resume: optionalPositiveNumber,
+  pause: optionalPositiveNumber,
+  status: optionalPositiveNumber,
 });
 
 const ResourceConfigSchema = z.object({
-  provision: z.array(z.string()).optional(),
-  teardown: z.array(z.string()).optional(),
-  resume: z.array(z.string()).optional(),
-  pause: z.array(z.string()).optional(),
-  status: z.string().optional(),
-  connect: z.string().optional(),
-  timeouts: ResourceTimeoutsSchema.optional(),
-  statusInterval: z.number().positive().optional(),
-  provider: z.string().optional(),
+  provision: optionalStringArray,
+  teardown: optionalStringArray,
+  resume: optionalStringArray,
+  pause: optionalStringArray,
+  status: z.optional(z.string()),
+  connect: z.optional(z.string()),
+  timeouts: z.optional(ResourceTimeoutsSchema),
+  statusInterval: optionalPositiveNumber,
+  provider: z.optional(z.string()),
 });
 
 export type ResourceConfig = z.infer<typeof ResourceConfigSchema>;
@@ -43,10 +47,10 @@ export type ResourceConfig = z.infer<typeof ResourceConfigSchema>;
 const ResourcesConfigSchema = z.record(z.string(), ResourceConfigSchema);
 
 const DaintreeLifecycleConfigSchema = z.object({
-  setup: z.array(z.string()).optional(),
-  teardown: z.array(z.string()).optional(),
-  resource: ResourceConfigSchema.optional(),
-  resources: ResourcesConfigSchema.optional(),
+  setup: optionalStringArray,
+  teardown: optionalStringArray,
+  resource: z.optional(ResourceConfigSchema),
+  resources: z.optional(ResourcesConfigSchema),
 });
 
 export type DaintreeLifecycleConfig = z.infer<typeof DaintreeLifecycleConfigSchema>;

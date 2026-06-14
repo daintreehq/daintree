@@ -1171,42 +1171,23 @@ describe("NotificationCenter — Group by context toggle", () => {
     );
   });
 
-  it("carries an off-state border outline that flips to transparent when pressed", async () => {
+  it("uses aria-pressed as the sole state signal — no border outline in either state", async () => {
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
 
+    // The shared toolbar-icon-button armed styling keys off aria-pressed; a
+    // per-state border class would be a contradictory second signal and make
+    // the toggle's geometry differ from its sibling icon buttons.
     const toggle = screen.getByLabelText("Group by project or worktree");
-    expect(toggle.className).toContain("border");
-    expect(toggle.className).toContain("border-daintree-text/15");
-    expect(toggle.className).not.toContain("border-transparent");
+    expect(toggle.className).not.toMatch(/\bborder\b|border-daintree-text\/15|border-transparent/);
 
     await act(async () => {
       fireEvent.click(toggle);
     });
 
     const pressed = screen.getByLabelText("Group by project or worktree");
-    expect(pressed.className).toContain("border-transparent");
-    expect(pressed.className).not.toContain("border-daintree-text/15");
-  });
-
-  it("starts in on-state with border-transparent and flips to /15 outline when toggled off", async () => {
-    useNotificationSettingsStore.setState({ groupByContext: true });
-    setEntries([makeEntry()]);
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const toggle = screen.getByLabelText("Group by project or worktree");
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    expect(toggle.className).toContain("border-transparent");
-    expect(toggle.className).not.toContain("border-daintree-text/15");
-
-    await act(async () => {
-      fireEvent.click(toggle);
-    });
-
-    const released = screen.getByLabelText("Group by project or worktree");
-    expect(released.getAttribute("aria-pressed")).toBe("false");
-    expect(released.className).toContain("border-daintree-text/15");
-    expect(released.className).not.toContain("border-transparent");
+    expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    expect(pressed.className).not.toMatch(/\bborder\b|border-daintree-text\/15|border-transparent/);
   });
 
   it("renders context section headers with worktree names when groupByContext is on", () => {

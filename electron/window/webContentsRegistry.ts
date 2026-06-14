@@ -43,6 +43,23 @@ const projectViewDestroyListeners = new Map<
   { webContents: WebContents; listener: () => void }
 >();
 
+// Cached (deactivated) project views. High-frequency, replayable streams (log
+// batches) skip these renderers — a CPU-throttled/frozen renderer has no
+// backpressure, so pushed messages pile up in its task queue. State broadcasts
+// (project added/updated/removed, etc.) must NOT consult this set: cached views
+// have no replay path on warm reactivation (#9490).
+const cachedViewWebContents = new Set<number>();
+
+// Memoized getAllAppWebContents() result. broadcastToRenderer() calls it on
+// every relayed event (terminal data/status/activity, events:push), but the
+// recipient set only changes on view register/unregister/destroy — every
+// mutation site of windowToAppView / viewToProject invalidates the cache.
+let cachedAllAppWebContents: WebContents[] | null = null;
+
+function invalidateAllAppWebContentsCache(): void {
+  cachedAllAppWebContents = null;
+}
+
 function removeDestroyedListener(registration: {
   webContents: WebContents;
   listener: () => void;
@@ -114,6 +131,7 @@ export function getWindowForWebContents(webContents: WebContents): BrowserWindow
  * Also registers its webContents in the main registry so getWindowForWebContents() works.
  */
 export function registerAppView(win: BrowserWindow, view: WebContentsView): void {
+  invalidateAllAppWebContentsCache();
   windowToAppView.set(win.id, view);
   registerWebContents(view.webContents, win);
 
@@ -134,6 +152,7 @@ export function registerAppView(win: BrowserWindow, view: WebContentsView): void
       if (windowToAppView.get(win.id) === view) {
         windowToAppView.delete(win.id);
       }
+      invalidateAllAppWebContentsCache();
     };
     appViewDestroyListeners.set(wcId, {
       webContents: view.webContents,
@@ -156,6 +175,7 @@ export function unregisterAppView(win: BrowserWindow): void {
       unregisterWebContents(view.webContents);
     }
     windowToAppView.delete(win.id);
+    invalidateAllAppWebContentsCache();
   }
 }
 
@@ -173,6 +193,7 @@ export function getAppWebContents(win: BrowserWindow): WebContents {
       return view.webContents;
     }
     windowToAppView.delete(win.id);
+    invalidateAllAppWebContentsCache();
   }
   return win.webContents;
 }
@@ -188,6 +209,8 @@ export function getAppView(win: BrowserWindow): WebContentsView | null {
  * Get all registered app view webContents (for broadcasting).
  */
 export function getAllAppWebContents(): WebContents[] {
+  if (cachedAllAppWebContents) return cachedAllAppWebContents;
+
   const seen = new Set<number>();
   const result: WebContents[] = [];
 
@@ -215,17 +238,23 @@ export function getAllAppWebContents(): WebContents[] {
       result.push(wc);
     } else {
       viewToProject.delete(wcId);
+      cachedViewWebContents.delete(wcId);
     }
   }
 
-  // Fallback: if nothing is registered, return all BrowserWindow webContents
+  // Fallback: if nothing is registered, return all BrowserWindow webContents.
+  // Never cached — new windows don't pass through any register* function, so
+  // there is no invalidation hook for this branch.
   if (result.length === 0) {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         result.push(win.webContents);
       }
     }
+    return result;
   }
+
+  cachedAllAppWebContents = result;
   return result;
 }
 
@@ -238,11 +267,14 @@ export function getAllAppWebContents(): WebContents[] {
 export function registerProjectView(projectId: string, webContents: WebContents): void {
   const wcId = webContents.id;
   viewToProject.set(wcId, projectId);
+  invalidateAllAppWebContentsCache();
 
   if (!projectViewDestroyListeners.has(wcId)) {
     const onDestroyed = () => {
       viewToProject.delete(wcId);
+      cachedViewWebContents.delete(wcId);
       projectViewDestroyListeners.delete(wcId);
+      invalidateAllAppWebContentsCache();
     };
     projectViewDestroyListeners.set(wcId, { webContents, listener: onDestroyed });
     webContents.once("destroyed", onDestroyed);
@@ -254,6 +286,8 @@ export function registerProjectView(projectId: string, webContents: WebContents)
  */
 export function unregisterProjectView(webContentsId: number): void {
   viewToProject.delete(webContentsId);
+  cachedViewWebContents.delete(webContentsId);
+  invalidateAllAppWebContentsCache();
 
   const registration = projectViewDestroyListeners.get(webContentsId);
   if (registration) {
@@ -263,10 +297,41 @@ export function unregisterProjectView(webContentsId: number): void {
 }
 
 /**
+ * Mark a project view's webContents as cached (deactivated). Maintained by
+ * every ProjectViewManager instance, so the set spans all windows.
+ */
+export function registerCachedViewWebContents(webContents: WebContents): void {
+  cachedViewWebContents.add(webContents.id);
+}
+
+/**
+ * Clear the cached mark — call on reactivation. Idempotent.
+ */
+export function unregisterCachedViewWebContents(webContentsId: number): void {
+  cachedViewWebContents.delete(webContentsId);
+}
+
+/**
+ * Whether a webContents is a cached (deactivated) project view.
+ */
+export function isCachedViewWebContents(webContentsId: number): boolean {
+  return cachedViewWebContents.has(webContentsId);
+}
+
+/**
  * Get the projectId associated with a webContents.
  */
 export function getProjectForWebContents(webContentsId: number): string | null {
   return viewToProject.get(webContentsId) ?? null;
+}
+
+/**
+ * Whether any project views are registered at all. Project-scoped broadcasts
+ * fall back to a full broadcast when this is false (startup / windows that
+ * don't route through ProjectViewManager).
+ */
+export function hasRegisteredProjectViews(): boolean {
+  return viewToProject.size > 0;
 }
 
 /**
@@ -282,6 +347,8 @@ export function getWebContentsForProject(projectId: string): WebContents[] {
       result.push(wc);
     } else {
       viewToProject.delete(wcId);
+      cachedViewWebContents.delete(wcId);
+      invalidateAllAppWebContentsCache();
     }
   }
   return result;

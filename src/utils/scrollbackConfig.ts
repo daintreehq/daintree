@@ -6,24 +6,41 @@ interface ScrollbackPolicy {
   minLines: number;
 }
 
-const AGENT_POLICY: ScrollbackPolicy = { multiplier: 1.5, maxLines: 5000, minLines: 500 };
+const AGENT_POLICY: ScrollbackPolicy = { multiplier: 5, maxLines: 5000, minLines: 500 };
 const PLAIN_POLICY: ScrollbackPolicy = { multiplier: 0.3, maxLines: 2000, minLines: 200 };
+
+// Resource-profile ceiling on the agent policy. Pushed by useResourceProfile
+// (same pattern as TerminalWebGLConfig); the initial value matches the
+// balanced profile. Held here, isolated from the profile types, so the eager
+// renderer chunk can update it without new import edges.
+let agentScrollbackMaxLines = AGENT_POLICY.maxLines;
+
+export function setAgentScrollbackMaxLines(lines: number): void {
+  if (!Number.isFinite(lines)) return;
+  agentScrollbackMaxLines = Math.max(AGENT_POLICY.minLines, Math.floor(lines));
+}
+
+export function getAgentScrollbackMaxLines(): number {
+  return agentScrollbackMaxLines;
+}
 
 /**
  * Get appropriate scrollback lines based on whether an agent is live in the
  * terminal. Agent terminals (or terminals launched to run an agent) get the
- * larger scrollback policy; plain shells get the smaller one.
+ * larger scrollback policy; plain shells get the smaller one. The agent
+ * ceiling scales with the resource profile (efficiency halves it).
  */
 export function getScrollbackForType(isAgent: boolean, baseScrollback: number): number {
   const policy = isAgent ? AGENT_POLICY : PLAIN_POLICY;
+  const maxLines = isAgent ? Math.min(policy.maxLines, agentScrollbackMaxLines) : policy.maxLines;
 
   // Handle unlimited (0) by using the policy's maxLines
   if (baseScrollback === 0) {
-    return policy.maxLines;
+    return maxLines;
   }
 
   const calculated = Math.floor(baseScrollback * policy.multiplier);
-  return Math.max(policy.minLines, Math.min(policy.maxLines, calculated));
+  return Math.max(policy.minLines, Math.min(maxLines, calculated));
 }
 
 // xterm.js 6 BufferLine: 80 cols × CELL_SIZE(3) × 4 bytes/cell = 960 raw

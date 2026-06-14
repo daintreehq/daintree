@@ -1,0 +1,260 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
+import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
+
+vi.mock("../stores/githubConfigStore", () => ({
+  useGitHubConfigStore: vi.fn(),
+}));
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    dispatch: vi.fn(),
+  },
+}));
+
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/utils/logger", () => ({
+  logError: vi.fn(),
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+import { useGitHubConfigStore } from "../stores/githubConfigStore";
+import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+
+const mockedUseGitHubConfigStore = vi.mocked(useGitHubConfigStore);
+const mockedDispatch = vi.mocked(actionService.dispatch);
+const mockedNotify = vi.mocked(notify);
+
+const setCredentialMock = vi.fn();
+const clearCredentialMock = vi.fn(async () => {});
+
+function installForgeMocks() {
+  window.electron = {
+    forge: {
+      setCredential: setCredentialMock,
+      clearCredential: clearCredentialMock,
+    },
+  } as unknown as typeof window.electron;
+}
+
+function setupStore(overrides: Record<string, unknown> = {}) {
+  mockedUseGitHubConfigStore.mockReturnValue({
+    config: { hasToken: false },
+    isLoading: false,
+    error: null,
+    initialize: vi.fn(),
+    updateConfig: vi.fn(),
+    ...overrides,
+  } as ReturnType<typeof useGitHubConfigStore>);
+}
+
+describe("GitHubSettingsTab handleSaveToken", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installForgeMocks();
+    setupStore();
+  });
+
+  it("saves via forge.setCredential keyed by the canonical GitHub provider id", async () => {
+    setCredentialMock.mockResolvedValue({ valid: true, scopes: [] });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "  ghp_valid_token  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+
+    await waitFor(() => {
+      expect(setCredentialMock).toHaveBeenCalledWith("daintree.github.github", {
+        token: "ghp_valid_token",
+      });
+    });
+  });
+
+  it("dispatches worktree.refresh after a successful token save so the sidebar re-fetches", async () => {
+    setCredentialMock.mockResolvedValue({ valid: true, scopes: [] });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "ghp_valid_token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+
+    await waitFor(() => {
+      expect(mockedDispatch).toHaveBeenCalledWith(
+        "worktree.refresh",
+        undefined,
+        expect.objectContaining({ source: "user" })
+      );
+    });
+
+    expect(mockedDispatch).not.toHaveBeenCalledWith(
+      "worktree.refreshPullRequests",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("does not dispatch worktree.refresh when token validation fails", async () => {
+    setCredentialMock.mockResolvedValue({ valid: false, scopes: [], error: "Invalid token" });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "ghp_invalid" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/invalid token/i)).toBeTruthy();
+    });
+
+    expect(mockedDispatch).not.toHaveBeenCalledWith(
+      "worktree.refresh",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mockedDispatch).not.toHaveBeenCalledWith(
+      "worktree.refreshPullRequests",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("shows inline error on IPC failure without firing notify", async () => {
+    setCredentialMock.mockRejectedValue(new Error("IPC down"));
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "ghp_token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save token" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/couldn't save token/i)).toBeTruthy();
+    });
+
+    expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
+  it("clears via forge.clearCredential keyed by the canonical GitHub provider id", async () => {
+    setupStore({ config: { hasToken: true } });
+    mockedDispatch.mockImplementation(async () => {
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear token" }));
+
+    await waitFor(() => {
+      expect(clearCredentialMock).toHaveBeenCalledWith("daintree.github.github");
+    });
+  });
+
+  it("shows inline error when token validation IPC fails", async () => {
+    mockedDispatch.mockImplementation(async (actionId: string) => {
+      if (actionId === "forge.validateToken") {
+        return { ok: false, error: { message: "IPC down" } } as never;
+      }
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "ghp_token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test token" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/couldn't validate token/i)).toBeTruthy();
+    });
+
+    expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
+  it("Test button dispatches forge.validateToken with the GitHub provider id so a non-GitHub default cannot reroute the call (#9985)", async () => {
+    mockedDispatch.mockImplementation(async (actionId: string, args: unknown) => {
+      if (actionId === "forge.validateToken") {
+        return {
+          ok: true,
+          result: { valid: true, scopes: ["repo"], error: undefined },
+        } as never;
+      }
+      // Defensive — make the assertion message below specific to the test id
+      void args;
+      return { ok: true, result: undefined } as never;
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    fireEvent.change(screen.getByLabelText(/github personal access token/i), {
+      target: { value: "  ghp_typed_token  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test token" }));
+
+    await waitFor(() => {
+      expect(mockedDispatch).toHaveBeenCalledWith(
+        "forge.validateToken",
+        expect.objectContaining({
+          providerId: "daintree.github.github",
+          token: "ghp_typed_token",
+        }),
+        expect.objectContaining({ source: "user" })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/token valid/i)).toBeTruthy();
+    });
+  });
+});

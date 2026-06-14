@@ -30,7 +30,7 @@ const TEMPLATE_OPTIONS: Array<{ value: GitignoreTemplate; label: string; descrip
 export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: GitInitDialogProps) {
   const [gitignoreTemplate, setGitignoreTemplate] = useState<GitignoreTemplate>("node");
   const [createInitialCommit, setCreateInitialCommit] = useState(true);
-  const [initialCommitMessage, setInitialCommitMessage] = useState("");
+  const [initialCommitMessage, setInitialCommitMessage] = useState("Initial commit");
   const [progressEvents, setProgressEvents] = useState<GitInitProgressEvent[]>([]);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +39,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const hasFinalizedSuccessRef = useRef(false);
   const inFlightRef = useRef(false);
   const sawTerminalEventRef = useRef(false);
+  const sawErrorEventRef = useRef(false);
 
   const finalizeSuccess = useCallback(() => {
     if (hasFinalizedSuccessRef.current) {
@@ -52,7 +53,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     if (!isOpen) {
       setGitignoreTemplate("node");
       setCreateInitialCommit(true);
-      setInitialCommitMessage("");
+      setInitialCommitMessage("Initial commit");
       setProgressEvents([]);
       setIsInitializing(false);
       setError(null);
@@ -60,6 +61,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
       hasFinalizedSuccessRef.current = false;
       inFlightRef.current = false;
       sawTerminalEventRef.current = false;
+      sawErrorEventRef.current = false;
       return;
     }
 
@@ -68,13 +70,18 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
 
       if (event.status === "error") {
         sawTerminalEventRef.current = true;
+        sawErrorEventRef.current = true;
         setError(event.error || event.message || "Unknown error");
         setIsComplete(false);
         setIsInitializing(false);
       } else if (event.step === "complete" && event.status === "success") {
         sawTerminalEventRef.current = true;
-        setIsComplete(true);
-        setIsInitializing(false);
+        // A success event never follows an error event within one run — treat it as stale/foreign
+        if (!sawErrorEventRef.current) {
+          setError(null);
+          setIsComplete(true);
+          setIsInitializing(false);
+        }
       }
     });
 
@@ -86,15 +93,12 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   }, [progressEvents]);
 
   const startInitialization = useCallback(async () => {
-    const trimmedMessage = initialCommitMessage.trim();
-    if (createInitialCommit && trimmedMessage === "") {
-      return;
-    }
     if (inFlightRef.current) {
       return;
     }
     inFlightRef.current = true;
     sawTerminalEventRef.current = false;
+    sawErrorEventRef.current = false;
 
     setIsInitializing(true);
     setError(null);
@@ -103,14 +107,17 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
     hasFinalizedSuccessRef.current = false;
 
     try {
-      await projectClient.initGitGuided({
+      const result = await projectClient.initGitGuided({
         directoryPath,
         createInitialCommit,
-        initialCommitMessage: trimmedMessage,
+        initialCommitMessage: initialCommitMessage.trim(),
         createGitignore: gitignoreTemplate !== "none",
         gitignoreTemplate,
       });
-      if (!sawTerminalEventRef.current) {
+      if (result.outcome === "success") {
+        setError(null);
+        setIsComplete(true);
+      } else if (!sawTerminalEventRef.current) {
         setError(
           "Initialization finished without a status update — check the repository to confirm the result."
         );
@@ -161,8 +168,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   const showConnecting = useDohertyGate(isInitializing && progressEvents.length === 0);
   const showProgress = showConnecting || progressEvents.length > 0;
   const configDisabled = isInitializing || isComplete;
-  const trimmedMessage = initialCommitMessage.trim();
-  const canStart = !createInitialCommit || trimmedMessage !== "";
+  const canStart = !createInitialCommit || initialCommitMessage.trim() !== "";
 
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
@@ -187,7 +193,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             value={gitignoreTemplate}
             onChange={(e) => setGitignoreTemplate(e.target.value as GitignoreTemplate)}
             disabled={configDisabled}
-            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           >
             {TEMPLATE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -225,7 +231,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
               onChange={(e) => setInitialCommitMessage(e.target.value)}
               disabled={configDisabled}
               placeholder="Initial commit"
-              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
+              className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
             />
           </div>
         )}
@@ -295,7 +301,10 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             <Button variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button onClick={() => void startInitialization()} disabled={isInitializing}>
+            <Button
+              onClick={() => void startInitialization()}
+              disabled={isInitializing || !canStart}
+            >
               Try again
             </Button>
           </>
@@ -306,7 +315,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
             </Button>
             <Button
               onClick={() => void startInitialization()}
-              disabled={!canStart}
+              disabled={isInitializing || !canStart}
               loading={isInitializing}
             >
               Initialize repository

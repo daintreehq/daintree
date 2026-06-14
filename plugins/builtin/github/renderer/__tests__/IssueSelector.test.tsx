@@ -4,13 +4,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { IssueSelector } from "../components/IssueSelector";
-import type { GitHubIssue } from "@shared/types/github";
+import type { Issue } from "@shared/types/forge";
 
 const mockListIssues = vi.fn();
 
-vi.mock("@/clients/githubClient", () => ({
-  githubClient: {
-    listIssues: (opts: unknown) => mockListIssues(opts),
+vi.mock("@/clients/forgeClient", () => ({
+  forgeClient: {
+    listIssues: (cwd: unknown, opts: unknown) => mockListIssues({ cwd, ...(opts as object) }),
   },
 }));
 
@@ -18,15 +18,20 @@ vi.mock("@/hooks/useDebounce", () => ({
   useDebounce: (value: string) => value,
 }));
 
-const mockIssue = (overrides: Partial<GitHubIssue> = {}): GitHubIssue => ({
+const mockIssue = (overrides: Partial<Issue> = {}): Issue => ({
   number: 1,
   title: "Test issue",
-  state: "OPEN",
+  body: "",
+  state: "open",
+  rawState: "OPEN",
   url: "https://github.com/test/repo/issues/1",
-  updatedAt: "2025-01-01T00:00:00Z",
-  author: { login: "testuser", avatarUrl: "" },
-  commentCount: 0,
+  author: { login: "testuser", avatarUrl: "", rawData: null },
   assignees: [],
+  labels: [],
+  commentCount: 0,
+  createdAt: 0,
+  updatedAt: 0,
+  rawData: null,
   ...overrides,
 });
 
@@ -46,7 +51,7 @@ describe("IssueSelector", () => {
   };
 
   it("shows skeleton on initial open when loading and no issues exist", async () => {
-    let resolvePromise!: (value: { items: GitHubIssue[] }) => void;
+    let resolvePromise!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolvePromise = r;
@@ -73,8 +78,8 @@ describe("IssueSelector", () => {
   });
 
   it("keeps existing rows visible with palette-results-stale class during refetch", async () => {
-    let resolveFirst!: (value: { items: GitHubIssue[] }) => void;
-    let resolveSecond!: (value: { items: GitHubIssue[] }) => void;
+    let resolveFirst!: (value: { items: Issue[] }) => void;
+    let resolveSecond!: (value: { items: Issue[] }) => void;
     mockListIssues
       .mockReturnValueOnce(
         new Promise((r) => {
@@ -127,8 +132,8 @@ describe("IssueSelector", () => {
   });
 
   it("prevents stale response from overwriting newer results when visible", async () => {
-    let resolveFirst!: (value: { items: GitHubIssue[] }) => void;
-    let resolveSecond!: (value: { items: GitHubIssue[] }) => void;
+    let resolveFirst!: (value: { items: Issue[] }) => void;
+    let resolveSecond!: (value: { items: Issue[] }) => void;
     mockListIssues
       .mockReturnValueOnce(
         new Promise((r) => {
@@ -167,7 +172,7 @@ describe("IssueSelector", () => {
   });
 
   it("preserves existing rows on refetch failure", async () => {
-    let resolveFirst!: (value: { items: GitHubIssue[] }) => void;
+    let resolveFirst!: (value: { items: Issue[] }) => void;
     let rejectSecond!: (reason: Error) => void;
     mockListIssues
       .mockReturnValueOnce(
@@ -207,7 +212,7 @@ describe("IssueSelector", () => {
   });
 
   it("clears issues on close and does not restore stale results on reopen", async () => {
-    let resolvePromise!: (value: { items: GitHubIssue[] }) => void;
+    let resolvePromise!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolvePromise = r;
@@ -227,7 +232,7 @@ describe("IssueSelector", () => {
     fireEvent.click(trigger);
 
     // Reopen — should start fresh with empty issues (skeleton, then fetch)
-    let resolveSecond!: (value: { items: GitHubIssue[] }) => void;
+    let resolveSecond!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolveSecond = r;
@@ -249,7 +254,7 @@ describe("IssueSelector", () => {
   });
 
   it("clears issues when projectPath changes", async () => {
-    let resolvePromise!: (value: { items: GitHubIssue[] }) => void;
+    let resolvePromise!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolvePromise = r;
@@ -266,7 +271,7 @@ describe("IssueSelector", () => {
     });
 
     // Change projectPath — should clear stale issues and refetch
-    let resolveSecond!: (value: { items: GitHubIssue[] }) => void;
+    let resolveSecond!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolveSecond = r;
@@ -288,8 +293,8 @@ describe("IssueSelector", () => {
   });
 
   it("renders empty state when latest success returns no results", async () => {
-    let resolveFirst!: (value: { items: GitHubIssue[] }) => void;
-    let resolveSecond!: (value: { items: GitHubIssue[] }) => void;
+    let resolveFirst!: (value: { items: Issue[] }) => void;
+    let resolveSecond!: (value: { items: Issue[] }) => void;
     mockListIssues
       .mockReturnValueOnce(
         new Promise((r) => {
@@ -323,7 +328,7 @@ describe("IssueSelector", () => {
   });
 
   it("removes stale attributes after fetch resolves", async () => {
-    let resolveFirst!: (value: { items: GitHubIssue[] }) => void;
+    let resolveFirst!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolveFirst = r;
@@ -350,7 +355,7 @@ describe("IssueSelector", () => {
   });
 
   it("renders no-open-issues message when popover opens with no results", async () => {
-    let resolvePromise!: (value: { items: GitHubIssue[] }) => void;
+    let resolvePromise!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(
       new Promise((r) => {
         resolvePromise = r;

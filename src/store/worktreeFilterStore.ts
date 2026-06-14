@@ -2,6 +2,7 @@ import { create, useStore } from "zustand";
 import { persist } from "zustand/middleware";
 import {
   createSafeJSONStorage,
+  createDebouncedSafeJSONStorage,
   readLocalStorageItemSafely,
   safeJSONParse,
 } from "./persistence/safeStorage";
@@ -366,7 +367,7 @@ const _projectStore = create<ProjectScopedState>()(
     {
       name: PROJECT_KEY,
       version: 2,
-      storage: createSafeJSONStorage(),
+      storage: createDebouncedSafeJSONStorage(300),
       partialize: (state): ProjectPersistedShape => ({
         query: state.query,
         statusFilters: Array.from(state.statusFilters),

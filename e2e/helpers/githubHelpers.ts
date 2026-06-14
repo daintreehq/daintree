@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds";
-import type { GitHubIssue, GitHubListResponse } from "../../shared/types/github";
+import type { Issue, Page as ForgePage } from "../../shared/types/forge";
 
 /**
  * GitHub E2E helpers. All state is injected through the same fault-mode hooks
@@ -8,11 +8,12 @@ import type { GitHubIssue, GitHubListResponse } from "../../shared/types/github"
  * API call is ever made:
  *
  * - `__daintreeSeedGitHubToken` / `__daintreeClearGitHubToken` (main process,
- *   `electron/window/globalServicesInit.ts`) seed an in-memory token, skipping
+ *   `plugins/builtin/github/main/index.ts`) seed an in-memory token, skipping
  *   validation by pre-populating cached user info.
- * - `window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__` (renderer, `src/App.tsx`)
- *   re-hydrates the renderer's GitHub config store so `hasToken: true` lands.
- * - `forge:rate-limit-changed` / `github:token-health-changed` pushes mirror
+ * - `window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__` (renderer,
+ *   `plugins/builtin/github/renderer/index.tsx`) re-hydrates the renderer's
+ *   GitHub config store so `hasToken: true` lands.
+ * - `forge:rate-limit-changed` / `forge:token-health-changed` pushes mirror
  *   the real `broadcastToRenderer` transport so the rate-limit and token-health
  *   surfaces light up exactly as in production.
  */
@@ -115,50 +116,136 @@ export async function pushRateLimitClear(app: ElectronApplication): Promise<void
 
 /** Push an "unhealthy" token-health state (mirrors an authoritative 401 from GitHub). */
 export async function pushTokenHealthUnhealthy(app: ElectronApplication): Promise<void> {
-  await broadcastToRenderers(app, "github:token-health-changed", {
-    status: "unhealthy",
-    tokenVersion: 1,
-    checkedAt: Date.now(),
+  await broadcastToRenderers(app, "forge:token-health-changed", {
+    providerId: BUILTIN_GITHUB_PROVIDER_ID,
+    isUnhealthy: true,
+    state: { status: "unhealthy", tokenVersion: 1, checkedAt: Date.now() },
   });
 }
 
 /** Push a "healthy" token-health state to clear the banner. */
 export async function pushTokenHealthHealthy(app: ElectronApplication): Promise<void> {
-  await broadcastToRenderers(app, "github:token-health-changed", {
-    status: "healthy",
-    tokenVersion: 1,
-    checkedAt: Date.now(),
+  await broadcastToRenderers(app, "forge:token-health-changed", {
+    providerId: BUILTIN_GITHUB_PROVIDER_ID,
+    isUnhealthy: false,
+    state: { status: "healthy", tokenVersion: 1, checkedAt: Date.now() },
   });
 }
 
-/** Build a minimal fixture issue for list stubbing. */
-export function makeFixtureIssue(number: number, title: string): GitHubIssue {
+/**
+ * Replace the `forge:get-repo-stats` IPC handler with one returning fixture
+ * counts. The real stats fetch hits the provider's network path, which with
+ * the fake E2E token is a live 401 on networked runners and a network failure
+ * offline — so `isTokenError`, the freshness level, and the pill's click
+ * routing (#10347) would otherwise be nondeterministic, AND the polling loop
+ * would keep clobbering any one-shot pushed counts with a "couldn't refresh"
+ * error. Stubbing the handler makes every poll return the same fixed snapshot.
+ * Pass `error` to force a failure state — token-pattern messages flip the pill
+ * into its route-to-settings mode. Stash/restore mirrors {@link stubListIssues}.
+ */
+export async function stubRepoStats(
+  app: ElectronApplication,
+  stats: {
+    issueCount: number | null;
+    prCount: number | null;
+    commitCount?: number;
+    error?: string;
+  },
+  window?: Page
+): Promise<void> {
+  const now = Date.now();
+  const response = {
+    commitCount: stats.commitCount ?? 1,
+    issueCount: stats.issueCount,
+    prCount: stats.prCount,
+    loading: false,
+    error: stats.error,
+    lastUpdated: now,
+    issueCountRefreshedAt: now,
+    prCountRefreshedAt: now,
+  };
+  await app.evaluate(
+    ({ ipcMain }, { channel, response }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private Electron API
+      const handlers = (ipcMain as any)._invokeHandlers as Map<string, unknown> | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stash for restore
+      if (handlers && handlers.has(channel) && !(globalThis as any).__e2eOrigRepoStatsHandler) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stash for restore
+        (globalThis as any).__e2eOrigRepoStatsHandler = handlers.get(channel);
+      }
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, async () => response);
+    },
+    { channel: "forge:get-repo-stats", response }
+  );
+  // Replacing the handler only fixes FUTURE polls; the stats hook keeps any
+  // error state from a fetch that already landed until the next poll (a long
+  // interval). When a `window` is supplied, also push the counts straight onto
+  // the hook via the `forge:repo-counts-updated` broadcast so the pill updates
+  // immediately — needed by tests that assert on pill state right away rather
+  // than waiting out a re-poll.
+  if (window) {
+    const project = (await window.evaluate(() => window.electron.project.getCurrent())) as {
+      path: string;
+    } | null;
+    if (project) {
+      await broadcastToRenderers(app, "forge:repo-counts-updated", {
+        providerId: BUILTIN_GITHUB_PROVIDER_ID,
+        projectPath: project.path,
+        stats: response,
+        fetchedAt: now,
+      });
+    }
+  }
+}
+
+/** Restore the real `forge:get-repo-stats` handler captured by {@link stubRepoStats}. */
+export async function restoreRepoStats(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ ipcMain }, channel) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- private Electron API
+    const handlers = (ipcMain as any)._invokeHandlers as Map<string, unknown> | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- restore stashed handler
+    const orig = (globalThis as any).__e2eOrigRepoStatsHandler;
+    if (!orig) return;
+    ipcMain.removeHandler(channel);
+    if (handlers) handlers.set(channel, orig);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cleanup stash
+    delete (globalThis as any).__e2eOrigRepoStatsHandler;
+  }, "forge:get-repo-stats");
+}
+
+/** Build a minimal fixture issue (forge shape) for list stubbing. */
+export function makeFixtureIssue(number: number, title: string): Issue {
+  const updatedAt = Date.now() - number * 60_000;
   return {
     number,
     title,
+    body: "",
+    state: "open",
+    rawState: "OPEN",
     url: `https://github.com/daintreehq/daintree/issues/${number}`,
-    state: "OPEN",
-    updatedAt: new Date(Date.now() - number * 60_000).toISOString(),
     author: { login: "e2e-user", avatarUrl: "" },
     assignees: [],
-    commentCount: 0,
     labels: [],
+    commentCount: 0,
+    createdAt: updatedAt,
+    updatedAt,
+    rawData: {},
   };
 }
 
 /**
- * Replace the `github:list-issues` IPC handler with one returning fixture data.
+ * Replace the `forge:list-issues` IPC handler with one returning fixture data.
  * The fault registry only models error/delay, so the bulk-selection flow — which
  * needs a populated list — overrides the handler directly. The original handler
  * is stashed on `globalThis` and restored by {@link restoreListIssues}.
  */
-export async function stubListIssues(
-  app: ElectronApplication,
-  issues: GitHubIssue[]
-): Promise<void> {
-  const response: GitHubListResponse<GitHubIssue> = {
+export async function stubListIssues(app: ElectronApplication, issues: Issue[]): Promise<void> {
+  const response: ForgePage<Issue> = {
     items: issues,
-    pageInfo: { hasNextPage: false, endCursor: null },
+    nextCursor: null,
+    hasMore: false,
+    totalCount: issues.length,
   };
   await app.evaluate(
     ({ ipcMain }, { channel, response }) => {
@@ -174,12 +261,12 @@ export async function stubListIssues(
       ipcMain.removeHandler(channel);
       ipcMain.handle(channel, async () => response);
     },
-    { channel: "github:list-issues", response }
+    { channel: "forge:list-issues", response }
   );
 }
 
 /**
- * Restore the real `github:list-issues` handler captured by {@link stubListIssues}.
+ * Restore the real `forge:list-issues` handler captured by {@link stubListIssues}.
  * No-op when nothing was stubbed, so it is safe to call unconditionally in
  * `afterEach` cleanup without orphaning the channel.
  */
@@ -194,5 +281,5 @@ export async function restoreListIssues(app: ElectronApplication): Promise<void>
     if (handlers) handlers.set(channel, orig);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cleanup stash
     delete (globalThis as any).__e2eOrigListIssuesHandler;
-  }, "github:list-issues");
+  }, "forge:list-issues");
 }

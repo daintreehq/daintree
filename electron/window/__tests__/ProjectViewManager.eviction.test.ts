@@ -16,6 +16,7 @@ function createMockWebContents() {
     executeJavaScript: vi.fn(() => Promise.resolve()),
     loadURL: vi.fn(() => Promise.resolve()),
     focus: vi.fn(),
+    invalidate: vi.fn(),
     close: vi.fn(),
     reload: vi.fn(),
     send: vi.fn(),
@@ -46,6 +47,7 @@ function createMockWebContents() {
 }
 
 const mockGetAppMetrics = vi.fn<() => Electron.ProcessMetric[]>(() => []);
+const mockGetAllWebContents = vi.fn<() => unknown[]>(() => []);
 
 vi.mock("electron", () => {
   function MockWebContentsView() {
@@ -63,6 +65,7 @@ vi.mock("electron", () => {
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
     nativeTheme: { shouldUseDarkColors: true },
+    webContents: { getAllWebContents: () => mockGetAllWebContents() },
   };
 });
 
@@ -77,6 +80,8 @@ vi.mock("../webContentsRegistry.js", () => ({
   unregisterWebContents: vi.fn(),
   registerProjectView: vi.fn(),
   unregisterProjectView: vi.fn(),
+  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
 }));
 
 vi.mock("../../setup/protocols.js", () => ({
@@ -121,6 +126,7 @@ vi.mock("../skeletonCss.js", () => ({
   INITIAL_PROJECT_ID_ARG: "--daintree-initial-project-id",
   INSTANCE_ROLE_ARG: "--daintree-instance-role",
   resolveInstanceRole: vi.fn(() => "attended"),
+  resolveE2EPreloadArgs: vi.fn(() => []),
   resolveInitialColorSchemeId: vi.fn(() => "daintree"),
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
@@ -185,7 +191,21 @@ import { events } from "../../services/events.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
-import { throttleCpuWebContents } from "../../utils/webContentsLifecycle.js";
+import {
+  throttleCpuWebContents,
+  unthrottleCpuWebContents,
+} from "../../utils/webContentsLifecycle.js";
+import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+
+// The shared snapshot is module-level state; without a reset, a test could be
+// served metrics cached by the previous test's differently-mocked sweep.
+beforeEach(() => {
+  resetAppMetricsSnapshotForTesting();
+  mockGetAllWebContents.mockReset();
+  mockGetAllWebContents.mockReturnValue([]);
+});
+
+const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function createMockWindow() {
   return {
@@ -225,6 +245,74 @@ describe("ProjectViewManager — eviction safety", () => {
     });
   });
 
+  describe("dead cached views (render-process-gone)", () => {
+    function emitProcessGone(wc: ReturnType<typeof createMockWebContents>, reason: string): void {
+      const call = wc.on.mock.calls.find(([event]) => event === "render-process-gone");
+      expect(call).toBeDefined();
+      (call![1] as Handler)({}, { reason, exitCode: 1 });
+    }
+
+    it("memory-eviction of a cached view evicts it instead of reloading in the background", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+      await manager.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      // proj-b is now cached with handlers wired by setupViewHandlers.
+
+      emitProcessGone(wcB, "memory-eviction");
+      await flushImmediates();
+
+      expect(wcB.reload).not.toHaveBeenCalled();
+      expect(wcB.close).toHaveBeenCalled();
+      expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+    });
+
+    it("memory-eviction of the ACTIVE view still reloads it", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      emitProcessGone(wcB, "memory-eviction");
+      await flushImmediates();
+
+      expect(wcB.reload).toHaveBeenCalledTimes(1);
+      expect(wcB.close).not.toHaveBeenCalled();
+      expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+    });
+
+    it("a crashed cached view is evicted instead of auto-reloaded", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+      await manager.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      emitProcessGone(wcB, "crashed");
+      await flushImmediates();
+
+      expect(wcB.reload).not.toHaveBeenCalled();
+      expect(wcB.close).toHaveBeenCalled();
+      expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+    });
+
+    it("a crashed ACTIVE view still auto-reloads", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      emitProcessGone(wcB, "crashed");
+      await flushImmediates();
+
+      expect(wcB.reload).toHaveBeenCalledTimes(1);
+      expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+    });
+  });
+
   it("evictStaleViews does not evict any view when activeProjectId is null", async () => {
     // Register initial view for proj-a
     const wcA = createMockWebContents();
@@ -233,6 +321,7 @@ describe("ProjectViewManager — eviction safety", () => {
 
     // Switch to proj-b (now have 2 views, proj-b is active)
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Destroy proj-b which sets activeProjectId to null
     manager.destroyView("proj-b");
@@ -278,9 +367,11 @@ describe("ProjectViewManager — eviction safety", () => {
 
     // Switch to proj-b (2 views, within limit)
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Switch to proj-c (3 views, over limit)
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // proj-a should have been evicted (getAllViews has 2 entries for proj-b and proj-c)
     const views = managerWithLimit.getAllViews();
@@ -312,6 +403,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // proj-a (oldest) has an active agent. Eviction must skip it and evict proj-b instead
     // once we go over the limit with proj-c.
@@ -325,6 +417,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const wcB = wcBEntry?.view.webContents as ReturnType<typeof createMockWebContents> | undefined;
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).toContain("proj-a");
@@ -349,6 +442,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Seed proj-a's terminal as idle (so projectByTerminal knows t-a → proj-a),
     // then flip it to "working" purely via the event bus — the path the cache
@@ -371,6 +465,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const wcB = wcBEntry?.view.webContents as ReturnType<typeof createMockWebContents> | undefined;
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).toContain("proj-a");
@@ -393,6 +488,7 @@ describe("ProjectViewManager — eviction safety", () => {
     const viewA = { webContents: wcA, setBounds: vi.fn() };
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Seed proj-a as working, then simulate a host crash that comes back with an
     // empty registry — the reseed must drop the stale "working" entry so proj-a
@@ -406,6 +502,7 @@ describe("ProjectViewManager — eviction safety", () => {
     await ptyClientHandlers.get("host-crash")?.();
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // proj-a is the LRU and no longer protected, so it is evicted.
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
@@ -448,6 +545,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Both background candidates have active agents — fallback must evict the LRU
     // (proj-a) and emit a telemetry event rather than let the pool grow unbounded.
@@ -458,6 +556,7 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.initAgentStateCache(mockPtyClient as never);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).not.toContain("proj-a");
@@ -485,7 +584,9 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // All three cached projects have active agents.
     mockGetAllTerminals.mockResolvedValue([
@@ -529,6 +630,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // proj-a is the LRU view but small; proj-b is the heaviest cached renderer
     // and more recent. Under #8602, size must not promote proj-b ahead of the
@@ -541,6 +643,7 @@ describe("ProjectViewManager — eviction safety", () => {
     ] as unknown as Electron.ProcessMetric[]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).not.toContain("proj-a");
@@ -568,14 +671,18 @@ describe("ProjectViewManager — eviction safety", () => {
       managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
       await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
       await managerWithLimit.switchTo("proj-c", "/path/c");
+      await flushImmediates();
 
       // Re-visit proj-a from cache — its lastUsed must be refreshed so it is
       // no longer the oldest candidate. Without this, the next overflow would
       // wrongly target proj-a.
       await managerWithLimit.switchTo("proj-a", "/path/a");
+      await flushImmediates();
 
       await managerWithLimit.switchTo("proj-d", "/path/d");
+      await flushImmediates();
 
       const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
       expect(remaining).not.toContain("proj-b");
@@ -602,11 +709,13 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // No metrics returned — LRU should still drive eviction (proj-a evicted).
     mockGetAppMetrics.mockReturnValue([]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).not.toContain("proj-a");
@@ -630,6 +739,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Only proj-a has a measured pid; proj-b is unmeasured. Memory data does
     // not influence the sort — proj-a is the LRU pick and wins eviction
@@ -639,6 +749,7 @@ describe("ProjectViewManager — eviction safety", () => {
     ] as unknown as Electron.ProcessMetric[]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).not.toContain("proj-a");
@@ -661,6 +772,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // proj-a is huge but has an active agent — must not be evicted.
     // proj-b is smaller but evictable.
@@ -680,6 +792,7 @@ describe("ProjectViewManager — eviction safety", () => {
     await managerWithLimit.initAgentStateCache(mockPtyClient as never);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).toContain("proj-a");
@@ -703,12 +816,14 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     mockGetAppMetrics.mockReturnValue([
       { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
     ] as unknown as Electron.ProcessMetric[]);
 
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
       "projectview.eviction",
@@ -731,6 +846,7 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     mockGetAppMetrics.mockImplementation(() => {
       throw new Error("metrics unavailable");
@@ -738,6 +854,7 @@ describe("ProjectViewManager — eviction safety", () => {
 
     // Eviction must still complete without throwing — LRU drives the choice.
     await expect(managerWithLimit.switchTo("proj-c", "/path/c")).resolves.toBeDefined();
+    await flushImmediates();
 
     const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
     expect(remaining).not.toContain("proj-a");
@@ -760,8 +877,11 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await managerWithLimit.switchTo("proj-d", "/path/d");
+    await flushImmediates();
 
     const wcB = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
@@ -811,7 +931,9 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(vi.mocked(forgetBlinkSample)).toHaveBeenCalledWith(wcA.id);
   });
@@ -831,7 +953,9 @@ describe("ProjectViewManager — eviction safety", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(vi.mocked(forgetEluSample)).toHaveBeenCalledWith(wcA.id);
   });
@@ -866,7 +990,9 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith("projectview.eviction", {
       projectId: "proj-a",
@@ -901,7 +1027,9 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     vi.mocked(logInfo).mockClear();
 
@@ -946,13 +1074,18 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     vi.mocked(logInfo).mockClear();
 
     await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
 
     const revivalCalls = vi
       .mocked(logInfo)
@@ -985,20 +1118,27 @@ describe("ProjectViewManager — telemetry", () => {
 
     // Set up a revival for proj-a (same trace as the previous test)
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-a", "/path/a"); // revival fires for proj-a — timestamp consumed
+    await flushImmediates();
 
     // Switch away to a fresh cold-started project so the next return to proj-a
     // exercises the cache-hit path without touching any other stale timestamps.
     // proj-d is new; cold-starting it evicts proj-b (LRU), leaving {a, d} cached.
     await manager.switchTo("proj-d", "/path/d");
+    await flushImmediates();
 
     vi.mocked(logInfo).mockClear();
 
     // Return to proj-a — cache hit, but evictionTimestamps has no entry for proj-a.
     await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
 
     const revivalCalls = vi
       .mocked(logInfo)
@@ -1023,6 +1163,7 @@ describe("ProjectViewManager — telemetry", () => {
     vi.mocked(logInfo).mockClear();
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     const coldStartCall = vi
       .mocked(logInfo)
@@ -1050,7 +1191,9 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c"); // evicts proj-a
+    await flushImmediates();
 
     // dispose should not throw and should clear internal state
     expect(() => manager.dispose()).not.toThrow();
@@ -1075,6 +1218,7 @@ describe("ProjectViewManager — telemetry", () => {
 
     // Cold start to proj-b — no cached view exists, so warm-swap must not fire.
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     const warmSwapCalls = vi
       .mocked(logInfo)
@@ -1097,12 +1241,14 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     vi.mocked(logInfo).mockClear();
 
     // Cache hit on proj-a — no prior eviction, so revival does NOT fire,
     // but warm-swap MUST fire with the activation latency.
     await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
 
     const warmSwapCalls = vi
       .mocked(logInfo)
@@ -1134,6 +1280,7 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
@@ -1155,6 +1302,52 @@ describe("ProjectViewManager — telemetry", () => {
       projectId: "proj-a",
       memoryKb: 250 * 1024,
       pid: wcA.osPid,
+    });
+  });
+
+  it("sampleCachedViewMemory reports guest footprint separately from the host", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    // A dev-preview guest hosted by cached proj-a, with its own pid.
+    const guestPid = 9_999;
+    const guest = {
+      isDestroyed: () => false,
+      hostWebContents: wcA,
+      getOSProcessId: () => guestPid,
+    };
+    mockGetAllWebContents.mockReturnValue([guest]);
+
+    mockGetAppMetrics.mockReturnValue([
+      { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
+      { pid: guestPid, memory: { privateBytes: 400 * 1024 } },
+    ] as unknown as Electron.ProcessMetric[]);
+
+    vi.mocked(logInfo).mockClear();
+
+    (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
+
+    const memoryCalls = vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.cached-memory");
+    expect(memoryCalls.length).toBe(1);
+    expect(memoryCalls[0][1]).toMatchObject({
+      projectId: "proj-a",
+      memoryKb: 250 * 1024,
+      guestMemoryKb: 400 * 1024,
     });
   });
 
@@ -1201,6 +1394,7 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     // Metrics return nothing for proj-a's pid — sampler must skip silently.
     mockGetAppMetrics.mockReturnValue([]);
@@ -1230,7 +1424,9 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     // proj-c is now active; proj-a and proj-b are cached.
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
@@ -1276,6 +1472,7 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     mockGetAppMetrics.mockImplementation(() => {
       throw new Error("metrics unavailable");
@@ -1306,6 +1503,7 @@ describe("ProjectViewManager — telemetry", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     mockGetAppMetrics.mockReturnValue([
       { pid: wcA.osPid, memory: { privateBytes: 250 * 1024 } },
@@ -1356,6 +1554,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(onViewCached).not.toHaveBeenCalled();
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     expect(onViewCached).toHaveBeenCalledTimes(1);
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
@@ -1385,6 +1584,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     throttleMock.mockClear();
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     const cachedOrder = onViewCached.mock.invocationCallOrder[0];
     const throttleCall = throttleMock.mock.calls.findIndex((args) => {
@@ -1415,10 +1615,12 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     const cEntry = manager.getAllViews().find((v) => v.projectId === "proj-c");
     const wcC = cEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
@@ -1464,6 +1666,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
 
     expect(onViewCached).not.toHaveBeenCalled();
   });
@@ -1490,6 +1693,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     wcA.isDestroyed.mockReturnValue(true);
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
 
     expect(onViewCached).not.toHaveBeenCalled();
   });
@@ -1513,6 +1717,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
+    await flushImmediates();
     expect(manager.getActiveProjectId()).toBe("proj-b");
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
     // CPU throttle must still happen even if the callback throws — the catch
@@ -1535,7 +1740,42 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
+    await flushImmediates();
     expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
+  });
+
+  it("throttles <webview> guests when their host view is cached and unthrottles on reactivation", async () => {
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    // A dev-preview guest embedded in proj-a, plus an unrelated webContents
+    // that must NOT be touched.
+    const guest = { isDestroyed: () => false, hostWebContents: wcA };
+    const unrelated = { isDestroyed: () => false, hostWebContents: null };
+    mockGetAllWebContents.mockReturnValue([guest, unrelated]);
+
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(guest);
+    expect(vi.mocked(throttleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+
+    // Reactivate proj-a — its guest must be unthrottled along with the host.
+    await manager.switchTo("proj-a", "/path/a");
+    await flushImmediates();
+
+    expect(vi.mocked(unthrottleCpuWebContents)).toHaveBeenCalledWith(guest);
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
   });
 });
 
@@ -1578,6 +1818,7 @@ describe("ProjectViewManager — listener cleanup", () => {
 
     // Cold-start proj-b — setupViewHandlers attaches the 6 persistent listeners.
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
     expect(bEntry).toBeDefined();
     const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
@@ -1634,6 +1875,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
@@ -1673,6 +1915,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     const bEntry = manager.getAllViews().find((v) => v.projectId === "proj-b");
     const wcB = bEntry!.view.webContents as unknown as ReturnType<typeof createMockWebContents>;
 
@@ -1712,6 +1955,7 @@ describe("ProjectViewManager — listener cleanup", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
 
@@ -1739,7 +1983,9 @@ describe("ProjectViewManager — listener cleanup", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     const wcB = manager.getAllViews().find((v) => v.projectId === "proj-b")!.view
       .webContents as unknown as ReturnType<typeof createMockWebContents>;
@@ -1827,7 +2073,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // cachedProjectViews=3, so 3 views fit — no eviction.
     expect(manager.getAllViews().length).toBe(3);
@@ -1844,7 +2092,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(manager.getAllViews().length).toBe(3);
     expect(wcA.close).not.toHaveBeenCalled();
@@ -1860,12 +2110,60 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // Override clamped effectiveMax to 1 — only the active proj-c remains.
     const remaining = manager.getAllViews().map((v) => v.projectId);
     expect(remaining).toEqual(["proj-c"]);
     expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("periodic pressure check evicts cached views while idle — no project switch needed", async () => {
+    // Healthy at switch time so the switch-driven eviction pass does nothing.
+    let freeKb = 2 * 1024 * 1024;
+    stubSystemMemoryInfo(() => ({ free: freeKb, purgeable: 0, total: 8 * 1024 * 1024 }));
+    manager.setLowMemoryFreeThresholdMb(768);
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+    expect(manager.getAllViews().length).toBe(3);
+
+    // Free RAM drifts below the floor while the session idles. The sampler
+    // tick's pressure check must reclaim without waiting for a switch.
+    freeKb = 128 * 1024;
+    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    expect(wcA.close).toHaveBeenCalled();
+  });
+
+  it("periodic pressure check is a no-op above the floor or with a null threshold", async () => {
+    stubSystemMemoryInfo({ free: 128 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+
+    // Null threshold (performance profile): pressure check must not run.
+    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+    expect(manager.getAllViews().length).toBe(2);
+
+    // Threshold set but memory healthy: still a no-op.
+    stubSystemMemoryInfo({ free: 2 * 1024 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
+    manager.setLowMemoryFreeThresholdMb(768);
+    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+    expect(manager.getAllViews().length).toBe(2);
+    expect(wcA.close).not.toHaveBeenCalled();
   });
 
   it("uses free + purgeable on macOS so healthy systems do not trigger override", async () => {
@@ -1883,7 +2181,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // 50 + 2*1024*1024 KB ≈ 2050 MB > 768 → no override.
     expect(manager.getAllViews().length).toBe(3);
@@ -1899,7 +2199,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     expect(manager.getAllViews().length).toBe(1);
 
     // Pressure subsides
@@ -1907,8 +2209,11 @@ describe("ProjectViewManager — low-memory eviction", () => {
 
     // Subsequent switches should now respect the original cap of 3
     await manager.switchTo("proj-d", "/path/d");
+    await flushImmediates();
     await manager.switchTo("proj-e", "/path/e");
+    await flushImmediates();
     await manager.switchTo("proj-f", "/path/f");
+    await flushImmediates();
     expect(manager.getAllViews().length).toBe(3);
   });
 
@@ -1921,7 +2226,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
       "projectview.pressure-override",
@@ -1951,7 +2258,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // Threshold set but API missing → no override, normal LRU keeps 3 views.
     expect(manager.getAllViews().length).toBe(3);
@@ -1975,7 +2284,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await managerWithLimit.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await managerWithLimit.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // 3 views, cap 2, API missing → normal LRU evicts proj-a with reason "lru".
     expect(managerWithLimit.getAllViews().length).toBe(2);
@@ -1995,7 +2306,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(manager.getAllViews().length).toBe(3);
     expect(wcA.close).not.toHaveBeenCalled();
@@ -2011,7 +2324,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(manager.getAllViews().length).toBe(3);
     expect(wcA.close).not.toHaveBeenCalled();
@@ -2028,7 +2343,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     expect(manager.getAllViews().length).toBe(1);
     expect(wcA.close).toHaveBeenCalled();
@@ -2043,7 +2360,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // Active view (proj-c) survives even under severe pressure.
     const remaining = manager.getAllViews().map((v) => v.projectId);
@@ -2070,8 +2389,11 @@ describe("ProjectViewManager — low-memory eviction", () => {
     pressureManager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await pressureManager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await pressureManager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
     await pressureManager.switchTo("proj-d", "/path/d");
+    await flushImmediates();
 
     // 4 views, override clamps to 1 → 3 evictions, callback fires for each.
     expect(pressureManager.getAllViews().length).toBe(1);
@@ -2088,7 +2410,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // Threshold cleared — normal LRU applies, all 3 views fit.
     expect(manager.getAllViews().length).toBe(3);
@@ -2107,7 +2431,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
 
     await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
 
     // All bad values normalize to null, so override is disabled.
     expect(manager.getAllViews().length).toBe(3);

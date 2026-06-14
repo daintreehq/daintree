@@ -62,6 +62,17 @@ export interface PluginMcpAuditInput {
  *   over the raw bytes (no ANSI/Markdown stripping) so a rug-pull payload
  *   hidden in invisible Unicode still flips the digest.
  */
+/**
+ * Persistence boundary for the ring buffer itself. Config flags stay behind
+ * `saveConfig`/`readConfig` (the `pluginMcpAudit` config.json slice); the ring
+ * lives in the dedicated audit-logs store (migration023). Injected so this
+ * class stays store-free and unit-testable.
+ */
+export interface PluginMcpAuditLogStore {
+  read(): unknown;
+  write(records: PluginMcpAuditRecord[]): void;
+}
+
 export class PluginMcpAuditService {
   private records: PluginMcpAuditRecord[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -69,11 +80,15 @@ export class PluginMcpAuditService {
 
   constructor(
     private readonly saveConfig: (patch: Record<string, unknown>) => void,
-    private readonly readConfig: () => Record<string, unknown>
+    private readonly readConfig: () => Record<string, unknown>,
+    private readonly logStore: PluginMcpAuditLogStore
   ) {}
 
   append(input: PluginMcpAuditInput): void {
-    if (this.readConfig().auditEnabled === false) return;
+    // Single config read per append — the same result gates the kill switch
+    // and supplies the trim cap.
+    const config = this.readConfig();
+    if (config.auditEnabled === false) return;
     this.hydrate();
 
     const tool_description_sha = sha256Hex(input.descriptionRaw);
@@ -102,14 +117,14 @@ export class PluginMcpAuditService {
     if (input.consentDecision !== undefined) record.consentDecision = input.consentDecision;
     if (input.errorCode !== undefined) record.errorCode = input.errorCode;
 
-    this.enqueueAndTrim(record);
+    this.enqueueAndTrim(record, this.normalizeMaxRecords(config.auditMaxRecords));
   }
 
   hydrate(): void {
     if (this.hydrated) return;
-    const config = this.readConfig();
-    const persisted = Array.isArray(config.auditLog) ? config.auditLog : [];
-    const cap = this.normalizeMaxRecords(config.auditMaxRecords);
+    const stored = this.logStore.read();
+    const persisted = Array.isArray(stored) ? stored : [];
+    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
     const safe: PluginMcpAuditRecord[] = [];
     for (const raw of persisted) {
       const record = pickKnownAuditFields(raw);
@@ -127,9 +142,8 @@ export class PluginMcpAuditService {
     return n;
   }
 
-  private enqueueAndTrim(record: PluginMcpAuditRecord): void {
+  private enqueueAndTrim(record: PluginMcpAuditRecord, cap: number): void {
     this.records.push(record);
-    const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
     if (this.records.length > cap) {
       this.records.splice(0, this.records.length - cap);
     }
@@ -148,7 +162,7 @@ export class PluginMcpAuditService {
   private flush(): void {
     if (!this.hydrated) return;
     try {
-      this.saveConfig({ auditLog: [...this.records] });
+      this.logStore.write([...this.records]);
     } catch (err) {
       console.error("[PluginMcpAudit] Failed to flush audit log:", err);
     }

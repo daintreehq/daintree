@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { chmodSync, mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo } from "../../helpers/fixtures";
+import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
@@ -9,17 +12,65 @@ import {
   addCustomPreset,
   removeCcrConfig,
   waitForCcrPresets,
+  getPresetRowByName,
 } from "../../helpers/presets";
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
+let fakeBinDir: string;
+
+function writeFakeClaude(): void {
+  const scriptPath =
+    process.platform === "win32"
+      ? path.join(fakeBinDir, "claude.js")
+      : path.join(fakeBinDir, "claude");
+  writeFileSync(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('--version')) {",
+      "  console.log('claude fake v9.9.9');",
+      "  process.exit(0);",
+      "}",
+      "console.log('FAKE_CLAUDE_READY pid=' + process.pid);",
+      "process.stdout.write('> ');",
+      "process.stdin.resume();",
+      "const keepAlive = setInterval(() => {}, 1000);",
+      "function shutdown() { clearInterval(keepAlive); process.exit(0); }",
+      "process.on('SIGINT', shutdown);",
+      "process.on('SIGTERM', shutdown);",
+      "",
+    ].join("\n")
+  );
+  chmodSync(scriptPath, 0o755);
+
+  if (process.platform === "win32") {
+    writeFileSync(
+      path.join(fakeBinDir, "claude.cmd"),
+      ["@echo off", 'node "%~dp0\\claude.js" %*', ""].join("\r\n")
+    );
+  }
+}
+
+function launchEnv(): Record<string, string> {
+  return {
+    PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
+    ANTHROPIC_API_KEY: "e2e-fake-key",
+  };
+}
 
 test.describe.serial("Presets: Custom Edit (25–34)", () => {
   test.beforeAll(async () => {
     removeCcrConfig();
-    ctx = await launchApp();
+    fakeBinDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-preset-edit-bin-"));
+    writeFakeClaude();
+    ctx = await launchApp({ env: launchEnv() });
     const { dir: fixtureDir, cleanup } = createFixtureRepo({ name: "preset-edit" });
-    fixtureCleanup = cleanup;
+    fixtureCleanup = () => {
+      cleanup();
+      removePathSync(fakeBinDir);
+    };
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Preset Edit Test");
     await navigateToAgentSettings(ctx.window, "claude");
     await addCustomPreset(ctx.window);
@@ -117,17 +168,24 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
       await ctx.window.waitForTimeout(T_SETTLE);
     }
 
-    const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
-    if (!(await trayButton.isVisible().catch(() => false))) return;
-    await trayButton.click();
-    await ctx.window.waitForTimeout(T_SETTLE);
-    const submenu = ctx.window.locator('[data-testid="submenu-trigger"]', { hasText: "Claude" });
-    if (await submenu.isVisible().catch(() => false)) {
-      await submenu.hover();
-      await ctx.window.waitForTimeout(T_SETTLE);
-    }
-    await ctx.window.mouse.click(10, 10);
-    await ctx.window.waitForTimeout(T_SETTLE);
+    const trayButton = ctx.window.locator(SEL.agent.trayButton);
+    await expect(trayButton).toBeVisible({ timeout: T_MEDIUM });
+    await trayButton.click({ force: true, noWaitAfter: true });
+
+    const submenuTrigger = ctx.window
+      .getByRole("menu", { name: "Agent tray" })
+      .locator(SEL.preset.trayLaunchPresetSubmenu, { hasText: "Claude" });
+    await expect(submenuTrigger).toBeVisible({ timeout: T_MEDIUM });
+    await submenuTrigger.hover();
+
+    const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
+    await expect(submenuContent).toBeVisible({ timeout: T_MEDIUM });
+    await expect(
+      submenuContent.locator('[role^="menuitem"]', { hasText: "Renamed Preset" })
+    ).toBeVisible({ timeout: T_MEDIUM });
+
+    await ctx.window.keyboard.press("Escape");
+    await ctx.window.keyboard.press("Escape");
   });
 
   test("28. Canceling rename leaves name unchanged", async () => {
@@ -146,11 +204,15 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     await goToClaudeSettings();
     const input = await openFirstPresetEditor();
     await expect(input).toBeVisible({ timeout: T_SHORT });
+    const priorName = await input.inputValue();
+    expect(priorName.trim().length).toBeGreaterThan(0);
     await input.fill("");
     await input.press("Enter");
-    await ctx.window.waitForTimeout(T_SETTLE);
-    const customBadges = ctx.window.locator(SEL.preset.section).locator(SEL.preset.customBadge);
-    await expect(customBadges.first()).toBeVisible({ timeout: T_SHORT });
+    // Empty submit must be rejected: the preset keeps its prior non-empty name
+    // (no blank-named row replaces it).
+    await expect(
+      ctx.window.locator(SEL.preset.section).locator("span", { hasText: priorName }).first()
+    ).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("30. Very long name (200+ chars) works without crash", async () => {
@@ -160,8 +222,11 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     const longName = "A".repeat(250);
     await input.fill(longName);
     await input.press("Enter");
-    await ctx.window.waitForTimeout(T_SETTLE);
-    await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_SHORT });
+    const section = ctx.window.locator(SEL.preset.section);
+    await expect(section.locator(SEL.preset.customBadge).first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(ctx.window.locator(SEL.errorBoundary.fallback)).toHaveCount(0);
   });
 
   test("31. Edit button not shown for CCR presets", async () => {
@@ -169,22 +234,28 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     writeCcrConfig([{ id: "ccr-noedit", name: "No Edit", model: "noedit-model" }]);
     await waitForCcrPresets(ctx.window, ["No Edit"]);
     await goToClaudeSettings();
-    const ccrRow = ctx.window.locator(SEL.preset.section).locator("div.flex.items-center.border", {
-      hasText: "No Edit",
-    });
-    if (await ccrRow.isVisible().catch(() => false)) {
-      await expect(ccrRow.locator(SEL.preset.editButton)).toHaveCount(0);
-    }
+    const detail = await getPresetRowByName(ctx.window, "No Edit");
+    await expect(detail).toBeVisible({ timeout: T_MEDIUM });
+    await expect(detail.locator(SEL.preset.editButton)).toHaveCount(0);
   });
 
-  test("32. Name with special characters works", async () => {
+  test("32. Name with dangerous characters is rejected", async () => {
     await goToClaudeSettings();
     const input = await openFirstPresetEditor();
     await expect(input).toBeVisible({ timeout: T_SHORT });
+    const priorName = await input.inputValue();
+    expect(priorName.trim().length).toBeGreaterThan(0);
+    // The `&` is in the dangerous-character set, so the rename is rejected and
+    // the preset keeps its prior name.
     await input.fill("Test & Special");
     await input.press("Enter");
-    await ctx.window.waitForTimeout(T_SETTLE);
-    await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_SHORT });
+    const section = ctx.window.locator(SEL.preset.section);
+    await expect(section.locator("span", { hasText: "Test & Special" })).toHaveCount(0, {
+      timeout: T_MEDIUM,
+    });
+    await expect(section.locator("span", { hasText: priorName }).first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
   });
 
   test("33. Name with emoji works", async () => {
@@ -193,8 +264,9 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     await expect(input).toBeVisible({ timeout: T_SHORT });
     await input.fill("Rocket Preset");
     await input.press("Enter");
-    await ctx.window.waitForTimeout(T_SETTLE);
-    await expect(ctx.window.locator(SEL.preset.section)).toBeVisible({ timeout: T_SHORT });
+    await expect(
+      ctx.window.locator(SEL.preset.section).locator("span", { hasText: "Rocket Preset" }).first()
+    ).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("34. Edit persists across Settings close/reopen", async () => {

@@ -43,6 +43,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
   getGitDir: vi.fn().mockReturnValue("/test/worktree/.git"),
   getGitCommonDir: vi.fn().mockReturnValue(null),
   clearGitDirCache: vi.fn(),
+  clearGitCommonDirCache: vi.fn(),
 }));
 
 vi.mock("../../services/worktree/mood.js", () => ({
@@ -73,12 +74,6 @@ vi.mock("../../services/worktree/index.js", () => ({
   NoteFileReader: vi.fn(function () {
     return { read: vi.fn().mockResolvedValue({}) };
   }),
-}));
-
-vi.mock("../../services/github/GitHubAuth.js", () => ({
-  GitHubAuth: vi.fn().mockImplementation(() => ({
-    getToken: vi.fn().mockResolvedValue(null),
-  })),
 }));
 
 vi.mock("../../services/PullRequestService.js", () => ({
@@ -787,6 +782,21 @@ describe("WorkspaceService.deleteWorktree", () => {
         requestId: "req-replay",
         success: true,
       });
+    });
+
+    it("caps the ack set FIFO — oldest ids evict first, recent ids survive", async () => {
+      const { MAX_ACKNOWLEDGED_MUTATIONS } = await import("../WorkspaceService.js");
+      const record = (id: string) => service["recordAcknowledgedMutation"](id);
+
+      record("mut-oldest");
+      for (let i = 0; i < MAX_ACKNOWLEDGED_MUTATIONS; i++) {
+        record(`mut-${i}`);
+      }
+
+      const ids = service.getAcknowledgedMutationIds();
+      expect(ids.length).toBe(MAX_ACKNOWLEDGED_MUTATIONS);
+      expect(ids).not.toContain("mut-oldest");
+      expect(ids).toContain(`mut-${MAX_ACKNOWLEDGED_MUTATIONS - 1}`);
     });
 
     it("a request with a NEW mutationId for an already-removed worktree still throws not-found", async () => {

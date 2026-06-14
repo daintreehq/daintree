@@ -27,10 +27,12 @@ export const CRASH_CRITICAL_FIELDS = new Set([
 ]);
 
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
+import { isRunningUnderRosetta } from "../../../utils/rosettaDetection.js";
 import {
   isGpuDisabledByFlag,
   isGpuAngleFallbackApplied,
 } from "../../../services/GpuCrashMonitorService.js";
+import { readGpuDisabledFlagData } from "../../../services/gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerService.js";
 import { closeTelemetry } from "../../../services/TelemetryService.js";
@@ -43,6 +45,8 @@ import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrat
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
+import { getValidatedOverrides } from "../keybinding.js";
+import { loadSanitizedUserAgentRegistry } from "../../../services/UserAgentRegistryService.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
@@ -60,36 +64,70 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
     const currentProject = resolveProjectForHydration(ctx);
-    const globalAppState = store.get("appState");
     const projectId = currentProject?.id;
     const panelFilter = getCrashRecoveryService().consumePanelFilter();
-    const hasCrashRestoreTerminals =
-      panelFilter !== null &&
-      Array.isArray(globalAppState.terminals) &&
-      globalAppState.terminals.length > 0;
 
     // Hover-prefetch fast path: when a project switcher hover (or any other
     // pre-populated path) has primed the cache for this project, short-circuit
     // the disk read. Only safe when there's no in-flight crash recovery filter
     // and we aren't booting in safe mode — those scenarios layer constraints
     // (`panelFilter`, dropped terminals) that the prefetch built without.
+    // consumePrefetchedHydrateResult is destructive (return-and-delete), so the
+    // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
-    if (projectId && panelFilter === null && !cacheInSafeMode) {
-      const cached = consumePrefetchedHydrateResult(projectId);
-      if (cached) {
-        return {
-          ...cached,
-          skippedPanelCount: 0,
-          crashCount: cacheGuard.getCrashCount(),
-          lastCrashAt: cacheGuard.getLastCrashTimestamp(),
-          settingsRecovery: consumePendingSettingsRecovery(),
-          // Crash-loop quarantine notifications are gated on safe mode; the
-          // fast path runs only when safe mode is inactive, so clear the field.
-          crashLoopStateRecovery: null,
-        };
-      }
+    const cacheEligible = Boolean(projectId) && panelFilter === null && !cacheInSafeMode;
+    const cached = cacheEligible ? consumePrefetchedHydrateResult(projectId!) : undefined;
+    markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
+      hit: Boolean(cached),
+      projectId: projectId ?? null,
+      reason: cached
+        ? "hit"
+        : !projectId
+          ? "no-project"
+          : cacheInSafeMode
+            ? "safe-mode"
+            : panelFilter !== null
+              ? "panel-filter"
+              : "miss",
+    });
+    if (cached) {
+      return {
+        ...cached,
+        skippedPanelCount: 0,
+        crashCount: cacheGuard.getCrashCount(),
+        lastCrashAt: cacheGuard.getLastCrashTimestamp(),
+        settingsRecovery: consumePendingSettingsRecovery(),
+        // Crash-loop quarantine notifications are gated on safe mode; the
+        // fast path runs only when safe mode is inactive, so clear the field.
+        crashLoopStateRecovery: null,
+        // Ride-along synchronous reads not covered by the prefetch cache —
+        // always read fresh so the toolbar/bootstrap dedup never sees a stale
+        // snapshot from the hover-prefetch window.
+        projects: projectStore.getAllProjects(),
+        keybindingOverrides: getValidatedOverrides(),
+        userAgentRegistry: loadSanitizedUserAgentRegistry(),
+      };
     }
+
+    // In-repo presets ride along in the payload; kicked off after the fast
+    // path (the cached result already carries them) so the disk read overlaps
+    // the rest of the hydrate work.
+    const projectPresetsPromise = currentProject
+      ? projectStore.readInRepoPresets(currentProject.path).catch((error) => {
+          console.warn("[AppHydrate] Failed to read in-repo presets:", error);
+          return {};
+        })
+      : undefined;
+
+    // Read the global app state only after the fast path — the cached
+    // HydrateResult already carries appState, so reading it earlier would pay
+    // a redundant full config.json parse on every cache hit.
+    const globalAppState = store.get("appState");
+    const hasCrashRestoreTerminals =
+      panelFilter !== null &&
+      Array.isArray(globalAppState.terminals) &&
+      globalAppState.terminals.length > 0;
 
     // First, try to get terminals from per-project state (new model)
     // Fall back to global appState.terminals for migration
@@ -105,11 +143,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // list so existing users keep their MRU on first open after upgrade.
     let mruListToUse = globalAppState.mruList;
     let projectStateQuarantinedPath: string | undefined;
+    // Per-project layout state folded into the payload so the renderer skips
+    // the standalone getTabGroups/getTerminalSizes/getDraftInputs round-trips
+    // during hydration. Left undefined on the no-project fallback branch so
+    // the renderer falls back to the standalone IPC calls.
+    let tabGroupsToUse: import("../../../../shared/types/panel.js").TabGroup[] | undefined;
+    let terminalSizesToUse: Record<string, { cols: number; rows: number }> | undefined;
+    let draftInputsToUse: Record<string, string> | undefined;
 
     if (projectId) {
       const { state: projectState, quarantinedPath } =
         await projectStore.getProjectStateWithRecovery(projectId);
       projectStateQuarantinedPath = quarantinedPath;
+      // Defaults match the standalone handlers' null-state returns.
+      tabGroupsToUse = projectState?.tabGroups ?? [];
+      terminalSizesToUse = projectState?.terminalSizes ?? {};
+      draftInputsToUse = projectState?.draftInputs ?? {};
       // undefined means "not migrated yet" — fall through to the global list.
       if (projectState?.mruList !== undefined) {
         mruListToUse = projectState.mruList;
@@ -378,10 +427,13 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
+      gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
       gpuAngleFallbackActive: isGpuAngleFallbackApplied(app.getPath("userData")),
       safeMode: inSafeMode,
       isWindowsStore:
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
+      runningUnderRosetta: isRunningUnderRosetta(),
+      rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
       skippedPanelCount,
       quarantinedPanels,
       crashCount: guard.getCrashCount(),
@@ -399,6 +451,17 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       // Folded into the payload so the renderer skips a standalone
       // `system:get-tmp-dir` round-trip on boot (matches `handleSystemGetTmpDir`).
       systemTmpDir: os.tmpdir(),
+      tabGroups: tabGroupsToUse,
+      terminalSizes: terminalSizesToUse,
+      draftInputs: draftInputsToUse,
+      projectPresets: projectPresetsPromise ? await projectPresetsPromise : undefined,
+      // Folded into the payload so the Toolbar mount and the hydration
+      // bootstrap skip their standalone round-trips during the boot window
+      // (project:get-all / project:get-current, keybinding:get-overrides,
+      // user-agent-registry:get). All three are synchronous reads.
+      projects: projectStore.getAllProjects(),
+      keybindingOverrides: getValidatedOverrides(),
+      userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
@@ -423,10 +486,25 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const pending = crashService.getPendingCrash();
       crashPending = pending ? { ...pending, crashCount: guard.getCrashCount() } : null;
     }
+    // Ride-along app theme: only when the stored config is already in its
+    // fully-migrated shape. First-run defaulting and legacy customSchemes
+    // migration stay in the `app-theme:get` handler, which the renderer falls
+    // back to whenever this field is undefined.
+    const rawAppTheme = store.get("appTheme");
+    const appTheme =
+      rawAppTheme &&
+      typeof rawAppTheme === "object" &&
+      !Array.isArray(rawAppTheme) &&
+      typeof rawAppTheme.colorSchemeId === "string" &&
+      rawAppTheme.colorSchemeId &&
+      typeof (rawAppTheme.customSchemes as unknown) !== "string"
+        ? (rawAppTheme as import("../../../../shared/types/appTheme.js").AppThemeConfig)
+        : undefined;
     return {
       ...hydrate,
       crashPending,
       crashConfig: crashService.getConfig(),
+      appTheme,
     };
   };
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
@@ -710,13 +788,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       const hasCriticalField = Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
 
       try {
-        for (const [field, value] of Object.entries(updates)) {
-          if (value === undefined) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (store.delete as (k: string) => void)(`appState.${field}` as any);
-          } else {
-            store.set(`appState.${field}`, value);
+        // Batch all fields into one write: every store.set() re-reads and
+        // re-serializes the whole config.json, so a per-field loop costs N×
+        // the file IO of a single merged set.
+        if (Object.keys(updates).length > 0) {
+          const current = (store.get("appState") ?? {}) as Record<string, unknown>;
+          const merged: Record<string, unknown> = { ...current };
+          for (const [field, value] of Object.entries(updates)) {
+            if (value === undefined) {
+              // electron-store v11 throws on `undefined` values — drop the
+              // key from the merged object instead (was store.delete before).
+              delete merged[field];
+            } else {
+              merged[field] = value;
+            }
           }
+          store.set("appState", merged as StoreSchema["appState"]);
         }
       } finally {
         if (hasCriticalField) {

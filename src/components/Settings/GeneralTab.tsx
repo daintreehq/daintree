@@ -37,6 +37,7 @@ import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useDistributionStore } from "@/store/distributionStore";
@@ -219,13 +220,29 @@ export function GeneralTab({
   const handleStoreUpdateNotificationsToggle = async () => {
     if (storeUpdateSettingsSaving || storeUpdateNotificationsEnabled === null) return;
     if (!window.electron?.storeUpdate?.setSettings) return;
-    const next = !storeUpdateNotificationsEnabled;
+    const prev = storeUpdateNotificationsEnabled;
+    const next = !prev;
+    setStoreUpdateNotificationsEnabled(next);
     setStoreUpdateSettingsSaving(true);
     try {
       const result = await window.electron.storeUpdate.setSettings(next);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(result.enabled);
     } catch (error) {
       logError("Failed to set store update notification settings", error);
+      if (isMountedRef.current) setStoreUpdateNotificationsEnabled(prev);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Update notification preference couldn't be saved.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleStoreUpdateNotificationsToggle(),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
     } finally {
       if (isMountedRef.current) setStoreUpdateSettingsSaving(false);
     }
@@ -234,12 +251,28 @@ export function GeneralTab({
   const handleChannelChange = async (channel: "stable" | "nightly") => {
     if (updatesManagedByStore) return;
     if (channelSaving || channel === updateChannel) return;
+    const prev = updateChannel;
+    setUpdateChannel(channel);
     setChannelSaving(true);
     try {
       const result = await window.electron.update.setChannel(channel);
       if (isMountedRef.current) setUpdateChannel(result);
     } catch (error) {
       logError("Failed to set update channel", error);
+      if (isMountedRef.current) setUpdateChannel(prev);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Update channel couldn't be changed.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleChannelChange(channel),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -383,11 +416,13 @@ export function GeneralTab({
   }, []);
   const handleHibernationToggle = async () => {
     if (!hibernationConfig || isSaving) return;
+    const prev = hibernationConfig;
+    setHibernationConfig({ ...prev, enabled: !prev.enabled });
     setIsSaving(true);
     try {
       const result = await actionService.dispatch(
         "hibernation.updateConfig",
-        { enabled: !hibernationConfig.enabled },
+        { enabled: !prev.enabled },
         { source: "user" }
       );
       if (!isMountedRef.current) return;
@@ -397,7 +432,17 @@ export function GeneralTab({
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
+      setHibernationConfig(prev);
       logError("Failed to update hibernation config", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Auto-hibernation couldn't be updated.",
+        actions: [
+          { label: "Try again", variant: "primary", onClick: () => void handleHibernationToggle() },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -407,11 +452,13 @@ export function GeneralTab({
 
   const handleIdleNotifyToggle = async () => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
+    const prev = idleNotifyConfig;
+    setIdleNotifyConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleNotifySaving(true);
     try {
       const result = await actionService.dispatch(
         "idleTerminalNotify.updateConfig",
-        { enabled: !idleNotifyConfig.enabled },
+        { enabled: !prev.enabled },
         { source: "user" }
       );
       if (!isMountedRef.current) return;
@@ -421,7 +468,17 @@ export function GeneralTab({
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
+      setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify config", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Idle terminal notifications couldn't be updated.",
+        actions: [
+          { label: "Try again", variant: "primary", onClick: () => void handleIdleNotifyToggle() },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -431,6 +488,8 @@ export function GeneralTab({
 
   const handleIdleNotifyThresholdChange = async (value: number) => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
+    const prev = idleNotifyConfig;
+    setIdleNotifyConfig({ ...prev, thresholdMinutes: value });
     setIsIdleNotifySaving(true);
     try {
       const result = await actionService.dispatch(
@@ -445,7 +504,21 @@ export function GeneralTab({
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
+      setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify threshold", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Idle threshold couldn't be updated.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleIdleNotifyThresholdChange(value),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -455,6 +528,8 @@ export function GeneralTab({
 
   const handleThresholdChange = async (value: number) => {
     if (!hibernationConfig || isSaving) return;
+    const prev = hibernationConfig;
+    setHibernationConfig({ ...prev, inactiveThresholdHours: value });
     setIsSaving(true);
     try {
       const result = await actionService.dispatch(
@@ -469,7 +544,21 @@ export function GeneralTab({
       setHibernationConfig(result.result as HibernationConfig);
     } catch (error) {
       if (!isMountedRef.current) return;
+      setHibernationConfig(prev);
       logError("Failed to update hibernation threshold", error);
+      notify({
+        type: "error",
+        title: "Couldn't save setting",
+        message: "Inactivity threshold couldn't be updated.",
+        actions: [
+          {
+            label: "Try again",
+            variant: "primary",
+            onClick: () => void handleThresholdChange(value),
+          },
+        ],
+        context: { eventKind: "uiFeedback" },
+      });
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -639,11 +728,11 @@ export function GeneralTab({
               <SettingsSwitchCard
                 icon={RefreshCw}
                 title="Notify when a new version is available"
-                subtitle="Show an inbox notification with a link to the Microsoft Store."
+                subtitle="Show an inbox notification with a link to the Microsoft Store"
                 isEnabled={storeUpdateNotificationsEnabled ?? true}
                 onChange={() => void handleStoreUpdateNotificationsToggle()}
                 ariaLabel="Toggle Microsoft Store update notifications"
-                disabled={storeUpdateNotificationsEnabled === null || storeUpdateSettingsSaving}
+                disabled={storeUpdateNotificationsEnabled === null}
               />
             </SettingsSection>
           ) : (
@@ -657,7 +746,7 @@ export function GeneralTab({
                 {(["stable", "nightly"] as const).map((ch) => (
                   <button
                     key={ch}
-                    disabled={channelSaving || updateChannel === null}
+                    disabled={updateChannel === null}
                     onClick={() => void handleChannelChange(ch)}
                     className={cn(
                       "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
@@ -699,7 +788,7 @@ export function GeneralTab({
               <ChevronRight
                 data-animated-chevron
                 className={cn(
-                  "w-4 h-4 transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+                  "w-3.5 h-3.5 transition-transform duration-150",
                   isShortcutsOpen && "rotate-90"
                 )}
               />
@@ -710,7 +799,7 @@ export function GeneralTab({
               <div id="keyboard-shortcuts-content" className="space-y-4">
                 {shortcuts.map((category) => (
                   <div key={category.category} className="space-y-2">
-                    <h5 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+                    <h5 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider">
                       {category.category}
                     </h5>
                     <dl className="space-y-1">
@@ -752,7 +841,6 @@ export function GeneralTab({
                 isEnabled={idleNotifyConfig.enabled}
                 onChange={handleIdleNotifyToggle}
                 ariaLabel="Idle Terminal Notifications Toggle"
-                disabled={isIdleNotifySaving}
               />
 
               {idleNotifyConfig.enabled && (
@@ -762,7 +850,6 @@ export function GeneralTab({
                     {IDLE_TERMINAL_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
                         key={value}
-                        disabled={isIdleNotifySaving}
                         onClick={() => handleIdleNotifyThresholdChange(value)}
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
@@ -803,7 +890,6 @@ export function GeneralTab({
                 isEnabled={hibernationConfig.enabled}
                 onChange={handleHibernationToggle}
                 ariaLabel="Auto-Hibernation Toggle"
-                disabled={isSaving}
               />
 
               {hibernationConfig.enabled && (
@@ -813,7 +899,6 @@ export function GeneralTab({
                     {THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
                         key={value}
-                        disabled={isSaving}
                         onClick={() => handleThresholdChange(value)}
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
