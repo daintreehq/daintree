@@ -7534,7 +7534,7 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     await expect(waiter).resolves.toBeUndefined();
   });
 
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, menu items, context-menu items, and agents to the target webContents", async () => {
+  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, and agents to the target webContents", async () => {
     const service = new PluginService(tmpDir);
     await service.activateStartupFinishedPlugins();
     const send = vi.fn();
@@ -7556,6 +7556,9 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(names).toContain("plugin:keybindings-changed");
     expect(names).toContain("plugin:context-menu-items-changed");
     expect(names).toContain("plugin:agents-changed");
+    // The renderer menu-items channel was removed (#10465) — guard against the
+    // cold-restore replay accidentally re-emitting it.
+    expect(names).not.toContain("plugin:menu-items-changed");
     // The keybindings replay is a full authoritative snapshot — the renderer
     // hook full-replaces its plugin bindings on every push, so `complete: true`
     // is consistent with that replace-all semantics.

@@ -609,7 +609,7 @@ export class PluginService {
   private appVersion: string;
   /**
    * Owns the coalesced per-tick contribution broadcasts (actions, panel kinds,
-   * toolbar buttons, menu items, keybindings, context-menu items) plus the
+   * toolbar buttons, keybindings, context-menu items) plus the
    * cold-start {@link pushSnapshotTo} replay. Constructed in the constructor
    * after {@link initPromise} is set, so it can await the init gate.
    */

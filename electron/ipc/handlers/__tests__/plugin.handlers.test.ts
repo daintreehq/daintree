@@ -190,6 +190,9 @@ describe("registerPluginHandlers", () => {
       "plugin:settings-reveal-secret",
       expect.any(Function)
     );
+    // The renderer-side menu-items IPC surface was removed (#10465) — the native
+    // app menu is the wired surface. Guard against accidental re-introduction.
+    expect(mockIpcMainHandle).not.toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
   });
 
   it("throws before registering any handler when invoked before enforceIpcSenderValidation", () => {
