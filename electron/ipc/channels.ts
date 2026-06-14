@@ -863,7 +863,6 @@ export const CHANNELS = {
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
-  PLUGIN_MENU_ITEMS: "plugin:menu-items",
   PLUGIN_KEYBINDINGS: "plugin:keybindings",
   PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",

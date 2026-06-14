@@ -1798,23 +1798,15 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
-  // Plugin menu item registry events (main → renderer). Same `complete` flag
-  // semantics as toolbar buttons: true for an authoritative post-unload
-  // snapshot, false for partial/growing load-time broadcasts.
-  "plugin:menu-items-changed": {
-    items: Array<{ pluginId: string; item: import("../plugin.js").MenuItemContribution }>;
-    complete: boolean;
-  };
-
   // Plugin keybinding registry events (main → renderer). Same `complete` flag
-  // semantics as toolbar buttons and menu items.
+  // semantics as toolbar buttons.
   "plugin:keybindings-changed": {
     keybindings: import("../plugin.js").PluginKeybindingDescriptor[];
     complete: boolean;
   };
 
   // Plugin context-menu item registry events (main → renderer). Same `complete`
-  // flag semantics as menu items.
+  // flag semantics as toolbar buttons.
   "plugin:context-menu-items-changed": {
     items: Array<{ pluginId: string; item: import("../plugin.js").ContextMenuContribution }>;
     complete: boolean;
@@ -1822,7 +1814,7 @@ export interface IpcEventMap {
 
   // Plugin agent registry events (main → renderer). Carries the flattened
   // plugin-agent record so the renderer can mirror main's effective registry.
-  // Same `complete` flag semantics as toolbar buttons / menu items: true for an
+  // Same `complete` flag semantics as toolbar buttons: true for an
   // authoritative post-unload snapshot, false for partial/growing load-time
   // broadcasts.
   "plugin:agents-changed": {
@@ -1938,8 +1930,6 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-kinds-changed"
   // Plugin toolbar button registry (global broadcast)
   | "plugin:toolbar-buttons-changed"
-  // Plugin menu item registry (global broadcast)
-  | "plugin:menu-items-changed"
   // Plugin keybinding registry (global broadcast)
   | "plugin:keybindings-changed"
   // Plugin context-menu item registry (global broadcast)

@@ -419,23 +419,15 @@ async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
 }
 
-async function handleMenuItems() {
-  // Same init-race guard as `handleToolbarButtons` — block until startup
-  // activation settles so the renderer's mount-time pull can't observe an
-  // empty registry before plugins finish registering (#9285).
-  await (await getPluginService()).waitForInit();
-  return getPluginMenuItems();
-}
-
 async function handleKeybindings() {
   await (await getPluginService()).waitForInit();
   return getPluginKeybindings();
 }
 
 async function handleContextMenuItems() {
-  // Same init-race guard as `handleMenuItems` — block until startup activation
-  // settles so the renderer's mount-time pull can't observe an empty registry
-  // before plugins finish registering (#9285).
+  // Same init-race guard as `handleToolbarButtons` — block until startup
+  // activation settles so the renderer's mount-time pull can't observe an empty
+  // registry before plugins finish registering (#9285).
   await (await getPluginService()).waitForInit();
   return getPluginContextMenuItems();
 }
@@ -818,7 +810,6 @@ export const pluginNamespace = defineIpcNamespace({
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
     toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
-    menuItems: op(PLUGIN_METHOD_CHANNELS.menuItems, handleMenuItems),
     keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),
     contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),

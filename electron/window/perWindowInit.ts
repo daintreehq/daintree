@@ -85,8 +85,8 @@ export async function initPerWindowServices(
   // show none of them. Lazy-import `pluginService` to avoid the cyclic edge
   // (`PluginService` depends on services that may eventually reach window
   // code), then await init and rebuild once. Dynamic plugin load/unload does
-  // not refresh the native menu — accepted limitation; the in-app renderer
-  // hook is the dynamic surface.
+  // not refresh the native menu — accepted limitation: the native app menu is
+  // rebuilt once after init, not on every subsequent contribution change.
   registerDeferredTask({
     name: `plugin-menu-rebuild:${win.id}`,
     run: async () => {

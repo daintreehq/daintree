@@ -15,7 +15,6 @@ export const PLUGIN_METHOD_CHANNELS = {
   uninstall: "plugin:uninstall",
   checkForUpdate: "plugin:check-for-update",
   toolbarButtons: "plugin:toolbar-buttons",
-  menuItems: "plugin:menu-items",
   keybindings: "plugin:keybindings",
   contextMenuItems: "plugin:context-menu-items",
   validateActionIds: "plugin:validate-action-ids",

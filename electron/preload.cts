@@ -141,7 +141,6 @@ import type { PortalNewTabMenuAction } from "../shared/types/portal.js";
 import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 import type {
   PluginActionDescriptor,
-  MenuItemContribution,
   PluginKeybindingDescriptor,
   ContextMenuContribution,
   PluginDeepLinkIntent,
@@ -2597,12 +2596,6 @@ function buildElectronApi(): ElectronAPI {
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
-      onMenuItemsChanged: (
-        callback: (payload: {
-          items: Array<{ pluginId: string; item: MenuItemContribution }>;
-          complete: boolean;
-        }) => void
-      ) => _eventBusOn("plugin:menu-items-changed", callback),
       onKeybindingsChanged: (
         callback: (payload: {
           keybindings: PluginKeybindingDescriptor[];

@@ -1574,7 +1574,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       result: import("../actions.js").ActionDispatchResult;
     }): void;
   };
-  // list / toolbarButtons / menuItems / validateActionIds / get|register|
+  // list / toolbarButtons / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations
   // come from GeneratedElectronAPI; invoke + on are variadic plugin RPC
   // helpers that aren't expressible through IpcInvokeMap, and the on*
@@ -1630,16 +1630,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToolbarButtonsChanged(
       callback: (payload: {
         buttons: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
-        complete: boolean;
-      }) => void
-    ): () => void;
-    /** Subscribe to plugin menu item registry changes. Returns a cleanup. */
-    onMenuItemsChanged(
-      callback: (payload: {
-        items: Array<{
-          pluginId: string;
-          item: import("../plugin.js").MenuItemContribution;
-        }>;
         complete: boolean;
       }) => void
     ): () => void;

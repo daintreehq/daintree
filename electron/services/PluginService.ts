@@ -1150,9 +1150,6 @@ export class PluginService {
       trackPluginExpression(manifest.name, menuItem.when);
       registerPluginMenuItem(manifest.name, menuItem);
     }
-    if (manifest.contributes.menuItems.length > 0) {
-      this.broadcaster.scheduleMenuItemsBroadcast(false);
-    }
 
     for (const keybinding of manifest.contributes.keybindings) {
       trackPluginExpression(manifest.name, keybinding.when);
@@ -2678,9 +2675,6 @@ export class PluginService {
       this.unregisterPluginActions(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginMenuItems", () => unregisterPluginMenuItems(pluginId));
-    runUnloadStep(pluginId, "scheduleMenuItemsBroadcast", () =>
-      this.broadcaster.scheduleMenuItemsBroadcast(true)
-    );
     runUnloadStep(pluginId, "unregisterPluginKeybindings", () =>
       unregisterPluginKeybindings(pluginId)
     );
