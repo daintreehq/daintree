@@ -109,7 +109,8 @@ ruleTester.run("no-icon-opacity-dimming", rule, {
     },
     {
       name: "opacity in a template literal on an icon",
-      code: "import { Clock } from \"lucide-react\";\n" +
+      code:
+        'import { Clock } from "lucide-react";\n' +
         "const A = ({ size }) => <Clock className={`${size} opacity-40`} />;",
       errors: [{ messageId: "opacity" }],
     },

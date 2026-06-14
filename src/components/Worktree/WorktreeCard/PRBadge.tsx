@@ -126,9 +126,7 @@ export function PRBadge({
         >
           {isSubordinate && (
             <CornerDownRight
-              className={cn(
-                "w-3 h-3 shrink-0 text-text-muted"
-              )}
+              className={cn("w-3 h-3 shrink-0 text-text-muted")}
               aria-hidden="true"
             />
           )}
