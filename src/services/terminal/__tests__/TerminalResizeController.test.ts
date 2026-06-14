@@ -1386,7 +1386,11 @@ describe("TerminalResizeController", () => {
 
     it("returns false for a zero/too-small layout box", () => {
       const managed = createManagedTerminal();
-      managed.hostElement.getBoundingClientRect = vi.fn(() => ({ left: 0, width: 10, height: 10 })) as any;
+      managed.hostElement.getBoundingClientRect = vi.fn(() => ({
+        left: 0,
+        width: 10,
+        height: 10,
+      })) as any;
 
       const controller = makeController(managed);
       expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
