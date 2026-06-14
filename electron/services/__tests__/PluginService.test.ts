@@ -167,6 +167,8 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { z } from "zod";
 import { PluginService } from "../PluginService.js";
+import { getPluginActionAuditService } from "../PluginActionAuditService.js";
+import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { getPluginManifestSchema, isPrivateOrLoopbackHostname } from "../../schemas/plugin.js";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -2400,6 +2402,105 @@ describe("Plugin IPC handler registration", () => {
       []
     );
     expect(result).toBe("sync-result");
+  });
+
+  describe("dispatchHandler failure auditing (#10463)", () => {
+    it("audits a throwing typed-channel handler as an ipc-invoke error record", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const boom = new Error("handler exploded");
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(boom));
+
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [
+            { q: "x" },
+          ])
+        ).rejects.toBe(boom);
+
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        const record = appendSpy.mock.calls[0][0];
+        expect(record).toMatchObject({
+          pluginId: "acme.test-plugin",
+          actionId: "get-data",
+          recordType: "ipc-invoke",
+          channel: "get-data",
+          result: "error",
+        });
+        expect(record.errorMessage).toContain("handler exploded");
+        expect(typeof record.durationMs).toBe("number");
+        expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+        // The error is marked so the outer plugin:invoke catch won't re-audit.
+        expect(isAuditedHandlerFailure(boom)).toBe(true);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("does not audit when the typed-channel handler succeeds", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockResolvedValue("ok"));
+        await service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [
+          "a",
+        ]);
+        expect(appendSpy).not.toHaveBeenCalled();
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("does not audit schema/no-handler errors (owned by the IPC boundary)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "missing", makeCtx("acme.test-plugin"), [])
+        ).rejects.toThrow("No plugin handler registered");
+        expect(appendSpy).not.toHaveBeenCalled();
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("rethrows the original error even when it is frozen (marker can't attach)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const frozen = Object.freeze(new Error("handler exploded"));
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(frozen));
+        // The marker can't be written onto a frozen error; the original error
+        // must still surface (not a TypeError from the failed assignment).
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [])
+        ).rejects.toBe(frozen);
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        expect(isAuditedHandlerFailure(frozen)).toBe(false);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("never lets an audit append failure mask the handler error", async () => {
+      const appendSpy = vi.spyOn(getPluginActionAuditService(), "append").mockImplementation(() => {
+        throw new Error("audit store corrupt");
+      });
+      try {
+        const boom = new Error("handler exploded");
+        service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockRejectedValue(boom));
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [])
+        ).rejects.toBe(boom);
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
   });
 
   describe("dispatchHandler args validation", () => {
@@ -4856,6 +4957,43 @@ describe("createHost — registerAction", () => {
     // undefined, so a handler can safely destructure the args object.
     expect(handler).toHaveBeenCalledWith({});
     expect(result).toBe("ran");
+  });
+
+  it("audits a throwing action handler as an action-dispatch error record (#10463)", async () => {
+    const appendSpy = vi
+      .spyOn(getPluginActionAuditService(), "append")
+      .mockImplementation(() => {});
+    try {
+      const boom = new Error("action exploded");
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => {
+        throw boom;
+      });
+
+      await expect(
+        service.dispatchHandler(
+          "acme.act-test",
+          "acme.act-test.plan-from-issue",
+          makeCtx("acme.act-test"),
+          [{ issue: 7 }]
+        )
+      ).rejects.toBe(boom);
+
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      const record = appendSpy.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "acme.act-test",
+        actionId: "acme.act-test.plan-from-issue",
+        recordType: "action-dispatch",
+        result: "error",
+      });
+      expect(record.errorMessage).toContain("action exploded");
+      expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+      // Marked so the outer plugin:invoke catch won't record a duplicate.
+      expect(isAuditedHandlerFailure(boom)).toBe(true);
+    } finally {
+      appendSpy.mockRestore();
+    }
   });
 
   it("rejects calls after the host is revoked", () => {

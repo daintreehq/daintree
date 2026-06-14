@@ -110,6 +110,9 @@ import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
+import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
 import type {
   PluginDiagnosticsAuditRecord,
   PluginDiagnosticsLogLine,
@@ -351,6 +354,35 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
     fn();
   } catch (err) {
     console.warn(`[PluginService] Unload step "${step}" for "${pluginId}" threw:`, err);
+  }
+}
+
+/**
+ * Append a plugin audit record without ever surfacing an audit failure to the
+ * caller. Mirrors the `safeAppend` in `electron/ipc/handlers/plugin.ts` — a
+ * throw from `append()` (corrupt store, disk error) must never mask the
+ * handler error we're in the middle of rethrowing. Audit is a side channel.
+ */
+function safeAppendAudit(
+  input: Parameters<ReturnType<typeof getPluginActionAuditService>["append"]>[0]
+): void {
+  try {
+    getPluginActionAuditService().append(input);
+  } catch (err) {
+    console.error("[PluginService] Failed to append audit record:", err);
+  }
+}
+
+/**
+ * SHA-256 of the dispatch args for forensic grouping, best-effort. A
+ * serialization throw here must not mask the handler error, so it degrades to
+ * an empty hash (the documented "hashing failed" sentinel).
+ */
+function safeArgsHash(args: unknown[]): string {
+  try {
+    return stableArgsSha256(args);
+  } catch {
+    return "";
   }
 }
 
@@ -2391,6 +2423,9 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Start the clock before activation so a failure record carries the full
+    // dispatch cost (cold activation included) the renderer actually waited on.
+    const dispatchStart = Date.now();
     // Implicit activation: the first dispatch into a plugin's channel forces
     // its `activate()` to run if it hasn't yet, so handlers registered during
     // activation are available on the very first call. No-op once activated.
@@ -2463,8 +2498,21 @@ export class PluginService {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
         // surfaces to the renderer (rethrown after logging).
-        // TODO(#9232): emit PluginActionAuditRecord to the audit pipeline.
         console.error(`[PluginService] Action handler "${channel}" threw:`, err);
+        // Audit at the dispatch boundary (#10463) so non-IPC callers (agent
+        // automation, recipe dispatch) leave the same durable trail as a
+        // `plugin:invoke` call. Mark the error so the outer `plugin:invoke`
+        // catch doesn't record it a second time.
+        safeAppendAudit({
+          pluginId,
+          actionId: channel,
+          recordType: "action-dispatch",
+          result: "error",
+          errorMessage: formatErrorMessage(err, "plugin action handler threw"),
+          argsHash: safeArgsHash(args),
+          durationMs: Date.now() - dispatchStart,
+        });
+        markAuditedHandlerFailure(err);
         throw err;
       }
     }
@@ -2513,8 +2561,21 @@ export class PluginService {
       // process. The error still surfaces to the renderer (we rethrow after
       // logging) — the renderer-side wrapping in `usePluginActions` turns
       // that rejection into a user-facing toast.
-      // TODO(#9232): emit PluginActionAuditRecord to the audit pipeline.
       console.error(`[PluginService] Handler "${key}" threw:`, err);
+      // Audit at the dispatch boundary (#10463). `channel` carries the plugin
+      // channel string that failed (the IPC transport is always plugin:invoke);
+      // mark the error so the outer `plugin:invoke` catch doesn't double-record.
+      safeAppendAudit({
+        pluginId,
+        actionId: channel,
+        recordType: "ipc-invoke",
+        channel,
+        result: "error",
+        errorMessage: formatErrorMessage(err, "plugin IPC handler threw"),
+        argsHash: safeArgsHash(args),
+        durationMs: Date.now() - dispatchStart,
+      });
+      markAuditedHandlerFailure(err);
       throw err;
     }
 
