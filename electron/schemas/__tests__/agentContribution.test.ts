@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  AgentContributionSchema,
-  AgentDetectionContributionSchema,
-  getPluginManifestSchema,
-} from "../plugin.js";
+import { AgentContributionSchema, getPluginManifestSchema } from "../plugin.js";
 
 const VALID_AGENT = {
   id: "acme-agent",
@@ -30,14 +26,31 @@ describe("AgentContributionSchema (issue #9560)", () => {
     }
   });
 
-  it("accepts args, supportsContextInjection, and a detection block", () => {
+  it("accepts args and supportsContextInjection", () => {
     const result = AgentContributionSchema.safeParse({
       ...VALID_AGENT,
       args: ["--flag", "value"],
       supportsContextInjection: true,
-      detection: { primaryPatterns: ["thinking", "working\\.\\.\\."] },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejects a detection block as an unknown key — output detection is cut from the 1.0 schema (#10460)", () => {
+    const result = AgentContributionSchema.safeParse({
+      ...VALID_AGENT,
+      detection: { primaryPatterns: ["thinking"] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Assert the failure is strict unknown-key rejection of `detection`
+      // specifically, not some unrelated validation error — so a future
+      // re-introduction of the field can't silently flip this to a pass.
+      const unknownKeyIssue = result.error.issues.find(
+        (issue) => issue.code === "unrecognized_keys"
+      );
+      expect(unknownKeyIssue).toBeDefined();
+      expect((unknownKeyIssue as { keys?: string[] }).keys).toContain("detection");
+    }
   });
 
   it("rejects unknown top-level fields (strict)", () => {
@@ -79,59 +92,6 @@ describe("AgentContributionSchema (issue #9560)", () => {
   });
 });
 
-describe("AgentDetectionContributionSchema bounded-regex contract (issue #9560)", () => {
-  it("rejects an invalid regular expression", () => {
-    expect(AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["("] }).success).toBe(
-      false
-    );
-  });
-
-  it("rejects backreferences, lookarounds, and nested quantifiers", () => {
-    expect(
-      AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["(foo)\\1"] }).success
-    ).toBe(false);
-    expect(
-      AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["foo(?=bar)"] }).success
-    ).toBe(false);
-    expect(AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["(a+)+"] }).success).toBe(
-      false
-    );
-  });
-
-  it("rejects ReDoS families that a naive nested-quantifier check would miss", () => {
-    // Quantified alternation, optional-quantified group, and doubly-nested
-    // quantified groups all backtrack catastrophically.
-    for (const pattern of ["(a|aa)+", "(a?)+", "((a)*)*", "(.*)*", "(a+){2,}"]) {
-      expect(
-        AgentDetectionContributionSchema.safeParse({ primaryPatterns: [pattern] }).success
-      ).toBe(false);
-    }
-  });
-
-  it("accepts a plain quantified group with no risky body", () => {
-    expect(
-      AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["(foo)+", "bar*"] }).success
-    ).toBe(true);
-  });
-
-  it("rejects a pattern longer than 250 chars and more than 8 patterns", () => {
-    expect(
-      AgentDetectionContributionSchema.safeParse({ primaryPatterns: ["a".repeat(251)] }).success
-    ).toBe(false);
-    expect(
-      AgentDetectionContributionSchema.safeParse({
-        primaryPatterns: Array.from({ length: 9 }, (_, i) => `p${i}`),
-      }).success
-    ).toBe(false);
-  });
-
-  it("rejects unknown detection fields (strict)", () => {
-    expect(
-      AgentDetectionContributionSchema.safeParse({ titleStatePatterns: { working: ["x"] } }).success
-    ).toBe(false);
-  });
-});
-
 describe("manifest-level agent contribution gates (issue #9560)", () => {
   const schema = getPluginManifestSchema(false);
 
@@ -165,12 +125,12 @@ describe("manifest-level agent contribution gates (issue #9560)", () => {
     }
   });
 
-  it("rejects the whole manifest when an agent's detection config is malformed", () => {
+  it("rejects the whole manifest when an agent declares a detection block (cut in 1.0, #10460)", () => {
     const result = schema.safeParse(
       manifestWith({
         capabilities: ["agent:register"],
         contributes: {
-          agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["("] } }],
+          agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["thinking"] } }],
         },
       })
     );

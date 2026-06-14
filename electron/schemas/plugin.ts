@@ -230,93 +230,6 @@ export const FileDecorationContributionSchema = z
   .strict();
 
 /**
- * Detection patterns run against live PTY output for every terminal, so a
- * plugin-supplied pattern needs a tight contract — bounded length, a bounded
- * count, well-formedness, and no constructs prone to catastrophic backtracking.
- * RE2 (linear-time) is deliberately not added as a native dependency (#9560);
- * instead each pattern is validated structurally at manifest-parse time, which
- * is off the hot PTY path. A pattern that compiles but uses backreferences,
- * lookarounds, or nested quantifiers is rejected so a malicious manifest can't
- * stall the matcher.
- */
-const MAX_DETECTION_PATTERN_LENGTH = 250;
-const MAX_DETECTION_PATTERNS_PER_FIELD = 8;
-
-/** Backreference, e.g. `\1`. */
-const BACKREFERENCE_RE = /\\[1-9]/;
-/** Lookahead/lookbehind: `(?=`, `(?!`, `(?<=`, `(?<!`. */
-const LOOKAROUND_RE = /\(\?<?[=!]/;
-/**
- * A group whose body contains a quantifier (`* + ? {`) or an alternation (`|`)
- * and that is itself quantified with an unbounded outer quantifier
- * (`* + {`). Catches the classic catastrophic-backtracking families
- * `(a+)+`, `(.*)*`, `(a?)+`, and quantified-alternation `(a|aa)+`. Outer `?`
- * is excluded because an optional group does not repeat unboundedly.
- */
-const QUANTIFIED_COMPLEX_GROUP_RE = /\([^)]*[*+?{|][^)]*\)[*+{]/;
-/**
- * Two nested quantified groups, e.g. `((a)*)*` — the inner group is closed and
- * quantified, then re-closed and quantified again. The single-group regex above
- * can't span the inner `)`, so this catches the nesting separately.
- */
-const NESTED_QUANTIFIED_GROUP_RE = /\)[*+?][^(]*\)[*+{]/;
-
-function hasCatastrophicBacktrackingRisk(pattern: string): boolean {
-  return (
-    BACKREFERENCE_RE.test(pattern) ||
-    LOOKAROUND_RE.test(pattern) ||
-    QUANTIFIED_COMPLEX_GROUP_RE.test(pattern) ||
-    NESTED_QUANTIFIED_GROUP_RE.test(pattern)
-  );
-}
-
-const BoundedDetectionPatternSchema = z
-  .string()
-  .min(1)
-  .max(MAX_DETECTION_PATTERN_LENGTH, {
-    message: `Detection pattern must be at most ${MAX_DETECTION_PATTERN_LENGTH} characters`,
-  })
-  .refine(
-    (pattern) => {
-      try {
-        new RegExp(pattern);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    { message: "Detection pattern is not a valid regular expression" }
-  )
-  .refine((pattern) => !hasCatastrophicBacktrackingRisk(pattern), {
-    message:
-      "Detection pattern may not use backreferences, lookarounds, quantified alternation, or nested quantifiers (catastrophic-backtracking risk)",
-  });
-
-const BoundedDetectionPatternArraySchema = z
-  .array(BoundedDetectionPatternSchema)
-  .max(MAX_DETECTION_PATTERNS_PER_FIELD, {
-    message: `At most ${MAX_DETECTION_PATTERNS_PER_FIELD} detection patterns are allowed per field`,
-  });
-
-/**
- * Plugin-supplied output-detection config (#9560). Validated here but not yet
- * wired into the live matcher — the minimal tier launches plugin agents as
- * named, untracked terminals. Strict so an unrecognised field surfaces as a
- * manifest error rather than silently dropping.
- */
-export const AgentDetectionContributionSchema = z
-  .object({
-    primaryPatterns: BoundedDetectionPatternArraySchema.optional(),
-    fallbackPatterns: BoundedDetectionPatternArraySchema.optional(),
-    promptPatterns: BoundedDetectionPatternArraySchema.optional(),
-    bootCompletePatterns: BoundedDetectionPatternArraySchema.optional(),
-    completionPatterns: BoundedDetectionPatternArraySchema.optional(),
-    scanLineCount: z.number().int().min(1).max(50).optional(),
-    debounceMs: z.number().int().min(500).max(30_000).optional(),
-  })
-  .strict();
-
-/**
  * One `contributes.agents` entry (#9560). `id` and `command` use the shared
  * safe-id pattern (no shell metacharacters); a contribution whose `id` collides
  * with a built-in agent is rejected by the manifest-level `superRefine`. Strict
@@ -352,7 +265,6 @@ export const AgentContributionSchema = z
     color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     iconId: z.string().min(1).max(64),
     supportsContextInjection: z.boolean().default(false),
-    detection: AgentDetectionContributionSchema.optional(),
   })
   .strict();
 

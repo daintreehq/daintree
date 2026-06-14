@@ -32,13 +32,13 @@ These are product/architecture calls a human must make **first** — most freeze
 | D7 | **1.0 SDK surface.** Which packages/subpaths ship: `@daintreehq/plugin-sdk` core, `/react` (real hooks vs reserved-empty), `@daintreehq/plugin-testing` mock host, and the `plugin.json`/`.dntr` format version guarantees. | You cannot freeze an API no external author can build against. |
 | D8 | **`ForgeProvider` credentialFields: freeze single-field-only vs support multi-field credentials** (pass the full record to `validateToken`/`setCredentials`). | Shapes a frozen provider interface. |
 | D9 | **OS keychain for `type: "secret"` settings vs accept plaintext JSON as documented permanent 1.0 behavior** (#9167). | Either way it must be disclosed, not implied. |
-| D10 | **Plugin agent detection: cut the `detection` field for 1.0 (minimal tier) vs ship the full-tracking tier.** Are any in-the-wild plugins already declaring detection patterns? | Determines whether a heavily-validated manifest field stays or goes. |
+| D10 | **Plugin agent detection: cut the `detection` field for 1.0 (minimal tier) vs ship the full-tracking tier.** **Resolved — cut (#10460):** the `detection` field is removed from the 1.0 plugin schema; plugin agents launch as named, untracked terminals and the live PTY matcher stays built-in-only. | Determines whether a heavily-validated manifest field stays or goes. |
 
 ## What the audit found: cross-cutting failure classes
 
 The 23 individual findings cluster into a handful of systemic patterns. These are the themes worth internalizing — most issues are an instance of one of them.
 
-1. **Schema validates fields the runtime ignores (frozen-promise violations).** The single largest freeze-risk class. `detection` patterns, `scopes.fs.allowedPaths`, `scopes.network.allowedUrls` enforcement, `ForgeProviderContribution.capabilities`, and `ViewContribution.location:"sidebar"` are all validated at manifest-parse time but unconsulted or outright rejected at runtime. A plugin author writes a manifest, it passes validation, and nothing happens. Freezing these means freezing promises we don't keep.
+1. **Schema validates fields the runtime ignores (frozen-promise violations).** The single largest freeze-risk class. `scopes.fs.allowedPaths`, `scopes.network.allowedUrls` enforcement, `ForgeProviderContribution.capabilities`, and `ViewContribution.location:"sidebar"` are all validated at manifest-parse time but unconsulted or outright rejected at runtime. A plugin author writes a manifest, it passes validation, and nothing happens. Freezing these means freezing promises we don't keep. (Plugin agent `detection` was the canonical example; it has since been cut from the schema — #10460.)
 2. **Stale/contradictory schema-vs-implementation docs.** The `ForgeProvider` "reserved" comment, `SettingDefinition` "Reserved for F29," and `manifest.md` presenting `allowedPaths`/`allowedUrls` as enforcement all diverge from the actual code (the features are either done or never wired — the comments say the opposite). For a frozen API the schema doc must be authoritative.
 3. **Built infrastructure with no caller (dead pipelines).** The MCP consent service + audit + rug-pull detection + tier-cap are fully implemented but **never invoked** — there is no `tools/call` dispatcher wiring them in. `usePluginMenuItems` has no non-test consumer. `PluginActionAuditService` never receives error records. The plumbing exists; the last wire is missing.
 4. **Trust model is disclosure-first with no runtime sandbox — and under-disclosed.** No install-time consent gate, no signing/publisher identity, `scopes` implied as enforcement, `secret` settings stored in plaintext. The honest model ("trusted plugins only, runs as you do") is defensible, but it is currently implied rather than stated, and stated inconsistently across docs and UI.
@@ -68,7 +68,7 @@ Every issue candidate triaged into three tiers. "Blocks freeze" issues must land
 
 | # | Issue | Type | Severity | Scope |
 | --- | --- | --- | --- | --- |
-| 1 | Resolve plugin agent detection: wire it or cut it from the 1.0 schema (D10) | decision | high | large |
+| 1 | ~~Resolve plugin agent detection: wire it or cut it from the 1.0 schema (D10)~~ **Resolved — cut (#10460)** | decision | high | large |
 | 2 | Close `ViewContribution.location:"sidebar"` gap (validated by schema, rejected at runtime) | decision | high | medium |
 | 3 | Resolve plugin `menuItems`: render it somewhere or remove the contribution point | decision | high | medium |
 | 4 | Wire the MCP `tools/call` dispatch path through consent + audit + rate limiting | feature | critical | large |
@@ -116,7 +116,7 @@ The per-point disposition the freeze hinges on (resolved by D6). "Wired" means v
 | `settings` | Wired (F29 enforcement is live; comment stale) | Freeze after #16 |
 | `fileDecorationProviders` | Wired | Freeze |
 | `forgeProviders` | Wired (comment falsely says "reserved") | Freeze after #12, #16 |
-| `agents` | Launch wired; `detection` validated-but-dropped | Freeze after #1 (cut or wire detection) |
+| `agents` | Launch wired; `detection` cut from schema (#10460) | Freeze |
 | `menuItems` | Registered; **no renderer consumer** | Cut or wire (#3) |
 | `experimental_views` | `panel` partially wired; `sidebar` rejected at runtime | De-prefix or keep unstable (#2, #5) |
 | `experimental_mcpServers` | Supervisor + consent built but **dispatcher never called** | Wire dispatcher then de-prefix (#4, #5) |

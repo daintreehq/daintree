@@ -32,7 +32,6 @@ function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
     tooltip: config.tooltip,
     usageUrl: config.usageUrl,
     capabilities: config.capabilities,
-    hasDetection: !!config.detection,
     hasVersionConfig: !!config.version,
     hasUpdateConfig: !!config.update,
     hasInstallHelp: !!config.install,
