@@ -1,11 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { closeApp, type AppContext } from "../../helpers/launch";
-import { launchWithSamplePlugin } from "../../helpers/plugins";
+import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
 
 /**
- * Plugin `keybindings` contribution (#10473). The sample manifest declares one
- * keybinding (`CmdOrCtrl+Shift+H`) bound to the plugin's own
- * `daintree.hello.greet` action. This asserts the declared binding reaches the
+ * Plugin `keybindings` contribution (#10473). The `rich-daintree` sample
+ * declares one keybinding (`CmdOrCtrl+Shift+R`) bound to the plugin's own
+ * `daintree.rich.ready` action. This asserts the declared binding reaches the
  * main-process keybinding registry — the runtime source the renderer's
  * `usePluginKeybindings` hook pulls from.
  *
@@ -22,6 +22,7 @@ test.describe.serial("Core: Plugin keybindings contribution", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-keybindings");
     ctx = launched;
     fixtureCleanup = cleanup;
+    await waitForRichPluginReady(ctx.window);
   });
 
   test.afterAll(async () => {
@@ -31,16 +32,14 @@ test.describe.serial("Core: Plugin keybindings contribution", () => {
 
   test("registers the contributed keybinding in the main-process registry", async () => {
     const keybindings = await ctx.window.evaluate(() => window.electron.plugin.keybindings());
-    const helloBinding = keybindings.find(
-      (entry) => entry.item.actionId === "daintree.hello.greet"
-    );
+    const richBinding = keybindings.find((entry) => entry.item.actionId === "daintree.rich.ready");
 
-    expect(helloBinding).toBeDefined();
-    expect(helloBinding).toMatchObject({
-      pluginId: "daintree.hello",
+    expect(richBinding).toBeDefined();
+    expect(richBinding).toMatchObject({
+      pluginId: "daintree.rich",
       item: {
-        actionId: "daintree.hello.greet",
-        combo: "CmdOrCtrl+Shift+H",
+        actionId: "daintree.rich.ready",
+        combo: "CmdOrCtrl+Shift+R",
         scope: "global",
       },
     });

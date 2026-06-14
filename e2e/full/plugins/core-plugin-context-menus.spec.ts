@@ -1,13 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { closeApp, type AppContext } from "../../helpers/launch";
-import { launchWithSamplePlugin } from "../../helpers/plugins";
+import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
 
 /**
- * Plugin `contextMenus` contribution (#10473). The sample manifest declares one
- * context-menu item (label "Say hello", location `worktree`) bound to the
- * plugin's own `daintree.hello.greet` action. This asserts the declared item
- * reaches the main-process context-menu registry — the runtime source the
- * renderer's `PluginContextMenuSection` reads when building a worktree menu.
+ * Plugin `contextMenus` contribution (#10473). The `rich-daintree` sample
+ * declares one context-menu item (label "Rich sample action", location
+ * `worktree`) bound to the plugin's own `daintree.rich.ready` action. This
+ * asserts the declared item reaches the main-process context-menu registry —
+ * the runtime source the renderer's `PluginContextMenuSection` reads when
+ * building a worktree menu.
  */
 test.describe.serial("Core: Plugin context menus contribution", () => {
   let ctx: AppContext;
@@ -17,6 +18,7 @@ test.describe.serial("Core: Plugin context menus contribution", () => {
     const { ctx: launched, cleanup } = await launchWithSamplePlugin("plugin-context-menus");
     ctx = launched;
     fixtureCleanup = cleanup;
+    await waitForRichPluginReady(ctx.window);
   });
 
   test.afterAll(async () => {
@@ -26,15 +28,15 @@ test.describe.serial("Core: Plugin context menus contribution", () => {
 
   test("registers the contributed context-menu item in the main-process registry", async () => {
     const items = await ctx.window.evaluate(() => window.electron.plugin.contextMenuItems());
-    const helloItem = items.find((entry) => entry.item.label === "Say hello");
+    const richItem = items.find((entry) => entry.item.label === "Rich sample action");
 
-    expect(helloItem).toBeDefined();
-    expect(helloItem).toMatchObject({
-      pluginId: "daintree.hello",
+    expect(richItem).toBeDefined();
+    expect(richItem).toMatchObject({
+      pluginId: "daintree.rich",
       item: {
-        actionId: "daintree.hello.greet",
+        actionId: "daintree.rich.ready",
         location: "worktree",
-        label: "Say hello",
+        label: "Rich sample action",
       },
     });
   });
