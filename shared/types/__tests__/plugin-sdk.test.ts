@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
   PluginManifest,
   PluginHostApi,
+  PluginActivationApi,
   PluginActivate,
   PanelContribution,
   ToolbarButtonContribution,
@@ -61,6 +62,7 @@ describe("plugin-sdk boundary", () => {
     it("exports activation contract", () => {
       expectTypeOf<PluginActivate>().toMatchTypeOf<(...args: never[]) => unknown>();
       expectTypeOf<PluginHostApi>().toMatchTypeOf<object>();
+      expectTypeOf<PluginActivationApi>().toMatchTypeOf<object>();
     });
 
     it("exports IPC types", () => {
@@ -107,6 +109,60 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(host.getActiveWorktree).toEqualTypeOf<
         () => Promise<PluginWorktreeSnapshot | null>
       >();
+    });
+
+    it("PluginHostApi extends the revoke-guarded PluginActivationApi", () => {
+      // The full host surface is assignable to the activation slice, but not
+      // vice versa — PluginHostApi adds the post-activation-safe methods.
+      expectTypeOf<PluginHostApi>().toMatchTypeOf<PluginActivationApi>();
+      expectTypeOf<PluginActivationApi>().not.toMatchTypeOf<PluginHostApi>();
+    });
+
+    it("PluginActivationApi carries the revoke-guarded registration methods", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.registerAction).toBeFunction();
+      expectTypeOf(activation.registerHandler).toBeFunction();
+      expectTypeOf(activation.broadcastToRenderer).toBeFunction();
+      expectTypeOf(activation.registerForgeProvider).toBeFunction();
+      expectTypeOf(activation.registerFileDecorationProvider).toBeFunction();
+      // Worktree subscriptions are revoke-guarded too (subscribing is an
+      // activation-window op), so they belong on the slice.
+      expectTypeOf(activation.onDidChangeActiveWorktree).toBeFunction();
+      expectTypeOf(activation.onDidChangeWorktrees).toBeFunction();
+      // The provider registrars hand back a disposer — guard the return type so
+      // a signature regression to `void` is caught.
+      expectTypeOf(activation.registerForgeProvider).returns.toEqualTypeOf<() => void>();
+      expectTypeOf(activation.registerFileDecorationProvider).returns.toEqualTypeOf<() => void>();
+    });
+
+    it("PluginActivationApi excludes the post-activation-safe methods", () => {
+      const activation = {} as PluginActivationApi;
+      // @ts-expect-error — showToast is post-activation-safe, not on the slice
+      const _showToast = activation.showToast;
+      // @ts-expect-error — dispatch is post-activation-safe, not on the slice
+      const _dispatch = activation.dispatch;
+      // @ts-expect-error — logger is post-activation-safe, not on the slice
+      const _logger = activation.logger;
+      // @ts-expect-error — invalidateFileDecorations is not on the slice
+      const _invalidate = activation.invalidateFileDecorations;
+      // @ts-expect-error — pluginId is not on the slice
+      const _pluginId = activation.pluginId;
+      // @ts-expect-error — getActiveWorktree (the accessor) is not on the slice
+      const _getActive = activation.getActiveWorktree;
+      // @ts-expect-error — getWorktrees (the accessor) is not on the slice
+      const _getAll = activation.getWorktrees;
+      // @ts-expect-error — settings accessor is not on the slice
+      const _settings = activation.settings;
+      expect([
+        _showToast,
+        _dispatch,
+        _logger,
+        _invalidate,
+        _pluginId,
+        _getActive,
+        _getAll,
+        _settings,
+      ]).toHaveLength(8);
     });
 
     it("PanelViewProps exposes the host-provided view props", () => {
