@@ -1,12 +1,9 @@
 {
-  "name": "daintree-plugin",
+  "name": "@daintreehq/plugin-testing",
   "version": "0.1.0",
-  "description": "CLI for building, validating, packaging, and installing Daintree plugins.",
+  "description": "In-memory PluginHostApi mock for unit-testing Daintree plugins without booting Electron.",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": {
-    "daintree-plugin": "./dist/cli.js"
-  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -19,6 +16,7 @@
   "files": [
     "dist"
   ],
+  "sideEffects": false,
   "engines": {
     "node": ">=22.13"
   },
@@ -30,15 +28,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare": "tsup"
   },
-  "dependencies": {
-    "@clack/prompts": "^0.11.0",
-    "archiver": "^8.0.0",
-    "commander": "^14.0.0",
-    "execa": "^9.6.0",
-    "globby": "^14.1.0",
-    "semver": "^7.8.0",
-    "yauzl": "^2.10.0",
-    "zod": "^4.4.0"
+  "peerDependencies": {
+    "@daintreehq/plugin-sdk": "^0.1.0"
   },
   "devDependencies": {
     "tsup": "^8.5.0"

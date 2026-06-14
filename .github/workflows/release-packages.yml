@@ -1,0 +1,89 @@
+name: Release (Plugin Packages)
+
+# Manual npm publish for the plugin-ecosystem workspace packages
+# (@daintreehq/plugin-sdk, @daintreehq/plugin-testing, @daintreehq/plugin-vite,
+# daintree-plugin, create-daintree-plugin). Kept separate from the Electron app
+# release workflows (release-{macos,linux,windows}.yml): those fire on `v*`
+# tags, so this one is `workflow_dispatch`-only to avoid tag collisions. Once a
+# versioning scheme for the packages is agreed, a `packages/v*` tag trigger can
+# be added here without touching the app release tags.
+#
+# Requires the `NPM_TOKEN` secret (an npm automation token with publish rights
+# to the @daintreehq scope). Until it is provisioned, run with dry_run=true to
+# exercise the build + pack steps without publishing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — build and pack the tarballs without publishing to npm"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  publish:
+    name: Build and publish packages
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+
+      # `--ignore-scripts` skips the app's native-module rebuild (postinstall)
+      # and each workspace's `prepare` build — none are needed to publish the
+      # pure-JS/TS packages, and `packages:build` below produces dist/ explicitly.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck packages
+        run: |
+          npm run typecheck --workspace=packages/plugin-sdk
+          npm run typecheck --workspace=packages/plugin-testing
+          npm run typecheck --workspace=packages/plugin-vite
+          npm run typecheck --workspace=packages/daintree-plugin
+          npm run typecheck --workspace=packages/create-daintree-plugin
+
+      - name: Build packages
+        run: npm run packages:build
+
+      - name: Pack (dry run)
+        if: ${{ inputs.dry_run }}
+        run: |
+          npm pack --workspace=packages/plugin-sdk \
+            --workspace=packages/plugin-testing \
+            --workspace=packages/plugin-vite \
+            --workspace=packages/daintree-plugin \
+            --workspace=packages/create-daintree-plugin
+
+      # Publish in dependency order: plugin-sdk first (others peer/depend on it),
+      # then plugin-testing, the vite preset, and the CLIs.
+      - name: Publish to npm
+        if: ${{ inputs.dry_run != true }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --workspace=packages/plugin-sdk
+          npm publish --workspace=packages/plugin-testing
+          npm publish --workspace=packages/plugin-vite
+          npm publish --workspace=packages/daintree-plugin
+          npm publish --workspace=packages/create-daintree-plugin
