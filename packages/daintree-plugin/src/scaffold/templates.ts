@@ -24,7 +24,7 @@ export interface ScaffoldContext {
 const DAINTREE_ENGINE_RANGE = "^0.11.0";
 
 /**
- * A `contributes.panels` entry paired with an `experimental_views` entry of the
+ * A `contributes.panels` entry paired with a `views` entry of the
  * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
  * kind while iterating declared `panels`, attaching the view's `componentPath`
  * when ids match; a view with no matching panel is ignored, so the scaffold
@@ -173,7 +173,7 @@ function viewEntry(ctx: ScaffoldContext): string {
 
 /**
  * ${c(ctx.displayName)} — view plugin entry. The panel UI lives in \`src/panel.tsx\`
- * and is wired through \`contributes.experimental_views\` in plugin.json.
+ * and is wired through \`contributes.views\` in plugin.json.
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
   return () => {};
@@ -199,7 +199,7 @@ function mcpEntry(ctx: ScaffoldContext): string {
 
 /**
  * ${c(ctx.displayName)} — MCP plugin entry. The MCP server process is declared in
- * \`contributes.experimental_mcpServers\` (see plugin.json) and spawned by
+ * \`contributes.mcpServers\` (see plugin.json) and spawned by
  * Daintree; \`src/server.ts\` is its skeleton implementation.
  */
 export async function activate(_host: PluginHostApi): Promise<() => void> {
@@ -249,7 +249,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
       return {
         "plugin.json": manifest(ctx, {
           panels: [viewPanelContribution(ctx)],
-          experimental_views: [
+          views: [
             {
               id: "main",
               name: ctx.displayName,
@@ -269,7 +269,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
     case "mcp": {
       return {
         "plugin.json": manifest(ctx, {
-          experimental_mcpServers: [
+          mcpServers: [
             {
               id: "main",
               name: ctx.displayName,
@@ -301,7 +301,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
             },
           ],
           panels: [viewPanelContribution(ctx)],
-          experimental_views: [
+          views: [
             {
               id: "main",
               name: ctx.displayName,
@@ -309,7 +309,7 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
               location: "panel",
             },
           ],
-          experimental_mcpServers: [
+          mcpServers: [
             {
               id: "main",
               name: ctx.displayName,

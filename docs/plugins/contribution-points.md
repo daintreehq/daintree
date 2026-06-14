@@ -124,7 +124,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 ## Views — _Shipped (panel surface)_
 
-Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key keeps the `experimental_` prefix until the props contract has lived through a release; the shape below is the contract today.
+Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` before the 1.0 freeze — the old key is still accepted as a deprecated alias that logs a warning; the shape below is the frozen contract).
 
 ```json
 {
@@ -132,7 +132,7 @@ Views are the React components that render inside a panel. A view binds to a pan
     "panels": [
       { "id": "dashboard", "name": "Cost Dashboard", "iconId": "gauge", "color": "#5b8def" }
     ],
-    "experimental_views": [
+    "views": [
       {
         "id": "dashboard",
         "name": "Cost Dashboard",
@@ -366,12 +366,12 @@ Context menus follow the same `actionId` dispatch pattern as menu items.
 
 ## MCP servers — _Shipped_
 
-Declares Model Context Protocol servers the plugin ships. The `experimental_` manifest key retains its prefix while the contribution shape settles, but the runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` before the 1.0 freeze — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {
   "contributes": {
-    "experimental_mcpServers": [
+    "mcpServers": [
       {
         "id": "linear",
         "name": "Linear MCP",

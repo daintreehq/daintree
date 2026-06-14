@@ -79,7 +79,7 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "main",
             name: "Server",
@@ -101,7 +101,7 @@ describe("runValidate", () => {
       version: "1.0.0",
       engines: { daintree: "^0.11.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "main",
             name: "Server",

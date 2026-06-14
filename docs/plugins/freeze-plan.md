@@ -118,8 +118,8 @@ The per-point disposition the freeze hinges on (resolved by D6). "Wired" means v
 | `forgeProviders` | Wired (comment falsely says "reserved") | Freeze after #12, #16 |
 | `agents` | Launch wired; `detection` cut from schema (#10460) | Freeze |
 | `menuItems` | Registered; **no renderer consumer** | Cut or wire (#3) |
-| `experimental_views` | `panel` partially wired; `sidebar` rejected at runtime | De-prefix or keep unstable (#2, #5) |
-| `experimental_mcpServers` | Supervisor + consent built but **dispatcher never called** | Wire dispatcher then de-prefix (#4, #5) |
+| `views` | `panel` wired; `sidebar` rejected at validation | De-prefixed; `experimental_views` kept as deprecated alias (#10466) |
+| `mcpServers` | Supervisor + consent + dispatcher wired | De-prefixed; `experimental_mcpServers` kept as deprecated alias (#10466) |
 
 ## Audit provenance & confidence
 

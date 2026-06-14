@@ -239,7 +239,7 @@ describe("usePluginPanelKinds", () => {
     expect(getPanelKindDefinition(withView.id)).toBeDefined();
 
     // Plugin re-emits the same kind with no view contribution attached
-    // (e.g. the `experimental_views` entry was removed). Renderer must drop
+    // (e.g. the `views` entry was removed). Renderer must drop
     // the prior PluginViewHost definition so the panel falls back to
     // PluginMissingPanel rather than rendering a stale lazy import.
     const noView = pluginKind({ id: "acme.toggle", hasPty: false });

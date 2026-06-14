@@ -27,7 +27,11 @@ interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
 }
 
-import { getPluginManifestSchema, PluginToastOptionsSchema } from "../schemas/plugin.js";
+import {
+  DEPRECATED_CONTRIBUTION_ALIASES,
+  getPluginManifestSchema,
+  PluginToastOptionsSchema,
+} from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { z } from "zod";
 import type {
@@ -913,6 +917,22 @@ export class PluginService {
     // type below is the compile-time half of the same invariant.
     deepFreeze(manifest);
 
+    // Deprecation surface for the 1.0 freeze: the schema migrates the old
+    // `experimental_*` contribution keys to their stable names before
+    // validation, so warn (once per alias) when an old manifest is still using
+    // them. Inspect the raw JSON because the migrated `manifest` no longer
+    // carries the deprecated keys.
+    const rawContributes = (json as { contributes?: Record<string, unknown> } | null)?.contributes;
+    if (rawContributes && typeof rawContributes === "object") {
+      for (const [deprecated, canonical] of Object.entries(DEPRECATED_CONTRIBUTION_ALIASES)) {
+        if (deprecated in rawContributes) {
+          console.warn(
+            `[PluginService] Plugin "${manifest.name}": contributes.${deprecated} is deprecated — rename it to contributes.${canonical}`
+          );
+        }
+      }
+    }
+
     // Plugins disabled in Preferences are skipped entirely — neither
     // registered in the plugins map nor activated — for both built-in and
     // user plugins (#9284). The disable persists in electron-store and takes
@@ -1031,7 +1051,7 @@ export class PluginService {
     // runtime panel id is `${manifest.name}.${panel.id}`.
     const viewsByBareId = new Map<string, ViewContribution>();
     const unmatchedViewIds = new Set<string>();
-    for (const view of manifest.contributes.experimental_views) {
+    for (const view of manifest.contributes.views) {
       // `location` is narrowed to `"panel"` and `componentPath` safety is
       // enforced by `ViewContributionSchema` at manifest parse — an unsupported
       // location or unsafe path fails validation before we reach this loop.
@@ -1040,7 +1060,7 @@ export class PluginService {
         // earlier. Surface the authoring mistake; keep the first to make the
         // outcome deterministic.
         console.warn(
-          `[PluginService] Plugin "${manifest.name}": experimental_views has duplicate entries for id "${view.id}"; keeping the first occurrence`
+          `[PluginService] Plugin "${manifest.name}": views has duplicate entries for id "${view.id}"; keeping the first occurrence`
         );
         continue;
       }
@@ -1071,14 +1091,14 @@ export class PluginService {
         // would never render because TerminalPane owns the surface. Surface the
         // collision rather than silently dropping the view.
         console.warn(
-          `[PluginService] Plugin "${manifest.name}": experimental_views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
+          `[PluginService] Plugin "${manifest.name}": views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
         );
       }
     }
 
     for (const orphanId of unmatchedViewIds) {
       console.warn(
-        `[PluginService] Plugin "${manifest.name}": experimental_views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
+        `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
       );
     }
 
@@ -2776,7 +2796,7 @@ export class PluginService {
   }
 
   /**
-   * Look up a single `contributes.experimental_mcpServers` entry by id along
+   * Look up a single `contributes.mcpServers` entry by id along
    * with the plugin's resolved on-disk directory. Used by the
    * `plugin-mcp:restart` IPC handler to feed the supervisor a fresh
    * contribution (with re-resolved `${settings:*}` substitutions) on each
@@ -2787,13 +2807,13 @@ export class PluginService {
     serverId: string
   ):
     | {
-        contribution: PluginManifest["contributes"]["experimental_mcpServers"][number];
+        contribution: PluginManifest["contributes"]["mcpServers"][number];
         pluginDir: string;
       }
     | undefined {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return undefined;
-    const contribution = plugin.manifest.contributes.experimental_mcpServers.find(
+    const contribution = plugin.manifest.contributes.mcpServers.find(
       (c) => c.id === serverId
     );
     if (!contribution) return undefined;

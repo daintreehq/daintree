@@ -121,7 +121,7 @@ export interface PanelKindConfig {
   extensionId?: string;
   /**
    * Fully-resolved `plugin://{pluginId}/{path}` URL of the React module that
-   * renders this kind. Set during `loadPlugin` when an `experimental_views`
+   * renders this kind. Set during `loadPlugin` when a `views`
    * entry matches a panel by bare id. Travels through the existing
    * `plugin:panel-kinds-changed` broadcast so the renderer can lazy-import the
    * module without a separate IPC call. Absent for PTY-backed plugin panels

@@ -582,7 +582,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
         }
       }
 
-      for (const view of manifest.contributes.experimental_views) {
+      for (const view of manifest.contributes.views) {
         const viewPath = stripLeading(view.componentPath);
         if (!entryNames.has(viewPath)) {
           return resolve({

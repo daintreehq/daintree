@@ -67,7 +67,7 @@ export function resolvePluginCategory(manifest: PluginManifest): PluginCategoryI
   if (isPluginCategoryId(manifest.category)) return manifest.category;
   const c = manifest.contributes;
   if (c.forgeProviders.length > 0) return "forge";
-  if (c.agents.length > 0 || c.experimental_mcpServers.length > 0) return "ai";
-  if (c.panels.length > 0 || c.experimental_views.length > 0) return "workspace";
+  if (c.agents.length > 0 || c.mcpServers.length > 0) return "ai";
+  if (c.panels.length > 0 || c.views.length > 0) return "workspace";
   return "other";
 }

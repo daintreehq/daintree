@@ -845,20 +845,58 @@ describe("PluginManifestSchema contributes strict validation", () => {
     }
   });
 
-  it("rejects old unprefixed views key inside contributes", () => {
+  it("accepts the stable views key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }] },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(1);
+    }
   });
 
-  it("rejects old unprefixed mcpServers key inside contributes", () => {
+  it("accepts the stable mcpServers key inside contributes (#10466)", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: { mcpServers: [{ id: "svc", name: "Svc", command: "node" }] },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.mcpServers).toHaveLength(1);
+    }
+  });
+
+  it("migrates the deprecated experimental_views alias to the stable views key (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        experimental_views: [
+          { id: "v", name: "V", componentPath: "./v.js", location: "panel" },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.views).toHaveLength(1);
+      // The deprecated key is stripped from the parsed output — no
+      // `experimental_*` field survives in the frozen contract.
+      expect("experimental_views" in result.data.contributes).toBe(false);
+    }
+  });
+
+  it("migrates the deprecated experimental_mcpServers alias to the stable mcpServers key (#10466)", () => {
+    const result = getPluginManifestSchema(false).safeParse({
+      ...validBase,
+      contributes: {
+        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributes.mcpServers).toHaveLength(1);
+      expect("experimental_mcpServers" in result.data.contributes).toBe(false);
+    }
   });
 
   it("rejects an arbitrary unknown key inside contributes", () => {
@@ -873,8 +911,8 @@ describe("PluginManifestSchema contributes strict validation", () => {
     const result = getPluginManifestSchema(false).safeParse({ ...validBase, contributes: {} });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.contributes.experimental_views).toEqual([]);
-      expect(result.data.contributes.experimental_mcpServers).toEqual([]);
+      expect(result.data.contributes.views).toEqual([]);
+      expect(result.data.contributes.mcpServers).toEqual([]);
     }
   });
 
@@ -5892,7 +5930,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5915,19 +5953,19 @@ describe("reserved contribution point warnings", () => {
       })
     );
     const viewWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes("experimental_views")
+      String(call[0]).includes(": views ")
     );
     expect(viewWarnings).toHaveLength(0);
   });
 
-  it("warns and skips an experimental_views entry with no matching panel id", async () => {
+  it("warns and skips an views entry with no matching panel id", async () => {
     await writePlugin("orphan", {
       name: "acme.orphan",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "ghost",
             name: "Ghost",
@@ -5951,7 +5989,7 @@ describe("reserved contribution point warnings", () => {
     expect(panelCall.componentPath).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Plugin "acme.orphan": experimental_views entry "ghost" has no matching contributes.panels entry'
+        'Plugin "acme.orphan": views entry "ghost" has no matching contributes.panels entry'
       )
     );
   });
@@ -5963,7 +6001,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -5988,14 +6026,14 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("warns when an experimental_views entry targets a PTY-backed panel", async () => {
+  it("warns when an views entry targets a PTY-backed panel", async () => {
     await writePlugin("pty-view", {
       name: "acme.pty-view",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc", hasPty: true }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -6016,7 +6054,7 @@ describe("reserved contribution point warnings", () => {
     expect(panelCall.hasPty).toBe(true);
     expect(panelCall.componentPath).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views entry "main" matches a panel with hasPty=true')
+      expect.stringContaining('views entry "main" matches a panel with hasPty=true')
     );
   });
 
@@ -6027,7 +6065,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -6058,7 +6096,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           {
             id: "main",
             name: "Main",
@@ -6080,14 +6118,14 @@ describe("reserved contribution point warnings", () => {
     );
   });
 
-  it("warns and keeps the first occurrence on duplicate experimental_views ids", async () => {
+  it("warns and keeps the first occurrence on duplicate views ids", async () => {
     await writePlugin("dup", {
       name: "acme.dup",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "main", name: "Main", iconId: "eye", color: "#abc" }],
-        experimental_views: [
+        views: [
           { id: "main", name: "First", componentPath: "./first.js", location: "panel" },
           { id: "main", name: "Second", componentPath: "./second.js", location: "panel" },
         ],
@@ -6103,18 +6141,18 @@ describe("reserved contribution point warnings", () => {
     };
     expect(panelCall.componentPath).toBe("plugin://acme.dup/first.js");
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('experimental_views has duplicate entries for id "main"')
+      expect.stringContaining('views has duplicate entries for id "main"')
     );
   });
 
-  it("registers a contributes.experimental_mcpServers entry without eagerly spawning it (#9235)", async () => {
+  it("registers a contributes.mcpServers entry without eagerly spawning it (#9235)", async () => {
     mockPluginMcpSupervisor.start.mockClear();
     await writePlugin("mcp", {
       name: "acme.mcp",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
-        experimental_mcpServers: [
+        mcpServers: [
           {
             id: "linear",
             name: "Linear MCP",
@@ -6225,7 +6263,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.explicit-empty",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
-      contributes: { experimental_views: [], experimental_mcpServers: [], forgeProviders: [] },
+      contributes: { views: [], mcpServers: [], forgeProviders: [] },
     });
 
     const service = new PluginService(tmpDir, "0.7.5");
@@ -6242,10 +6280,10 @@ describe("reserved contribution point warnings", () => {
     expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
   });
 
-  it("still processes other contributions when reserved points are present", async () => {
+  it("migrates deprecated experimental_* contribution aliases to their stable names and warns (#10466)", async () => {
     mockPluginMcpSupervisor.start.mockClear();
-    await writePlugin("mixed", {
-      name: "acme.mixed",
+    await writePlugin("legacy", {
+      name: "acme.legacy",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
       contributes: {
@@ -6260,9 +6298,56 @@ describe("reserved contribution point warnings", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
+    // The deprecated aliases are honored: the view binds to its panel and the
+    // MCP contribution resolves through the canonical lookup.
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acme.legacy.viewer",
+        componentPath: "plugin://acme.legacy/v.js",
+      })
+    );
+    expect(service.findMcpServerContribution("acme.legacy", "svc")).toBeDefined();
+
+    // Each deprecated alias logs exactly one deprecation warning naming the
+    // stable replacement.
+    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(
+      warnMessages.some(
+        (m: string) =>
+          m.includes("contributes.experimental_views is deprecated") && m.includes("contributes.views")
+      )
+    ).toBe(true);
+    expect(
+      warnMessages.some(
+        (m: string) =>
+          m.includes("contributes.experimental_mcpServers is deprecated") &&
+          m.includes("contributes.mcpServers")
+      )
+    ).toBe(true);
+  });
+
+  it("still processes other contributions when reserved points are present", async () => {
+    mockPluginMcpSupervisor.start.mockClear();
+    await writePlugin("mixed", {
+      name: "acme.mixed",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        views: [
+          { id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" },
+        ],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
     expect(service.listPlugins()).toHaveLength(1);
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    // experimental_mcpServers is registered (no warning) but, under lazy
+    // mcpServers is registered (no warning) but, under lazy
     // discovery (#9235), is NOT spawned at activation.
     expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
     expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
@@ -6277,7 +6362,7 @@ describe("reserved contribution point warnings", () => {
         // `a` matches a panel and binds; `c` is an orphan with no matching
         // panel id. The orphan should log exactly one warning naming its id.
         panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
-        experimental_views: [
+        views: [
           { id: "a", name: "A", componentPath: "./a.js", location: "panel" },
           { id: "c", name: "C", componentPath: "./c.js", location: "panel" },
         ],
@@ -6298,7 +6383,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        experimental_views: [
+        views: [
           { id: "main", name: "Main", componentPath: "./v.js", location: "floating" },
         ],
       },
@@ -6311,7 +6396,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
-        experimental_views: [{ id: "main", name: "Main", location: "panel" }],
+        views: [{ id: "main", name: "Main", location: "panel" }],
       },
     });
     expect(result.success).toBe(false);
@@ -6322,7 +6407,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.no-cmd",
       version: "1.0.0",
       contributes: {
-        experimental_mcpServers: [{ id: "svc", name: "Svc" }],
+        mcpServers: [{ id: "svc", name: "Svc" }],
       },
     });
     expect(result.success).toBe(false);
@@ -6333,7 +6418,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-env",
       version: "1.0.0",
       contributes: {
-        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node", env: { PORT: 8080 } }],
       },
     });
     expect(result.success).toBe(false);
@@ -6344,7 +6429,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.minimal-mcp",
       version: "1.0.0",
       contributes: {
-        experimental_mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
+        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
     expect(result.success).toBe(true);

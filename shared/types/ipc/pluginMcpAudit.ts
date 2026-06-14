@@ -36,7 +36,7 @@ export interface PluginMcpAuditRecord {
   ts: number;
   /** Contributing plugin id (`manifest.name`). */
   pluginId: string;
-  /** Server id from `contributes.experimental_mcpServers[].id`. */
+  /** Server id from `contributes.mcpServers[].id`. */
   serverId: string;
   /** Tool name as advertised by the server's `tools/list`. */
   toolName: string;
