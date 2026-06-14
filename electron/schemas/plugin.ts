@@ -148,8 +148,8 @@ function isSafePluginViewComponentPath(componentPath: string): boolean {
  * sets `showInPalette: true` so the view is spawnable from the panel palette.
  * `"sidebar"` is rejected at the schema boundary: the sidebar host does not
  * exist yet, so accepting it would validate a manifest the runtime cannot
- * honor. The `experimental_` prefix on the contribution point signals that the
- * shape may change before the renderer host ships. See
+ * honor. Contributed via the stable `contributes.views` key (the pre-1.0
+ * `experimental_views` name is still accepted as a deprecated alias). See
  * `docs/plugins/architecture.md`.
  */
 export const ViewContributionSchema = z
@@ -729,7 +729,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             fileDecorationProviders: [],
             agents: [],
             settings: [],
-          }),
+          })
       ),
     })
     .superRefine((manifest, ctx) => {

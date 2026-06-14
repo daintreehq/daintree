@@ -871,9 +871,7 @@ describe("PluginManifestSchema contributes strict validation", () => {
     const result = getPluginManifestSchema(false).safeParse({
       ...validBase,
       contributes: {
-        experimental_views: [
-          { id: "v", name: "V", componentPath: "./v.js", location: "panel" },
-        ],
+        experimental_views: [{ id: "v", name: "V", componentPath: "./v.js", location: "panel" }],
       },
     });
     expect(result.success).toBe(true);
@@ -6378,9 +6376,7 @@ describe("reserved contribution point warnings", () => {
       engines: { daintree: "^0.7.0" },
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        views: [
-          { id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" },
-        ],
+        views: [{ id: "viewer", name: "Viewer", componentPath: "./v.js", location: "panel" }],
         mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
       },
     });
@@ -6426,9 +6422,7 @@ describe("reserved contribution point warnings", () => {
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
-        views: [
-          { id: "main", name: "Main", componentPath: "./v.js", location: "floating" },
-        ],
+        views: [{ id: "main", name: "Main", componentPath: "./v.js", location: "floating" }],
       },
     });
     expect(result.success).toBe(false);

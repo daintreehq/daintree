@@ -2813,9 +2813,7 @@ export class PluginService {
     | undefined {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return undefined;
-    const contribution = plugin.manifest.contributes.mcpServers.find(
-      (c) => c.id === serverId
-    );
+    const contribution = plugin.manifest.contributes.mcpServers.find((c) => c.id === serverId);
     if (!contribution) return undefined;
     return { contribution, pluginDir: plugin.dir };
   }
