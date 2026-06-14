@@ -138,21 +138,31 @@ describe("plugin-sdk boundary", () => {
     it("PluginActivationApi excludes the post-activation-safe methods", () => {
       const activation = {} as PluginActivationApi;
       // @ts-expect-error — showToast is post-activation-safe, not on the slice
-      activation.showToast;
+      const _showToast = activation.showToast;
       // @ts-expect-error — dispatch is post-activation-safe, not on the slice
-      activation.dispatch;
+      const _dispatch = activation.dispatch;
       // @ts-expect-error — logger is post-activation-safe, not on the slice
-      activation.logger;
+      const _logger = activation.logger;
       // @ts-expect-error — invalidateFileDecorations is not on the slice
-      activation.invalidateFileDecorations;
+      const _invalidate = activation.invalidateFileDecorations;
       // @ts-expect-error — pluginId is not on the slice
-      activation.pluginId;
+      const _pluginId = activation.pluginId;
       // @ts-expect-error — getActiveWorktree (the accessor) is not on the slice
-      activation.getActiveWorktree;
+      const _getActive = activation.getActiveWorktree;
       // @ts-expect-error — getWorktrees (the accessor) is not on the slice
-      activation.getWorktrees;
+      const _getAll = activation.getWorktrees;
       // @ts-expect-error — settings accessor is not on the slice
-      activation.settings;
+      const _settings = activation.settings;
+      expect([
+        _showToast,
+        _dispatch,
+        _logger,
+        _invalidate,
+        _pluginId,
+        _getActive,
+        _getAll,
+        _settings,
+      ]).toHaveLength(8);
     });
 
     it("PanelViewProps exposes the host-provided view props", () => {
