@@ -66,9 +66,8 @@ export function getPluginAgentRegistrySnapshot(): Record<string, AgentConfig> {
 }
 
 function contributionToAgentConfig(contribution: PluginAgentContribution): AgentConfig {
-  // Minimal tier: surface only the launch-relevant fields. `detection` is
-  // validated at the manifest gate but deliberately not mapped here — the
-  // full-tracking tier wires it into the PTY matcher separately.
+  // Surface only the launch-relevant fields. Plugin agents launch as named,
+  // untracked terminals; output-pattern detection is not part of the 1.0 schema.
   return {
     id: contribution.id,
     name: contribution.name,
