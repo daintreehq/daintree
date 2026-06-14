@@ -392,7 +392,10 @@ export class PluginDevWorkerHost extends EventEmitter {
         );
         this.readyReject = null;
       }
-      this.emit("crash-loop", -1);
+      // A fork failure is a hard non-start, not a crash loop: `start()` rejects
+      // and `activateViaDevWorker`'s catch records the (more informative)
+      // loadError. Emitting `crash-loop` here would make the bridge write a
+      // second, racy "crash loop (code -1)" provenance entry over that one.
       return;
     }
 

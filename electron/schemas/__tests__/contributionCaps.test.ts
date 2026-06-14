@@ -47,6 +47,18 @@ describe("contributes.* array-size caps (#10477)", () => {
     ).toBe(false);
   });
 
+  it.each(Object.keys(MANIFEST_CONTRIBUTION_CAPS))(
+    "rejects contributes.%s when one entry over its cap",
+    (key) => {
+      const cap = MANIFEST_CONTRIBUTION_CAPS[key as keyof typeof MANIFEST_CONTRIBUTION_CAPS];
+      // Fill with `null` entries: the array-length `.max()` check runs before
+      // per-element validation, so an over-length array is rejected regardless of
+      // element shape. (At/under cap, element validation would apply.)
+      const result = parseContributes({ [key]: new Array(cap + 1).fill(null) });
+      expect(result.success).toBe(false);
+    }
+  );
+
   it("exposes a cap for every contributes.* array key", () => {
     // Guard against a new contribution point being added to the schema without a
     // matching cap — every declared array must be bounded.

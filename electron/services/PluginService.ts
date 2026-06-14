@@ -2083,10 +2083,16 @@ export class PluginService {
             ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
             : undefined;
         if (narrowed && narrowed.length > MAX_FILE_DECORATION_PATHS) {
+          // Over the cap, fall back to a scope-wide invalidation (drop `paths`)
+          // rather than truncating: a truncated list would silently omit the
+          // tail, and the renderer skips a re-pull for any visible file not in
+          // the list — leaving stale decorations with no error surfaced. A
+          // path-less broadcast forces an unconditional re-pull, which is
+          // correct (just broader) for this pathological case.
           console.warn(
-            `Plugin "${pluginId}" invalidateFileDecorations: ${narrowed.length} paths exceeds cap of ${MAX_FILE_DECORATION_PATHS} for scope "${scope}"; truncating`
+            `Plugin "${pluginId}" invalidateFileDecorations: ${narrowed.length} paths exceeds cap of ${MAX_FILE_DECORATION_PATHS} for scope "${scope}"; falling back to scope-wide invalidation`
           );
-          narrowed = narrowed.slice(0, MAX_FILE_DECORATION_PATHS);
+          narrowed = undefined;
         }
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
           name: "plugin:decorations-changed",

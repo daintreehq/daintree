@@ -638,9 +638,10 @@ describe("PluginService integration — file decoration provider contributions",
 
   it("caps the paths broadcast by invalidateFileDecorations (#10477)", async () => {
     // A misbehaving plugin passing an unbounded paths array must not force an
-    // arbitrarily large IPC payload to every renderer — the broadcast is capped.
+    // arbitrarily large IPC payload to every renderer. Over the cap we fall back
+    // to a scope-wide invalidation (no `paths`) rather than truncating, so no
+    // visible file silently misses its refresh.
     const oversized = 1500;
-    const cap = 1000;
     const pluginDir = await writePlugin("acme.flood-decor", {
       name: "acme.flood-decor",
       version: "1.0.0",
@@ -678,9 +679,11 @@ describe("PluginService integration — file decoration provider contributions",
           (evt as { name?: string }).name === "plugin:decorations-changed"
       );
     expect(call).toBeDefined();
-    const payload = (call![1] as { payload: { paths?: string[] } }).payload;
-    expect(payload.paths).toHaveLength(cap);
-    expect(payload.paths!.length).toBeLessThan(oversized);
+    const payload = (call![1] as { payload: { scope: string; paths?: string[] } }).payload;
+    // Over-cap drops `paths` entirely — a scope-wide invalidation — so the
+    // renderer does an unconditional re-pull instead of missing the tail.
+    expect(payload.scope).toBe("my-scope:/x");
+    expect(payload.paths).toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("exceeds cap"));
     warnSpy.mockRestore();
   });

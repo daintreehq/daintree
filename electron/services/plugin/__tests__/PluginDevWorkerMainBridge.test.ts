@@ -234,6 +234,22 @@ describe("PluginDevWorkerMainBridge", () => {
     });
   });
 
+  it("surfaces a crash loop that trips before the first activation", async () => {
+    const onActivationResult = vi.fn();
+    const { workerHost, bridge } = makeBridge({ onActivationResult });
+    const activation = bridge.waitForActivation();
+    activation.catch(() => {});
+
+    workerHost.emit("crash-loop", 7);
+
+    await expect(activation).rejects.toThrow("crash loop");
+    expect(onActivationResult).toHaveBeenCalledTimes(1);
+    expect(onActivationResult).toHaveBeenCalledWith({
+      ok: false,
+      error: expect.stringContaining("crash loop (code 7)"),
+    });
+  });
+
   it("registerFileDecorationProvider wires a proxy impl that round-trips provideDecorations", async () => {
     const { host, workerHost } = makeBridge();
     workerHost.emit("worker-message", {

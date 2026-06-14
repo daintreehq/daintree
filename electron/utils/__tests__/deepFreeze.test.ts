@@ -14,9 +14,8 @@ describe("deepFreeze", () => {
     expect(Object.isFrozen(obj.list[0])).toBe(true);
   });
 
-  it("makes a nested write throw in strict mode", () => {
+  it("makes a nested write throw (ESM modules are always strict mode)", () => {
     vi.stubEnv("NODE_ENV", "development");
-    ("use strict");
     const obj: { nested: { b: number } } = { nested: { b: 2 } };
     deepFreeze(obj);
     expect(() => {
