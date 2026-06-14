@@ -166,6 +166,14 @@ export class PluginDevWorkerMainBridge {
     logger.error(
       `[${this.pluginId}] dev worker entered a crash loop (code ${code}); reload halted until next edit`
     );
+    // Persist the crash to the owner's provenance — unlike activate-error/error,
+    // a crash loop can trip after a successful activation (on a later reload), so
+    // the loadError write must go through onActivationResult, not just the
+    // activation promise rejection (which has no listener post-activation).
+    this.onActivationResult?.({
+      ok: false,
+      error: `Plugin "${this.pluginId}" dev worker crash loop (code ${code})`,
+    });
     this.rejectActivation(new Error(`Plugin "${this.pluginId}" dev worker crash loop`));
   };
 

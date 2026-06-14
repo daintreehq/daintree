@@ -987,6 +987,29 @@ describe("PluginService", () => {
     expect(names).toEqual(["acme.good-1", "acme.good-2"]);
   });
 
+  it("deep-freezes the stored manifest as an immutability invariant (#10477)", async () => {
+    await writePlugin("frozen", {
+      name: "acme.frozen",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const stored = (
+      service as unknown as { plugins: Map<string, { manifest: unknown }> }
+    ).plugins.get("acme.frozen")?.manifest as { contributes: { panels: unknown[] } } | undefined;
+    expect(stored).toBeDefined();
+    // Deep freeze: top level and nested contribution arrays/objects are sealed.
+    expect(Object.isFrozen(stored)).toBe(true);
+    expect(Object.isFrozen(stored!.contributes)).toBe(true);
+    expect(Object.isFrozen(stored!.contributes.panels)).toBe(true);
+    expect(Object.isFrozen(stored!.contributes.panels[0])).toBe(true);
+  });
+
   it("is idempotent — second initialize is a no-op", async () => {
     await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
 
