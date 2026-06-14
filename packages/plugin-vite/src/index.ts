@@ -13,6 +13,13 @@ import type { Plugin } from "vite";
  * Paired with the host import map (injected into Daintree's index.html), the
  * stripped imports resolve at load time to Daintree's single `vendor-react`
  * chunk, sharing one React instance across the host and every loaded plugin.
+ *
+ * Note: the regex also externalizes subpaths the host import map does not yet
+ * provide (e.g. `react-dom/server`). The host map currently serves `react`,
+ * `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and
+ * `react-dom/client`. A plugin importing an unmapped subpath would have it
+ * externalized but unresolved at runtime — keep the two sides in lockstep
+ * (`HOST_IMPORTMAP_SPECIFIERS` in the host `vite.config.ts`).
  */
 export const reactExternals: readonly RegExp[] = [/^react($|\/)/, /^react-dom($|\/)/] as const;
 
