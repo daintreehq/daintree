@@ -761,8 +761,25 @@ export interface PluginToastOptions {
  */
 export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
 
-export interface PluginHostApi {
-  readonly pluginId: string;
+/**
+ * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
+ * that are only valid during `activate()`. The host revokes this surface once
+ * activation resolves or times out — every method here throws if called
+ * afterward (e.g. from a subscription callback or timer). The split is
+ * extracted into its own interface so the activation-window contract is visible
+ * at the type level, not only in JSDoc and prose docs.
+ *
+ * {@link PluginHostApi} extends this, so the `host` handed to `activate()`
+ * exposes both these registration methods and the post-activation-safe methods.
+ * Type a helper that should only ever register-during-activation as
+ * `PluginActivationApi` to make the narrower contract explicit at its call
+ * sites. The post-activation-safe methods ({@link PluginHostApi.showToast},
+ * {@link PluginHostApi.dispatch}, {@link PluginHostApi.invalidateFileDecorations},
+ * {@link PluginHostApi.logger}, the worktree accessors) live on
+ * {@link PluginHostApi} directly and remain callable for the plugin's whole
+ * lifetime.
+ */
+export interface PluginActivationApi {
   /**
    * Imperatively register an action with a main-side handler. The
    * `descriptor.id` must NOT include the plugin prefix — the host namespaces
@@ -773,6 +790,9 @@ export interface PluginHostApi {
    * Calling with a previously-registered id replaces the prior descriptor and
    * handler. Must be called during `activate()` — the host is revoked once
    * activation resolves or times out. Unregistered automatically on unload.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
    */
   registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
   /**
@@ -785,6 +805,11 @@ export interface PluginHostApi {
    * renderer. Schema failures throw with a `SCHEMA_ERROR:` prefix; missing
    * capabilities throw with a `PERMISSION_REQUIRED:` prefix — the
    * renderer-side `useHostChannel` hook discriminates on these prefixes.
+   *
+   * Must be called during `activate()`.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
    */
   registerHandler<TArgs, TResult>(
     channel: string,
@@ -794,10 +819,68 @@ export interface PluginHostApi {
   /**
    * Legacy untyped overload: a variadic handler with no host-side validation.
    * Retained for plugins that haven't migrated to per-channel schemas. The
-   * typed overload above is preferred for new code.
+   * typed overload above is preferred for new code. Also revoke-guarded — must
+   * be called during `activate()`.
    */
   registerHandler(channel: string, handler: PluginIpcHandler): void;
+  /**
+   * Push a fire-and-forget payload to all renderers listening on `channel`.
+   * Intended for the activation window — wiring up the renderer-side view of a
+   * plugin's state before `activate()` returns.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the broadcast is rejected.
+   */
   broadcastToRenderer(channel: string, payload: unknown): void;
+  /**
+   * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
+   * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
+   * plugin at runtime as `{pluginId}.{descriptor.id}`. Returns a disposer that
+   * unbinds the single implementation; all bindings are automatically removed
+   * when the plugin is unloaded. Must be called during `activate()` — the
+   * host is revoked once activation resolves or times out.
+   *
+   * The `descriptor.id` must match an entry declared in
+   * `contributes.forgeProviders`; an undeclared id is rejected so the impl
+   * cannot drift away from the manifest-driven routing table. Calling this
+   * method twice with the same `descriptor.id` overwrites the prior binding;
+   * the older disposer becomes inert and will not remove the newer impl when
+   * later invoked.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
+  /**
+   * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
+   * in `contributes.fileDecorationProviders`. The descriptor's `id` is
+   * namespaced at runtime as `{pluginId}.{descriptor.id}` and must match an
+   * entry in the manifest — an undeclared id is rejected so the impl cannot
+   * drift away from the manifest-driven scope-routing table. Returns a
+   * disposer that unbinds the single implementation; all bindings are
+   * automatically removed when the plugin is unloaded. Must be called during
+   * `activate()` — the host is revoked once activation resolves or times out.
+   * Calling this twice with the same `descriptor.id` overwrites the prior
+   * binding; the older disposer becomes inert.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and registration is rejected.
+   */
+  registerFileDecorationProvider(
+    descriptor: FileDecorationProviderDescriptor,
+    impl: FileDecorationProviderImpl
+  ): () => void;
+}
+
+/**
+ * The full host surface handed to a plugin's `activate()`. Extends
+ * {@link PluginActivationApi} (the revoke-guarded registration methods, valid
+ * only during activation) with the post-activation-safe methods below, which
+ * remain callable from subscription callbacks and timers for the plugin's whole
+ * lifetime and degrade to a no-op once the plugin is unloaded.
+ */
+export interface PluginHostApi extends PluginActivationApi {
+  readonly pluginId: string;
   /**
    * Returns the currently-active worktree (`isCurrent === true`) across all
    * projects as a frozen snapshot, or `null` if none is active. In multi-project
@@ -823,38 +906,6 @@ export interface PluginHostApi {
    * disposed when the plugin is unloaded.
    */
   onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
-  /**
-   * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
-   * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
-   * plugin at runtime as `{pluginId}.{descriptor.id}`. Returns a disposer that
-   * unbinds the single implementation; all bindings are automatically removed
-   * when the plugin is unloaded. Must be called during `activate()` — the
-   * host is revoked once activation resolves or times out.
-   *
-   * The `descriptor.id` must match an entry declared in
-   * `contributes.forgeProviders`; an undeclared id is rejected so the impl
-   * cannot drift away from the manifest-driven routing table. Calling this
-   * method twice with the same `descriptor.id` overwrites the prior binding;
-   * the older disposer becomes inert and will not remove the newer impl when
-   * later invoked.
-   */
-  registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
-  /**
-   * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
-   * in `contributes.fileDecorationProviders`. The descriptor's `id` is
-   * namespaced at runtime as `{pluginId}.{descriptor.id}` and must match an
-   * entry in the manifest — an undeclared id is rejected so the impl cannot
-   * drift away from the manifest-driven scope-routing table. Returns a
-   * disposer that unbinds the single implementation; all bindings are
-   * automatically removed when the plugin is unloaded. Must be called during
-   * `activate()` — the host is revoked once activation resolves or times out.
-   * Calling this twice with the same `descriptor.id` overwrites the prior
-   * binding; the older disposer becomes inert.
-   */
-  registerFileDecorationProvider(
-    descriptor: FileDecorationProviderDescriptor,
-    impl: FileDecorationProviderImpl
-  ): () => void;
   /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the

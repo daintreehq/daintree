@@ -79,6 +79,8 @@ The authoritative definition is in `shared/types/plugin.ts` in the Daintree repo
 
 The `register*` methods (`registerAction`, `registerHandler`, `registerForgeProvider`, `registerFileDecorationProvider`) plus `broadcastToRenderer` are revoke-guarded — they must be called during `activate()` and throw once the host is revoked. `invalidateFileDecorations`, `showToast`, `dispatch`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op after unload.
 
+This split is encoded in the type surface, not just in prose: the revoke-guarded methods are factored into a `PluginActivationApi` sub-interface that `PluginHostApi extends`. Each revoke-guarded method also carries a `@throws` JSDoc tag describing the revoke condition, so it shows up on hover in your editor. The `host` passed to `activate()` stays typed as the full `PluginHostApi` (every method is callable during activation); `PluginActivationApi` is exported from `@daintreehq/plugin-sdk` for the narrower case where you want a helper to accept only the registration window and have the post-activation methods be statically absent.
+
 ## `registerAction`
 
 Imperative action registration for cases where manifest-declared commands aren't enough (dynamic IDs, programmatic danger levels, runtime-driven categories).
@@ -354,3 +356,16 @@ Deliberately not part of the host API:
 - Daintree's internal event bus. Only the specific subscriptions listed above are exposed. Broad event access would tie plugins to internal shape changes we want to be free to make.
 
 If you have a legitimate need that isn't covered, open an issue with the use case.
+
+## Module cache and memory
+
+Production plugins are loaded by `import()`-ing the plugin's main module into Daintree's main process — in-process, not in an isolated worker. Node's ESM module cache is keyed by the module's file URL and is never evicted within a process lifetime, and Daintree does not bust that cache on unload. This is an accepted limitation for 1.0; the behavior below is the contract, not a bug.
+
+When a plugin is unloaded (uninstall, disable, or hot reload), the host runs the full disposal cascade: every registration is torn down — IPC handlers, actions, forge and file-decoration providers, worktree subscriptions, and the cleanup function your `activate()` returned. What it cannot do is evict the plugin module from V8's module cache. The module's namespace object, and any state held in module-scope (top-level `let`/`const` bindings, singletons constructed at import time, timers or connections opened outside `activate()`), stay resident in the main-process heap for the rest of the session.
+
+Two consequences follow for production plugins:
+
+- **No hot reload.** Re-importing the same file URL returns the cached module rather than re-evaluating it, so editing an installed plugin's code has no effect until Daintree restarts. Put all teardown-able work inside `activate()` and its returned cleanup; never rely on module-scope re-initialization between loads.
+- **Module-scope state persists across load/unload cycles.** If a plugin is unloaded and re-loaded in the same session, module-level variables retain their prior values and static-init memory is not reclaimed. Treat module scope as process-lifetime state and keep per-activation state inside `activate()`.
+
+Dev-mode plugins (`daintree-plugin dev`) are exempt: they run in a separate `utilityProcess.fork` child, so each reload gets a fresh module cache and module-scope state never leaks across reloads. Hot reload works in dev for exactly this reason. The limitation above applies only to installed production plugins running in-process.

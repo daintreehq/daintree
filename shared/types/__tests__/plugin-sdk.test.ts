@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
   PluginManifest,
   PluginHostApi,
+  PluginActivationApi,
   PluginActivate,
   PanelContribution,
   ToolbarButtonContribution,
@@ -61,6 +62,7 @@ describe("plugin-sdk boundary", () => {
     it("exports activation contract", () => {
       expectTypeOf<PluginActivate>().toMatchTypeOf<(...args: never[]) => unknown>();
       expectTypeOf<PluginHostApi>().toMatchTypeOf<object>();
+      expectTypeOf<PluginActivationApi>().toMatchTypeOf<object>();
     });
 
     it("exports IPC types", () => {
@@ -107,6 +109,34 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(host.getActiveWorktree).toEqualTypeOf<
         () => Promise<PluginWorktreeSnapshot | null>
       >();
+    });
+
+    it("PluginHostApi extends the revoke-guarded PluginActivationApi", () => {
+      // The full host surface is assignable to the activation slice, but not
+      // vice versa — PluginHostApi adds the post-activation-safe methods.
+      expectTypeOf<PluginHostApi>().toMatchTypeOf<PluginActivationApi>();
+      expectTypeOf<PluginActivationApi>().not.toMatchTypeOf<PluginHostApi>();
+    });
+
+    it("PluginActivationApi carries the revoke-guarded registration methods", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.registerAction).toBeFunction();
+      expectTypeOf(activation.registerHandler).toBeFunction();
+      expectTypeOf(activation.broadcastToRenderer).toBeFunction();
+      expectTypeOf(activation.registerForgeProvider).toBeFunction();
+      expectTypeOf(activation.registerFileDecorationProvider).toBeFunction();
+    });
+
+    it("PluginActivationApi excludes the post-activation-safe methods", () => {
+      const activation = {} as PluginActivationApi;
+      // @ts-expect-error — showToast is post-activation-safe, not on the slice
+      activation.showToast;
+      // @ts-expect-error — dispatch is post-activation-safe, not on the slice
+      activation.dispatch;
+      // @ts-expect-error — logger is post-activation-safe, not on the slice
+      activation.logger;
+      // @ts-expect-error — invalidateFileDecorations is not on the slice
+      activation.invalidateFileDecorations;
     });
 
     it("PanelViewProps exposes the host-provided view props", () => {
