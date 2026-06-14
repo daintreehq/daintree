@@ -7,7 +7,7 @@
   "engines": {
     "daintree": ">=0.11.0"
   },
-  "capabilities": [],
+  "capabilities": ["agent:register"],
   "contributes": {
     "toolbarButtons": [
       {
@@ -23,6 +23,42 @@
         "label": "Hello ping",
         "actionId": "daintree.hello.ping",
         "location": "help"
+      }
+    ],
+    "panels": [
+      {
+        "id": "hello-panel",
+        "name": "Hello Panel",
+        "iconId": "layout-panel-top",
+        "color": "#6366f1",
+        "hasPty": false,
+        "canRestart": false,
+        "canConvert": false,
+        "showInPalette": true
+      }
+    ],
+    "keybindings": [
+      {
+        "actionId": "daintree.hello.greet",
+        "combo": "CmdOrCtrl+Shift+H",
+        "scope": "global",
+        "description": "Greet from the Hello Daintree sample plugin"
+      }
+    ],
+    "contextMenus": [
+      {
+        "actionId": "daintree.hello.greet",
+        "location": "worktree",
+        "label": "Say hello"
+      }
+    ],
+    "agents": [
+      {
+        "id": "hello-sample",
+        "name": "Hello Sample",
+        "command": "echo",
+        "color": "#6366f1",
+        "iconId": "bot"
       }
     ],
     "fileDecorationProviders": [
