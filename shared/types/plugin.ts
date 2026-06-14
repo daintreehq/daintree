@@ -174,11 +174,12 @@ export interface PluginNetworkScope {
 
 export interface PluginFsScope {
   /**
-   * Allowlist of absolute filesystem paths the plugin's `fs:*` capabilities
-   * may touch. Each entry must be an absolute path containing no `..` segment
-   * and no `*`/`**` glob (literal-path allowlist only). Reserved for future
-   * compound rules that attenuate fs sinks; the current lattice only consults
-   * `scopes.network` for compound elevation.
+   * Advisory allowlist of absolute filesystem paths the plugin's `fs:*`
+   * capabilities intend to touch. Each entry is schema-validated at parse time
+   * (must be an absolute path containing no `..` segment and no `*`/`**` glob —
+   * literal-path allowlist only), but the value is not consulted at runtime: it
+   * does not gate filesystem access and does not attenuate the compound-capability
+   * lattice. `scopes.network` is the only bucket the lattice consults today.
    */
   allowedPaths: string[];
 }
@@ -278,9 +279,11 @@ export interface PluginManifest {
      */
     agents: PluginAgentContribution[];
     /**
-     * Declared plugin settings. Reserved for F29 — absent from parsed manifests
-     * until that schema lands, so `host.settings.set()` accepts any key for now.
-     * When present, `set()` rejects keys not declared here.
+     * Declared plugin settings. When absent or empty, `host.settings.set()`
+     * accepts any key (permissive for plugins that declare none). When non-empty,
+     * `set()` (and the settings-UI write/reset paths) reject keys not declared
+     * here and enforce each setting's declared scope — see `assertSettingDeclared`
+     * in `electron/services/plugin/PluginSettingsManager.ts`.
      */
     settings?: SettingDefinition[];
   };

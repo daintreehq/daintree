@@ -96,8 +96,19 @@ describe("PluginSettingsManager declared-scope enforcement", () => {
     expect(() => mgr.assertSettingScope("acme.scope-test", "other", "user")).not.toThrow();
   });
 
-  it("accepts any scope when no settings are declared (pre-F29 manifests)", () => {
+  it("accepts any key when contributes.settings is an empty array", () => {
     const mgr = managerFor([]);
+    expect(() => mgr.assertSettingDeclared("acme.scope-test", "anything", "project")).not.toThrow();
+    expect(() => mgr.assertSettingScope("acme.scope-test", "anything", "project")).not.toThrow();
+  });
+
+  it("accepts any key when contributes.settings is absent", () => {
+    const manifest = manifestWith([]);
+    delete manifest.contributes.settings;
+    const mgr = new PluginSettingsManager({
+      getPluginsRoot: () => path.join(tmpDir, "plugins"),
+      getManifest: (id) => (id === manifest.name ? manifest : undefined),
+    });
     expect(() => mgr.assertSettingDeclared("acme.scope-test", "anything", "project")).not.toThrow();
     expect(() => mgr.assertSettingScope("acme.scope-test", "anything", "project")).not.toThrow();
   });

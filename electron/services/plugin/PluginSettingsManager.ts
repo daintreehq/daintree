@@ -101,12 +101,12 @@ export class PluginSettingsManager {
   }
 
   /**
-   * Enforce `contributes.settings` key declarations on `set`/`delete`. F29 has
-   * not landed yet, so manifests never declare settings today and any key is
-   * accepted; once a plugin declares them, undeclared keys are rejected. When a
-   * key IS declared, its declared `scope` (default `"user"`) must match the
-   * requested scope — the write counterpart to the scope filter the read/reveal
-   * paths apply, so a `user`-scoped key can't be written under `project` (or
+   * Enforce `contributes.settings` key declarations on `set`/`delete`. When a
+   * manifest declares no settings (absent or empty array), any key is accepted;
+   * once a plugin declares them, undeclared keys are rejected. When a key IS
+   * declared, its declared `scope` (default `"user"`) must match the requested
+   * scope — the write counterpart to the scope filter the read/reveal paths
+   * apply, so a `user`-scoped key can't be written under `project` (or
    * vice-versa) via the host API or the settings-UI bridge.
    */
   assertSettingDeclared(pluginId: string, key: string, scope: PluginSettingsScope): void {
