@@ -17,6 +17,7 @@ vi.mock("@/clients", () => ({
   },
   systemClient: {
     getAppMetrics: vi.fn(),
+    getHardwareInfo: vi.fn(),
     getProcessMetrics: vi.fn(),
     getHeapStats: vi.fn(),
     getDiagnosticsInfo: vi.fn(),
@@ -40,6 +41,7 @@ import { ProjectResourceBadge } from "../ProjectResourceBadge";
 
 const mockGetAll = vi.mocked(projectClient.getAll);
 const mockGetAppMetrics = vi.mocked(systemClient.getAppMetrics);
+const mockGetHardwareInfo = vi.mocked(systemClient.getHardwareInfo);
 
 describe("ProjectResourceBadge — visibility-aware polling", () => {
   let originalHidden: boolean;
@@ -80,6 +82,11 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
     mockGetAll.mockResolvedValue([]);
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 100 });
+    mockGetHardwareInfo.mockReset();
+    mockGetHardwareInfo.mockResolvedValue({
+      totalMemoryBytes: 8 * 1024 * 1024 * 1024,
+      logicalCpuCount: 8,
+    });
   });
 
   afterEach(() => {
@@ -162,6 +169,31 @@ describe("ProjectResourceBadge — visibility-aware polling", () => {
       await Promise.resolve();
     });
     expect(mockGetAll.mock.calls.length).toBeGreaterThan(callsAfterRestore);
+  });
+
+  it("probes hardware info once at mount to scale thresholds to the machine", async () => {
+    render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockGetHardwareInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not crash polling when hardware info probe rejects", async () => {
+    mockGetHardwareInfo.mockRejectedValue(new Error("no hw"));
+
+    render(<ProjectResourceBadge />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Badge still polls stats using the fallback thresholds.
+    expect(mockGetAll.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("removes visibility listener on unmount", () => {

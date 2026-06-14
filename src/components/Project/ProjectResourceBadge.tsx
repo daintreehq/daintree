@@ -7,47 +7,21 @@ import { logError } from "@/utils/logger";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type { Project } from "@shared/types";
+import {
+  type MemoryState,
+  type TrendDirection,
+  type MemoryThresholds,
+  FALLBACK_THRESHOLDS,
+  computeThresholds,
+  getMemoryState,
+  getTrendDirection,
+  formatMemory,
+} from "./ProjectResourceBadge.utils";
 
-type MemoryState = "normal" | "elevated" | "critical";
-type TrendDirection = "up" | "down" | "stable";
-
-const MEMORY_THRESHOLD_ELEVATED = 500;
-const MEMORY_THRESHOLD_CRITICAL = 800;
-const TREND_DEADBAND_MB_PER_MIN = 3;
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
 const POPOVER_POLL_MS = 4_000;
 const SAMPLES_PER_MIN = 60_000 / BADGE_POLL_MS;
-
-function getMemoryState(totalMB: number): MemoryState {
-  if (totalMB >= MEMORY_THRESHOLD_CRITICAL) return "critical";
-  if (totalMB >= MEMORY_THRESHOLD_ELEVATED) return "elevated";
-  return "normal";
-}
-
-function computeSlope(samples: number[]): number {
-  const n = samples.length;
-  if (n < 3) return 0;
-  const sumX = (n * (n - 1)) / 2;
-  const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
-  const sumY = samples.reduce((a, b) => a + b, 0);
-  const sumXY = samples.reduce((acc, y, i) => acc + i * y, 0);
-  const denom = n * sumX2 - sumX * sumX;
-  if (denom === 0) return 0;
-  return (n * sumXY - sumX * sumY) / denom;
-}
-
-function getTrendDirection(samples: number[]): TrendDirection {
-  const slopePerSample = computeSlope(samples);
-  const slopePerMin = slopePerSample * SAMPLES_PER_MIN;
-  if (Math.abs(slopePerMin) < TREND_DEADBAND_MB_PER_MIN) return "stable";
-  return slopePerMin > 0 ? "up" : "down";
-}
-
-function formatMemory(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
-  return `${mb}MB`;
-}
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -227,12 +201,13 @@ export function ProjectResourceBadge() {
   const [isLoading, setIsLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
+  const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
-  const memoryState = getMemoryState(stats.totalMemoryMB);
-  const trend = getTrendDirection(samples);
+  const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
+  const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
   const fetchStats = useCallback(async () => {
@@ -241,6 +216,10 @@ export function ProjectResourceBadge() {
         projectClient.getAll(),
         systemClient.getAppMetrics(),
       ]);
+
+      // Suppress the reading rather than reporting a misleading "0MB" when the
+      // main process couldn't read process metrics.
+      if (appMetrics.unavailable) return null;
 
       const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
@@ -265,21 +244,46 @@ export function ProjectResourceBadge() {
     }
   }, []);
 
+  // Read total RAM once to scale the severity thresholds to the machine.
   useEffect(() => {
     let cancelled = false;
+    void systemClient
+      .getHardwareInfo()
+      .then((info) => {
+        if (!cancelled) setThresholds(computeThresholds(info.totalMemoryBytes));
+      })
+      .catch((error) => {
+        logError("[ProjectResourceBadge] Failed to fetch hardware info", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let pending = false;
     let interval: ReturnType<typeof setInterval> | null = null;
 
     const runFetch = async () => {
-      const result = await fetchStats();
-      if (!cancelled && result) {
-        samplesRef.current = result.nextSamples;
-        setSamples(result.nextSamples);
-        setStats({
-          runningProjects: result.runningProjects,
-          totalMemoryMB: result.totalMemoryMB,
-          projects: result.projects,
-        });
-        setIsLoading(false);
+      // Skip if a previous poll is still in flight so a slow IPC round-trip
+      // can't stack overlapping calls or write results out of order.
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await fetchStats();
+        if (!cancelled && result) {
+          samplesRef.current = result.nextSamples;
+          setSamples(result.nextSamples);
+          setStats({
+            runningProjects: result.runningProjects,
+            totalMemoryMB: result.totalMemoryMB,
+            projects: result.projects,
+          });
+          setIsLoading(false);
+        }
+      } finally {
+        pending = false;
       }
     };
 
@@ -298,6 +302,11 @@ export function ProjectResourceBadge() {
       if (document.hidden) {
         stopInterval();
       } else {
+        // The poll pauses while hidden, so pre-hide samples are arbitrarily old
+        // relative to the resumed cadence — drop them so the trend slope isn't
+        // computed across the gap.
+        samplesRef.current = [];
+        setSamples([]);
         void runFetch();
         startInterval();
       }
@@ -381,6 +390,14 @@ export function ProjectResourceBadge() {
         <div className="space-y-3">
           {popoverData ? (
             <>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-daintree-text/50 font-medium">
+                  Daintree memory
+                </span>
+                <span className="text-[10px] font-mono tabular-nums text-daintree-text/40">
+                  {formatMemory(stats.totalMemoryMB)}
+                </span>
+              </div>
               <ProcessTable metrics={popoverData.processMetrics} />
               <HeapBar heapStats={popoverData.heapStats} />
               <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />

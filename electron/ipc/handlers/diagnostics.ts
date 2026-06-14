@@ -26,6 +26,7 @@ import type {
 import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
 import { recordBlinkSample, recordEluSample } from "../../services/ProcessMemoryMonitor.js";
+import { getAppMetricsSnapshot } from "../../utils/appMetricsSnapshot.js";
 
 let cachedDiagnosticsCollector: typeof DiagnosticsCollectorModule | null = null;
 async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorModule> {
@@ -198,27 +199,34 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
     try {
-      const metrics = app.getAppMetrics();
+      const metrics = getAppMetricsSnapshot();
       let totalKB = 0;
       for (const proc of metrics) {
-        totalKB += proc.memory.privateBytes ?? proc.memory.workingSetSize;
+        // workingSetSize is the only cross-platform field: privateBytes is
+        // Windows-only and reports 0 on macOS/Linux, so a `?? workingSetSize`
+        // fallback never fires there and silently sums to zero (lesson #8646).
+        totalKB += proc.memory.workingSetSize;
       }
       return { totalMemoryMB: Math.round(totalKB / 1024) };
     } catch {
-      return { totalMemoryMB: 0 };
+      // Distinguish a real read failure from a genuine 0 reading so the badge
+      // can suppress the value instead of rendering a misleading "0MB".
+      return { totalMemoryMB: 0, unavailable: true };
     }
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics));
 
   const handleGetProcessMetrics = (): ProcessMetricEntry[] => {
     try {
-      const metrics = app.getAppMetrics();
+      const metrics = getAppMetricsSnapshot();
       return metrics
         .map((proc) => ({
           pid: proc.pid,
           type: proc.type,
           name: proc.name ?? proc.type,
-          memoryMB: Math.round((proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024),
+          // workingSetSize only — privateBytes is Windows-only and reports 0
+          // on macOS/Linux (lesson #8646).
+          memoryMB: Math.round(proc.memory.workingSetSize / 1024),
           cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
         }))
         .sort((a, b) => b.memoryMB - a.memoryMB);
