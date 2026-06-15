@@ -21,7 +21,11 @@ export interface ScaffoldContext {
   template: TemplateKind;
 }
 
-const DAINTREE_ENGINE_RANGE = "^0.11.0";
+// Open-ended lower bound: `^0.11.0` resolves to `>=0.11.0 <0.12.0` under semver's
+// 0.x caret rule, so a scaffolded plugin would be rejected by the host's
+// `engines.daintree` gate on every release past 0.11 (e.g. 0.19.x). Match the
+// reference manifests under `plugins/sample/`, which pin the open-ended range.
+const DAINTREE_ENGINE_RANGE = ">=0.11.0";
 
 /**
  * A `contributes.panels` entry paired with a `views` entry of the
@@ -76,6 +80,18 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
   if (needsReact) {
     devDeps.react = "^19.0.0";
     devDeps["react-dom"] = "^19.0.0";
+    // React 19 still ships types separately; without these the generated
+    // `panel.tsx` fails `tsc` on the `react` import and the JSX namespace.
+    devDeps["@types/react"] = "^19.0.0";
+    devDeps["@types/react-dom"] = "^19.0.0";
+  }
+  if (needsServer) {
+    // Runtime dependency, not a devDependency: the spawned `node dist/server.js`
+    // imports the SDK at runtime, so it must be installed in the packaged plugin.
+    // Floor at 1.12: `server/mcp.js`'s `McpServer` arrived in 1.3 and
+    // `registerTool` (used by the generated server) in 1.12, so a lower `^1.0.0`
+    // could resolve to a release missing both.
+    deps["@modelcontextprotocol/sdk"] = "^1.12.0";
   }
   const obj = {
     name: ctx.scopedName,
@@ -113,7 +129,11 @@ function tsconfig(jsx: boolean): string {
 }
 
 function viteConfig(entries: Record<string, string>): string {
-  const entryLiteral = JSON.stringify(entries, null, 6).replace(/\n/g, "\n  ");
+  // `entry:` sits at 6-space depth inside the `build.lib` block, so each line of
+  // the embedded object literal needs a 6-space lead to align — and the closing
+  // brace must land back at that depth. Stringify at 2-space indent, then offset
+  // every line by the 6 spaces of the surrounding context.
+  const entryLiteral = JSON.stringify(entries, null, 2).replace(/\n/g, "\n      ");
   return `import { daintreePlugin } from "@daintreehq/plugin-vite";
 import { defineConfig } from "vite";
 
@@ -140,7 +160,8 @@ export default defineConfig({
  * \`emptyOutDir: false\` preserves the browser build that ran first.
  */
 function viteServerConfig(entries: Record<string, string>): string {
-  const entryLiteral = JSON.stringify(entries, null, 6).replace(/\n/g, "\n  ");
+  // Same 6-space alignment as viteConfig (see the note there).
+  const entryLiteral = JSON.stringify(entries, null, 2).replace(/\n/g, "\n      ");
   return `import { daintreePlugin } from "@daintreehq/plugin-vite";
 import { defineConfig } from "vite";
 
@@ -241,13 +262,31 @@ export async function activate(_host: PluginHostApi): Promise<() => void> {
 function mcpServer(ctx: ScaffoldContext): string {
   return `#!/usr/bin/env node
 /**
- * Minimal stdio MCP server skeleton for ${c(ctx.displayName)}. Replace this with a
- * real implementation using \`@modelcontextprotocol/sdk\`. Daintree spawns it
- * per the \`command\`/\`args\` in plugin.json and speaks MCP over stdio.
+ * Minimal stdio MCP server for ${c(ctx.displayName)}. Daintree spawns it per the
+ * \`command\`/\`args\` in plugin.json and speaks MCP over stdio. The SDK answers
+ * the \`initialize\` handshake and \`tools/list\` automatically once connected —
+ * the previous skeleton only listened on stdin and never replied, so the host
+ * timed out and marked the server crashed.
+ *
+ * Never write to stdout yourself: it carries the JSON-RPC stream and stray
+ * output corrupts the protocol. Log to stderr (\`console.error\`) instead. Built
+ * with vite.config.server.ts (\`target: "node"\`) so the SDK's stdio transport
+ * gets the real Node \`process\` rather than a browser shim.
  */
-process.stdin.on("data", () => {
-  // Wire up an MCP server here (tools/list, tools/call, …).
-});
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+const server = new McpServer({ name: ${q(ctx.scopedName)}, version: "0.1.0" });
+
+// Example tool — replace with your own. It takes no input and returns text;
+// add an \`inputSchema\` (a Zod raw shape) to accept arguments.
+server.registerTool(
+  "ping",
+  { description: ${q(`Health check for ${ctx.displayName}; replies with "pong".`)} },
+  async () => ({ content: [{ type: "text", text: "pong" }] })
+);
+
+await server.connect(new StdioServerTransport());
 `;
 }
 
