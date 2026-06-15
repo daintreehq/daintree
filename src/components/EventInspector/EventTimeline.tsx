@@ -162,7 +162,7 @@ export function EventTimeline({
         )}
       >
         <div className="text-center space-y-2">
-          <Circle className="w-8 h-8 mx-auto opacity-30" />
+          <Circle className="w-8 h-8 mx-auto text-text-muted" />
           <p>No events captured yet</p>
           <p className="text-xs">Events will appear here as they occur</p>
         </div>

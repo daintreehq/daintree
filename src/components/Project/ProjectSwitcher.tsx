@@ -197,7 +197,7 @@ export function ProjectSwitcher() {
               {showLoadingSpinner ? (
                 <Spinner size="md" className="shrink-0" />
               ) : (
-                <ChevronsUpDown className="opacity-50" />
+                <ChevronsUpDown className="text-text-muted" />
               )}
             </Button>
           </ProjectSwitcherPalette>

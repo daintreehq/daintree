@@ -16,7 +16,7 @@ export function PRDetectionPausedIndicator({ defaultOpen = false }: { defaultOpe
           aria-label="PR detection paused — retrying"
           className="flex h-full w-7 shrink-0 items-center justify-center text-muted-foreground"
         >
-          <CloudOff className="h-3.5 w-3.5 opacity-80" aria-hidden />
+          <CloudOff className="h-3.5 w-3.5 text-text-muted" aria-hidden />
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="px-3 py-1.5">

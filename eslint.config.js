@@ -5,6 +5,7 @@ import reactCompiler from "eslint-plugin-react-compiler";
 import unicorn from "eslint-plugin-unicorn";
 import prettier from "eslint-config-prettier";
 import structuredTestSkipAnnotations from "./scripts/eslint-rules/structured-test-skip-annotations.js";
+import iconOpacityDimming from "./scripts/eslint-rules/icon-opacity-dimming.js";
 
 export default tseslint.config(
   // Base JS recommended rules
@@ -1094,6 +1095,21 @@ export default tseslint.config(
     },
     rules: {
       "e2e-structured-skip/structured-test-skip-annotations": "error",
+    },
+  },
+
+  // Icon dimming — icons must use a solid theme token (text-text-muted), never
+  // opacity-* utilities or grayscale, which composite differently on each theme
+  // background. Scoped to icon elements only. See #10458.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    plugins: {
+      "icon-opacity-dimming": {
+        rules: { "no-icon-opacity-dimming": iconOpacityDimming },
+      },
+    },
+    rules: {
+      "icon-opacity-dimming/no-icon-opacity-dimming": "error",
     },
   },
 

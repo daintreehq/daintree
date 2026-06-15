@@ -61,7 +61,7 @@ export function ToolbarContextMenuItems({
           args={{ tab: "toolbar" }}
           className="h-7"
         >
-          <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
+          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
         <DropdownMenuSeparator />

@@ -126,10 +126,7 @@ export function PRBadge({
         >
           {isSubordinate && (
             <CornerDownRight
-              className={cn(
-                "w-3 h-3 shrink-0",
-                missingCredential ? "grayscale opacity-50" : "text-text-muted"
-              )}
+              className={cn("w-3 h-3 shrink-0 text-text-muted")}
               aria-hidden="true"
             />
           )}
@@ -137,7 +134,7 @@ export function PRBadge({
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingCredential ? "grayscale opacity-50" : prStateColor
+              missingCredential ? "text-text-muted" : prStateColor
             )}
             aria-hidden="true"
           />

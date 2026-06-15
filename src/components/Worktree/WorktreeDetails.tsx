@@ -169,7 +169,7 @@ export function WorktreeDetails({
           )}
           {!effectiveNote && !effectiveSummary && showLastCommit && rawLastCommitMsg && (
             <div className="flex gap-2 rounded bg-overlay-subtle p-2 text-xs italic text-text-secondary">
-              <GitCommit className="w-3.5 h-3.5 mt-0.5 shrink-0 opacity-60" />
+              <GitCommit className="w-3.5 h-3.5 mt-0.5 shrink-0 text-text-muted" />
               <div className="whitespace-pre-wrap leading-relaxed min-w-0">{rawLastCommitMsg}</div>
             </div>
           )}
@@ -214,7 +214,7 @@ export function WorktreeDetails({
                   isFocused && "text-text-secondary"
                 )}
               >
-                <ExternalLink className="w-3 h-3 shrink-0 opacity-60" />
+                <ExternalLink className="w-3 h-3 shrink-0 text-text-muted" />
                 <span className="truncate">{displayPath}</span>
               </button>
             </TooltipTrigger>

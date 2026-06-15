@@ -756,10 +756,8 @@ export function AgentTrayButton({
                   onSelect={() => handleSetup(row.id)}
                   className="group h-7"
                 >
-                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center grayscale opacity-50">
-                    <BrandMark brandColor={getBrandColorHex(row.id)}>
-                      <row.Icon brandColor={getBrandColorHex(row.id)} />
-                    </BrandMark>
+                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
+                    <row.Icon className="text-text-muted" />
                   </span>
                   <span className="flex-1 text-daintree-text/70">{row.name}</span>
                   <span className="ml-2 shrink-0 rounded border border-daintree-text/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50">
@@ -780,10 +778,8 @@ export function AgentTrayButton({
                   className="group h-7"
                   data-testid={`agent-tray-fallback-${row.id}`}
                 >
-                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center grayscale opacity-50">
-                    <BrandMark brandColor={getBrandColorHex(row.id)}>
-                      <row.Icon brandColor={getBrandColorHex(row.id)} />
-                    </BrandMark>
+                  <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
+                    <row.Icon className="text-text-muted" />
                   </span>
                   <span className="flex-1 text-daintree-text/70">{row.name}</span>
                   <span className="ml-2 shrink-0 rounded border border-daintree-text/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-daintree-text/50">
@@ -796,7 +792,7 @@ export function AgentTrayButton({
 
           {(hasAnyContent || showFallback) && <DropdownMenuSeparator />}
           <DropdownMenuItem onSelect={handleManageAgents} className="h-7">
-            <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
+            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
             Manage Agents
           </DropdownMenuItem>
           <DropdownMenuActionItem
@@ -804,7 +800,7 @@ export function AgentTrayButton({
             args={{ tab: "toolbar" }}
             className="h-7"
           >
-            <Settings2 className="mr-2 h-3.5 w-3.5 opacity-60" />
+            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
             {TOOLBAR_CUSTOMIZE_LABEL}
           </DropdownMenuActionItem>
           <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">

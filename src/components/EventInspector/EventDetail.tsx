@@ -44,7 +44,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
           >
             <span className="truncate">{strValue}</span>
             {isActive ? (
-              <X className="w-3 h-3 flex-shrink-0 opacity-70" />
+              <X className="w-3 h-3 flex-shrink-0 text-text-muted" />
             ) : (
               <Filter className="w-3 h-3 flex-shrink-0 opacity-0 group-hover:opacity-30" />
             )}

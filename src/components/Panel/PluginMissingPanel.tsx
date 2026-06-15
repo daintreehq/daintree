@@ -35,7 +35,7 @@ export function PluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPa
       aria-label="Plugin unavailable"
       className="flex flex-1 flex-col items-center justify-center gap-3 bg-surface-panel p-6 text-text-muted"
     >
-      <Puzzle className="h-8 w-8 opacity-50" aria-hidden />
+      <Puzzle className="h-8 w-8 text-text-muted" aria-hidden />
       <div className="max-w-sm text-center">
         <p className="text-sm font-medium text-text-primary">Plugin unavailable</p>
         <p className="mt-1 text-xs text-text-muted">

@@ -535,9 +535,9 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           {item.type === "saved" ? (
                             <Pin className="h-3 w-3 text-text-secondary shrink-0" />
                           ) : item.type === "history" ? (
-                            <Clock className="h-3 w-3 opacity-40 shrink-0" />
+                            <Clock className="h-3 w-3 text-text-muted shrink-0" />
                           ) : (
-                            <SquareTerminal className="h-3 w-3 opacity-40 shrink-0" />
+                            <SquareTerminal className="h-3 w-3 text-text-muted shrink-0" />
                           )}
                           <div className="flex-1 truncate flex items-start justify-between min-w-0">
                             <div className="truncate">
