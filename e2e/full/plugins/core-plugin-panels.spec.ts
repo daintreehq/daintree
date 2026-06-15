@@ -1,6 +1,29 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { closeApp, type AppContext } from "../../helpers/launch";
 import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
+import { T_LONG } from "../../helpers/timeouts";
+
+/** Dispatch a renderer action through the E2E-only bridge. */
+async function dispatchAction(page: Page, actionId: string, args?: unknown): Promise<unknown> {
+  return page.evaluate(
+    async (payload) => {
+      const dispatch = (
+        window as unknown as {
+          __daintreeDispatchAction?: (
+            id: string,
+            a?: unknown,
+            opts?: { source: string }
+          ) => Promise<unknown>;
+        }
+      ).__daintreeDispatchAction;
+      if (typeof dispatch !== "function") {
+        throw new Error("__daintreeDispatchAction is not available");
+      }
+      return dispatch(payload.actionId, payload.args, { source: "menu" });
+    },
+    { actionId, args }
+  );
+}
 
 /**
  * Plugin `panels` contribution (#10473). The capability-rich `rich-daintree`
@@ -43,5 +66,23 @@ test.describe.serial("Core: Plugin panels contribution", () => {
       hasPty: false,
       showInPalette: true,
     });
+  });
+
+  // Regression for #10512: registration alone (above) is NOT enough — the bug
+  // was that a registered plugin panel never reached a mounted GridPanel because
+  // the grid membership selectors dropped non-built-in kinds. This opens the
+  // panel and asserts its React component actually MOUNTS over `plugin://`,
+  // which is the coverage gap that let the bug ship.
+  test("mounts the contributed view's React component in the grid", async () => {
+    const result = (await dispatchAction(ctx.window, "panel.openPluginPanel", {
+      kind: "daintree.rich.rich-panel",
+    })) as { panelId?: string };
+    expect(result?.panelId).toBeTruthy();
+
+    // The view lazy-imports over `plugin://` and resolves `react` through the
+    // host import map — allow generous time for the cold protocol load.
+    const view = ctx.window.locator('[data-testid="rich-panel-view"]');
+    await expect(view).toBeVisible({ timeout: T_LONG });
+    await expect(view).toContainText("Rich panel view mounted");
   });
 });

@@ -158,6 +158,19 @@ function copySamplePluginManifests() {
     fs.mkdirSync(path.dirname(manifestDest), { recursive: true });
     fs.copyFileSync(manifestSrc, manifestDest);
     console.log(`[Build] Copied sample plugin manifest: ${entry.name}`);
+
+    // Copy any hand-authored `view/` assets verbatim. Plugin view modules are
+    // browser-ready ESM served over `plugin://` with bare `react` specifiers
+    // resolved through the host import map — esbuild must NOT process them
+    // (it would bundle React in and break the single-instance contract), so
+    // these are copied, not built. Used by the rich-daintree panel-view E2E
+    // (#10512).
+    const viewSrc = path.join(pluginsRoot, entry.name, "view");
+    if (fs.existsSync(viewSrc)) {
+      const viewDest = path.join(root, "dist-electron/plugins/sample", entry.name, "view");
+      fs.cpSync(viewSrc, viewDest, { recursive: true });
+      console.log(`[Build] Copied sample plugin view assets: ${entry.name}`);
+    }
   }
 }
 

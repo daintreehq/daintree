@@ -110,6 +110,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   ]);
 
   const dockTerminals = useMemo<PtyPanelData[]>(() => {
+    // The dock is intentionally PTY-only: its chrome (output preview, restart,
+    // agent state) is built on terminal affordances. Non-PTY panels — browser,
+    // dev-preview, review, AND plugin-contributed kinds — are grid-only here,
+    // so `getNarrowPanel` + `isPtyPanel` is the correct gate (NOT the #10512
+    // grid render-eligibility predicate, which deliberately does not apply to
+    // the dock).
     const result: PtyPanelData[] = [];
     for (const id of storeTerminalIds) {
       const terminal = getNarrowPanel(panelsById, id);

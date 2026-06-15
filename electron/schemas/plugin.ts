@@ -84,7 +84,10 @@ export const KeybindingContributionSchema = z
 export const ContextMenuContributionSchema = z
   .object({
     actionId: z.string().min(1),
-    location: z.enum(["worktree", "terminal", "panel", "file"]),
+    // `"panel"` removed (#10512) — no renderer surface consumed it, so a
+    // contributed panel context-menu item was dead. Reject it at the manifest
+    // gate so authors get a clear error instead of a silently-ignored item.
+    location: z.enum(["worktree", "terminal", "file"]),
     label: z.string().min(1),
     when: z.string().min(1).optional(),
   })

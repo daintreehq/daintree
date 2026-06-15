@@ -35,7 +35,10 @@ export interface ToolbarButtonContribution {
 }
 
 export type MenuItemLocation = "terminal" | "file" | "view" | "help";
-export type ContextMenuLocation = "worktree" | "terminal" | "panel" | "file";
+// `"panel"` was removed (#10512): no renderer surface ever mounted
+// `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
+// was silently dead. Only `worktree` / `terminal` / `file` have live consumers.
+export type ContextMenuLocation = "worktree" | "terminal" | "file";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",

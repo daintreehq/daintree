@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PanelInstance } from "@shared/types/panel";
-import { _resetSelectorCacheForTests, getNarrowPanel, getNarrowPanels } from "../selectors";
+import {
+  _resetSelectorCacheForTests,
+  getNarrowPanel,
+  getNarrowPanels,
+  getRenderablePanel,
+  isPanelRenderEligible,
+} from "../selectors";
 
 // Adapter selectors that narrow the legacy `TerminalInstance` carrier to the
 // `PanelInstance` union via the kind type guards (#8957). A missing `kind`
@@ -61,6 +67,59 @@ describe("getNarrowPanel", () => {
   it("narrows a review panel", () => {
     const p = getNarrowPanel({ r: panel("r", { kind: "review" }) }, "r");
     expect(p?.kind).toBe("review");
+  });
+});
+
+describe("isPanelRenderEligible (#10512)", () => {
+  it("treats every built-in kind as renderable", () => {
+    for (const kind of ["terminal", "browser", "dev-preview", "review"] as const) {
+      expect(isPanelRenderEligible(panel(kind, { kind }))).toBe(true);
+    }
+  });
+
+  it("treats a plugin panel carrying a pluginId as renderable", () => {
+    const p = panel("x", {
+      kind: "acme.notes" as unknown as PanelInstance["kind"],
+      pluginId: "acme",
+    });
+    expect(isPanelRenderEligible(p)).toBe(true);
+  });
+
+  it("treats a dotted plugin kind without a pluginId as renderable (disabled-plugin hatch)", () => {
+    const p = panel("x", { kind: "acme.notes" as unknown as PanelInstance["kind"] });
+    expect(isPanelRenderEligible(p)).toBe(true);
+  });
+
+  it("excludes an unknown, undotted kind with no pluginId", () => {
+    const p = panel("x", { kind: "garbage" as unknown as PanelInstance["kind"] });
+    expect(isPanelRenderEligible(p)).toBe(false);
+  });
+});
+
+describe("getRenderablePanel (#10512)", () => {
+  it("returns undefined for an absent id", () => {
+    expect(getRenderablePanel({}, "missing")).toBeUndefined();
+  });
+
+  it("returns built-in panels just like getNarrowPanel", () => {
+    const b = panel("b", { kind: "browser" });
+    expect(getRenderablePanel({ b }, "b")).toBe(b);
+  });
+
+  it("returns a plugin panel that getNarrowPanel drops", () => {
+    const ext = panel("x", {
+      kind: "acme.notes" as unknown as PanelInstance["kind"],
+      pluginId: "acme",
+    });
+    // Regression guard: the type-narrowing read path still drops it...
+    expect(getNarrowPanel({ x: ext }, "x")).toBeUndefined();
+    // ...but the grid render-eligibility path keeps it.
+    expect(getRenderablePanel({ x: ext }, "x")).toBe(ext);
+  });
+
+  it("drops an unknown, undotted kind with no pluginId", () => {
+    const junk = panel("x", { kind: "garbage" as unknown as PanelInstance["kind"] });
+    expect(getRenderablePanel({ x: junk }, "x")).toBeUndefined();
   });
 });
 
