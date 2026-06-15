@@ -89,7 +89,8 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
     // Runtime dependency, not a devDependency: the spawned `node dist/server.js`
     // imports the SDK at runtime, so it must be installed in the packaged plugin.
     // Floor at 1.12: `server/mcp.js`'s `McpServer` arrived in 1.3 and
-    // `registerTool` (used by the generated server) in 1.12.
+    // `registerTool` (used by the generated server) in 1.12, so a lower `^1.0.0`
+    // could resolve to a release missing both.
     deps["@modelcontextprotocol/sdk"] = "^1.12.0";
   }
   const obj = {

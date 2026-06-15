@@ -241,4 +241,52 @@ describe("runValidate", () => {
     expect(result.ok).toBe(true);
     expect(result.warnings.join("\n")).not.toMatch(/doesn't exist/);
   });
+
+  it("stays quiet about a ./-prefixed unbuilt dist/ main (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      main: "./dist/index.js",
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/doesn't exist/);
+  });
+
+  it("warns when a view componentPath is missing but its dir exists (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+        views: [
+          { id: "main", name: "Main", componentPath: "src/missing-panel.js", location: "panel" },
+        ],
+      },
+    });
+    await fs.mkdir(path.join(tmpDir, "src"));
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(
+      /views\[0\]\.componentPath "src\/missing-panel\.js" doesn't exist/
+    );
+  });
+
+  it("does not warn when a panel iconId is a built-in agent id (#10513)", async () => {
+    // `claude` resolves to the agent brand icon via getAgentConfig, so the
+    // "renders as terminal" advisory would be wrong — it must be suppressed.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "claude", color: "var(--x)" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
 });

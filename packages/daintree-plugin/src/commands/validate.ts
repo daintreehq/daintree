@@ -8,6 +8,7 @@ import {
   VALID_PANEL_ICON_IDS,
   isValidPanelIconId,
 } from "../../../../shared/config/panelIconIds.js";
+import { isBuiltInAgentId } from "../../../../shared/config/agentIds.js";
 
 export interface ValidateOptions {
   /** Plugin project directory (default: cwd). */
@@ -57,8 +58,11 @@ async function warnIfTargetMissing(
 ): Promise<void> {
   if (!target || path.isAbsolute(target) || target.includes("\\")) return;
   if (await pathExists(path.join(dir, target))) return;
-  const [topSegment] = target.split("/");
-  if (target.includes("/") && !(await pathExists(path.join(dir, topSegment)))) return;
+  // Normalize a leading `./` so the top-segment check sees `dist`, not `.`
+  // (a bare `.` always exists and would defeat the unbuilt-output skip below).
+  const normalized = target.replace(/^\.\//, "");
+  const [topSegment] = normalized.split("/");
+  if (normalized.includes("/") && !(await pathExists(path.join(dir, topSegment)))) return;
   warnings.push(`${label} "${target}" doesn't exist on disk — build the plugin or fix the path`);
 }
 
@@ -150,17 +154,20 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
 
   // Advisory icon check: a panel/view `iconId` outside the recognized set renders
   // as the generic terminal icon (the renderers do no dynamic Lucide-by-name
-  // lookup). Non-fatal — the schema accepts any string and the renderer is the
-  // runtime authority.
+  // lookup). Built-in agent ids are exempt — `PanelKindIcon` resolves them via
+  // `getAgentConfig` to the agent's brand icon before the fallback. Non-fatal:
+  // the schema accepts any string and the renderer is the runtime authority.
+  const isUnrenderableIcon = (iconId: string): boolean =>
+    !isValidPanelIconId(iconId) && !isBuiltInAgentId(iconId);
   for (const [index, panel] of manifest.contributes.panels.entries()) {
-    if (panel.iconId && !isValidPanelIconId(panel.iconId)) {
+    if (panel.iconId && isUnrenderableIcon(panel.iconId)) {
       warnings.push(
         `panels[${index}].iconId "${panel.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${VALID_PANEL_ICON_IDS.join(", ")}`
       );
     }
   }
   for (const [index, view] of manifest.contributes.views.entries()) {
-    if (view.iconId && !isValidPanelIconId(view.iconId)) {
+    if (view.iconId && isUnrenderableIcon(view.iconId)) {
       warnings.push(
         `views[${index}].iconId "${view.iconId}" isn't a recognized panel icon — it will render as the default terminal icon. Known ids: ${VALID_PANEL_ICON_IDS.join(", ")}`
       );

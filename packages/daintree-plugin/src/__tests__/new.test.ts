@@ -265,27 +265,45 @@ describe("scaffoldPlugin", () => {
     }
   });
 
-  it("MCP template ships an SDK version that contains McpServer + registerTool (#10513)", async () => {
+  it("pins an SDK range that actually contains McpServer + registerTool (#10513)", async () => {
     // McpServer (server/mcp.js) arrived in 1.3.0 and registerTool in 1.12.0, so a
     // `^1.0.0` range could resolve to a release missing the APIs the generated
     // server imports. Assert the floor is >=1.12.
+    for (const template of ["mcp", "full"] as const) {
+      const result = await scaffoldPlugin({
+        cwd: tmpDir,
+        targetDir: `sdkver-${template}`,
+        publisher: "acme",
+        displayName: "Sdk Ver",
+        template,
+      });
+      const deps = (await readJson(path.join(result.dir, "package.json"))).dependencies as Record<
+        string,
+        string
+      >;
+      const range = deps["@modelcontextprotocol/sdk"];
+      expect(range).toBeDefined();
+      const semver = await import("semver");
+      const min = semver.minVersion(range!);
+      expect(min).not.toBeNull();
+      expect(semver.gte(min!, "1.12.0")).toBe(true);
+    }
+  });
+
+  it("full template ships both React types and the MCP SDK dep (#10513)", async () => {
     const result = await scaffoldPlugin({
       cwd: tmpDir,
-      targetDir: "sdkver",
+      targetDir: "full-deps",
       publisher: "acme",
-      displayName: "Sdk Ver",
-      template: "mcp",
+      displayName: "Full Deps",
+      template: "full",
     });
-    const deps = (await readJson(path.join(result.dir, "package.json"))).dependencies as Record<
-      string,
-      string
-    >;
-    const range = deps["@modelcontextprotocol/sdk"];
-    expect(range).toBeDefined();
-    const semver = await import("semver");
-    const min = semver.minVersion(range!);
-    expect(min).not.toBeNull();
-    expect(semver.gte(min!, "1.12.0")).toBe(true);
+    const pkg = await readJson(path.join(result.dir, "package.json"));
+    const dev = pkg.devDependencies as Record<string, string>;
+    const deps = pkg.dependencies as Record<string, string>;
+    expect(dev["@types/react"]).toBeDefined();
+    expect(dev["@types/react-dom"]).toBeDefined();
+    expect(deps["@modelcontextprotocol/sdk"]).toBeDefined();
   });
 
   it("non-React MCP template needs no @types/node (server avoids Node globals) (#10513)", async () => {
