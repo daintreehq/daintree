@@ -240,6 +240,16 @@ export function GitHubListItem({
             <span className="shrink-0">&middot;</span>
             <span className="whitespace-nowrap shrink-0">{formatTimeAgo(item.updatedAt)}</span>
 
+            {(item.commentCount ?? 0) >= 1 && (
+              <>
+                <span className="shrink-0">&middot;</span>
+                <span className="inline-flex items-center gap-0.5 shrink-0">
+                  <MessageSquare className="w-3 h-3" />
+                  <span>{item.commentCount}</span>
+                </span>
+              </>
+            )}
+
             {isItemPR && item.headRef && (
               <>
                 <span className="shrink-0">&middot;</span>
@@ -262,16 +272,6 @@ export function GitHubListItem({
                       <span className="truncate min-w-0 max-w-[80px]">{label.name}</span>
                     </span>
                   ))}
-                </span>
-              </>
-            )}
-
-            {(item.commentCount ?? 0) >= 1 && (
-              <>
-                <span className="shrink-0">&middot;</span>
-                <span className="inline-flex items-center gap-0.5 shrink-0">
-                  <MessageSquare className="w-3 h-3" />
-                  <span>{item.commentCount}</span>
                 </span>
               </>
             )}

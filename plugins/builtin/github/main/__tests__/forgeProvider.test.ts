@@ -491,6 +491,119 @@ describe("listPRs ciStatus", () => {
   });
 });
 
+describe("commentCount mapping", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  function prListWithNodes(nodes: unknown[]) {
+    return {
+      repository: {
+        pullRequests: {
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          totalCount: nodes.length,
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    };
+  }
+
+  function issueListWithNodes(nodes: unknown[]) {
+    return {
+      repository: {
+        issues: {
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          totalCount: nodes.length,
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    };
+  }
+
+  function issueNode(number: number, comments?: unknown) {
+    return {
+      number,
+      title: `Issue ${number}`,
+      bodyText: "",
+      state: "OPEN",
+      url: `https://github.com/owner/repo/issues/${number}`,
+      author: { login: "user", avatarUrl: "" },
+      assignees: { nodes: [] },
+      labels: { nodes: [] },
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:00:00Z",
+      closedAt: null,
+      ...(comments !== undefined ? { comments } : {}),
+    };
+  }
+
+  it("extracts comments.totalCount onto the listed issue's commentCount", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(issueListWithNodes([issueNode(5, { totalCount: 7 })]));
+
+    const page = await githubForgeProvider.listIssues(repo, {});
+    expect(page.items[0].commentCount).toBe(7);
+  });
+
+  it("preserves a zero comment count from the issue node", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(issueListWithNodes([issueNode(5, { totalCount: 0 })]));
+
+    const page = await githubForgeProvider.listIssues(repo, {});
+    expect(page.items[0].commentCount).toBe(0);
+  });
+
+  it("omits commentCount when the issue node has no comments connection", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(issueListWithNodes([issueNode(5)]));
+
+    const page = await githubForgeProvider.listIssues(repo, {});
+    expect("commentCount" in page.items[0]).toBe(false);
+  });
+
+  it("omits commentCount when comments.totalCount is not a number", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      issueListWithNodes([issueNode(5, { totalCount: "7" })])
+    );
+
+    const page = await githubForgeProvider.listIssues(repo, {});
+    expect("commentCount" in page.items[0]).toBe(false);
+  });
+
+  it("extracts comments.totalCount onto the listed PR's commentCount", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListWithNodes([{ ...makePRNode(1, "feature/a"), comments: { totalCount: 3 } }])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect(page.items[0].commentCount).toBe(3);
+  });
+
+  it("preserves a zero comment count from the PR node", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListWithNodes([{ ...makePRNode(1, "feature/a"), comments: { totalCount: 0 } }])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect(page.items[0].commentCount).toBe(0);
+  });
+
+  it("omits commentCount when the PR node has no comments connection", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(prListWithNodes([makePRNode(1, "feature/a")]));
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect("commentCount" in page.items[0]).toBe(false);
+  });
+
+  it("omits commentCount when the PR comments.totalCount is malformed", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      prListWithNodes([{ ...makePRNode(1, "feature/a"), comments: { totalCount: null } }])
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {});
+    expect("commentCount" in page.items[0]).toBe(false);
+  });
+});
+
 function issueListResponse(totalCount?: number) {
   return {
     repository: {

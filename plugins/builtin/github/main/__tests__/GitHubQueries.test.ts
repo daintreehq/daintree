@@ -503,6 +503,8 @@ describe("buildBatchBranchPRQuery", () => {
     expect(query).toContain("closedAt");
     expect(query).toContain("mergedAt");
     expect(query).toContain("author { login avatarUrl }");
+    // toForgePR now reads node.comments.totalCount — the batch shape must carry it.
+    expect(query).toContain("comments { totalCount }");
   });
 
   it("uses bodyText (not body) — parity with SEARCH_QUERY and getPRTooltip", () => {
