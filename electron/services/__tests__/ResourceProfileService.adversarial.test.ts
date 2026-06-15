@@ -215,6 +215,37 @@ describe("ResourceProfileService adversarial", () => {
     vi.restoreAllMocks();
   });
 
+  describe("getSnapshot (#10500)", () => {
+    it("mirrors the profile reported by getProfile", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+
+      expect(service.getSnapshot().profile).toBe(service.getProfile());
+    });
+
+    it("reflects battery state transitions", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      expect(service.getSnapshot().isOnBattery).toBe(false);
+
+      const onBatteryHandler = mockPowerMonitorOn.mock.calls.find(
+        (call: string[]) => call[0] === "on-battery"
+      )?.[1] as (() => void) | undefined;
+      onBatteryHandler!();
+      expect(service.getSnapshot().isOnBattery).toBe(true);
+
+      const onAcHandler = mockPowerMonitorOn.mock.calls.find(
+        (call: string[]) => call[0] === "on-ac"
+      )?.[1] as (() => void) | undefined;
+      onAcHandler!();
+      expect(service.getSnapshot().isOnBattery).toBe(false);
+
+      service.stop();
+    });
+  });
+
   it("does not thrash profiles when pressure oscillates around the hysteresis boundary", () => {
     const { deps } = createDeps();
     const service = new ResourceProfileService(deps);

@@ -125,6 +125,48 @@ describe("HibernationService", () => {
     });
   });
 
+  describe("getSnapshot (#10500)", () => {
+    it("reports isRunning false and surfaces config before start", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 12 });
+      const service = makeService();
+
+      const snapshot = service.getSnapshot();
+
+      expect(snapshot.isRunning).toBe(false);
+      expect(snapshot.config).toEqual({ enabled: true, inactiveThresholdHours: 12 });
+    });
+
+    it("reports isRunning true once the scheduler is armed", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      const service = makeService();
+
+      expect(service.getSnapshot().isRunning).toBe(false);
+      service.start();
+      expect(service.getSnapshot().isRunning).toBe(true);
+      service.stop();
+      expect(service.getSnapshot().isRunning).toBe(false);
+    });
+
+    it("does not arm the scheduler when hibernation is disabled", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
+      const service = makeService();
+
+      service.start();
+
+      expect(service.getSnapshot().isRunning).toBe(false);
+    });
+
+    it("reflects the memory-pressure threshold override", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
+      const service = makeService();
+
+      const defaultMs = service.getSnapshot().memoryPressureThresholdMs;
+      service.setMemoryPressureThresholdMs(defaultMs + 90_000);
+
+      expect(service.getSnapshot().memoryPressureThresholdMs).toBe(defaultMs + 90_000);
+    });
+  });
+
   it("ignores invalid update payload values", () => {
     (storeMock.get as Mock).mockReturnValue(undefined);
     const service = makeService();

@@ -175,6 +175,19 @@ interface ViewEntry {
   preloadEvalDurationMs?: number;
 }
 
+/** Safe-scalar view inventory entry for the diagnostics export (#10500). */
+export interface ViewInventoryEntry {
+  projectId: string;
+  /** Raw path; sanitized by the diagnostics collector's redactDeep pass. */
+  projectPath: string;
+  /** webContents id, or -1 if the view was destroyed mid-read. */
+  webContentsId: number;
+  state: "loading" | "active" | "cached";
+  lastUsed: number;
+  /** Epoch ms of the project's most recent eviction, if it was ever evicted. */
+  evictedAt?: number;
+}
+
 export interface ProjectViewManagerOptions {
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
@@ -879,6 +892,46 @@ export class ProjectViewManager {
 
   getAllViews(): ViewEntry[] {
     return Array.from(this.views.values());
+  }
+
+  /**
+   * Safe-scalar projection of the per-project view inventory for the
+   * diagnostics export (#10500). Unlike {@link getAllViews}, never exposes the
+   * live WebContentsView — only the project id, webContentsId, lifecycle state,
+   * last-used time, and (when previously evicted) the eviction timestamp.
+   * `projectPath` is returned raw; the diagnostics collector's final
+   * `redactDeep` pass sanitizes it, keeping path redaction in one place.
+   */
+  getViewInventory(): ViewInventoryEntry[] {
+    const out: ViewInventoryEntry[] = [];
+    for (const entry of this.views.values()) {
+      let webContentsId = -1;
+      try {
+        if (!entry.view.webContents.isDestroyed()) {
+          webContentsId = entry.view.webContents.id;
+        }
+      } catch {
+        // View torn down mid-read — leave webContentsId as -1.
+      }
+      const evictedAt = this.evictionTimestamps.get(entry.projectId);
+      out.push({
+        projectId: entry.projectId,
+        projectPath: entry.projectPath,
+        webContentsId,
+        state: entry.state,
+        lastUsed: entry.lastUsed,
+        ...(evictedAt !== undefined ? { evictedAt } : {}),
+      });
+    }
+    return out;
+  }
+
+  /** Cache-policy snapshot companion to {@link getViewInventory} (#10500). */
+  getCacheConfig(): { maxCachedViews: number; activeProjectId: string | null } {
+    return {
+      maxCachedViews: this.maxCachedViews,
+      activeProjectId: this.activeProjectId,
+    };
   }
 
   getAllWebContentsIds(): number[] {

@@ -313,6 +313,42 @@ describe("ProjectViewManager — eviction safety", () => {
     });
   });
 
+  describe("getViewInventory / getCacheConfig (#10500)", () => {
+    it("projects each view to safe scalars with the live webContentsId and lifecycle state", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      await manager.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+
+      const inventory = manager.getViewInventory();
+      expect(inventory.map((v) => v.projectId).sort()).toEqual(["proj-b", "proj-c"]);
+
+      const liveC = manager.getAllViews().find((v) => v.projectId === "proj-c")!;
+      const invC = inventory.find((v) => v.projectId === "proj-c")!;
+      // webContentsId must be the real id of the live view, not a placeholder.
+      expect(invC.webContentsId).toBe(liveC.view.webContents.id);
+      // The just-activated project is active; the previous one is cached.
+      expect(invC.state).toBe("active");
+      expect(inventory.find((v) => v.projectId === "proj-b")!.state).toBe("cached");
+      // Never-evicted views carry no eviction timestamp.
+      expect(invC.evictedAt).toBeUndefined();
+      // The live WebContentsView must never leak through the projection.
+      expect(invC).not.toHaveProperty("view");
+    });
+
+    it("getCacheConfig reflects the active project and the cache limit", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      expect(manager.getCacheConfig().activeProjectId).toBe("proj-b");
+      // Constructed with cachedProjectViews: 3.
+      expect(manager.getCacheConfig().maxCachedViews).toBe(3);
+
+      manager.setCachedViewLimit(2);
+      expect(manager.getCacheConfig().maxCachedViews).toBe(2);
+    });
+  });
+
   it("evictStaleViews does not evict any view when activeProjectId is null", async () => {
     // Register initial view for proj-a
     const wcA = createMockWebContents();
