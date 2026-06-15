@@ -16,6 +16,7 @@ const getVersionInfoMock = vi.hoisted(() =>
     electron: "41.0.0",
     chrome: "146.0.0.0",
     os: "darwin 24.0.0 (arm64)",
+    arch: "Apple Silicon",
   })
 );
 vi.mock("@/clients/appClient", () => ({

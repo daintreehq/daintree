@@ -50,6 +50,8 @@ const GENERAL_SUBTABS: SettingsSubtabItem[] = [
 
 interface GeneralTabProps {
   appVersion: string;
+  /** Human-readable running architecture (e.g. "Apple Silicon", "Intel (Rosetta)"). */
+  buildArch?: string;
   onNavigateToAgents?: (agentId?: string) => void;
   activeSubtab: string | null;
   onSubtabChange: (id: string) => void;
@@ -110,6 +112,7 @@ interface ShortcutCategory {
 
 export function GeneralTab({
   appVersion,
+  buildArch,
   onNavigateToAgents,
   activeSubtab,
   onSubtabChange,
@@ -591,6 +594,11 @@ export function GeneralTab({
                 </span>
                 <span className="text-xs text-text-muted font-mono ml-auto">v{appVersion}</span>
               </div>
+              {buildArch && (
+                <p data-testid="about-build-arch" className="text-xs text-text-muted font-mono">
+                  {buildArch}
+                </p>
+              )}
               <p className="text-xs text-text-secondary leading-relaxed">
                 An orchestration board for AI coding agents. Start agents on worktrees, monitor
                 progress, and inject context.
