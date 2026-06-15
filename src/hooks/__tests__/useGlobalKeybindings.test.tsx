@@ -36,7 +36,15 @@ const mocks = vi.hoisted(() => ({
     }),
   },
   actionService: {
-    dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
+    // Typed signature so mock.calls is a labeled tuple (not the empty tuple),
+    // letting tests destructure the dispatched actionId without TS2493.
+    dispatch: vi.fn<
+      (
+        actionId: string,
+        args?: unknown,
+        options?: unknown
+      ) => Promise<{ ok: boolean; result?: unknown; error?: unknown }>
+    >(async () => ({ ok: true, result: undefined })),
   },
 }));
 
