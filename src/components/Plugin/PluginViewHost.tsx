@@ -168,6 +168,11 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
     }, []);
 
     const handleReset = (): void => {
+      // Abort the outgoing view's signal before swapping in a fresh controller —
+      // the prior view instance is being discarded on retry, so any fetches or
+      // subscriptions it tied to `disposeSignal` must cancel now rather than
+      // linger until the whole host unmounts (#10512 review).
+      controller.abort();
       // Fresh controller for the retry so the new lazy import sees an unaborted
       // signal; the mirror effect propagates it to controllerRef for teardown.
       setController(new AbortController());

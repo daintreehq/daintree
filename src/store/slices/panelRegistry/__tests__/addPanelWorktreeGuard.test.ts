@@ -112,6 +112,8 @@ describe("addPanel non-PTY active-worktree null guard (#10512)", () => {
 
     expect(id).toBe("plugin-1");
     expect(getPanel("plugin-1")?.runtimeStatus).toBe("running");
+    // The panel must also be indexed under its worktree so the grid can find it.
+    expect(usePanelStore.getState().panelIdsByWorktreeId["wt-1"]).toContain("plugin-1");
   });
 
   it("backgrounds a non-PTY plugin panel that belongs to a different, hydrated worktree", async () => {
