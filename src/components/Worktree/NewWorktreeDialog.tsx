@@ -650,16 +650,17 @@ export function NewWorktreeDialog({
               mutateCacheEntries(rootPath, "issue", (entry) => {
                 let changed = false;
                 const items = entry.items.map((item) => {
-                  const issue = item as Issue;
-                  if (issue.number !== assignIssueNumber) return item;
-                  const hasUser = issue.assignees.some((a) => a.login === assignUsername);
+                  // `assignees` exists only on Issue, so this `in` check narrows
+                  // the Issue|PR union safely and skips any non-issue slot.
+                  if (!("assignees" in item) || item.number !== assignIssueNumber) return item;
+                  const hasUser = item.assignees.some((a) => a.login === assignUsername);
                   if (assigned) {
                     if (hasUser) return item;
                     changed = true;
                     return {
-                      ...issue,
+                      ...item,
                       assignees: [
-                        ...issue.assignees,
+                        ...item.assignees,
                         { login: assignUsername, avatarUrl: snapCurrentUserAvatar, rawData: null },
                       ],
                     };
@@ -667,8 +668,8 @@ export function NewWorktreeDialog({
                   if (!hasUser) return item;
                   changed = true;
                   return {
-                    ...issue,
-                    assignees: issue.assignees.filter((a) => a.login !== assignUsername),
+                    ...item,
+                    assignees: item.assignees.filter((a) => a.login !== assignUsername),
                   };
                 });
                 return changed ? { ...entry, items } : null;
