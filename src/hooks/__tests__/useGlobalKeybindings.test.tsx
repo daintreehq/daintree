@@ -219,6 +219,49 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
     }
   });
 
+  it("closes the Daintree Assistant via help.togglePanel when its panel is focused (issue #10509)", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.close" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+
+    // The assistant runs an embedded xterm whose focused escape handler bails
+    // to let Escape reach the PTY, so routing Cmd+W through the escape stack
+    // would swallow it. Focus inside the aside must close the assistant instead.
+    const assistant = document.createElement("aside");
+    assistant.id = "daintree-assistant-panel";
+    const focusable = document.createElement("div");
+    focusable.tabIndex = -1;
+    assistant.appendChild(focusable);
+    document.body.appendChild(assistant);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      focusable.focus();
+      expect(document.activeElement).toBe(focusable);
+
+      pressCmdW();
+
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "help.togglePanel",
+        undefined,
+        expect.objectContaining({ source: "keybinding" })
+      );
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalledWith(
+        "terminal.close",
+        expect.anything(),
+        expect.anything()
+      );
+    } finally {
+      assistant.remove();
+    }
+  });
+
   it("routes Cmd+W to escape stack when focus has no panel ancestor (dialog/body)", () => {
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
       match: { actionId: "terminal.close" },

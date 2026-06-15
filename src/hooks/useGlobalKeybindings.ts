@@ -163,19 +163,36 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         e.stopPropagation();
 
         if (result.match) {
-          // When a dialog/palette is open, route Cmd+W to the escape stack so it
-          // dismisses the topmost layer instead of falling through to the terminal.
-          // Skip this diversion when focus is inside a grid or dock panel —
-          // persistent docks like the assistant keep an escape handler registered
-          // the whole time they are open, but Cmd+W from a focused terminal panel
-          // (grid or dock) must close that panel rather than the dock.
-          if (result.match.actionId === "terminal.close" && hasHandlers()) {
+          // Cmd+W resolves to terminal.close, but where it actually lands
+          // depends on focus: the Daintree Assistant closes itself, an open
+          // dialog/palette dismisses its topmost layer, and a focused grid or
+          // dock panel closes that panel. See the branches below.
+          if (result.match.actionId === "terminal.close") {
             const active = document.activeElement as HTMLElement | null;
-            const isFocusInsidePanel =
-              active?.closest("[data-panel-location='grid'],[data-panel-location='dock']") != null;
-            if (!isFocusInsidePanel) {
-              dispatchEscape();
+            // Cmd+W inside the Daintree Assistant closes the assistant itself.
+            // Its escape handler intentionally bails when the embedded xterm /
+            // CodeMirror has focus (so a bare Escape reaches the running PTY),
+            // which would otherwise swallow Cmd+W and leave the panel open
+            // (#10509). Route to help.togglePanel — focus is inside the aside,
+            // so its open-and-focused branch closes the panel.
+            if (active?.closest("#daintree-assistant-panel") != null) {
+              void actionService.dispatch("help.togglePanel", undefined, {
+                source: "keybinding",
+              });
               return;
+            }
+            // When a dialog/palette keeps an escape handler registered, route
+            // Cmd+W to the escape stack so it dismisses the topmost layer
+            // instead of falling through to the terminal — unless focus is
+            // inside a grid or dock panel, where Cmd+W must close that panel.
+            if (hasHandlers()) {
+              const isFocusInsidePanel =
+                active?.closest("[data-panel-location='grid'],[data-panel-location='dock']") !=
+                null;
+              if (!isFocusInsidePanel) {
+                dispatchEscape();
+                return;
+              }
             }
           }
 
