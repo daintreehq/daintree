@@ -1141,6 +1141,11 @@ export default tseslint.config(
       // and binding.gyp aren't part of the TypeScript build graph; they're
       // packaged build infrastructure (analogous to scripts/).
       "electron/native/**",
+      // Sample plugin view assets are hand-authored, browser-ready ESM served
+      // verbatim over `plugin://` (bare `react` resolved via the host import
+      // map). They're test fixtures, not part of the TS build graph — like
+      // packages/*/dist (#10512).
+      "plugins/sample/*/view/**",
     ],
   }
 );

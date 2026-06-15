@@ -249,6 +249,52 @@ describe("usePluginPanelKinds", () => {
     clearPanelKindRegistry();
   });
 
+  it("re-registers a view-host definition after the plugin is removed and re-added (#10512)", async () => {
+    // The host cache keys view entries `${id}\0${componentPath}`, but removal
+    // used a bare-id delete that never matched — so a removed-then-re-added kind
+    // found a stale cache hit and skipped both `makePluginViewHost` and the
+    // definition re-registration, leaving the panel on PluginMissingPanel.
+    // Proper eviction rebuilds the host and restores the definition.
+    let emit: ((payload: { kinds: PanelKindConfig[] }) => void) | null = null;
+    onPanelKindsChangedMock.mockImplementation(
+      (cb: (payload: { kinds: PanelKindConfig[] }) => void) => {
+        emit = cb;
+        return () => {};
+      }
+    );
+
+    const { clearPanelKindRegistry } = await import("@shared/config/panelKindRegistry");
+    const { getPanelKindDefinition } = await import("@/registry");
+    const { makePluginViewHost } = await import("@/components/Plugin/PluginViewHost");
+    const { usePluginPanelKinds } = await import("../usePluginPanelKinds");
+
+    renderHook(() => usePluginPanelKinds());
+    await waitFor(() => expect(onPanelKindsChangedMock).toHaveBeenCalled());
+
+    const viewKind = pluginKind({
+      id: "acme.recycle",
+      hasPty: false,
+      componentPath: "plugin://acme/v.js",
+    });
+
+    act(() => emit!({ kinds: [viewKind] }));
+    expect(getPanelKindDefinition(viewKind.id)).toBeDefined();
+    const callsAfterFirst = (makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Remove the whole plugin from the snapshot.
+    act(() => emit!({ kinds: [] }));
+    expect(getPanelKindDefinition(viewKind.id)).toBeUndefined();
+
+    // Re-add the identical kind: the host must be rebuilt and re-registered.
+    act(() => emit!({ kinds: [viewKind] }));
+    expect(getPanelKindDefinition(viewKind.id)).toBeDefined();
+    expect((makePluginViewHost as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      callsAfterFirst + 1
+    );
+
+    clearPanelKindRegistry();
+  });
+
   it("clears registered plugin kinds on unmount", async () => {
     getPanelKindsMock.mockResolvedValue([pluginKind()]);
 

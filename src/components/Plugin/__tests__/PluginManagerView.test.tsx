@@ -185,6 +185,37 @@ describe("PluginManagerView", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
+  it("does not flash 'Restart required' when a built-in plugin is toggled (#10512)", async () => {
+    // Built-ins transition live, so their authoritative pendingRestart stays
+    // false. The optimistic update must match — not invert — to avoid a
+    // false badge flash before the next refresh.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ isBuiltin: true, disabled: false, pendingRestart: false }),
+    ]);
+    renderDialog();
+    const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
+    fireEvent.click(toggle);
+
+    // The optimistic flip lands synchronously; wait for it to settle the switch,
+    // then assert no restart badge appeared.
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText("Restart required")).toBeNull();
+  });
+
+  it("flashes 'Restart required' when a session-fixed user plugin is toggled (#10512)", async () => {
+    // Control for the built-in case: user plugins are fixed for the session, so
+    // a toggle genuinely diverges desired vs. running state and must surface the
+    // restart cue.
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makePlugin({ isBuiltin: false, disabled: false, pendingRestart: false }),
+    ]);
+    renderDialog();
+    const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0));
+  });
+
   it("renders a plugin's settings form in the detail pane once selected", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePluginWithSettings(),

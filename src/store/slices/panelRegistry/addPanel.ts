@@ -158,7 +158,13 @@ export const createAddPanelActions = (
       // hard ceiling has already been enforced upstream by `panelLimitStore`.
       const location = options.location || "grid";
       const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
-      const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
+      // When activeWorktreeId is null (worktree store not yet hydrated — common
+      // during a project switch), treat the panel as being in the active worktree
+      // to avoid incorrectly backgrounding it. Mirrors the PTY branch guard
+      // below; without it a non-PTY plugin panel spawned mid-switch is
+      // mis-backgrounded (#10512).
+      const isInActiveWorktree =
+        activeWorktreeId === null || (options.worktreeId ?? null) === (activeWorktreeId ?? null);
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 

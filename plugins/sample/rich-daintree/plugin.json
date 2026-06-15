@@ -26,6 +26,14 @@
         "showInPalette": true
       }
     ],
+    "views": [
+      {
+        "id": "rich-panel",
+        "name": "Rich Panel",
+        "componentPath": "./view/rich-panel-view.js",
+        "location": "panel"
+      }
+    ],
     "keybindings": [
       {
         "actionId": "daintree.rich.ready",

@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
-import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -35,7 +35,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const panels = usePanelStore(
     useShallow((state) =>
       group.panelIds
-        .map((id) => getNarrowPanel(state.panelsById, id))
+        // Render-eligibility, not type-narrowing: a tab group may hold a
+        // plugin-contributed panel, which must stay in the rendered set (#10512).
+        .map((id) => getRenderablePanel(state.panelsById, id))
         .filter((p): p is PanelInstance => p !== undefined)
     )
   );

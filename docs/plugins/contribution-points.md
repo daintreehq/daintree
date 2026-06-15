@@ -366,7 +366,7 @@ Adds entries to right-click menus on specific UI elements.
 }
 ```
 
-**Locations:** `worktree`, `terminal`, `panel`, `file`. More may be added. The `file` location is mounted on the Review Hub's changed-file rows: a contributed `file` item appears in the right-click menu of a changed file, and its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`). A changed-file list with no plugin-contributed `file` items keeps its plain rows — the context menu only wraps a row when a plugin contributes to that location.
+**Locations:** `worktree`, `terminal`, `file`. More may be added. The `file` location is mounted on the Review Hub's changed-file rows: a contributed `file` item appears in the right-click menu of a changed file, and its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`). A changed-file list with no plugin-contributed `file` items keeps its plain rows — the context menu only wraps a row when a plugin contributes to that location.
 
 Context menus follow the same `actionId` dispatch pattern as menu items, but a `file`-location item additionally receives the clicked file's context as dispatch args. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
@@ -518,7 +518,7 @@ Registers a provider that decorates files (or other scoped resources) with statu
 
 The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
 
-Decorations are no longer confined to the worktree diff/review surface: any file-path list in Daintree can pull a declared decoration scope for the paths it renders, so a lint/leak/status plugin can badge files wherever a path list appears, not just in the Review Hub. From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
+Today the only mounted decoration consumer is the worktree diff/review surface (the Review Hub's changed-file rows); the routing and host API are general, but no other path list in Daintree pulls decorations yet, so badges from a lint/leak/status plugin currently appear only there. (Widening this to arbitrary path lists is tracked separately — see #10512.) From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
 ## Agents — _Shipped (minimal tier)_
 
