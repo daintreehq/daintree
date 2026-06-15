@@ -168,7 +168,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
           // dialog/palette dismisses its topmost layer, and a focused grid or
           // dock panel closes that panel. See the branches below.
           if (result.match.actionId === "terminal.close") {
-            const active = document.activeElement as HTMLElement | null;
+            // Element (not HTMLElement) — only closest() is needed below, and
+            // an unchecked HTMLElement cast trips no-unsafe-type-assertion.
+            const active = document.activeElement;
             // Cmd+W inside the Daintree Assistant closes the assistant itself.
             // Its escape handler intentionally bails when the embedded xterm /
             // CodeMirror has focus (so a bare Escape reaches the running PTY),
