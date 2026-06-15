@@ -710,7 +710,7 @@ export function HelpPanel({
   // Both guards are scoped to the panel so a focused CodeMirror or xterm in a
   // different panel (e.g. FileViewer, a grid terminal) can't trap Escape here.
   const handleEscape = useCallback(() => {
-    const active = document.activeElement as HTMLElement | null;
+    const active = document.activeElement;
     if (active && panelRef.current?.contains(active)) {
       if (active.closest(".xterm-helper-textarea")) return;
       if (active.closest(".cm-editor")) return;
