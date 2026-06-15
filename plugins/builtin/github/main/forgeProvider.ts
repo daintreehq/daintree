@@ -220,6 +220,8 @@ function normalizePRState(rawState: string, merged: boolean): NormalizedPRState 
 
 function toForgeIssue(node: Record<string, unknown>): Issue {
   const rawState = typeof node.state === "string" ? node.state : "OPEN";
+  const comments = node.comments as { totalCount?: unknown } | undefined;
+  const commentCount = typeof comments?.totalCount === "number" ? comments.totalCount : undefined;
   return {
     number: node.number as number,
     title: (node.title as string) ?? "",
@@ -230,6 +232,7 @@ function toForgeIssue(node: Record<string, unknown>): Issue {
     author: toForgeUser(node.author),
     assignees: toForgeUsers(node.assignees),
     labels: toForgeLabels(node.labels),
+    ...(commentCount !== undefined ? { commentCount } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),
     closedAt: isoToMsOrNull(node.closedAt),
@@ -309,6 +312,8 @@ function toForgePR(node: Record<string, unknown>): PR {
   const ciStatus = mapListCIStatus(
     typeof rollupState === "string" ? (rollupState as GitHubPRCIStatus) : undefined
   );
+  const comments = node.comments as { totalCount?: unknown } | undefined;
+  const commentCount = typeof comments?.totalCount === "number" ? comments.totalCount : undefined;
   return {
     number: node.number as number,
     title: (node.title as string) ?? "",
@@ -323,6 +328,7 @@ function toForgePR(node: Record<string, unknown>): PR {
     headRef: (node.headRefName as string) ?? "",
     mergeable: undefined,
     reviewDecision: node.reviewDecision as NormalizedReviewDecision | undefined,
+    ...(commentCount !== undefined ? { commentCount } : {}),
     ...(ciStatus ? { ciStatus } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),
     updatedAt: isoToMs(node.updatedAt),

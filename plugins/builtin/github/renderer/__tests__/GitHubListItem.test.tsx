@@ -489,6 +489,32 @@ describe("GitHubListItem", () => {
     expect(svgs).toHaveLength(0);
   });
 
+  it("renders the issue comment count before labels in the metadata row", () => {
+    const issue: Issue = {
+      ...baseIssue,
+      commentCount: 4,
+      labels: [{ name: "enhancement", color: "a2eeef" }],
+    };
+    const { container } = render(<GitHubListItem item={issue} type="issue" />);
+    const html = container.innerHTML;
+    const commentIdx = html.indexOf("lucide-message-square");
+    const labelIdx = html.indexOf("enhancement");
+    expect(commentIdx).toBeGreaterThanOrEqual(0);
+    expect(labelIdx).toBeGreaterThanOrEqual(0);
+    expect(commentIdx).toBeLessThan(labelIdx);
+  });
+
+  it("renders the PR comment count before the head branch in the metadata row", () => {
+    const pr: PR = { ...basePR, commentCount: 6, headRef: "feature/new-thing" };
+    const { container } = render(<GitHubListItem item={pr} type="pr" />);
+    const html = container.innerHTML;
+    const commentIdx = html.indexOf("lucide-message-square");
+    const headRefIdx = html.indexOf("feature/new-thing");
+    expect(commentIdx).toBeGreaterThanOrEqual(0);
+    expect(headRefIdx).toBeGreaterThanOrEqual(0);
+    expect(commentIdx).toBeLessThan(headRefIdx);
+  });
+
   it("does not show Copy icon - only # prefix and Check on copy", async () => {
     const { container } = render(<GitHubListItem item={baseIssue} type="issue" />);
     // No Copy icon should exist
