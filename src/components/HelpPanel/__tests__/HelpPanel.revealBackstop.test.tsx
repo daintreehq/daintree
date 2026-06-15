@@ -258,11 +258,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete (document as unknown as Record<string, unknown>)["visibilityState"];
+  Reflect.deleteProperty(document, "visibilityState");
   if (clientWidthDescriptor) {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidthDescriptor);
   } else {
-    delete (HTMLElement.prototype as unknown as Record<string, unknown>)["clientWidth"];
+    Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
   }
   vi.useRealTimers();
 });
