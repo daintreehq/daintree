@@ -5,10 +5,14 @@
  * over the `postToPanel` transport and exposes this read-only snapshot to the
  * renderer (e.g. a process/task dashboard) via `plugin-process:list`.
  *
- * Deliberately NOT part of the public `@daintreehq/plugin-sdk` barrel — these
- * are renderer-IPC observability types, not the plugin-author surface. The
- * plugin-author surface is `PluginProcessApi` / `PluginProcessHandle` in
- * `shared/types/plugin.ts`.
+ * The observability types here (`PluginProcessInfo`, `PluginProcessStatus`,
+ * `PLUGIN_PROCESS_MAX_CONCURRENT`, `PLUGIN_PROCESS_KILL_GRACE_MS`) are
+ * renderer-IPC internals, NOT the plugin-author surface — that lives in
+ * `PluginProcessApi` / `PluginProcessHandle` in `shared/types/plugin.ts`. The
+ * two exceptions are `PluginProcessStreamEvent` and `PLUGIN_PROCESS_STREAM_CHANNEL`:
+ * panel authors subscribe to the process stream via the documented
+ * `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)` pattern, so those two ARE
+ * re-exported from the public `@daintreehq/plugin-sdk` barrel (#10515).
  */
 
 /**

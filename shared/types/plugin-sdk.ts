@@ -118,6 +118,39 @@ export type {
 
 export type { NormalizedPRState, ResourceRef, CIStatus } from "./forge.js";
 
+// ── Forge domain types (ForgeProviderImpl method params & returns) ──
+// A forge-provider author writing named `toIssue`/`toPR` helpers and typing
+// the provider's method signatures must be able to name these from the public
+// SDK without reaching into internal app paths. FetchOptions and FileDecoration
+// appear directly in ForgeProviderImpl / FileDecorationProviderImpl signatures.
+
+export type {
+  Issue,
+  PR,
+  RepoRef,
+  Page,
+  Credentials,
+  AuthValidation,
+  FetchOptions,
+  ListOptions,
+  RepoMetadata,
+  CreateIssueInput,
+  ForgeUser,
+  ForgeLabel,
+  NormalizedIssueState,
+  RateLimitInfo,
+  FileDecoration,
+} from "./forge.js";
+
+// ── Plugin-managed process stream events ────────────────────────────
+// A panel author subscribing via `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)`
+// discriminates the streamed events on `kind`. PLUGIN_PROCESS_STREAM_CHANNEL is a
+// runtime constant, so it is a value export (not `export type`) — type-only would
+// strip the value and break `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)`.
+
+export type { PluginProcessStreamEvent } from "./ipc/pluginProcess.js";
+export { PLUGIN_PROCESS_STREAM_CHANNEL } from "./ipc/pluginProcess.js";
+
 // ── Action dispatch result (host.dispatch return type) ──────────────
 // host.dispatch() resolves to ActionDispatchResult, so plugin authors must be
 // able to name it and narrow on its error codes from the public SDK.

@@ -36,12 +36,29 @@ import type {
   NormalizedPRState,
   ResourceRef,
   CIStatus,
+  Issue,
+  PR,
+  RepoRef,
+  Page,
+  Credentials,
+  AuthValidation,
+  FetchOptions,
+  ListOptions,
+  RepoMetadata,
+  CreateIssueInput,
+  ForgeUser,
+  ForgeLabel,
+  NormalizedIssueState,
+  RateLimitInfo,
+  FileDecoration,
+  PluginProcessStreamEvent,
   ActionDispatchResult,
   ActionDispatchSuccess,
   ActionDispatchError,
   ActionError,
   ActionErrorCode,
 } from "../plugin-sdk.js";
+import { PLUGIN_PROCESS_STREAM_CHANNEL } from "../plugin-sdk.js";
 import type { UseHostChannelResult, PluginEventHandler } from "../plugin-sdk-react.js";
 
 /**
@@ -114,6 +131,33 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<NormalizedPRState>().toMatchTypeOf<string>();
       expectTypeOf<ResourceRef>().toMatchTypeOf<object>();
       expectTypeOf<CIStatus>().toMatchTypeOf<object>();
+    });
+
+    it("exports forge domain types for provider authoring", () => {
+      expectTypeOf<Issue>().toMatchTypeOf<object>();
+      expectTypeOf<PR>().toMatchTypeOf<object>();
+      expectTypeOf<RepoRef>().toMatchTypeOf<object>();
+      expectTypeOf<Page<unknown>>().toMatchTypeOf<object>();
+      expectTypeOf<Credentials>().toMatchTypeOf<object>();
+      expectTypeOf<AuthValidation>().toMatchTypeOf<object>();
+      expectTypeOf<FetchOptions>().toMatchTypeOf<object>();
+      expectTypeOf<ListOptions>().toMatchTypeOf<object>();
+      expectTypeOf<RepoMetadata>().toMatchTypeOf<object>();
+      expectTypeOf<CreateIssueInput>().toMatchTypeOf<object>();
+      expectTypeOf<ForgeUser>().toMatchTypeOf<object>();
+      expectTypeOf<ForgeLabel>().toMatchTypeOf<object>();
+      expectTypeOf<NormalizedIssueState>().toMatchTypeOf<string>();
+      expectTypeOf<RateLimitInfo>().toMatchTypeOf<object>();
+      expectTypeOf<FileDecoration>().toMatchTypeOf<object>();
+    });
+
+    it("exports the process-stream event type and channel constant", () => {
+      expectTypeOf<PluginProcessStreamEvent>().toMatchTypeOf<object>();
+      // PLUGIN_PROCESS_STREAM_CHANNEL is a value export, not type-only — it must
+      // survive to runtime so `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)`
+      // resolves the real channel string.
+      expect(typeof PLUGIN_PROCESS_STREAM_CHANNEL).toBe("string");
+      expectTypeOf(PLUGIN_PROCESS_STREAM_CHANNEL).toEqualTypeOf<"process">();
     });
 
     it("exports the host.dispatch result types", () => {
@@ -283,6 +327,43 @@ describe("plugin-sdk boundary", () => {
       };
       expectTypeOf(status.state).toMatchTypeOf<string>();
     });
+
+    it("forge-provider helpers can be typed entirely against the SDK", () => {
+      // The issue's acceptance criterion: an author writes named toIssue/toPR
+      // helpers and provider methods using only @daintreehq/plugin-sdk imports,
+      // with no relative internal paths.
+      function toIssue(node: unknown): Issue {
+        return node as Issue;
+      }
+      function toPR(node: unknown): PR {
+        return node as PR;
+      }
+      const listIssues = (_repo: RepoRef, _opts?: ListOptions): Promise<Page<Issue>> =>
+        Promise.resolve({} as Page<Issue>);
+      const createIssue = (_repo: RepoRef, _input: CreateIssueInput): Promise<Issue> =>
+        Promise.resolve({} as Issue);
+      expectTypeOf(toIssue).returns.toEqualTypeOf<Issue>();
+      expectTypeOf(toPR).returns.toEqualTypeOf<PR>();
+      expectTypeOf(listIssues).returns.toEqualTypeOf<Promise<Page<Issue>>>();
+      expectTypeOf(createIssue).returns.toEqualTypeOf<Promise<Issue>>();
+    });
+
+    it("PluginProcessStreamEvent discriminates on kind", () => {
+      const onEvent = (event: PluginProcessStreamEvent): string => {
+        switch (event.kind) {
+          case "stdout":
+          case "stderr":
+            return event.chunk;
+          case "exit":
+          case "crash":
+            return event.signal ?? String(event.exitCode);
+        }
+      };
+      expectTypeOf(onEvent).parameter(0).toEqualTypeOf<PluginProcessStreamEvent>();
+      expectTypeOf<PluginProcessStreamEvent["kind"]>().toEqualTypeOf<
+        "stdout" | "stderr" | "exit" | "crash"
+      >();
+    });
   });
 
   describe("react entry point", () => {
@@ -313,6 +394,18 @@ describe("plugin-sdk boundary", () => {
     it("BUILT_IN_PLUGIN_CAPABILITIES is not in the SDK barrel", () => {
       // @ts-expect-error — BUILT_IN_PLUGIN_CAPABILITIES is host-internal
       const _check: import("../plugin-sdk.js").BUILT_IN_PLUGIN_CAPABILITIES = null;
+    });
+
+    it("PluginProcessInfo is not in the SDK barrel", () => {
+      // The process-stream event type and channel constant are SDK-public, but
+      // the renderer-IPC observability snapshot stays host-internal.
+      // @ts-expect-error — PluginProcessInfo is host-internal
+      const _check: import("../plugin-sdk.js").PluginProcessInfo = null;
+    });
+
+    it("PluginProcessStatus is not in the SDK barrel", () => {
+      // @ts-expect-error — PluginProcessStatus is host-internal
+      const _check: import("../plugin-sdk.js").PluginProcessStatus = null;
     });
   });
 });
