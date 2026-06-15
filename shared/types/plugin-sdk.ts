@@ -44,7 +44,7 @@ export type { PanelViewProps } from "./plugin.js";
 
 // ── Manifest root ───────────────────────────────────────────────────
 
-export type { PluginManifest } from "./plugin.js";
+export type { PluginManifest, PluginAuthor } from "./plugin.js";
 
 // ── Activation contract ─────────────────────────────────────────────
 

@@ -244,6 +244,20 @@ export const PLUGIN_CATEGORY_IDS = ["forge", "ai", "workspace", "other"] as cons
 
 export type PluginCategoryId = (typeof PLUGIN_CATEGORY_IDS)[number];
 
+/**
+ * A single attribution entry in {@link PluginManifest.authors}. `name` is
+ * required; the rest are optional. `url` (when present) is validated to the
+ * same https-only, no-credentials, no-private-host discipline as network
+ * scopes — see `PluginAuthorUrlSchema` in `electron/schemas/plugin.ts` — since
+ * it surfaces as a user-clickable link in the detail pane.
+ */
+export interface PluginAuthor {
+  name: string;
+  url?: string;
+  email?: string;
+  role?: string;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -254,6 +268,11 @@ export interface PluginManifest {
    * stays the long-form copy for the detail pane.
    */
   tagline?: string;
+  /**
+   * Optional attribution credits shown in the detail pane's "Contributors"
+   * block. Each entry credits a person who worked on the plugin.
+   */
+  authors?: PluginAuthor[];
   /**
    * Declared catalog category. Optional — when absent the manager derives one
    * from `contributes` (see `resolvePluginCategory`).
