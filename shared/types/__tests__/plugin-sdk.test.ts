@@ -160,6 +160,17 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(PLUGIN_PROCESS_STREAM_CHANNEL).toEqualTypeOf<"process">();
     });
 
+    it("surfaces the channel constant as a runtime value through the package entry", async () => {
+      // The barrel emits a value export, but the published `@daintreehq/plugin-sdk`
+      // entry re-exports with `export type *`, which strips value bindings. The
+      // entry needs an explicit value re-export line; without it a plugin author
+      // gets `undefined` for the channel constant. Import the package SOURCE entry
+      // (vitest transpiles it like the build would) and assert the value survives.
+      const pkg = await import("../../../packages/plugin-sdk/src/index.js");
+      expect(pkg.PLUGIN_PROCESS_STREAM_CHANNEL).toBe(PLUGIN_PROCESS_STREAM_CHANNEL);
+      expect(typeof pkg.PLUGIN_PROCESS_STREAM_CHANNEL).toBe("string");
+    });
+
     it("exports the host.dispatch result types", () => {
       // host.dispatch() resolves to ActionDispatchResult; a plugin author must be
       // able to name it and its error-code union from the public SDK.
@@ -346,6 +357,24 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(toPR).returns.toEqualTypeOf<PR>();
       expectTypeOf(listIssues).returns.toEqualTypeOf<Promise<Page<Issue>>>();
       expectTypeOf(createIssue).returns.toEqualTypeOf<Promise<Issue>>();
+
+      // A no-cast literal proves Issue still carries its required-field contract
+      // (would compile even if Issue were broadened to `any`/`{}` — the casts
+      // above wouldn't catch that).
+      const issue: Issue = {
+        number: 1,
+        title: "t",
+        body: "b",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://example.test/1",
+        assignees: [],
+        labels: [],
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      };
+      expectTypeOf(issue.state).toEqualTypeOf<NormalizedIssueState>();
     });
 
     it("PluginProcessStreamEvent discriminates on kind", () => {
@@ -363,6 +392,16 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<PluginProcessStreamEvent["kind"]>().toEqualTypeOf<
         "stdout" | "stderr" | "exit" | "crash"
       >();
+
+      // Per-variant payload guards — the chunk/exit fields must stay bound to
+      // their own kinds (catches an accidental union merge that would let a
+      // stdout event carry exitCode or an exit event carry chunk).
+      // @ts-expect-error — stdout carries a chunk, not exitCode
+      const _badStdout: PluginProcessStreamEvent = { kind: "stdout", id: "x", exitCode: 0 };
+      // @ts-expect-error — exit carries exitCode/signal, not chunk
+      const _badExit: PluginProcessStreamEvent = { kind: "exit", id: "x", chunk: "" };
+      void _badStdout;
+      void _badExit;
     });
   });
 
