@@ -178,8 +178,44 @@ export class TerminalReconciliationWatchdog {
     let heavyBudget = WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK;
     const now = Date.now();
     for (const { id, managed } of onScreen) {
+      this.diagnoseGeometryDivergence(id, managed);
       if (now - (managed.lastWatchdogRepairAt ?? 0) < WATCHDOG_REPAIR_COOLDOWN_MS) continue;
       heavyBudget -= this.reconcile(id, managed, now, heavyBudget);
+    }
+  }
+
+  /**
+   * Dev-only diagnostic for the project-switch garble bug: an on-screen,
+   * settled terminal whose xterm grid (`terminal.cols/rows`) disagrees with the
+   * dimensions the container can actually hold (`fitAddon.proposeDimensions()`)
+   * is rendering its buffer at the wrong width — the exact "garbled line flow"
+   * users see after switching back to a project. The watchdog already gated out
+   * drags, layout transitions, and resize-suppressed/attaching terminals, so a
+   * divergence reaching here is real, not transient. This does not repair —
+   * the reveal backstops and the suppression-clear redraw own recovery — it
+   * just makes a silently-wrong grid loud during local development.
+   */
+  private diagnoseGeometryDivergence(id: string, managed: ManagedTerminal): void {
+    if (!import.meta.env?.DEV) return;
+    if (managed.isHibernated) return;
+    try {
+      const proposal = managed.fitAddon.proposeDimensions?.();
+      if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return;
+      const { cols, rows } = managed.terminal;
+      if (proposal.cols !== cols || proposal.rows !== rows) {
+        logWarn(
+          "[TerminalReconciliationWatchdog] geometry divergence: xterm grid disagrees with container (garble risk)",
+          {
+            id,
+            xtermCols: cols,
+            xtermRows: rows,
+            proposedCols: proposal.cols,
+            proposedRows: proposal.rows,
+          }
+        );
+      }
+    } catch {
+      // Diagnostic only — never let a measurement throw break the sweep.
     }
   }
 

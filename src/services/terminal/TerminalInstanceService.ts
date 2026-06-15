@@ -849,6 +849,18 @@ class TerminalInstanceService {
         instance.resizeSuppressionEndTime = undefined;
         instance.resizeSuppressionTimer = undefined;
         this.resizeController.lockResize(id, false);
+        // Guaranteed post-switch redraw. The reveal repaint and its rAF
+        // backstops all fire INSIDE this suppression window, where the renderer
+        // can still be mid-settle and a stale `isVisible` can no-op the
+        // visibility-guarded reveal path. Now that suppression and the resize
+        // lock are gone, the DOM has long settled, and the reconciliation
+        // watchdog (which skips suppressed terminals) re-engages, run the exact
+        // recovery a user gets by clicking "Redraw": resetRenderer has no
+        // isVisible guard and its fit() is no longer lock-gated, so it corrects
+        // both a stale grid (garbled wrapping) and a paused/garbled renderer.
+        // Cheap and idempotent — a no-op when the pane is already correct, and
+        // self-skips a backgrounded/zero-box terminal via its own guards.
+        this.resetRenderer(id);
       }, durationMs);
     });
   }
@@ -3423,6 +3435,24 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     const managed = terminalInstanceService.getInstanceForE2E(panelId);
     if (!managed) return null;
     return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+  };
+
+  // Container CAPACITY (what the fit addon would size the grid to right now)
+  // alongside the grid the terminal is ACTUALLY rendering at. The E2E
+  // project-switch garble guard compares the two: after a switch-back the grid
+  // must match the container, else the buffer is wrapping at the wrong column.
+  (window as unknown as Record<string, unknown>).__daintreeProposeTerminalDimensions = (
+    panelId: string
+  ): { cols: number; rows: number; proposedCols: number; proposedRows: number } | null => {
+    const managed = terminalInstanceService.getInstanceForE2E(panelId);
+    if (!managed) return null;
+    const proposal = managed.fitAddon.proposeDimensions?.();
+    return {
+      cols: managed.terminal.cols,
+      rows: managed.terminal.rows,
+      proposedCols: proposal?.cols ?? -1,
+      proposedRows: proposal?.rows ?? -1,
+    };
   };
 
   type TerminalScrollSnapshotForE2E = {

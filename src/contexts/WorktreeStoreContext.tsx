@@ -768,9 +768,45 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       if (repaintRafId !== null) cancelAnimationFrame(repaintRafId);
     });
 
+    // Timed redraw backstop: the single frame-sweep repaint above is bounded to
+    // ~160ms (MAX_REVEAL_FRAMES) and then never retries. That window falls
+    // before the compositor presents the now-foreground view, before xterm's
+    // IntersectionObserver un-pauses the renderer as the view un-occludes, and
+    // entirely inside the 5s project-switch resize lock — exactly when a repaint
+    // can't stick. A manual Redraw works ONLY because the user clicks it seconds
+    // later, after all three resolve. Replicate that without the click: re-run
+    // the same cheap, idempotent, lock-exempt repaint on a fixed timer cadence so
+    // a late-settling view is corrected on its own. Each pass is visibility- and
+    // box-guarded down the stack (repaintForReveal / reconcileGeometryFresh), so
+    // extra passes are near-no-ops — better too many redraws than a garbled pane.
+    // 1s/2s/3.5s catch the common fast-settle case; 6s covers a late layout
+    // change that lands after the early passes. The hard guarantee past the 10s
+    // project-switch resize suppression is owned by the service-side
+    // suppression-clear redraw (suppressResizesDuringProjectSwitch), so the
+    // cadence intentionally stops before it rather than racing it.
+    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 2000, 3500, 6000];
+    let backstopTimers: ReturnType<typeof setTimeout>[] = [];
+    function clearRevealBackstops() {
+      for (const timer of backstopTimers) clearTimeout(timer);
+      backstopTimers = [];
+    }
+    cleanups.push(clearRevealBackstops);
+
     const offViewRevealed = window.electron?.app?.onViewRevealed?.(() => {
       if (document.visibilityState !== "visible") return;
       scheduleRepaint();
+      // Cancel any backstops still pending from a prior switch so rapid
+      // back-and-forth switching can't stack passes, then arm this switch's.
+      clearRevealBackstops();
+      for (const delay of REVEAL_BACKSTOP_DELAYS_MS) {
+        backstopTimers.push(
+          setTimeout(() => {
+            // Re-checked here AND inside scheduleRepaint's rAF: if the user
+            // switched away again the view is hidden and this no-ops.
+            if (document.visibilityState === "visible") scheduleRepaint();
+          }, delay)
+        );
+      }
     });
     if (offViewRevealed) cleanups.push(offViewRevealed);
 

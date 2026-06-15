@@ -59,6 +59,7 @@ const E2E_TERMINAL_GLOBALS = [
   "__daintreeSelectTerminalAll",
   "__daintreeGetTerminalBufferLength",
   "__daintreeGetTerminalDimensions",
+  "__daintreeProposeTerminalDimensions",
   "__daintreeGetTerminalScrollState",
   "__daintreeScrollTerminalLines",
   "__daintreeApplyTerminalTier",
