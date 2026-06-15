@@ -147,4 +147,52 @@ describe("scaffoldPlugin", () => {
     expect(panel).toBeDefined();
     expect(panel?.hasPty ?? false).toBe(false);
   });
+
+  for (const template of ["mcp", "full"] as const) {
+    it(`"${template}" template builds the server entry through a separate node config`, async () => {
+      const result = await scaffoldPlugin({
+        cwd: tmpDir,
+        targetDir: `srv-${template}`,
+        publisher: "acme",
+        displayName: "Srv",
+        template,
+      });
+
+      const clientConfig = await fs.readFile(path.join(result.dir, "vite.config.ts"), "utf8");
+      const serverConfig = await fs.readFile(
+        path.join(result.dir, "vite.config.server.ts"),
+        "utf8"
+      );
+
+      // The server entry must NOT go through the browser config — that's the
+      // bug where node code is built for the client environment and crashes.
+      expect(clientConfig).not.toContain("src/server.ts");
+      expect(serverConfig).toContain("src/server.ts");
+      expect(serverConfig).toContain('daintreePlugin({ target: "node" })');
+      // The second build pass must not wipe the browser output.
+      expect(serverConfig).toContain("emptyOutDir: false");
+
+      // The build script chains both passes so a plain `npm run build` produces
+      // both bundles.
+      const pkg = await readJson(path.join(result.dir, "package.json"));
+      const buildScript = (pkg.scripts as Record<string, string>).build;
+      expect(buildScript).toContain("vite build");
+      expect(buildScript).toContain("--config vite.config.server.ts");
+    });
+  }
+
+  for (const template of ["command", "view"] as const) {
+    it(`"${template}" template has no separate server config`, async () => {
+      const result = await scaffoldPlugin({
+        cwd: tmpDir,
+        targetDir: `nosrv-${template}`,
+        publisher: "acme",
+        displayName: "NoSrv",
+        template,
+      });
+      await expect(fs.access(path.join(result.dir, "vite.config.server.ts"))).rejects.toThrow();
+      const pkg = await readJson(path.join(result.dir, "package.json"));
+      expect((pkg.scripts as Record<string, string>).build).toBe("vite build");
+    });
+  }
 });
