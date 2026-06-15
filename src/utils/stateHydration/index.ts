@@ -450,7 +450,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         const MRU_TERMINAL_PREFIX = "terminal:";
         const mruHead = appState.mruList?.[0];
         const visiblePanelId =
-          mruHead && mruHead.startsWith(MRU_TERMINAL_PREFIX)
+          typeof mruHead === "string" && mruHead.startsWith(MRU_TERMINAL_PREFIX)
             ? mruHead.slice(MRU_TERMINAL_PREFIX.length)
             : undefined;
 
