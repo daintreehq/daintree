@@ -17,10 +17,13 @@ describe("PluginDevWorkerHostProxy file decoration providers", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
 
-  it("notifies main on registerFileDecorationProvider and keeps the impl in the worker", () => {
+  it("notifies main on registerFileDecorationProvider and keeps the impl in the worker", async () => {
     const { proxy, sent } = makeProxy();
     const impl = { provideDecorations: vi.fn(async () => ({})) };
-    const dispose = proxy.host.registerFileDecorationProvider({ id: "deco", scopes: ["pr"] }, impl);
+    const dispose = await proxy.host.registerFileDecorationProvider(
+      { id: "deco", scopes: ["pr"] },
+      impl
+    );
 
     const notify = sent.find((m) => m.type === "host-notify");
     expect(notify).toMatchObject({
@@ -74,7 +77,7 @@ describe("PluginDevWorkerHostProxy file decoration providers", () => {
   it("notifies unregister and drops the impl on dispose", async () => {
     const { proxy, sent } = makeProxy();
     const impl = { provideDecorations: vi.fn(async () => ({})) };
-    const dispose = proxy.host.registerFileDecorationProvider({ id: "deco" }, impl);
+    const dispose = await proxy.host.registerFileDecorationProvider({ id: "deco" }, impl);
     dispose();
 
     const unregister = sent.find(
@@ -100,8 +103,8 @@ describe("PluginDevWorkerHostProxy file decoration providers", () => {
     const { proxy, sent } = makeProxy();
     const implA = { provideDecorations: vi.fn(async () => ({ a: { badge: "A" } })) };
     const implB = { provideDecorations: vi.fn(async () => ({ b: { badge: "B" } })) };
-    const disposeA = proxy.host.registerFileDecorationProvider({ id: "deco" }, implA);
-    proxy.host.registerFileDecorationProvider({ id: "deco" }, implB); // overwrites A
+    const disposeA = await proxy.host.registerFileDecorationProvider({ id: "deco" }, implA);
+    await proxy.host.registerFileDecorationProvider({ id: "deco" }, implB); // overwrites A
     disposeA(); // stale — must NOT remove B
 
     proxy.handleMessage({
@@ -125,10 +128,10 @@ describe("PluginDevWorkerHostProxy file decoration providers", () => {
     );
   });
 
-  it("warns but does not register forge providers (synchronous-contract limitation)", () => {
+  it("warns but does not register forge providers (synchronous-contract limitation)", async () => {
     const { proxy, sent } = makeProxy();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const dispose = proxy.host.registerForgeProvider({ id: "gh" } as any, {} as any);
+    const dispose = await proxy.host.registerForgeProvider({ id: "gh" } as any, {} as any);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("not supported in dev mode"));
     expect(sent.find((m) => m.type === "host-notify")).toBeUndefined();
     expect(typeof dispose).toBe("function");

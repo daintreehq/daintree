@@ -178,7 +178,7 @@ function commandEntry(ctx: ScaffoldContext): string {
  * unregistered automatically on unload, so the disposer here is a no-op.
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
-  host.registerAction(
+  await host.registerAction(
     {
       id: "run",
       title: ${title},

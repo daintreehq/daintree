@@ -80,8 +80,10 @@ export class PluginHostGit {
    * collapse the worktree snapshot uses so plugins see one status vocabulary.
    * Reads via the shared `getWorktreeChangesWithStats` (cached, hardened).
    */
-  async status(worktreePath: string): Promise<PluginGitStatus> {
+  async status(worktreePath: string, signal?: AbortSignal): Promise<PluginGitStatus> {
+    signal?.throwIfAborted();
     const changes = await this.changesProvider(worktreePath);
+    signal?.throwIfAborted();
     const projected = toPluginWorktreeStatus(changes);
     return {
       worktreePath,
@@ -91,8 +93,10 @@ export class PluginHostGit {
   }
 
   /** Unified diff for the worktree, optionally narrowed to one path. `--no-textconv` blocks user diff drivers. */
-  async diff(worktreePath: string, filePath?: string): Promise<string> {
+  async diff(worktreePath: string, filePath?: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     const git = await this.gitFactory(worktreePath);
+    signal?.throwIfAborted();
     const args = ["--no-ext-diff", "--no-textconv", "--no-color"];
     if (typeof filePath === "string" && filePath.length > 0) {
       assertSafePathspec(this.pluginId, filePath);
@@ -102,8 +106,10 @@ export class PluginHostGit {
   }
 
   /** Stage paths relative to the worktree, or all changes when omitted. */
-  async add(worktreePath: string, paths?: string[]): Promise<void> {
+  async add(worktreePath: string, paths?: string[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const git = await this.gitFactory(worktreePath);
+    signal?.throwIfAborted();
     const targets =
       Array.isArray(paths) && paths.length > 0
         ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
@@ -123,17 +129,24 @@ export class PluginHostGit {
    */
   async commit(
     worktreePath: string,
-    options: PluginGitCommitOptions
+    options: PluginGitCommitOptions,
+    signal?: AbortSignal
   ): Promise<PluginGitCommitResult> {
+    signal?.throwIfAborted();
     const message = typeof options?.message === "string" ? options.message : "";
     if (message.trim().length === 0) {
       throw new PluginGitCommitMessageRequiredError(this.pluginId);
     }
 
     const git = await this.gitFactory(worktreePath);
+    // Re-check after acquiring the client but BEFORE computing the preview.
+    signal?.throwIfAborted();
     // The real change preview the D2 safeguard requires: the staged diff that is
     // about to be committed, computed before the mutation. No silent fallback.
     const preview = await git.diff(["--cached", "--no-ext-diff", "--no-textconv", "--no-color"]);
+    // Re-check immediately before the mutation — the diff above can take time on
+    // a large staged set, and an abort mid-diff must not still create the commit.
+    signal?.throwIfAborted();
     const result = await git.commit(message);
     return {
       commit: result.commit,

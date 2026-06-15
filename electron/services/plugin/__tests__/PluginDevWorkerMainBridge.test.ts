@@ -141,6 +141,10 @@ describe("PluginDevWorkerMainBridge", () => {
       registrationKey: "handler:secret",
       params: { channel: "secret", hasSchema: true, requires: ["worktree:read"] },
     });
+    // host-notify dispatch is async (the host registration methods are
+    // Promise-returning); flush microtasks so the capability-gate rejection
+    // routes to register-error before asserting.
+    await flush();
     expect(host.registerHandler).not.toHaveBeenCalled();
     const err = workerHost.sent.find((m) => m.type === "register-error");
     expect(err).toMatchObject({ registrationKey: "handler:secret" });
@@ -184,6 +188,10 @@ describe("PluginDevWorkerMainBridge", () => {
       subscriptionId: "s2",
       kind: "worktrees",
     });
+    // Subscribe is async now (onDidChangeWorktrees resolves the disposer); flush
+    // so the disposer is recorded before the unsubscribe looks it up — mirrors
+    // the per-message task boundary the MessagePort provides in production.
+    await flush();
     workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "s2" });
     expect(dispose).toHaveBeenCalled();
   });
@@ -294,6 +302,9 @@ describe("PluginDevWorkerMainBridge", () => {
       method: "registerFileDecorationProvider",
       params: { descriptor: { id: "acme.demo.deco" } },
     });
+    // registerFileDecorationProvider records its disposer after awaiting the
+    // (now Promise-returning) host registration; flush so the unregister finds it.
+    await flush();
     workerHost.emit("worker-message", {
       type: "host-notify",
       method: "unregisterFileDecorationProvider",
@@ -312,6 +323,9 @@ describe("PluginDevWorkerMainBridge", () => {
       method: "registerFileDecorationProvider",
       params: { descriptor: { id: "acme.demo.deco" } },
     });
+    // Let the async registration record its disposer before reload tears it down
+    // (the register message and the reload event are distinct tasks in prod).
+    await flush();
     workerHost.emit("reloading");
     expect(dispose).toHaveBeenCalledTimes(1);
   });

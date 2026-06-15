@@ -468,6 +468,32 @@ export type PluginSecretStorageTier = "keychain" | "plaintext";
  * call time, so it tracks project switches: `get` returns `undefined` and `set`
  * throws when no project is active.
  */
+/**
+ * Options accepted by long-running host calls (filesystem reads/writes, git
+ * reads and mutations, the on-demand worktree-status accessor). Carries an
+ * optional {@link AbortSignal} so a plugin can cancel a call it no longer needs
+ * — e.g. when a panel the read was feeding has unmounted. An already-aborted
+ * signal rejects the call before any I/O; aborting mid-flight rejects with the
+ * signal's reason. Always the trailing argument so it never collides with a
+ * method's positional parameters.
+ */
+export interface PluginHostCallOptions {
+  signal?: AbortSignal;
+}
+
+/**
+ * Options accepted by high-frequency event subscriptions (today
+ * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
+ * burst of change events into a single trailing callback fired `debounceMs`
+ * after the last event — the host re-emits the worktree set on every git-status
+ * poll, so a UI-updating plugin can opt into far fewer callbacks. Values below a
+ * small floor (~50ms) are clamped up; `0` / omitted means no debounce (fire on
+ * every change). The coalesced callback receives the most recent snapshot list.
+ */
+export interface PluginHostSubscriptionOptions {
+  debounceMs?: number;
+}
+
 export interface SettingsApi {
   /**
    * Read a setting. Resolves to `undefined` when the key is unset, or (for
@@ -485,17 +511,17 @@ export interface SettingsApi {
    * callback fires with the new value after each `set` that changes it. Edits
    * made to the JSON file by other processes do NOT fire until the plugin
    * reloads. Must be called during `activate()` — subscribing is revoke-guarded.
-   * Returns a disposer; calling it more than once is a no-op. All subscriptions
-   * are automatically disposed when the plugin is unloaded.
+   * Resolves to a disposer; calling it more than once is a no-op. All
+   * subscriptions are automatically disposed when the plugin is unloaded.
    *
    * @throws {Error} If called after activation resolves or times out — the host
-   *   is revoked and the subscription is rejected.
+   *   is revoked and the subscription is rejected (the promise rejects).
    */
   onDidChange<T = unknown>(
     key: string,
     callback: (value: T | undefined) => void,
     scope?: PluginSettingsScope
-  ): () => void;
+  ): Promise<() => void>;
 }
 
 export type PluginInstallSource = "builtin" | "sideload" | "url" | "catalog";
@@ -1018,28 +1044,35 @@ export interface PluginFsStat {
 export interface PluginFsApi {
   /**
    * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on
-   * a missing read capability, an out-of-scope path, or a non-file target.
+   * a missing read capability, an out-of-scope path, or a non-file target. Pass
+   * `options.signal` to cancel a read that is no longer needed.
    */
-  readFile(filePath: string): Promise<string>;
+  readFile(filePath: string, options?: PluginHostCallOptions): Promise<string>;
   /**
    * Write UTF-8 text to a file, creating it if absent (parent directories must
    * already exist within scope). Rejects on a missing write capability or an
-   * out-of-scope path. Recorded in the audit trail.
+   * out-of-scope path. Recorded in the audit trail. No cancellation signal —
+   * partial-write semantics are deliberately out of scope.
    */
   writeFile(filePath: string, contents: string): Promise<void>;
   /** List a directory's immediate children. Rejects on a missing read capability or an out-of-scope path. */
-  readdir(dirPath: string): Promise<PluginFsDirEntry[]>;
+  readdir(dirPath: string, options?: PluginHostCallOptions): Promise<PluginFsDirEntry[]>;
   /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
-  stat(targetPath: string): Promise<PluginFsStat>;
+  stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
   /**
    * Watch one or more contained paths for changes, invoking `callback` with the
    * changed absolute path. `paths` are each resolved and contained at
    * subscription time; an out-of-scope or missing-capability path rejects.
-   * Returns a disposer that tears the watcher down; all watchers are
-   * automatically torn down on unload. Rejects synchronously (throws) on a
-   * missing read capability so authoring mistakes surface loudly.
+   * Resolves to a disposer that tears the watcher down; all watchers are
+   * automatically torn down on unload. Rejects on a missing read capability so
+   * authoring mistakes surface loudly. Pass `options.signal` to abort the
+   * subscription attempt before it is wired.
    */
-  watch(paths: string[], callback: (changedPath: string) => void): Promise<() => void>;
+  watch(
+    paths: string[],
+    callback: (changedPath: string) => void,
+    options?: PluginHostCallOptions
+  ): Promise<() => void>;
 }
 
 /** A single changed file in {@link PluginGitApi.status}. Mirrors {@link PluginWorktreeStatusFile}. */
@@ -1098,25 +1131,30 @@ export interface PluginGitCommitResult {
  * NOT revoke-guarded — same lifetime/membership semantics as {@link PluginFsApi}.
  */
 export interface PluginGitApi {
-  /** Changed-file status for the worktree. Gated on `git:read`. */
-  status(worktreePath: string): Promise<PluginGitStatus>;
+  /** Changed-file status for the worktree. Gated on `git:read`. Pass `options.signal` to cancel. */
+  status(worktreePath: string, options?: PluginHostCallOptions): Promise<PluginGitStatus>;
   /**
    * Unified diff for the worktree (or one `filePath` relative to it). Returns
-   * the raw diff text. Gated on `git:read`.
+   * the raw diff text. Gated on `git:read`. Pass `options.signal` to cancel.
    */
-  diff(worktreePath: string, filePath?: string): Promise<string>;
+  diff(worktreePath: string, filePath?: string, options?: PluginHostCallOptions): Promise<string>;
   /**
    * Stage paths (relative to `worktreePath`, or all changes when omitted).
-   * Gated on `git:write`. Recorded in the audit trail.
+   * Gated on `git:write`. Recorded in the audit trail. Pass `options.signal` to cancel.
    */
-  add(worktreePath: string, paths?: string[]): Promise<void>;
+  add(worktreePath: string, paths?: string[], options?: PluginHostCallOptions): Promise<void>;
   /**
    * Commit staged changes. Gated on `git:write`. Refuses without an explicit
    * non-empty {@link PluginGitCommitOptions.message} — no silent fallback (the
    * #7880 guard) — and returns the real staged diff as a change preview.
-   * Recorded in the audit trail.
+   * Recorded in the audit trail. Pass `callOptions.signal` to cancel before the
+   * commit is created.
    */
-  commit(worktreePath: string, options: PluginGitCommitOptions): Promise<PluginGitCommitResult>;
+  commit(
+    worktreePath: string,
+    options: PluginGitCommitOptions,
+    callOptions?: PluginHostCallOptions
+  ): Promise<PluginGitCommitResult>;
 }
 
 /**
@@ -1152,10 +1190,14 @@ export interface PluginActivationApi {
    * handler. Must be called during `activate()` — the host is revoked once
    * activation resolves or times out. Unregistered automatically on unload.
    *
+   * Resolves once the registration is accepted. The revoke / validation guard
+   * still throws synchronously, so a rejected registration surfaces both as a
+   * synchronous throw at the call site and is reflected by the promise.
+   *
    * @throws {Error} If called after activation resolves or times out — the host
    *   is revoked and registration is rejected.
    */
-  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): void;
+  registerAction(descriptor: PluginActionContribution, handler: ActionHandler): Promise<void>;
   /**
    * Bind a typed IPC handler whose args and result are validated against the
    * provided Zod schemas, gated on the listed plugin capabilities. The host
@@ -1176,14 +1218,14 @@ export interface PluginActivationApi {
     channel: string,
     schema: PluginChannelSchema<TArgs, TResult>,
     handler: PluginTypedIpcHandler<TArgs, TResult>
-  ): void;
+  ): Promise<void>;
   /**
    * Legacy untyped overload: a variadic handler with no host-side validation.
    * Retained for plugins that haven't migrated to per-channel schemas. The
    * typed overload above is preferred for new code. Also revoke-guarded — must
    * be called during `activate()`.
    */
-  registerHandler(channel: string, handler: PluginIpcHandler): void;
+  registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
   /**
    * Push a fire-and-forget payload to all renderers listening on `channel`.
    * Intended for the activation window — wiring up the renderer-side view of a
@@ -1192,7 +1234,7 @@ export interface PluginActivationApi {
    * @throws {Error} If called after activation resolves or times out — the host
    *   is revoked and the broadcast is rejected.
    */
-  broadcastToRenderer(channel: string, payload: unknown): void;
+  broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
   /**
    * Bind a runtime {@link ForgeProviderImpl} to the descriptor declared in
    * `contributes.forgeProviders`. The descriptor's `id` is namespaced to the
@@ -1211,7 +1253,10 @@ export interface PluginActivationApi {
    * @throws {Error} If called after activation resolves or times out — the host
    *   is revoked and registration is rejected.
    */
-  registerForgeProvider(descriptor: ForgeProviderDescriptor, impl: ForgeProviderImpl): () => void;
+  registerForgeProvider(
+    descriptor: ForgeProviderDescriptor,
+    impl: ForgeProviderImpl
+  ): Promise<() => void>;
   /**
    * Bind a runtime {@link FileDecorationProviderImpl} to a descriptor declared
    * in `contributes.fileDecorationProviders`. The descriptor's `id` is
@@ -1230,7 +1275,7 @@ export interface PluginActivationApi {
   registerFileDecorationProvider(
     descriptor: FileDecorationProviderDescriptor,
     impl: FileDecorationProviderImpl
-  ): () => void;
+  ): Promise<() => void>;
   /**
    * Subscribe to active-worktree changes. The callback fires with the new
    * active snapshot (or `null` when none is active). Returns a disposer;
@@ -1246,12 +1291,16 @@ export interface PluginActivationApi {
    */
   onDidChangeActiveWorktree(
     callback: (snapshot: PluginWorktreeSnapshot | null) => void
-  ): () => void;
+  ): Promise<() => void>;
   /**
    * Subscribe to the worktree set changing. The callback fires with the full
-   * current list on any worktree add/update/remove. Returns a disposer;
+   * current list on any worktree add/update/remove. Resolves to a disposer;
    * calling it more than once is a no-op. All subscriptions are automatically
    * disposed when the plugin is unloaded.
+   *
+   * Pass `options.debounceMs` to coalesce bursts (the host re-emits on every
+   * git-status poll) into a single trailing callback — see
+   * {@link PluginHostSubscriptionOptions}. Omitted means fire on every change.
    *
    * Subscribing is revoke-guarded — call it during `activate()`. The callback
    * itself fires for the plugin's whole lifetime; only the act of subscribing
@@ -1260,7 +1309,10 @@ export interface PluginActivationApi {
    * @throws {Error} If called after activation resolves or times out — the host
    *   is revoked and the subscription is rejected.
    */
-  onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void): () => void;
+  onDidChangeWorktrees(
+    callback: (snapshots: PluginWorktreeSnapshot[]) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
 }
 
 /**
@@ -1288,7 +1340,7 @@ export interface PluginHostApi extends PluginActivationApi {
    * a non-empty string without colons (the namespace separator); an invalid
    * channel throws so authoring mistakes surface loudly.
    */
-  postToPanel(channel: string, payload: unknown): void;
+  postToPanel(channel: string, payload: unknown): Promise<void>;
   /**
    * Returns the currently-active worktree (`isCurrent === true`) across all
    * projects as a frozen snapshot, or `null` if none is active. In multi-project
@@ -1307,9 +1359,12 @@ export interface PluginHostApi extends PluginActivationApi {
    *
    * Like {@link postToPanel} this is NOT revoke-guarded: it stays callable from
    * the plugin's timers and subscription callbacks and degrades to `null` once
-   * the plugin is unloaded.
+   * the plugin is unloaded. Pass `options.signal` to cancel.
    */
-  getWorktreeStatus(path: string): Promise<PluginWorktreeStatus | null>;
+  getWorktreeStatus(
+    path: string,
+    options?: PluginHostCallOptions
+  ): Promise<PluginWorktreeStatus | null>;
   /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the
@@ -1319,7 +1374,7 @@ export interface PluginHostApi extends PluginActivationApi {
    * the plugin's whole lifetime. It becomes a silent no-op once the plugin is
    * unloaded.
    */
-  invalidateFileDecorations(scope: string, paths?: string[]): void;
+  invalidateFileDecorations(scope: string, paths?: string[]): Promise<void>;
   /**
    * Surface a toast notification. The host namespaces the message as
    * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
@@ -1410,6 +1465,13 @@ export interface PluginHostApi extends PluginActivationApi {
  * structured payload serialized alongside the message; an unserializable
  * payload is coerced to a string rather than thrown. Calls return `void` — the
  * write is enqueued internally and never rejects.
+ *
+ * Deliberate carve-out: every other host method is Promise-returning (#10519),
+ * but the logger stays synchronous. Logging happens from error handlers and
+ * sync callbacks where forcing `await` is ergonomic noise, the write genuinely
+ * cannot fail (it is enqueued, never awaited), and the precedent — VS Code's
+ * own `OutputChannel.appendLine` — is synchronous. Do not "complete" the async
+ * conversion by making these return `Promise<void>`.
  */
 export interface PluginLogger {
   info(message: string, fields?: Record<string, unknown>): void;

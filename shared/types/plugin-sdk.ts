@@ -52,6 +52,8 @@ export type {
   PluginActivate,
   PluginHostApi,
   PluginActivationApi,
+  PluginHostCallOptions,
+  PluginHostSubscriptionOptions,
   ActionHandler,
   PluginToastOptions,
   PluginLogger,

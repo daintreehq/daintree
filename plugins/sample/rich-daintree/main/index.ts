@@ -16,7 +16,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   // Sentinel the E2E harness polls for: the host namespaces this to
   // `daintree.rich.ready`, so `waitForRichPluginReady` knows activation ran.
   // The host unregisters plugin actions automatically on unload.
-  host.registerAction(
+  await host.registerAction(
     {
       id: "ready",
       title: "Rich: Ready",

@@ -112,9 +112,9 @@ async function syncCredentialsToWorkspaceHosts(): Promise<void> {
  * `plugin.json`. The descriptor ids MUST match the manifest contributions or
  * the host throws. Returns a disposer that tears down both.
  */
-export function activate(host: PluginHostApi): () => void {
+export async function activate(host: PluginHostApi): Promise<() => void> {
   initializeTokenStorage();
-  const disposeForge = host.registerForgeProvider({ id: "github" }, githubForgeProvider);
+  const disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
   validateStoredTokenInBackground();
   void syncCredentialsToWorkspaceHosts();
   // Pass the registered forge provider so the decoration hook can author
@@ -122,7 +122,7 @@ export function activate(host: PluginHostApi): () => void {
   // would inject its own equivalent). The provider instance is the same
   // object the host holds — sharing the reference keeps the capability
   // check a single source of truth.
-  const disposeDecorations = registerReviewDecorationProvider(host, githubForgeProvider);
+  const disposeDecorations = await registerReviewDecorationProvider(host, githubForgeProvider);
   // Periodic sweep of the data caches' expired entries (lazy get()-time
   // eviction can pin entries that stop being read). Cleared on deactivation.
   startCacheSweep();

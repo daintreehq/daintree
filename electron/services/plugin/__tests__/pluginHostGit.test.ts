@@ -131,4 +131,56 @@ describe("PluginHostGit", () => {
     expect(status.changedFileCount).toBe(0);
     expect(status.files).toEqual([]);
   });
+
+  describe("AbortSignal", () => {
+    it("commit does NOT create the commit when the signal aborts during the staged-diff", async () => {
+      // The destructive-mutation regression: an abort that fires while the
+      // change-preview diff is being computed must stop the commit, not let it
+      // proceed (the re-check between diff and commit).
+      const controller = new AbortController();
+      const diff = vi.fn(async () => {
+        controller.abort();
+        return "staged diff";
+      });
+      const commit = vi.fn(async () => ({ commit: "deadbee" }));
+      const git = { diff, commit } as unknown as SimpleGit;
+      const host = new PluginHostGit("p", async () => git);
+
+      await expect(
+        host.commit("/wt", { message: "feat: thing" }, controller.signal)
+      ).rejects.toThrow();
+      expect(diff).toHaveBeenCalledTimes(1);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("commit rejects before any work when the signal is already aborted", async () => {
+      const { git, diff, commit } = fakeGit();
+      const host = new PluginHostGit("p", async () => git);
+      await expect(host.commit("/wt", { message: "msg" }, AbortSignal.abort())).rejects.toThrow();
+      expect(diff).not.toHaveBeenCalled();
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("status rejects an already-aborted signal before reading", async () => {
+      const provider = vi.fn(async () => emptyChanges);
+      const host = new PluginHostGit("p", async () => fakeGit().git, provider);
+      await expect(host.status("/wt", AbortSignal.abort())).rejects.toThrow();
+      expect(provider).not.toHaveBeenCalled();
+    });
+
+    it("add rejects an already-aborted signal before staging", async () => {
+      const { git, raw } = fakeGit();
+      const host = new PluginHostGit("p", async () => git);
+      await expect(host.add("/wt", ["a.ts"], AbortSignal.abort())).rejects.toThrow();
+      expect(raw).not.toHaveBeenCalled();
+    });
+
+    it("commit proceeds normally when the signal is not aborted", async () => {
+      const { git, commit } = fakeGit();
+      const host = new PluginHostGit("p", async () => git);
+      const result = await host.commit("/wt", { message: "msg" }, new AbortController().signal);
+      expect(commit).toHaveBeenCalledWith("msg");
+      expect(result.message).toBe("msg");
+    });
+  });
 });

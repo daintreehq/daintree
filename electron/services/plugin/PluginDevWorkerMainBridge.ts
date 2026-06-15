@@ -77,6 +77,13 @@ export class PluginDevWorkerMainBridge {
   private invokeSeq = 1;
   private readonly pendingInvokes = new Map<string, PendingInvoke>();
   private readonly subscriptionDisposers = new Map<string, () => void>();
+  /** AbortControllers for in-flight `host-call`s, keyed by requestId. A worker
+   * `host-cancel` (the caller's AbortSignal fired) aborts the matching one. */
+  private readonly hostCallAborts = new Map<string, AbortController>();
+  /** Bumped on every reload. A host-call that started before a reload must not
+   * deliver its late `host-result` to the new worker generation, whose proxy
+   * resets its requestId counter and could collide on the same id. */
+  private reloadGeneration = 0;
   /** Disposers for providers (file decoration) the worker registered on the real
    * host, keyed by provider id. Torn down on reload and dispose so a reloaded
    * generation re-registers cleanly. */
@@ -127,11 +134,24 @@ export class PluginDevWorkerMainBridge {
     }
     this.subscriptionDisposers.clear();
     this.disposeProviders();
+    this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin dev worker bridge disposed"));
     }
     this.pendingInvokes.clear();
     this.rejectActivation(new Error(`Plugin dev worker "${this.pluginId}" disposed`));
+  }
+
+  /** Abort every in-flight host call (worker is going away — cancel the I/O). */
+  private abortAllHostCalls(): void {
+    for (const controller of this.hostCallAborts.values()) {
+      try {
+        controller.abort();
+      } catch {
+        // best-effort
+      }
+    }
+    this.hostCallAborts.clear();
   }
 
   /** Tear down every provider the worker registered on the real host. */
@@ -150,6 +170,7 @@ export class PluginDevWorkerMainBridge {
     // The new worker generation will re-register from scratch; drop the prior
     // generation's activate-time registrations and tear down subscriptions so
     // they don't double up. Pending invokes target a now-dead worker — fail them.
+    this.reloadGeneration++;
     this.clearPriorRegistrations();
     for (const dispose of this.subscriptionDisposers.values()) {
       try {
@@ -160,6 +181,7 @@ export class PluginDevWorkerMainBridge {
     }
     this.subscriptionDisposers.clear();
     this.disposeProviders();
+    this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin reloaded before invocation completed"));
     }
@@ -205,11 +227,16 @@ export class PluginDevWorkerMainBridge {
       case "host-call":
         void this.handleHostCall(msg);
         return;
+      case "host-cancel": {
+        const controller = this.hostCallAborts.get(msg.requestId);
+        if (controller) controller.abort();
+        return;
+      }
       case "host-notify":
-        this.handleHostNotify(msg);
+        void this.handleHostNotify(msg);
         return;
       case "subscribe":
-        this.handleSubscribe(msg);
+        void this.handleSubscribe(msg);
         return;
       case "unsubscribe": {
         const dispose = this.subscriptionDisposers.get(msg.subscriptionId);
@@ -240,27 +267,42 @@ export class PluginDevWorkerMainBridge {
   private async handleHostCall(
     msg: Extract<PluginWorkerToHostMessage, { type: "host-call" }>
   ): Promise<void> {
+    // Track an AbortController so a worker `host-cancel` can cancel the in-flight
+    // read/mutation (signal-bearing host methods honor it).
+    const controller = new AbortController();
+    this.hostCallAborts.set(msg.requestId, controller);
+    // Capture the generation so a result that resolves after a reload is dropped
+    // rather than mis-delivered to the new worker (whose requestIds collide).
+    const generation = this.reloadGeneration;
     try {
-      const result = await this.dispatchHostCall(msg.method, msg.params);
+      const result = await this.dispatchHostCall(msg.method, msg.params, controller.signal);
+      if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
     } catch (err) {
+      if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({
         type: "host-result",
         requestId: msg.requestId,
         ok: false,
         error: formatErrorMessage(err, "host call failed"),
       });
+    } finally {
+      this.hostCallAborts.delete(msg.requestId);
     }
   }
 
-  private async dispatchHostCall(method: string, params: unknown): Promise<unknown> {
+  private async dispatchHostCall(
+    method: string,
+    params: unknown,
+    signal: AbortSignal
+  ): Promise<unknown> {
     switch (method) {
       case "getActiveWorktree":
         return this.host.getActiveWorktree();
       case "getWorktrees":
         return this.host.getWorktrees();
       case "getWorktreeStatus":
-        return this.host.getWorktreeStatus(params as string);
+        return this.host.getWorktreeStatus(params as string, { signal });
       case "showToast": {
         const p = params as ShowToastParams;
         // `type` is validated against the NotificationType enum by the host's
@@ -286,39 +328,41 @@ export class PluginDevWorkerMainBridge {
         return undefined;
       }
       case "fs.readFile":
-        return this.host.fs.readFile((params as FsPathParams).path);
+        return this.host.fs.readFile((params as FsPathParams).path, { signal });
       case "fs.writeFile": {
         const p = params as FsWriteFileParams;
         await this.host.fs.writeFile(p.path, p.contents);
         return undefined;
       }
       case "fs.readdir":
-        return this.host.fs.readdir((params as FsPathParams).path);
+        return this.host.fs.readdir((params as FsPathParams).path, { signal });
       case "fs.stat":
-        return this.host.fs.stat((params as FsPathParams).path);
+        return this.host.fs.stat((params as FsPathParams).path, { signal });
       case "git.status":
-        return this.host.git.status((params as GitOpParams).worktreePath);
+        return this.host.git.status((params as GitOpParams).worktreePath, { signal });
       case "git.diff": {
         const p = params as GitOpParams;
-        return this.host.git.diff(p.worktreePath, p.filePath);
+        return this.host.git.diff(p.worktreePath, p.filePath, { signal });
       }
       case "git.add": {
         const p = params as GitOpParams;
-        await this.host.git.add(p.worktreePath, p.paths);
+        await this.host.git.add(p.worktreePath, p.paths, { signal });
         return undefined;
       }
       case "git.commit": {
         const p = params as GitOpParams;
-        return this.host.git.commit(p.worktreePath, { message: p.message ?? "" });
+        return this.host.git.commit(p.worktreePath, { message: p.message ?? "" }, { signal });
       }
       default:
         throw new Error(`Unknown host-call method "${method}"`);
     }
   }
 
-  private handleHostNotify(msg: Extract<PluginWorkerToHostMessage, { type: "host-notify" }>): void {
+  private async handleHostNotify(
+    msg: Extract<PluginWorkerToHostMessage, { type: "host-notify" }>
+  ): Promise<void> {
     try {
-      this.dispatchHostNotify(msg.method, msg.params);
+      await this.dispatchHostNotify(msg.method, msg.params);
     } catch (err) {
       const error = formatErrorMessage(err, "registration failed");
       if (msg.registrationKey) {
@@ -335,12 +379,14 @@ export class PluginDevWorkerMainBridge {
     }
   }
 
-  private dispatchHostNotify(method: string, params: unknown): void {
+  private async dispatchHostNotify(method: string, params: unknown): Promise<void> {
     switch (method) {
       case "registerAction": {
         const { descriptor } = params as RegisterActionParams;
         const namespacedId = `${this.pluginId}.${descriptor.id}`;
-        this.host.registerAction(descriptor, (args) =>
+        // The host registers synchronously and resolves; await so a deep-
+        // validation rejection routes to the register-error channel.
+        await this.host.registerAction(descriptor, (args) =>
           this.invoke({ kind: "action", namespacedId, args })
         );
         return;
@@ -361,22 +407,22 @@ export class PluginDevWorkerMainBridge {
         }
         const handler = (ctx: PluginIpcContext, ...args: unknown[]) =>
           this.invoke({ kind: "handler", channel: p.channel, ctx, args });
-        this.host.registerHandler(p.channel, handler);
+        await this.host.registerHandler(p.channel, handler);
         return;
       }
       case "broadcastToRenderer": {
         const p = params as BroadcastToRendererParams;
-        this.host.broadcastToRenderer(p.channel, p.payload);
+        await this.host.broadcastToRenderer(p.channel, p.payload);
         return;
       }
       case "postToPanel": {
         const p = params as PostToPanelParams;
-        this.host.postToPanel(p.channel, p.payload);
+        await this.host.postToPanel(p.channel, p.payload);
         return;
       }
       case "invalidateFileDecorations": {
         const p = params as InvalidateFileDecorationsParams;
-        this.host.invalidateFileDecorations(p.scope, p.paths);
+        await this.host.invalidateFileDecorations(p.scope, p.paths);
         return;
       }
       case "registerFileDecorationProvider": {
@@ -404,7 +450,19 @@ export class PluginDevWorkerMainBridge {
               args: [scope, paths],
             }) as Promise<Record<string, FileDecoration>>,
         };
-        const dispose = this.host.registerFileDecorationProvider(descriptor, proxyImpl);
+        const generation = this.reloadGeneration;
+        const dispose = await this.host.registerFileDecorationProvider(descriptor, proxyImpl);
+        // The bridge may have been torn down (dispose) or reloaded while the host
+        // registration was settling — don't leak the freshly bound provider past
+        // the cleanup pass that already ran.
+        if (this.disposed || generation !== this.reloadGeneration) {
+          try {
+            dispose();
+          } catch {
+            // best-effort
+          }
+          return;
+        }
         this.providerDisposers.set(providerId, dispose);
         return;
       }
@@ -422,6 +480,7 @@ export class PluginDevWorkerMainBridge {
       case "logger.error": {
         const p = params as LoggerParams;
         const level = method.split(".")[1] as "info" | "warn" | "error";
+        // Logger stays synchronous fire-and-forget (the #10519 carve-out).
         this.host.logger[level](p.message, p.fields);
         return;
       }
@@ -430,25 +489,40 @@ export class PluginDevWorkerMainBridge {
     }
   }
 
-  private handleSubscribe(msg: Extract<PluginWorkerToHostMessage, { type: "subscribe" }>): void {
+  private async handleSubscribe(
+    msg: Extract<PluginWorkerToHostMessage, { type: "subscribe" }>
+  ): Promise<void> {
     const { subscriptionId, kind } = msg;
     const push = (payload: unknown): void => {
       if (this.disposed) return;
       this.workerHost.send({ type: "subscription-event", subscriptionId, payload });
     };
+    const generation = this.reloadGeneration;
     try {
       let dispose: () => void;
       if (kind === "active-worktree") {
-        dispose = this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot));
+        dispose = await this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot));
       } else if (kind === "worktrees") {
-        dispose = this.host.onDidChangeWorktrees((snapshots) => push(snapshots));
+        dispose = await this.host.onDidChangeWorktrees((snapshots) => push(snapshots), {
+          debounceMs: msg.debounceMs,
+        });
       } else {
         // settings
         if (!msg.key) {
           logger.warn(`[${this.pluginId}] settings subscribe missing key`);
           return;
         }
-        dispose = this.host.settings.onDidChange(msg.key, (value) => push(value), msg.scope);
+        dispose = await this.host.settings.onDidChange(msg.key, (value) => push(value), msg.scope);
+      }
+      // The bridge may have been disposed or reloaded while the subscription was
+      // settling — tear it down rather than leak it past the cleanup pass.
+      if (this.disposed || generation !== this.reloadGeneration) {
+        try {
+          dispose();
+        } catch {
+          // best-effort
+        }
+        return;
       }
       this.subscriptionDisposers.set(subscriptionId, dispose);
     } catch (err) {

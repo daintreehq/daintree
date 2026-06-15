@@ -4605,7 +4605,7 @@ describe("createHost — registerForgeProvider", () => {
 
     vi.mocked(registerForgeProviderImpl).mockClear();
     const impl = { tag: "impl-a" };
-    host.registerForgeProvider({ id: "github" }, impl);
+    await host.registerForgeProvider({ id: "github" }, impl);
     expect(registerForgeProviderImpl).toHaveBeenCalledWith("acme.forge-host", "github", impl);
   });
 
@@ -4620,7 +4620,7 @@ describe("createHost — registerForgeProvider", () => {
 
     vi.mocked(unregisterForgeProviderImpl).mockClear();
     const impl = { tag: "impl" };
-    const dispose = host.registerForgeProvider({ id: "github" }, impl);
+    const dispose = await host.registerForgeProvider({ id: "github" }, impl);
     dispose();
     dispose(); // idempotent — only the first call should propagate
     expect(unregisterForgeProviderImpl).toHaveBeenCalledTimes(1);
@@ -4683,8 +4683,8 @@ describe("createHost — registerForgeProvider", () => {
 
     const impl1 = { tag: "first" };
     const impl2 = { tag: "second" };
-    const dispose1 = host.registerForgeProvider({ id: "github" }, impl1);
-    host.registerForgeProvider({ id: "github" }, impl2);
+    const dispose1 = await host.registerForgeProvider({ id: "github" }, impl1);
+    await host.registerForgeProvider({ id: "github" }, impl2);
 
     // Calling the older disposer must pass the older impl so the registry
     // can decline to clear an already-overwritten entry. The registry side
@@ -4717,7 +4717,7 @@ describe("createHost — registerForgeProvider", () => {
       "acme.forge-flush"
     );
     const impl = { tag: "impl" };
-    host.registerForgeProvider({ id: "github" }, impl);
+    await host.registerForgeProvider({ id: "github" }, impl);
 
     vi.mocked(unregisterForgeProviderImpl).mockClear();
     service.unloadPlugin("acme.forge-flush");
@@ -4740,7 +4740,7 @@ describe("createHost — registerForgeProvider", () => {
     );
 
     const setCredentials = vi.fn();
-    host.registerForgeProvider({ id: "github" }, { setCredentials });
+    await host.registerForgeProvider({ id: "github" }, { setCredentials });
 
     expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "stored-secret" });
   });
@@ -4777,7 +4777,7 @@ describe("createHost — registerForgeProvider", () => {
     );
 
     const setCredentials = vi.fn();
-    host.registerForgeProvider({ id: "github" }, { setCredentials });
+    await host.registerForgeProvider({ id: "github" }, { setCredentials });
 
     expect(setCredentials).toHaveBeenCalledWith({ kind: "bearer", value: "stored-secret" });
   });
@@ -4813,7 +4813,7 @@ describe("createHost — registerForgeProvider", () => {
       throw new Error("boom");
     });
     // A plugin's setCredentials throwing must not propagate out of binding.
-    const dispose = host.registerForgeProvider({ id: "github" }, { setCredentials });
+    const dispose = await host.registerForgeProvider({ id: "github" }, { setCredentials });
     expect(setCredentials).toHaveBeenCalled();
     expect(typeof dispose).toBe("function");
   });
@@ -6052,7 +6052,7 @@ describe("Plugin worktree host API", () => {
 
     // Subscribe during "activate" window (before revoke), as a real plugin would.
     const cb = vi.fn();
-    const dispose = host.onDidChangeActiveWorktree(cb);
+    const dispose = await host.onDidChangeActiveWorktree(cb);
     revoke();
 
     client.setStates([mkSnap({ id: "b", isCurrent: true, branch: "dev" })]);
@@ -6077,7 +6077,7 @@ describe("Plugin worktree host API", () => {
     ]);
 
     const cb = vi.fn();
-    host.onDidChangeWorktrees(cb);
+    await host.onDidChangeWorktrees(cb);
     revoke();
 
     client.emit("worktree-update", {
@@ -6095,8 +6095,8 @@ describe("Plugin worktree host API", () => {
 
     const cbA = vi.fn();
     const cbB = vi.fn();
-    const disposeA = host.onDidChangeActiveWorktree(cbA);
-    host.onDidChangeActiveWorktree(cbB);
+    const disposeA = await host.onDidChangeActiveWorktree(cbA);
+    await host.onDidChangeActiveWorktree(cbB);
     revoke();
 
     disposeA();
@@ -6113,8 +6113,8 @@ describe("Plugin worktree host API", () => {
 
     const cb1 = vi.fn();
     const cb2 = vi.fn();
-    host.onDidChangeActiveWorktree(cb1);
-    host.onDidChangeWorktrees(cb2);
+    await host.onDidChangeActiveWorktree(cb1);
+    await host.onDidChangeWorktrees(cb2);
     revoke();
 
     expect(client.listenerCount("worktree-activated")).toBe(1);
@@ -6149,7 +6149,7 @@ describe("Plugin worktree host API", () => {
   it("callbacks do not fire after unloadPlugin even if the client emits again", async () => {
     const { service, host, client, revoke } = await setup();
     const cb = vi.fn();
-    host.onDidChangeActiveWorktree(cb);
+    await host.onDidChangeActiveWorktree(cb);
     revoke();
 
     service.unloadPlugin("acme.wt-host");
@@ -6174,7 +6174,7 @@ describe("Plugin worktree host API", () => {
     ).createHost("acme.wt-boot");
 
     const cb = vi.fn();
-    host.onDidChangeActiveWorktree(cb);
+    await host.onDidChangeActiveWorktree(cb);
     revoke();
 
     // Now the client becomes available — subscriptions must be replayed.
@@ -6200,7 +6200,7 @@ describe("Plugin worktree host API", () => {
     ).createHost("acme.wt-boot2");
 
     const cb = vi.fn();
-    const dispose = host.onDidChangeActiveWorktree(cb);
+    const dispose = await host.onDidChangeActiveWorktree(cb);
     revoke();
     dispose();
 
@@ -6220,7 +6220,7 @@ describe("Plugin worktree host API", () => {
     ]);
 
     const cb = vi.fn();
-    host.onDidChangeWorktrees(cb);
+    await host.onDidChangeWorktrees(cb);
     revoke();
 
     client.setStates([mkSnap({ id: "a", isCurrent: true })]);
@@ -6235,7 +6235,7 @@ describe("Plugin worktree host API", () => {
     const { host, client, revoke } = await setup([mkSnap({ id: "a", isCurrent: true })]);
 
     const cb = vi.fn();
-    const dispose = host.onDidChangeWorktrees(cb);
+    const dispose = await host.onDidChangeWorktrees(cb);
     revoke();
     expect(client.listenerCount("worktree-update")).toBe(1);
     expect(client.listenerCount("worktree-removed")).toBe(1);
@@ -7934,7 +7934,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-watch");
     const { host } = createSettingsHost(service, "acme.settings-watch");
     const cb = vi.fn();
-    host.settings.onDidChange<string>("token", cb);
+    await host.settings.onDidChange<string>("token", cb);
     await host.settings.set("token", "v1");
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb).toHaveBeenCalledWith("v1");
@@ -7944,7 +7944,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-noop");
     const { host } = createSettingsHost(service, "acme.settings-noop");
     const cb = vi.fn();
-    host.settings.onDidChange("token", cb);
+    await host.settings.onDidChange("token", cb);
     await host.settings.set("token", "same");
     await host.settings.set("token", "same");
     expect(cb).toHaveBeenCalledTimes(1);
@@ -7955,7 +7955,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-scope");
     const { host } = createSettingsHost(service, "acme.settings-scope");
     const userCb = vi.fn();
-    host.settings.onDidChange("token", userCb, "user");
+    await host.settings.onDidChange("token", userCb, "user");
     await host.settings.set("token", "proj-value", "project");
     expect(userCb).not.toHaveBeenCalled();
   });
@@ -7964,7 +7964,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-dispose");
     const { host } = createSettingsHost(service, "acme.settings-dispose");
     const cb = vi.fn();
-    const dispose = host.settings.onDidChange("token", cb);
+    const dispose = await host.settings.onDidChange("token", cb);
     dispose();
     await host.settings.set("token", "v1");
     expect(cb).not.toHaveBeenCalled();
@@ -7974,7 +7974,7 @@ describe("createHost — settings", () => {
     const { service } = await setupSettingsService("acme.settings-unload");
     const { host } = createSettingsHost(service, "acme.settings-unload");
     const cb = vi.fn();
-    host.settings.onDidChange("token", cb);
+    await host.settings.onDidChange("token", cb);
     service.unloadPlugin("acme.settings-unload");
     await host.settings.set("token", "after-unload");
     expect(cb).not.toHaveBeenCalled();
