@@ -1,59 +1,62 @@
 import { describe, it, expect } from "vitest";
+import {
+  computeThresholds,
+  getMemoryState,
+  computeSlope,
+  getTrendDirection,
+  formatMemory,
+  FALLBACK_THRESHOLDS,
+} from "../ProjectResourceBadge.utils";
 
-// Re-implement the pure utility functions for testing since they're not exported
-// These mirror the functions in ProjectResourceBadge.tsx exactly
+const GB = 1024 * 1024 * 1024;
 
-type MemoryState = "normal" | "elevated" | "critical";
-type TrendDirection = "up" | "down" | "stable";
+describe("computeThresholds", () => {
+  it("scales thresholds as fractions of total RAM", () => {
+    // 8 GB → 20% elevated, 33% critical, expressed in MB.
+    const t = computeThresholds(8 * GB);
+    expect(t.elevated).toBe(Math.round(8 * 1024 * 0.2));
+    expect(t.critical).toBe(Math.round(8 * 1024 * 0.33));
+  });
 
-const MEMORY_THRESHOLD_ELEVATED = 500;
-const MEMORY_THRESHOLD_CRITICAL = 800;
-const TREND_DEADBAND_MB_PER_MIN = 3;
+  it("scales up on larger machines so the same MB isn't 'critical' everywhere", () => {
+    const small = computeThresholds(8 * GB);
+    const large = computeThresholds(64 * GB);
+    expect(large.elevated).toBeGreaterThan(small.elevated);
+    expect(large.critical).toBeGreaterThan(small.critical);
+    // critical must always sit above elevated.
+    expect(large.critical).toBeGreaterThan(large.elevated);
+    expect(small.critical).toBeGreaterThan(small.elevated);
+  });
 
-function getMemoryState(totalMB: number): MemoryState {
-  if (totalMB >= MEMORY_THRESHOLD_CRITICAL) return "critical";
-  if (totalMB >= MEMORY_THRESHOLD_ELEVATED) return "elevated";
-  return "normal";
-}
-
-function computeSlope(samples: number[]): number {
-  const n = samples.length;
-  if (n < 3) return 0;
-  const sumX = (n * (n - 1)) / 2;
-  const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
-  const sumY = samples.reduce((a, b) => a + b, 0);
-  const sumXY = samples.reduce((acc, y, i) => acc + i * y, 0);
-  const denom = n * sumX2 - sumX * sumX;
-  if (denom === 0) return 0;
-  return (n * sumXY - sumX * sumY) / denom;
-}
-
-function getTrendDirection(samples: number[]): TrendDirection {
-  const slopePerSample = computeSlope(samples);
-  const slopePerMin = slopePerSample * 6;
-  if (Math.abs(slopePerMin) < TREND_DEADBAND_MB_PER_MIN) return "stable";
-  return slopePerMin > 0 ? "up" : "down";
-}
-
-function formatMemory(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
-  return `${mb}MB`;
-}
+  it("falls back to fixed MB when total RAM is unknown or invalid", () => {
+    expect(computeThresholds(0)).toEqual(FALLBACK_THRESHOLDS);
+    expect(computeThresholds(-1)).toEqual(FALLBACK_THRESHOLDS);
+    expect(computeThresholds(Number.NaN)).toEqual(FALLBACK_THRESHOLDS);
+  });
+});
 
 describe("getMemoryState", () => {
-  it("returns normal below 500MB", () => {
-    expect(getMemoryState(0)).toBe("normal");
-    expect(getMemoryState(499)).toBe("normal");
+  const thresholds = { elevated: 1600, critical: 2700 };
+
+  it("returns normal below the elevated threshold", () => {
+    expect(getMemoryState(0, thresholds)).toBe("normal");
+    expect(getMemoryState(thresholds.elevated - 1, thresholds)).toBe("normal");
   });
 
-  it("returns elevated at 500-799MB", () => {
-    expect(getMemoryState(500)).toBe("elevated");
-    expect(getMemoryState(799)).toBe("elevated");
+  it("returns elevated between elevated and critical", () => {
+    expect(getMemoryState(thresholds.elevated, thresholds)).toBe("elevated");
+    expect(getMemoryState(thresholds.critical - 1, thresholds)).toBe("elevated");
   });
 
-  it("returns critical at 800MB+", () => {
-    expect(getMemoryState(800)).toBe("critical");
-    expect(getMemoryState(2000)).toBe("critical");
+  it("returns critical at or above the critical threshold", () => {
+    expect(getMemoryState(thresholds.critical, thresholds)).toBe("critical");
+    expect(getMemoryState(thresholds.critical * 2, thresholds)).toBe("critical");
+  });
+
+  it("tracks the supplied thresholds, not fixed values", () => {
+    // 800 MB is critical on the old fixed scale but normal on a big machine.
+    const big = computeThresholds(64 * GB);
+    expect(getMemoryState(800, big)).toBe("normal");
   });
 });
 
@@ -78,23 +81,31 @@ describe("computeSlope", () => {
 });
 
 describe("getTrendDirection", () => {
+  const SAMPLES_PER_MIN = 6;
+
   it("returns stable with fewer than 3 samples", () => {
-    expect(getTrendDirection([])).toBe("stable");
-    expect(getTrendDirection([100, 200])).toBe("stable");
+    expect(getTrendDirection([], SAMPLES_PER_MIN)).toBe("stable");
+    expect(getTrendDirection([100, 200], SAMPLES_PER_MIN)).toBe("stable");
   });
 
-  it("returns stable when slope is within deadband", () => {
-    // slope < 0.5 MB/sample → < 3 MB/min → within deadband
-    expect(getTrendDirection([100, 100.1, 100.2, 100.3])).toBe("stable");
+  it("returns stable when the per-minute slope is within the deadband", () => {
+    // slope ≈ 0.1 MB/sample → 0.6 MB/min → within the 3 MB/min deadband
+    expect(getTrendDirection([100, 100.1, 100.2, 100.3], SAMPLES_PER_MIN)).toBe("stable");
   });
 
-  it("returns up when memory is growing fast", () => {
-    // slope = 10 MB/sample → 60 MB/min → well above deadband
-    expect(getTrendDirection([100, 110, 120, 130])).toBe("up");
+  it("returns up when memory is growing past the deadband", () => {
+    expect(getTrendDirection([100, 110, 120, 130], SAMPLES_PER_MIN)).toBe("up");
   });
 
-  it("returns down when memory is decreasing fast", () => {
-    expect(getTrendDirection([130, 120, 110, 100])).toBe("down");
+  it("returns down when memory is decreasing past the deadband", () => {
+    expect(getTrendDirection([130, 120, 110, 100], SAMPLES_PER_MIN)).toBe("down");
+  });
+
+  it("scales the slope by the sample cadence", () => {
+    // Same samples, faster cadence crosses the deadband sooner.
+    const samples = [100, 100.3, 100.6, 100.9];
+    expect(getTrendDirection(samples, 1)).toBe("stable");
+    expect(getTrendDirection(samples, 60)).toBe("up");
   });
 });
 
