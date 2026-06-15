@@ -193,25 +193,44 @@ describe("PluginDetailPane contributors (issue #10516)", () => {
     expect(screen.queryByText("Contributors")).toBeNull();
   });
 
-  it("renders each author's name and role", () => {
+  it("renders each author's name, with the role attached to the right author", () => {
     renderOverview(withAuthors([{ name: "Alice", role: "Maintainer" }, { name: "Bob" }]));
     expect(screen.getByText("Contributors")).toBeTruthy();
-    expect(screen.getByText("Alice")).toBeTruthy();
-    expect(screen.getByText(/Maintainer/)).toBeTruthy();
     expect(screen.getByText("Bob")).toBeTruthy();
+    // Role must sit within Alice's list item, not Bob's.
+    const aliceItem = screen.getByText("Alice").closest("li");
+    expect(aliceItem).toBeTruthy();
+    if (aliceItem) {
+      expect(within(aliceItem).getByText(/Maintainer/)).toBeTruthy();
+    }
+    const bobItem = screen.getByText("Bob").closest("li");
+    if (bobItem) {
+      expect(within(bobItem).queryByText(/Maintainer/)).toBeNull();
+    }
   });
 
-  it("opens an author url through systemClient.openExternal", () => {
+  it("renders no contact buttons for a name-only author", () => {
+    renderOverview(withAuthors([{ name: "Alice" }]));
+    const aliceItem = screen.getByText("Alice").closest("li");
+    expect(aliceItem).toBeTruthy();
+    if (aliceItem) {
+      expect(within(aliceItem).queryAllByRole("button")).toHaveLength(0);
+    }
+  });
+
+  it("opens an author url through systemClient.openExternal exactly once", () => {
     openExternalMock.mockClear();
     renderOverview(withAuthors([{ name: "Alice", url: "https://alice.example.com" }]));
-    fireEvent.click(screen.getByText("https://alice.example.com"));
+    fireEvent.click(screen.getByRole("button", { name: "https://alice.example.com" }));
+    expect(openExternalMock).toHaveBeenCalledTimes(1);
     expect(openExternalMock).toHaveBeenCalledWith("https://alice.example.com");
   });
 
   it("opens an author email as a mailto link through systemClient.openExternal", () => {
     openExternalMock.mockClear();
     renderOverview(withAuthors([{ name: "Alice", email: "alice@example.com" }]));
-    fireEvent.click(screen.getByText("alice@example.com"));
+    fireEvent.click(screen.getByRole("button", { name: "alice@example.com" }));
+    expect(openExternalMock).toHaveBeenCalledTimes(1);
     expect(openExternalMock).toHaveBeenCalledWith("mailto:alice@example.com");
   });
 });

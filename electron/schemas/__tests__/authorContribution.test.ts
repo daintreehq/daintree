@@ -37,6 +37,29 @@ describe("PluginAuthorSchema (issue #10516)", () => {
     expect(PluginAuthorSchema.safeParse({ name: "   " }).success).toBe(false);
   });
 
+  it("trims surrounding whitespace from name and role in the parsed output", () => {
+    const result = PluginAuthorSchema.safeParse({ name: "  Alice  ", role: "  Maintainer  " });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.name).toBe("Alice");
+      expect(result.data.role).toBe("Maintainer");
+    }
+  });
+
+  it("reports the failing path for a nested invalid url", () => {
+    const result = getPluginManifestSchema(false).safeParse(
+      manifestWith({ authors: [{ name: "Alice", url: "http://alice.dev" }] })
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find(
+        (i) =>
+          (i as { params?: { errorCode?: string } }).params?.errorCode === "scope_url_not_https"
+      );
+      expect(issue?.path).toEqual(["authors", 0, "url"]);
+    }
+  });
+
   it("rejects unknown keys (strict object)", () => {
     const result = PluginAuthorSchema.safeParse({ name: "Alice", twitter: "@alice" });
     expect(result.success).toBe(false);

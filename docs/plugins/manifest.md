@@ -21,6 +21,15 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // One-sentence description, shown in UI listings.
   "description": "Plan Linear issues as multi-step agent workflows.",
 
+  // Attribution credits, shown in the plugin detail pane's "Contributors"
+  // block. Optional. Up to 10 entries; each needs a `name`, plus optional
+  // `url` (https-only, same private-host/credential discipline as
+  // scopes.network.allowedUrls), `email`, and free-form `role`.
+  "authors": [
+    { "name": "Ada Lovelace", "url": "https://ada.example.com", "role": "Maintainer" },
+    { "name": "Grace Hopper", "email": "grace@example.com" },
+  ],
+
   // Path to the compiled ESM entry, relative to the plugin directory.
   // Optional — plugins with only static contributions (themes, static MCP
   // server configs) don't need one.
@@ -122,6 +131,17 @@ The human-readable name shown in UI listings (plugin palette, installed-plugins 
 ### `description`
 
 One-sentence description shown in plugin listings. Keep it short; UI truncates long descriptions.
+
+### `authors`
+
+Optional attribution credits, surfaced as a "Contributors" block in the plugin detail pane. An array of up to 10 entries; each entry is an object where `name` is required and `url`, `email`, and `role` are optional. Unknown keys on an entry are rejected. `url` must be `https://` and follows the same discipline as `scopes.network.allowedUrls` — no wildcards, embedded credentials, or private/loopback hosts — because it surfaces as a user-clickable link; `email` must be a valid address; `role` is a free-form label (e.g. `"Maintainer"`, `"Contributor"`). The SDK exports the `PluginAuthor` type for authoring against this shape.
+
+```jsonc
+"authors": [
+  { "name": "Ada Lovelace", "url": "https://ada.example.com", "role": "Maintainer" },
+  { "name": "Grace Hopper", "email": "grace@example.com" },
+]
+```
 
 ### `main`
 
