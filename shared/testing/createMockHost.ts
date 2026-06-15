@@ -217,7 +217,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       key: string,
       callback: (value: T | undefined) => void,
       scope: PluginSettingsScope = "user"
-    ): () => void {
+    ): Promise<() => void> {
       let subs = settingsSubs[scope].get(key);
       if (!subs) {
         subs = new Set();
@@ -226,7 +226,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       const cb = callback as (value: unknown) => void;
       subs.add(cb);
       let disposed = false;
-      return () => {
+      const dispose = () => {
         if (disposed) return;
         disposed = true;
         const set = settingsSubs[scope].get(key);
@@ -235,6 +235,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           if (set.size === 0) settingsSubs[scope].delete(key);
         }
       };
+      return Promise.resolve(dispose);
     },
   };
 
@@ -304,12 +305,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       } else {
         registeredActions.push({ descriptor, handler });
       }
+      // Validation/registry mutation runs synchronously above (sync throws still
+      // surface at the call site); only the return value is a resolved promise.
+      return Promise.resolve();
     },
     registerHandler<TArgs = unknown, TResult = unknown>(
       channel: string,
       schemaOrHandler: PluginChannelSchema<TArgs, TResult> | PluginIpcHandler,
       handler?: PluginTypedIpcHandler<TArgs, TResult>
-    ) {
+    ): Promise<void> {
       // Handle both overloads:
       // 1. registerHandler(channel, schema, handler) — typed
       // 2. registerHandler(channel, handler) — untyped
@@ -328,12 +332,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           handler: schemaOrHandler as PluginIpcHandler,
         });
       }
+      return Promise.resolve();
     },
     broadcastToRenderer(channel, payload) {
       broadcastCalls.push({ channel, payload });
+      return Promise.resolve();
     },
     postToPanel(channel, payload) {
       postToPanelCalls.push({ channel, payload });
+      return Promise.resolve();
     },
     async getActiveWorktree() {
       return activeWorktree;
@@ -341,7 +348,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     async getWorktrees() {
       return worktrees;
     },
-    async getWorktreeStatus(path) {
+    async getWorktreeStatus(path, options) {
+      options?.signal?.throwIfAborted();
       const match =
         worktrees.find((w) => w.path === path) ??
         (activeWorktree?.path === path ? activeWorktree : null);
@@ -350,20 +358,25 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     onDidChangeActiveWorktree(callback) {
       activeWorktreeSubs.add(callback);
       let disposed = false;
-      return () => {
+      const dispose = () => {
         if (disposed) return;
         disposed = true;
         activeWorktreeSubs.delete(callback);
       };
+      return Promise.resolve(dispose);
     },
-    onDidChangeWorktrees(callback) {
+    onDidChangeWorktrees(callback, _options) {
+      // The mock ignores `debounceMs` — coalescing is a host-side concern and is
+      // unit-tested against PluginService directly; activation tests just need
+      // the subscription wired.
       worktreesSubs.add(callback);
       let disposed = false;
-      return () => {
+      const dispose = () => {
         if (disposed) return;
         disposed = true;
         worktreesSubs.delete(callback);
       };
+      return Promise.resolve(dispose);
     },
     registerForgeProvider(descriptor, impl) {
       // Mirrors PluginService.createHost L1738-L1817. Validation order matches
@@ -393,7 +406,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         registeredForgeProviders.push({ descriptor, impl });
       }
       let disposed = false;
-      return () => {
+      // Disposer captured synchronously (registry mutation already done above) —
+      // only the return value is a resolved promise, never a deferred write.
+      const dispose = () => {
         if (disposed) return;
         disposed = true;
         // Identity guard: only remove if the currently active entry is still
@@ -404,6 +419,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         );
         if (i >= 0) registeredForgeProviders.splice(i, 1);
       };
+      return Promise.resolve(dispose);
     },
     registerFileDecorationProvider(descriptor, impl) {
       // Mirrors PluginService.createHost L1818-L1875. Validation order matches
@@ -432,7 +448,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         registeredFileDecorationProviders.push({ descriptor, impl });
       }
       let disposed = false;
-      return () => {
+      // Disposer captured synchronously (registry mutation already done above).
+      const dispose = () => {
         if (disposed) return;
         disposed = true;
         // Identity guard: only remove if the currently active entry is still
@@ -443,9 +460,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         );
         if (i >= 0) registeredFileDecorationProviders.splice(i, 1);
       };
+      return Promise.resolve(dispose);
     },
     invalidateFileDecorations(scope, paths) {
       invalidationCalls.push({ scope, paths });
+      return Promise.resolve();
     },
     async showToast(opts: PluginToastOptions) {
       if (!opts.message) {
@@ -509,7 +528,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     // (containment lives in pluginFsContainment and is unit-tested directly) —
     // this mock is for exercising a plugin's activate()/handlers, not the guard.
     fs: {
-      async readFile(filePath) {
+      async readFile(filePath, options) {
+        options?.signal?.throwIfAborted();
         const v = fsFiles.get(filePath);
         if (v === undefined) {
           throw new Error(`ENOENT: mock fs has no file "${filePath}"`);
@@ -520,10 +540,12 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         fsFiles.set(filePath, contents);
         fsWriteCalls.push({ path: filePath, contents });
       },
-      async readdir() {
+      async readdir(_dirPath, options) {
+        options?.signal?.throwIfAborted();
         return [];
       },
-      async stat(targetPath) {
+      async stat(targetPath, options) {
+        options?.signal?.throwIfAborted();
         return {
           isDirectory: false,
           isFile: fsFiles.has(targetPath),
@@ -532,7 +554,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           mtimeMs: 0,
         };
       },
-      async watch() {
+      async watch(_paths, _callback, options) {
+        options?.signal?.throwIfAborted();
         return () => {};
       },
     },
@@ -540,14 +563,19 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     // message rejects — so a plugin tested against the mock sees the same
     // no-silent-fallback contract as production.
     git: {
-      async status(worktreePath) {
+      async status(worktreePath, options) {
+        options?.signal?.throwIfAborted();
         return { worktreePath, files: [], changedFileCount: 0 };
       },
-      async diff() {
+      async diff(_worktreePath, _filePath, options) {
+        options?.signal?.throwIfAborted();
         return "";
       },
-      async add() {},
-      async commit(worktreePath, options): Promise<PluginGitCommitResult> {
+      async add(_worktreePath, _paths, options) {
+        options?.signal?.throwIfAborted();
+      },
+      async commit(worktreePath, options, callOptions): Promise<PluginGitCommitResult> {
+        callOptions?.signal?.throwIfAborted();
         const message = typeof options?.message === "string" ? options.message : "";
         if (message.trim().length === 0) {
           throw new Error(

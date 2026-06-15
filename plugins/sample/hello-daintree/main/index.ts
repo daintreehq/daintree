@@ -12,7 +12,7 @@ import type { PluginHostApi, PluginIpcContext } from "../../../../shared/types/p
  */
 export async function activate(host: PluginHostApi): Promise<() => void> {
   // IPC handler the renderer reaches over `plugin:daintree.hello:ping`.
-  host.registerHandler("ping", (ctx: PluginIpcContext) => ({
+  await host.registerHandler("ping", (ctx: PluginIpcContext) => ({
     pluginId: host.pluginId,
     worktreeId: ctx.worktreeId,
   }));
@@ -20,7 +20,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   // Imperatively-registered action. The host namespaces this to
   // `daintree.hello.greet`; dispatching it surfaces a toast so the E2E spec
   // can assert the full register → dispatch → showToast loop.
-  host.registerAction(
+  await host.registerAction(
     {
       id: "greet",
       title: "Hello: Greet",
@@ -44,10 +44,10 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   // live value through an IPC handler so the E2E spec can read it back.
   let greeting = (await safeGet(host, "greeting")) ?? "world";
   void host.settings.set("greeting", greeting).catch(() => {});
-  const disposeGreetingSub = host.settings.onDidChange<string>("greeting", (next) => {
+  const disposeGreetingSub = await host.settings.onDidChange<string>("greeting", (next) => {
     greeting = next ?? "world";
   });
-  host.registerHandler("getGreeting", () => greeting);
+  await host.registerHandler("getGreeting", () => greeting);
 
   // Activation-time toast — observable in the notification inbox so the E2E
   // spec gets a durable signal without racing the toast dismiss timer.
@@ -58,7 +58,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   });
 
   // Badge every requested path with an "H" — the simplest honest decoration.
-  const disposeDecorations = host.registerFileDecorationProvider(
+  const disposeDecorations = await host.registerFileDecorationProvider(
     { id: "hello" },
     {
       provideDecorations: async (_scope, paths) => {
@@ -72,8 +72,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   );
 
   // When the active worktree changes, ask the host to re-pull our decorations.
-  const disposeWorktree = host.onDidChangeActiveWorktree(() => {
-    host.invalidateFileDecorations("hello:active");
+  const disposeWorktree = await host.onDidChangeActiveWorktree(() => {
+    void host.invalidateFileDecorations("hello:active");
   });
 
   return () => {

@@ -50,6 +50,8 @@ type Post = (message: PluginWorkerToHostMessage) => void;
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  /** Detach the abort listener once the call settles (no-op when no signal was passed). */
+  cleanup?: () => void;
 }
 
 interface RegisteredHandler {
@@ -87,6 +89,7 @@ export class PluginDevWorkerHostProxy {
   dispose(): void {
     this.disposed = true;
     for (const pending of this.pendingCalls.values()) {
+      pending.cleanup?.();
       pending.reject(new Error("Plugin dev worker disposed"));
     }
     this.pendingCalls.clear();
@@ -103,6 +106,7 @@ export class PluginDevWorkerHostProxy {
         const pending = this.pendingCalls.get(msg.requestId);
         if (!pending) return true;
         this.pendingCalls.delete(msg.requestId);
+        pending.cleanup?.();
         if (msg.ok) pending.resolve(msg.result);
         else pending.reject(new Error(msg.error));
         return true;
@@ -197,16 +201,38 @@ export class PluginDevWorkerHostProxy {
     return legacy(ctx, ...args);
   }
 
-  private call<T>(method: PluginHostCallMethod, params: unknown): Promise<T> {
+  private call<T>(method: PluginHostCallMethod, params: unknown, signal?: AbortSignal): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error("Plugin dev worker disposed"));
     }
+    // An already-aborted signal rejects before anything crosses the port.
+    if (signal?.aborted) {
+      return Promise.reject(abortError(signal));
+    }
     const requestId = `c${this.nextId++}`;
     return new Promise<T>((resolve, reject) => {
+      let onAbort: (() => void) | undefined;
+      const cleanup = (): void => {
+        if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+      };
       this.pendingCalls.set(requestId, {
         resolve: resolve as (value: unknown) => void,
         reject,
+        cleanup,
       });
+      if (signal) {
+        onAbort = (): void => {
+          const pending = this.pendingCalls.get(requestId);
+          if (!pending) return;
+          this.pendingCalls.delete(requestId);
+          cleanup();
+          // Tell main to abort the in-flight host call (AbortSignal itself is not
+          // structured-clone-safe, so the requestId is the cancellation handle).
+          this.post({ type: "host-cancel", requestId });
+          reject(abortError(signal));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
       this.post({ type: "host-call", requestId, method, params });
     });
   }
@@ -271,6 +297,9 @@ export class PluginDevWorkerHostProxy {
           },
           `action:${namespacedId}`
         );
+        // Sync structural validation + handler capture happen above (sync throws
+        // still surface at the call site); only the return value is async.
+        return Promise.resolve();
       },
       registerHandler: ((
         channel: string,
@@ -310,6 +339,7 @@ export class PluginDevWorkerHostProxy {
           this.ipcHandlers.set(channel, { handler: schemaOrHandler as PluginIpcHandler });
           this.notify("registerHandler", { channel, hasSchema: false }, `handler:${channel}`);
         }
+        return Promise.resolve();
       }) as PluginHostApi["registerHandler"],
       broadcastToRenderer: (channel, payload) => {
         this.assertActivationOpen("broadcastToRenderer");
@@ -319,6 +349,7 @@ export class PluginDevWorkerHostProxy {
           );
         }
         this.notify("broadcastToRenderer", { channel, payload });
+        return Promise.resolve();
       },
       // Post-activation-safe sibling of broadcastToRenderer: no
       // assertActivationOpen guard, so dev-worker plugins can stream live data
@@ -330,23 +361,33 @@ export class PluginDevWorkerHostProxy {
           );
         }
         this.notify("postToPanel", { channel, payload });
+        return Promise.resolve();
       },
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
-      getWorktreeStatus: (path) =>
-        this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path),
+      getWorktreeStatus: (path, options) =>
+        this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
       onDidChangeActiveWorktree: (callback) => {
         this.assertActivationOpen("onDidChangeActiveWorktree");
-        return this.subscribe("active-worktree", (payload) =>
+        // Subscription wired synchronously; only the disposer is async.
+        const dispose = this.subscribe("active-worktree", (payload) =>
           callback(payload as PluginWorktreeSnapshot | null)
         );
+        return Promise.resolve(dispose);
       },
-      onDidChangeWorktrees: (callback) => {
+      onDidChangeWorktrees: (callback, options) => {
         this.assertActivationOpen("onDidChangeWorktrees");
-        return this.subscribe("worktrees", (payload) =>
-          callback(payload as PluginWorktreeSnapshot[])
+        // Debounce is applied host-side: the worker forwards `debounceMs` in the
+        // subscribe message and the real host coalesces before pushing events.
+        const dispose = this.subscribe(
+          "worktrees",
+          (payload) => callback(payload as PluginWorktreeSnapshot[]),
+          undefined,
+          undefined,
+          options?.debounceMs
         );
+        return Promise.resolve(dispose);
       },
       registerForgeProvider: (descriptor: ForgeProviderDescriptor, _impl: ForgeProviderImpl) => {
         this.assertActivationOpen("registerForgeProvider");
@@ -361,7 +402,7 @@ export class PluginDevWorkerHostProxy {
         console.warn(
           `[plugin-dev:${this.pluginId}] registerForgeProvider("${descriptor?.id}") is not supported in dev mode — forge providers require synchronous host methods (parseRemote, URL builders) that can't cross the dev worker's async boundary. Package + install the plugin to test forge providers.`
         );
-        return () => {};
+        return Promise.resolve(() => {});
       },
       registerFileDecorationProvider: (
         descriptor: FileDecorationProviderDescriptor,
@@ -393,7 +434,7 @@ export class PluginDevWorkerHostProxy {
           `fileDecorationProvider:${providerId}`
         );
         let disposed = false;
-        return () => {
+        const dispose = (): void => {
           if (disposed) return;
           disposed = true;
           // Identity-guard the delete so a stale disposer (from a prior register
@@ -404,6 +445,7 @@ export class PluginDevWorkerHostProxy {
           }
           this.notify("unregisterFileDecorationProvider", { providerId });
         };
+        return Promise.resolve(dispose);
       },
       invalidateFileDecorations: (scope, paths) => {
         if (typeof scope !== "string" || scope.length === 0) {
@@ -412,6 +454,7 @@ export class PluginDevWorkerHostProxy {
           );
         }
         this.notify("invalidateFileDecorations", { scope, paths });
+        return Promise.resolve();
       },
       showToast: (options: PluginToastOptions) =>
         this.call<void>("showToast", {
@@ -445,26 +488,36 @@ export class PluginDevWorkerHostProxy {
       // back, a subscription whose teardown semantics don't survive a whole-
       // worker reload cleanly; reject it honestly in dev mode (mirrors process).
       fs: {
-        readFile: (filePath) => this.call<string>("fs.readFile", { path: filePath }),
+        readFile: (filePath, options) =>
+          this.call<string>("fs.readFile", { path: filePath }, options?.signal),
         writeFile: (filePath, contents) =>
           this.call<void>("fs.writeFile", { path: filePath, contents }),
-        readdir: (dirPath) => this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }),
-        stat: (targetPath) => this.call<PluginFsStat>("fs.stat", { path: targetPath }),
-        watch: (_paths, _callback) => {
+        readdir: (dirPath, options) =>
+          this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }, options?.signal),
+        stat: (targetPath, options) =>
+          this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
+        watch: (_paths, _callback, _options) => {
           const message = `[plugin-dev:${this.pluginId}] host.fs.watch is not supported in dev mode — the watcher subscription's disposer and change callback can't survive a whole-worker reload. Package + install the plugin to test host.fs.watch.`;
           console.warn(message);
           return Promise.reject(new Error(message));
         },
       },
       git: {
-        status: (worktreePath) => this.call<PluginGitStatus>("git.status", { worktreePath }),
-        diff: (worktreePath, filePath) => this.call<string>("git.diff", { worktreePath, filePath }),
-        add: (worktreePath, paths) => this.call<void>("git.add", { worktreePath, paths }),
-        commit: (worktreePath, options) =>
-          this.call<PluginGitCommitResult>("git.commit", {
-            worktreePath,
-            message: options?.message,
-          }),
+        status: (worktreePath, options) =>
+          this.call<PluginGitStatus>("git.status", { worktreePath }, options?.signal),
+        diff: (worktreePath, filePath, options) =>
+          this.call<string>("git.diff", { worktreePath, filePath }, options?.signal),
+        add: (worktreePath, paths, options) =>
+          this.call<void>("git.add", { worktreePath, paths }, options?.signal),
+        commit: (worktreePath, options, callOptions) =>
+          this.call<PluginGitCommitResult>(
+            "git.commit",
+            {
+              worktreePath,
+              message: options?.message,
+            },
+            callOptions?.signal
+          ),
       },
       settings: {
         get: <T = unknown>(key: string, scope: PluginSettingsScope = "user") =>
@@ -477,12 +530,13 @@ export class PluginDevWorkerHostProxy {
           scope: PluginSettingsScope = "user"
         ) => {
           this.assertActivationOpen("settings.onDidChange");
-          return this.subscribe(
+          const dispose = this.subscribe(
             "settings",
             (payload) => callback(payload as T | undefined),
             key,
             scope
           );
+          return Promise.resolve(dispose);
         },
       },
     };
@@ -493,11 +547,12 @@ export class PluginDevWorkerHostProxy {
     kind: "active-worktree" | "worktrees" | "settings",
     callback: (payload: unknown) => void,
     key?: string,
-    scope?: PluginSettingsScope
+    scope?: PluginSettingsScope,
+    debounceMs?: number
   ): () => void {
     const subscriptionId = `s${this.nextId++}`;
     this.subscriptions.set(subscriptionId, callback);
-    this.post({ type: "subscribe", subscriptionId, kind, key, scope });
+    this.post({ type: "subscribe", subscriptionId, kind, key, scope, debounceMs });
     let disposed = false;
     return () => {
       if (disposed) return;
@@ -506,6 +561,19 @@ export class PluginDevWorkerHostProxy {
       this.post({ type: "unsubscribe", subscriptionId });
     };
   }
+}
+
+/**
+ * Normalize an aborted signal's reason into an `Error` for rejection. Node sets
+ * `signal.reason` to a `DOMException` (name `AbortError`) by default, which is
+ * not an `Error` instance — wrap anything non-Error so callers always get one.
+ */
+function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  const err = new Error(typeof reason === "string" ? reason : "The operation was aborted");
+  err.name = "AbortError";
+  return err;
 }
 
 /** Structural guard mirroring `isChannelSchema` from PluginChannelRegistry,

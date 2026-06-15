@@ -126,6 +126,13 @@ export type PluginWorkerToHostMessage =
       method: PluginHostCallMethod;
       params: unknown;
     }
+  /**
+   * Cancel an in-flight `host-call`. The proxy posts this when the caller's
+   * `AbortSignal` fires — the signal itself isn't structured-clone-safe, so the
+   * `requestId` is the cancellation handle. The bridge aborts the matching
+   * in-flight host call; a no-op if it already settled.
+   */
+  | { type: "host-cancel"; requestId: string }
   /** Fire-and-forget host method call. `registrationKey` correlates `register-error`. */
   | {
       type: "host-notify";
@@ -140,6 +147,11 @@ export type PluginWorkerToHostMessage =
       kind: PluginWorkerSubscriptionKind;
       key?: string;
       scope?: PluginSettingsScope;
+      /**
+       * Opt-in debounce for the `worktrees` subscription (host-side coalescing).
+       * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
+       */
+      debounceMs?: number;
     }
   /** Close a previously opened subscription. */
   | { type: "unsubscribe"; subscriptionId: string }

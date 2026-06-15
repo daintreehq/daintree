@@ -3,6 +3,7 @@ import type {
   PluginManifest,
   PluginHostApi,
   PluginActivationApi,
+  PluginHostCallOptions,
   PluginActivate,
   PanelContribution,
   ToolbarButtonContribution,
@@ -189,7 +190,7 @@ describe("plugin-sdk boundary", () => {
     it("PluginHostApi.getWorktreeStatus takes a path and returns the status projection or null", () => {
       const host = {} as PluginHostApi;
       expectTypeOf(host.getWorktreeStatus).toEqualTypeOf<
-        (path: string) => Promise<PluginWorktreeStatus | null>
+        (path: string, options?: PluginHostCallOptions) => Promise<PluginWorktreeStatus | null>
       >();
     });
 
@@ -211,10 +212,12 @@ describe("plugin-sdk boundary", () => {
       // activation-window op), so they belong on the slice.
       expectTypeOf(activation.onDidChangeActiveWorktree).toBeFunction();
       expectTypeOf(activation.onDidChangeWorktrees).toBeFunction();
-      // The provider registrars hand back a disposer — guard the return type so
-      // a signature regression to `void` is caught.
-      expectTypeOf(activation.registerForgeProvider).returns.toEqualTypeOf<() => void>();
-      expectTypeOf(activation.registerFileDecorationProvider).returns.toEqualTypeOf<() => void>();
+      // The provider registrars resolve to a disposer — guard the return type so
+      // a signature regression (to `void`, or to a non-promise disposer) is caught.
+      expectTypeOf(activation.registerForgeProvider).returns.toEqualTypeOf<Promise<() => void>>();
+      expectTypeOf(activation.registerFileDecorationProvider).returns.toEqualTypeOf<
+        Promise<() => void>
+      >();
     });
 
     it("PluginActivationApi excludes the post-activation-safe methods", () => {

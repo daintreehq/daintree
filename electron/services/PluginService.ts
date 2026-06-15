@@ -339,6 +339,13 @@ const PLUGIN_DIAGNOSTICS_AUDIT_PER_PLUGIN = 50;
  * scope-wide invalidation (no `paths`) is the correct fallback anyway.
  */
 const MAX_FILE_DECORATION_PATHS = 1000;
+/**
+ * Floor for a plugin-supplied `onDidChangeWorktrees` `debounceMs`. A positive
+ * value below this is clamped up so a plugin can't request a near-zero debounce
+ * that defeats the coalescing intent while still paying timer overhead; `0` /
+ * omitted disables debouncing entirely (fire on every change).
+ */
+const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
 
 /**
  * Serialize an arbitrary logger payload without ever throwing. Tries
@@ -1875,6 +1882,9 @@ export class PluginService {
         owners.add(namespacedId);
 
         this.broadcaster.broadcastPluginActions();
+        // All registry mutation above is synchronous (sync throws still surface
+        // at the call site during activate()); only the return value is async.
+        return Promise.resolve();
       },
       registerHandler: ((
         channel: string,
@@ -1904,6 +1914,7 @@ export class PluginService {
         } else {
           this.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
         }
+        return Promise.resolve();
       }) as PluginHostApi["registerHandler"],
       broadcastToRenderer: (channel, payload) => {
         if (revoked) {
@@ -1917,6 +1928,7 @@ export class PluginService {
           );
         }
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+        return Promise.resolve();
       },
       // The post-activation-safe sibling of broadcastToRenderer: same
       // `plugin:{pluginId}:{channel}` transport, but NOT revoke-guarded — it is
@@ -1926,13 +1938,14 @@ export class PluginService {
       // is plugin membership (mirrors invalidateFileDecorations/showToast): once
       // the plugin unloads this silently no-ops.
       postToPanel: (channel, payload) => {
-        if (!isBound()) return;
+        if (!isBound()) return Promise.resolve();
         if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
           throw new Error(
             `Plugin "${pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
           );
         }
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+        return Promise.resolve();
       },
       getActiveWorktree: async () => {
         if (!isBound()) return null;
@@ -1947,10 +1960,12 @@ export class PluginService {
         if (!isBound()) return [];
         return snapshots.map(toPluginWorktreeSnapshot);
       },
-      getWorktreeStatus: async (path) => {
+      getWorktreeStatus: async (path, options) => {
+        options?.signal?.throwIfAborted();
         if (!isBound()) return null;
         if (typeof path !== "string" || path.length === 0) return null;
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        options?.signal?.throwIfAborted();
         if (!isBound()) return null;
         const match = snapshots.find((s) => s.path === path);
         return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
@@ -1961,7 +1976,9 @@ export class PluginService {
             `Plugin "${pluginId}" host revoked: onDidChangeActiveWorktree called after activate() returned or timed out`
           );
         }
-        return this.subscribeWorktreeEvent(pluginId, "worktree-activated", async () => {
+        // Subscription wired synchronously (revoke guard already held above);
+        // only the disposer return value is wrapped in a resolved promise.
+        const dispose = this.subscribeWorktreeEvent(pluginId, "worktree-activated", async () => {
           if (!this.plugins.has(pluginId)) return;
           try {
             const snapshots = await this.fetchAllWorktreeSnapshots();
@@ -1977,14 +1994,23 @@ export class PluginService {
             );
           }
         });
+        return Promise.resolve(dispose);
       },
-      onDidChangeWorktrees: (callback) => {
+      onDidChangeWorktrees: (callback, options) => {
         if (revoked) {
           throw new Error(
             `Plugin "${pluginId}" host revoked: onDidChangeWorktrees called after activate() returned or timed out`
           );
         }
-        const emit = async (): Promise<void> => {
+        // Opt-in debounce: the host re-emits the worktree set on every git-status
+        // poll, so a UI-updating plugin can coalesce bursts into a single
+        // trailing callback. Values below the floor are clamped up; 0/omitted
+        // fires on every change. See PluginHostSubscriptionOptions.
+        const debounceMs =
+          typeof options?.debounceMs === "number" && options.debounceMs > 0
+            ? Math.max(options.debounceMs, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS)
+            : 0;
+        const runEmit = async (): Promise<void> => {
           if (!this.plugins.has(pluginId)) return;
           try {
             const snapshots = await this.fetchAllWorktreeSnapshots();
@@ -1997,18 +2023,37 @@ export class PluginService {
             );
           }
         };
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+        const emit =
+          debounceMs > 0
+            ? (): void => {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                  debounceTimer = null;
+                  void runEmit();
+                }, debounceMs);
+              }
+            : (): void => {
+                void runEmit();
+              };
         // Fires on both add/update and remove so plugins' cached lists stay
         // correct after deletions. Each subscription is tracked separately
-        // so a single disposer stops both.
+        // so a single disposer stops both. A shared debounce timer coalesces
+        // bursts that span both event kinds.
         const disposeUpdate = this.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
         const disposeRemove = this.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
         let disposed = false;
-        return () => {
+        const dispose = (): void => {
           if (disposed) return;
           disposed = true;
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
           disposeUpdate();
           disposeRemove();
         };
+        return Promise.resolve(dispose);
       },
       registerForgeProvider: (descriptor, impl) => {
         if (revoked) {
@@ -2088,7 +2133,9 @@ export class PluginService {
           this.pluginEventCleanups.set(pluginId, list);
         }
         list.push(dispose);
-        return dispose;
+        // Disposer captured and registered into the unload cascade
+        // synchronously above; only the return value is async.
+        return Promise.resolve(dispose);
       },
       registerFileDecorationProvider: (descriptor, impl) => {
         if (revoked) {
@@ -2146,14 +2193,14 @@ export class PluginService {
           this.pluginEventCleanups.set(pluginId, list);
         }
         list.push(dispose);
-        return dispose;
+        return Promise.resolve(dispose);
       },
       // NOT revoke-guarded: called from the plugin's own post-activation
       // subscription callbacks (worktree changes, polling timers). The
       // liveness guard is plugin membership, not the activation window — once
       // the plugin unloads this becomes a silent no-op.
       invalidateFileDecorations: (scope, paths) => {
-        if (!this.plugins.has(pluginId)) return;
+        if (!this.plugins.has(pluginId)) return Promise.resolve();
         if (typeof scope !== "string" || scope.length === 0) {
           throw new Error(
             `Plugin "${pluginId}" invalidateFileDecorations: scope must be a non-empty string`
@@ -2195,6 +2242,7 @@ export class PluginService {
           name: "plugin:decorations-changed",
           payload: { scope, ...(narrowed && narrowed.length > 0 ? { paths: narrowed } : {}) },
         });
+        return Promise.resolve();
       },
       // NOT revoke-guarded for the same reason as invalidateFileDecorations:
       // plugins fire toasts from post-activation callbacks and timers. Liveness
@@ -2318,7 +2366,7 @@ export class PluginService {
           key: string,
           callback: (value: T | undefined) => void,
           scope: PluginSettingsScope = "user"
-        ): (() => void) => {
+        ): Promise<() => void> => {
           if (revoked) {
             throw new Error(
               `Plugin "${pluginId}" host revoked: settings.onDidChange called after activate() returned or timed out`
@@ -2352,7 +2400,7 @@ export class PluginService {
             this.pluginEventCleanups.set(pluginId, list);
           }
           list.push(dispose);
-          return dispose;
+          return Promise.resolve(dispose);
         },
       },
     };
@@ -2553,14 +2601,16 @@ export class PluginService {
       resolveContainedPath(pluginId, targetPath, this.declaredAllowedPaths(pluginId));
 
     return {
-      readFile: async (filePath) => {
+      readFile: async (filePath, options) => {
+        options?.signal?.throwIfAborted();
         requireLoaded("readFile");
         requireReadCap("readFile");
         const resolved = await contain(filePath);
         requireLoaded("readFile");
         // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
-        // not the size-limited files.read preview path.
-        return fs.readFile(resolved, "utf-8");
+        // not the size-limited files.read preview path. The signal cancels the
+        // read itself (Node honors it) as well as the boundary checks above.
+        return fs.readFile(resolved, { encoding: "utf-8", signal: options?.signal });
       },
       writeFile: async (filePath, contents) => {
         requireLoaded("writeFile");
@@ -2583,10 +2633,12 @@ export class PluginService {
           durationMs: 0,
         });
       },
-      readdir: async (dirPath) => {
+      readdir: async (dirPath, options) => {
+        options?.signal?.throwIfAborted();
         requireLoaded("readdir");
         requireReadCap("readdir");
         const resolved = await contain(dirPath);
+        options?.signal?.throwIfAborted();
         requireLoaded("readdir");
         const entries = await fs.readdir(resolved, { withFileTypes: true });
         return entries.map(
@@ -2598,10 +2650,12 @@ export class PluginService {
           })
         );
       },
-      stat: async (targetPath) => {
+      stat: async (targetPath, options) => {
+        options?.signal?.throwIfAborted();
         requireLoaded("stat");
         requireReadCap("stat");
         const resolved = await contain(targetPath);
+        options?.signal?.throwIfAborted();
         requireLoaded("stat");
         const s = await fs.stat(resolved);
         return {
@@ -2612,7 +2666,8 @@ export class PluginService {
           mtimeMs: s.mtimeMs,
         } satisfies PluginFsStat;
       },
-      watch: async (paths, callback) => {
+      watch: async (paths, callback, options) => {
+        options?.signal?.throwIfAborted();
         requireLoaded("watch");
         requireReadCap("watch");
         if (typeof callback !== "function") {
@@ -2625,6 +2680,7 @@ export class PluginService {
         // Contain every path up front so an out-of-scope watch target rejects
         // before any watcher is created.
         const resolvedTargets = await Promise.all(targets.map((p) => contain(p)));
+        options?.signal?.throwIfAborted();
         requireLoaded("watch");
 
         const watchers: FSWatcher[] = [];
@@ -2709,26 +2765,29 @@ export class PluginService {
     const git = new PluginHostGit(pluginId, this.hostGitFactory);
 
     return {
-      status: async (worktreePath): Promise<PluginGitStatus> => {
+      status: async (worktreePath, options): Promise<PluginGitStatus> => {
+        options?.signal?.throwIfAborted();
         requireLoaded("status");
         requireReadCap("status");
         const resolved = await containWorktree(worktreePath);
         requireLoaded("status");
-        return git.status(resolved);
+        return git.status(resolved, options?.signal);
       },
-      diff: async (worktreePath, filePath): Promise<string> => {
+      diff: async (worktreePath, filePath, options): Promise<string> => {
+        options?.signal?.throwIfAborted();
         requireLoaded("diff");
         requireReadCap("diff");
         const resolved = await containWorktree(worktreePath);
         requireLoaded("diff");
-        return git.diff(resolved, filePath);
+        return git.diff(resolved, filePath, options?.signal);
       },
-      add: async (worktreePath, paths): Promise<void> => {
+      add: async (worktreePath, paths, options): Promise<void> => {
+        options?.signal?.throwIfAborted();
         requireLoaded("add");
         requireWriteCap("add");
         const resolved = await containWorktree(worktreePath);
         requireLoaded("add");
-        await git.add(resolved, paths);
+        await git.add(resolved, paths, options?.signal);
         safeAppendAudit({
           pluginId,
           actionId: `git.add:${resolved}`,
@@ -2742,8 +2801,10 @@ export class PluginService {
       },
       commit: async (
         worktreePath,
-        options: PluginGitCommitOptions
+        options: PluginGitCommitOptions,
+        callOptions
       ): Promise<PluginGitCommitResult> => {
+        callOptions?.signal?.throwIfAborted();
         requireLoaded("commit");
         requireWriteCap("commit");
         // commit returns the staged diff as its change-preview, so it discloses
@@ -2753,7 +2814,7 @@ export class PluginService {
         requireLoaded("commit");
         // git.commit throws COMMIT_MESSAGE_REQUIRED before any mutation when the
         // message is empty — the #7880 no-silent-fallback guard at the host.
-        const result = await git.commit(resolved, options);
+        const result = await git.commit(resolved, options, callOptions?.signal);
         safeAppendAudit({
           pluginId,
           actionId: `git.commit:${resolved}`,
