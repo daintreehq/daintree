@@ -393,6 +393,28 @@ describe("buildNotificationReportUrl", () => {
     expect(result.fullBody).toContain("electron: 41.0.0");
   });
 
+  it("emits an arch line in the Environment block when arch is present", () => {
+    const result = buildNotificationReportUrl(
+      makeNotificationInput({
+        envInfo: {
+          appVersion: "1.2.3",
+          electron: "41.0.0",
+          chrome: "146.0.0.0",
+          os: "darwin 24.0.0 (arm64)",
+          arch: "Intel (Rosetta)",
+        } satisfies ReportEnvInfo,
+      })
+    );
+    expect(result.fullBody).toContain("arch: Intel (Rosetta)");
+  });
+
+  it("omits the arch line when arch is absent", () => {
+    // The default envInfo has no arch field; the block must not emit a bare
+    // "arch:" line that reads as an empty/unknown value.
+    const result = buildNotificationReportUrl(makeNotificationInput());
+    expect(result.fullBody).not.toContain("arch:");
+  });
+
   it("titles the issue with the Notification Report prefix", () => {
     const result = buildNotificationReportUrl(makeNotificationInput());
     const title = new URL(result.url).searchParams.get("title") ?? "";

@@ -74,4 +74,33 @@ describe("buildArchLabel", () => {
     electronMock.app.runningUnderARM64Translation = false;
     expect(buildArchLabel()).toBe("ia32");
   });
+
+  it("does not treat Windows-on-ARM x64 translation as Rosetta", () => {
+    // WOW64 also sets the translation flag; the darwin gate must keep this off
+    // the Mac path so it reports the raw slice, never "Intel (Rosetta)".
+    setPlatform("win32");
+    setArch("x64");
+    electronMock.app.runningUnderARM64Translation = true;
+    expect(buildArchLabel()).toBe("x64");
+  });
+
+  it("falls back to the raw arch when detection throws", () => {
+    setPlatform("darwin");
+    setArch("x64");
+    // A getter that throws simulates isRunningUnderRosetta blowing up; the
+    // label must never propagate the error into the IPC layer.
+    Object.defineProperty(electronMock.app, "runningUnderARM64Translation", {
+      get() {
+        throw new Error("boom");
+      },
+      configurable: true,
+    });
+    expect(buildArchLabel()).toBe("x64");
+    // Restore a plain data property for subsequent tests.
+    Object.defineProperty(electronMock.app, "runningUnderARM64Translation", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
 });
