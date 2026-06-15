@@ -67,8 +67,14 @@ export const PLUGIN_PROCESS_MAX_CONCURRENT = 8;
  */
 export const PLUGIN_PROCESS_KILL_GRACE_MS = 3_000;
 
-/** Channel name (under the plugin's `postToPanel` namespace) carrying process stream events. */
-export const PLUGIN_PROCESS_STREAM_CHANNEL = "process";
+/**
+ * Channel name (under the plugin's `postToPanel` namespace) carrying process
+ * stream events. `as const` pins the literal `"process"` type through
+ * declaration emit — without it, the re-exported constant widens to `string`
+ * in the composite build's emitted `.d.ts`, which plugin authors depend on for
+ * `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)` channel-key narrowing.
+ */
+export const PLUGIN_PROCESS_STREAM_CHANNEL = "process" as const;
 
 /**
  * Event payloads streamed to a plugin's panels over
