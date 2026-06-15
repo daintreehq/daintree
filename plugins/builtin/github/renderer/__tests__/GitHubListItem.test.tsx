@@ -496,23 +496,24 @@ describe("GitHubListItem", () => {
       labels: [{ name: "enhancement", color: "a2eeef" }],
     };
     const { container } = render(<GitHubListItem item={issue} type="issue" />);
-    const html = container.innerHTML;
-    const commentIdx = html.indexOf("lucide-message-square");
-    const labelIdx = html.indexOf("enhancement");
-    expect(commentIdx).toBeGreaterThanOrEqual(0);
-    expect(labelIdx).toBeGreaterThanOrEqual(0);
-    expect(commentIdx).toBeLessThan(labelIdx);
+    const commentIcon = container.querySelector("svg.lucide-message-square");
+    const label = screen.getByText("enhancement");
+    expect(commentIcon).not.toBeNull();
+    // DOCUMENT_POSITION_FOLLOWING set => label comes after the comment icon.
+    expect(
+      commentIcon!.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it("renders the PR comment count before the head branch in the metadata row", () => {
     const pr: PR = { ...basePR, commentCount: 6, headRef: "feature/new-thing" };
     const { container } = render(<GitHubListItem item={pr} type="pr" />);
-    const html = container.innerHTML;
-    const commentIdx = html.indexOf("lucide-message-square");
-    const headRefIdx = html.indexOf("feature/new-thing");
-    expect(commentIdx).toBeGreaterThanOrEqual(0);
-    expect(headRefIdx).toBeGreaterThanOrEqual(0);
-    expect(commentIdx).toBeLessThan(headRefIdx);
+    const commentIcon = container.querySelector("svg.lucide-message-square");
+    const headRef = screen.getByText("feature/new-thing");
+    expect(commentIcon).not.toBeNull();
+    expect(
+      commentIcon!.compareDocumentPosition(headRef) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it("does not show Copy icon - only # prefix and Check on copy", async () => {
