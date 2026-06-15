@@ -3005,8 +3005,9 @@ export class PluginService {
     // handler sees the same value the input-schema validation accepted above
     // (which also defaults the empty case to `{}`).
     if (actionHandler) {
+      let actionResult: unknown;
       try {
-        return await actionHandler(args.length > 0 ? args[0] : {});
+        actionResult = await actionHandler(args.length > 0 ? args[0] : {});
       } catch (err) {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
@@ -3028,6 +3029,20 @@ export class PluginService {
         markAuditedHandlerFailure(err);
         throw err;
       }
+      // Audit the success path too (#10517). A plugin calling its own
+      // registered action handler from its view must leave the same durable
+      // trail on success as on failure — otherwise a benign-looking action can
+      // run unobserved while only its failures are recorded.
+      safeAppendAudit({
+        pluginId,
+        actionId: channel,
+        recordType: "action-dispatch",
+        result: "success",
+        errorMessage: "",
+        argsHash: safeArgsHash(args),
+        durationMs: Date.now() - dispatchStart,
+      });
+      return actionResult;
     }
 
     if (!handler) {
@@ -3092,6 +3107,7 @@ export class PluginService {
       throw err;
     }
 
+    let finalResult: unknown = result;
     if (channelSchema) {
       const parsedResult = channelSchema.result.safeParse(result);
       if (!parsedResult.success) {
@@ -3099,10 +3115,25 @@ export class PluginService {
           `SCHEMA_ERROR: result for channel "${channel}" failed validation: ${z.prettifyError(parsedResult.error)}`
         );
       }
-      return parsedResult.data;
+      finalResult = parsedResult.data;
     }
 
-    return result;
+    // Audit the success path too (#10517). The catch above records IPC-handler
+    // failures; without this, a plugin invoking its own registered handler via
+    // `plugin:invoke` runs with zero audit trail on success. Recorded only once
+    // the dispatch will truly return (after result-schema validation), so a
+    // host-side schema rejection isn't logged as a success.
+    safeAppendAudit({
+      pluginId,
+      actionId: channel,
+      recordType: "ipc-invoke",
+      channel,
+      result: "success",
+      errorMessage: "",
+      argsHash: safeArgsHash(args),
+      durationMs: Date.now() - dispatchStart,
+    });
+    return finalResult;
   }
 
   removeHandlers(pluginId: string): void {

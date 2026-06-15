@@ -1,3 +1,4 @@
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stable mock boundaries so importing the handler stays cheap and free of the
@@ -116,10 +117,14 @@ function setSchema(tool: unknown): void {
 }
 
 /** Pin a TOFU approval so `authorizeToolCall` resolves without a prompt. */
-function pinApproval(tool: { description?: string; inputSchema: unknown }): void {
+function pinApproval(tool: {
+  description?: string;
+  inputSchema: unknown;
+  annotations?: ToolAnnotations;
+}): void {
   (h.consentStore as PluginMcpConsentStore).pin(
     { pluginId: input.pluginId, serverId: input.serverId, toolName: input.toolName },
-    fingerprintTool(tool.description ?? "", tool.inputSchema)
+    fingerprintTool(tool.description ?? "", tool.inputSchema, tool.annotations)
   );
 }
 

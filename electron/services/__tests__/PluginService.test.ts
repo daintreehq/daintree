@@ -2565,16 +2565,31 @@ describe("Plugin IPC handler registration", () => {
       }
     });
 
-    it("does not audit when the typed-channel handler succeeds", async () => {
+    it("audits a successful typed-channel handler as an ipc-invoke success record (#10517)", async () => {
       const appendSpy = vi
         .spyOn(getPluginActionAuditService(), "append")
         .mockImplementation(() => {});
       try {
         service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockResolvedValue("ok"));
-        await service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [
-          "a",
-        ]);
-        expect(appendSpy).not.toHaveBeenCalled();
+        const result = await service.dispatchHandler(
+          "acme.test-plugin",
+          "get-data",
+          makeCtx("acme.test-plugin"),
+          ["a"]
+        );
+        expect(result).toBe("ok");
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        const record = appendSpy.mock.calls[0][0];
+        expect(record).toMatchObject({
+          pluginId: "acme.test-plugin",
+          actionId: "get-data",
+          recordType: "ipc-invoke",
+          channel: "get-data",
+          result: "success",
+        });
+        expect(record.errorMessage).toBe("");
+        expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(typeof record.durationMs).toBe("number");
       } finally {
         appendSpy.mockRestore();
       }
@@ -5339,6 +5354,38 @@ describe("createHost — registerAction", () => {
       expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
       // Marked so the outer plugin:invoke catch won't record a duplicate.
       expect(isAuditedHandlerFailure(boom)).toBe(true);
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+
+  it("audits a successful action handler as an action-dispatch success record (#10517)", async () => {
+    const appendSpy = vi
+      .spyOn(getPluginActionAuditService(), "append")
+      .mockImplementation(() => {});
+    try {
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => "done");
+
+      const result = await service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{ issue: 7 }]
+      );
+      expect(result).toBe("done");
+
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      const record = appendSpy.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "acme.act-test",
+        actionId: "acme.act-test.plan-from-issue",
+        recordType: "action-dispatch",
+        result: "success",
+      });
+      expect(record.errorMessage).toBe("");
+      expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(typeof record.durationMs).toBe("number");
     } finally {
       appendSpy.mockRestore();
     }
