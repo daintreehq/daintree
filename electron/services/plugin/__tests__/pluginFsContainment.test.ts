@@ -65,6 +65,31 @@ describe("resolveContainedPath", () => {
     );
   });
 
+  it("rejects a DANGLING symlink leaf pointing outside (write-escape vector)", async () => {
+    // A symlink inside the allowed root whose target does NOT exist yet: realpath
+    // throws, so without the lstat guard the lexical nearest-ancestor path would
+    // contain it and a subsequent writeFile would follow the link and CREATE the
+    // out-of-scope target. Must be rejected.
+    const outsideTarget = path.join(root, "outside", "planted.txt");
+    const link = path.join(allowed, "dangling-link");
+    await fs.symlink(outsideTarget, link);
+    await expect(resolveContainedPath("p", link, [allowed])).rejects.toBeInstanceOf(
+      PluginPathNotAllowedError
+    );
+  });
+
+  it("rejects a path traversing a dangling INTERMEDIATE symlink dir", async () => {
+    // /allowed/linkdir -> /root/outside-missing (a dir that doesn't exist yet).
+    // A write to /allowed/linkdir/new.txt must NOT be contained lexically: once
+    // the link target is created, writeFile would escape scope through it.
+    const link = path.join(allowed, "linkdir");
+    await fs.symlink(path.join(root, "outside-missing"), link);
+    const target = path.join(link, "new.txt");
+    await expect(resolveContainedPath("p", target, [allowed])).rejects.toBeInstanceOf(
+      PluginPathNotAllowedError
+    );
+  });
+
   it("accepts an in-root symlink that points to an in-root target", async () => {
     const realTarget = path.join(allowed, "real.txt");
     await fs.writeFile(realTarget, "ok");

@@ -17,13 +17,15 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
   return cachedPluginService;
 }
 
-// Read-only snapshot of plugin-managed child processes (#9234) for a renderer
-// process/task dashboard. `pluginId` is an optional scope filter; an invalid
-// value yields the full list rather than throwing — this is observability, not
-// a control surface (lifecycle is driven by the plugin's own host.process API).
+// Read-only snapshot of one plugin's managed child processes (#9234). Scoped
+// STRICTLY to the requested pluginId — a missing/empty id returns an empty list
+// rather than dumping every plugin's process command lines (args can carry
+// tokens). Cross-plugin spoofing of `pluginId` from an untrusted renderer is
+// the deferred per-sender ownership work (D2 / freeze finding #7); this handler
+// only removes the trivial "omit the arg to see everything" disclosure.
 async function handleList(pluginId?: string): Promise<PluginProcessInfo[]> {
-  const scope = typeof pluginId === "string" && pluginId.length > 0 ? pluginId : undefined;
-  return (await getPluginService()).listManagedProcesses(scope);
+  if (typeof pluginId !== "string" || pluginId.length === 0) return [];
+  return (await getPluginService()).listManagedProcesses(pluginId);
 }
 
 export const pluginProcessNamespace = defineIpcNamespace({

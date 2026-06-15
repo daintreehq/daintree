@@ -1811,6 +1811,12 @@ export class PluginService {
     // the live instance so a stale host (post-unload, or after a same-id
     // reload) can't write into the current session's log buffer.
     const boundPlugin = this.plugins.get(pluginId);
+    // Liveness for the non-revoke-guarded runtime methods: the plugin must still
+    // be loaded AND be the same instance this host was bound to. Identity (not
+    // just id membership) so a stale timer from a pre-reload instance can't emit
+    // into the current same-id instance's panels or read its worktrees.
+    const isBound = (): boolean =>
+      boundPlugin !== undefined && this.plugins.get(pluginId) === boundPlugin;
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
@@ -1920,7 +1926,7 @@ export class PluginService {
       // is plugin membership (mirrors invalidateFileDecorations/showToast): once
       // the plugin unloads this silently no-ops.
       postToPanel: (channel, payload) => {
-        if (!this.plugins.has(pluginId)) return;
+        if (!isBound()) return;
         if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
           throw new Error(
             `Plugin "${pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
@@ -1929,19 +1935,23 @@ export class PluginService {
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
       },
       getActiveWorktree: async () => {
+        if (!isBound()) return null;
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return null;
         const active = snapshots.find((s) => s.isCurrent === true);
         return active ? toPluginWorktreeSnapshot(active) : null;
       },
       getWorktrees: async () => {
+        if (!isBound()) return [];
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return [];
         return snapshots.map(toPluginWorktreeSnapshot);
       },
       getWorktreeStatus: async (path) => {
-        if (!this.plugins.has(pluginId)) return null;
+        if (!isBound()) return null;
         if (typeof path !== "string" || path.length === 0) return null;
         const snapshots = await this.fetchAllWorktreeSnapshots();
-        if (!this.plugins.has(pluginId)) return null;
+        if (!isBound()) return null;
         const match = snapshots.find((s) => s.path === path);
         return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
       },
@@ -2478,8 +2488,17 @@ export class PluginService {
         get id() {
           return handle.id;
         },
-        kill: () => handle.kill(),
-        restart: () => handle.restart(),
+        // Gate lifecycle control on membership so a stale handle retained by a
+        // leaked timer can't kill or respawn a process after the plugin unloads
+        // (killManagedProcesses already tore the live children down on unload).
+        kill: () => {
+          if (!this.plugins.has(pluginId)) return;
+          handle.kill();
+        },
+        restart: () => {
+          if (!this.plugins.has(pluginId)) return Promise.resolve();
+          return handle.restart();
+        },
         onExit: (cb) => handle.onExit(cb),
         onCrash: (cb) => handle.onCrash(cb),
       };
@@ -2727,6 +2746,9 @@ export class PluginService {
       ): Promise<PluginGitCommitResult> => {
         requireLoaded("commit");
         requireWriteCap("commit");
+        // commit returns the staged diff as its change-preview, so it discloses
+        // repo content — require read alongside write.
+        requireReadCap("commit");
         const resolved = await containWorktree(worktreePath);
         requireLoaded("commit");
         // git.commit throws COMMIT_MESSAGE_REQUIRED before any mutation when the

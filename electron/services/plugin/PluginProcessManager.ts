@@ -413,6 +413,17 @@ export class PluginProcessManager {
       } catch {
         // best-effort
       }
+      // Escalate the detached old child to SIGKILL if it ignores SIGTERM, so a
+      // repeated restart can't strand a pile of live children outside the cap.
+      const oldChild = old;
+      const escalation = setTimeout(() => {
+        try {
+          oldChild.kill("SIGKILL");
+        } catch {
+          // best-effort
+        }
+      }, this.killGraceMs);
+      escalation.unref?.();
     }
     managed.restartCount++;
     managed.killRequested = false;
@@ -471,10 +482,49 @@ export class PluginProcessManager {
   }
 }
 
+// Env vars a child needs to function (PATH lookup, locale, temp, OS essentials)
+// WITHOUT inheriting the main process's secrets (API tokens, auth keys). A
+// plugin passes anything else it needs explicitly via options.env.
+const SAFE_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "SHELL",
+  "USER",
+  "LOGNAME",
+  "SystemRoot",
+  "COMSPEC",
+  "PATHEXT",
+  "WINDIR",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ProgramData",
+  "ProgramFiles",
+];
+
+export function minimalSpawnEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {};
+  for (const key of SAFE_ENV_KEYS) {
+    const value = process.env[key];
+    if (typeof value === "string") base[key] = value;
+  }
+  return { ...base, ...extra };
+}
+
 const defaultSpawner: ProcessSpawner = (config) => {
   const child = nodeSpawn(config.command, config.args, {
     cwd: config.cwd,
-    env: { ...process.env, ...config.env },
+    // Do NOT inherit the full host env — that would leak the main process's
+    // tokens to any shell:exec plugin. Allowlist essentials + plugin-provided.
+    env: minimalSpawnEnv(config.env),
     stdio: ["ignore", "pipe", "pipe"],
     // No shell — argv is passed verbatim, closing the shell-injection vector a
     // process-orchestrator plugin would otherwise carry.

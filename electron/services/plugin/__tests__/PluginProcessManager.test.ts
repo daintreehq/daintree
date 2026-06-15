@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import {
+  minimalSpawnEnv,
   PluginProcessConcurrencyError,
   PluginProcessManager,
   type ManagedChildProcess,
@@ -81,6 +82,31 @@ function makeHarness(opts?: { killGraceMs?: number }): Harness {
   });
   return { manager, events, spawnConfigs, fakes, auditCalls };
 }
+
+describe("minimalSpawnEnv", () => {
+  it("passes through PATH but drops arbitrary host secrets", () => {
+    const SECRET = "DAINTREE_TEST_SECRET_TOKEN";
+    const prev = process.env[SECRET];
+    process.env[SECRET] = "super-secret";
+    try {
+      const env = minimalSpawnEnv({ MY_FLAG: "1" });
+      // Essentials for the child to run survive…
+      expect(env.PATH).toBe(process.env.PATH);
+      // …plugin-provided env is merged…
+      expect(env.MY_FLAG).toBe("1");
+      // …but the main process's secret does NOT leak to the child.
+      expect(env[SECRET]).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env[SECRET];
+      else process.env[SECRET] = prev;
+    }
+  });
+
+  it("lets plugin-provided env override an allowlisted key", () => {
+    const env = minimalSpawnEnv({ PATH: "/custom/bin" });
+    expect(env.PATH).toBe("/custom/bin");
+  });
+});
 
 describe("PluginProcessManager", () => {
   beforeEach(() => {

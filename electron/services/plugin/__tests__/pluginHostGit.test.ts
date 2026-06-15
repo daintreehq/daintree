@@ -1,19 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SimpleGit } from "simple-git";
-import { PluginHostGit, PluginGitCommitMessageRequiredError } from "../pluginHostGit.js";
+import {
+  PluginHostGit,
+  PluginGitCommitMessageRequiredError,
+  PluginGitPathNotAllowedError,
+} from "../pluginHostGit.js";
 import type { WorktreeChanges } from "../../../../shared/types/index.js";
 
 function fakeGit(overrides: Partial<Record<keyof SimpleGit, unknown>> = {}): {
   git: SimpleGit;
   diff: ReturnType<typeof vi.fn>;
   add: ReturnType<typeof vi.fn>;
+  raw: ReturnType<typeof vi.fn>;
   commit: ReturnType<typeof vi.fn>;
 } {
   const diff = vi.fn().mockResolvedValue("");
   const add = vi.fn().mockResolvedValue(undefined);
+  const raw = vi.fn().mockResolvedValue("");
   const commit = vi.fn().mockResolvedValue({ commit: "abc123" });
-  const git = { diff, add, commit, ...overrides } as unknown as SimpleGit;
-  return { git, diff, add, commit };
+  const git = { diff, add, raw, commit, ...overrides } as unknown as SimpleGit;
+  return { git, diff, add, raw, commit };
 }
 
 const emptyChanges: WorktreeChanges = {
@@ -60,18 +66,39 @@ describe("PluginHostGit", () => {
     expect(result.preview).toContain("+hello");
   });
 
-  it("add stages all changes when no paths are given", async () => {
-    const { git, add } = fakeGit();
+  it("add stages all changes when no paths are given (with -- end-of-options)", async () => {
+    const { git, raw } = fakeGit();
     const host = new PluginHostGit("p", async () => git);
     await host.add("/wt");
-    expect(add).toHaveBeenCalledWith(["."]);
+    expect(raw).toHaveBeenCalledWith(["add", "--", "."]);
   });
 
-  it("add filters non-string path entries", async () => {
-    const { git, add } = fakeGit();
+  it("add filters non-string path entries and forces -- end-of-options", async () => {
+    const { git, raw } = fakeGit();
     const host = new PluginHostGit("p", async () => git);
     await host.add("/wt", ["a.ts", "", "b.ts"]);
-    expect(add).toHaveBeenCalledWith(["a.ts", "b.ts"]);
+    expect(raw).toHaveBeenCalledWith(["add", "--", "a.ts", "b.ts"]);
+  });
+
+  it("add rejects an escaping or option-injecting pathspec", async () => {
+    const { git, raw } = fakeGit();
+    const host = new PluginHostGit("p", async () => git);
+    // Traversal, absolute, pathspec magic, and git OPTION injection (-A/--all
+    // would otherwise stage the whole repo, escaping the contained worktree).
+    for (const escape of ["../outside.ts", "/etc/passwd", ":(top)secret", "-A", "--all"]) {
+      await expect(host.add("/wt", [escape])).rejects.toBeInstanceOf(PluginGitPathNotAllowedError);
+    }
+    // None of the rejected pathspecs reach git.
+    expect(raw).not.toHaveBeenCalled();
+  });
+
+  it("diff rejects an escaping pathspec before shelling out", async () => {
+    const { git, diff } = fakeGit();
+    const host = new PluginHostGit("p", async () => git);
+    await expect(host.diff("/wt", "../outside.ts")).rejects.toBeInstanceOf(
+      PluginGitPathNotAllowedError
+    );
+    expect(diff).not.toHaveBeenCalled();
   });
 
   it("status projects the changes provider output", async () => {

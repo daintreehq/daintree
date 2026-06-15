@@ -25,7 +25,12 @@ export function usePluginEvent<TPayload = unknown>(
   handler: PluginEventHandler<TPayload>
 ): void {
   const handlerRef = useRef(handler);
-  handlerRef.current = handler;
+  // Keep the latest handler in a ref via an effect (not a render-time mutation,
+  // which the React 19 compiler rejects). Pushes arrive asynchronously over IPC,
+  // so the post-render ref update is always in place before one fires.
+  useEffect(() => {
+    handlerRef.current = handler;
+  });
 
   useEffect(() => {
     const dispose = getPluginHostBridge().on(pluginId, channel, (payload) => {

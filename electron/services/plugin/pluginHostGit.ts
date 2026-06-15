@@ -1,3 +1,4 @@
+import path from "path";
 import type { SimpleGit } from "simple-git";
 import { createHardenedGit } from "../../utils/hardenedGit.js";
 import { getWorktreeChangesWithStats } from "../../utils/git.js";
@@ -21,6 +22,36 @@ export class PluginGitCommitMessageRequiredError extends Error {
       `COMMIT_MESSAGE_REQUIRED: plugin "${pluginId}" git.commit requires an explicit non-empty message — the host does not substitute a derived commit message`
     );
     this.name = "PluginGitCommitMessageRequiredError";
+  }
+}
+
+/** Thrown when a git pathspec escapes the contained worktree or uses pathspec magic. */
+export class PluginGitPathNotAllowedError extends Error {
+  constructor(
+    public readonly pluginId: string,
+    public readonly pathspec: string
+  ) {
+    super(
+      `PATH_NOT_ALLOWED: plugin "${pluginId}" git pathspec "${pathspec}" must be a relative path inside the worktree (no "..", absolute, or ":" pathspec magic)`
+    );
+    this.name = "PluginGitPathNotAllowedError";
+  }
+}
+
+/**
+ * A git pathspec from a plugin must be worktree-relative: containing the
+ * worktree `cwd` is not enough, because git resolves `../foo` and absolute paths
+ * against the repository, escaping the declared scope. Reject absolute paths,
+ * any `..` segment, and leading-`:` pathspec magic.
+ */
+function assertSafePathspec(pluginId: string, spec: string): void {
+  // Leading "-" would be parsed as a git OPTION (e.g. "-A" / "--all" stages the
+  // whole repo, escaping the worktree scope) rather than a path.
+  if (path.isAbsolute(spec) || spec.startsWith(":") || spec.startsWith("-")) {
+    throw new PluginGitPathNotAllowedError(pluginId, spec);
+  }
+  if (spec.split(/[\\/]/).some((seg) => seg === "..")) {
+    throw new PluginGitPathNotAllowedError(pluginId, spec);
   }
 }
 
@@ -64,6 +95,7 @@ export class PluginHostGit {
     const git = await this.gitFactory(worktreePath);
     const args = ["--no-ext-diff", "--no-textconv", "--no-color"];
     if (typeof filePath === "string" && filePath.length > 0) {
+      assertSafePathspec(this.pluginId, filePath);
       args.push("--end-of-options", "--", filePath);
     }
     return git.diff(args);
@@ -76,7 +108,12 @@ export class PluginHostGit {
       Array.isArray(paths) && paths.length > 0
         ? paths.filter((p): p is string => typeof p === "string" && p.length > 0)
         : ["."];
-    await git.add(targets);
+    for (const spec of targets) {
+      assertSafePathspec(this.pluginId, spec);
+    }
+    // "--" forces git to treat every following token as a pathspec, not an
+    // option — defense in depth alongside the leading-"-" rejection above.
+    await git.raw(["add", "--", ...targets]);
   }
 
   /**

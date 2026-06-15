@@ -36,6 +36,11 @@ import type {
   NormalizedPRState,
   ResourceRef,
   CIStatus,
+  ActionDispatchResult,
+  ActionDispatchSuccess,
+  ActionDispatchError,
+  ActionError,
+  ActionErrorCode,
 } from "../plugin-sdk.js";
 import type { UseHostChannelResult, PluginEventHandler } from "../plugin-sdk-react.js";
 
@@ -109,6 +114,16 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<NormalizedPRState>().toMatchTypeOf<string>();
       expectTypeOf<ResourceRef>().toMatchTypeOf<object>();
       expectTypeOf<CIStatus>().toMatchTypeOf<object>();
+    });
+
+    it("exports the host.dispatch result types", () => {
+      // host.dispatch() resolves to ActionDispatchResult; a plugin author must be
+      // able to name it and its error-code union from the public SDK.
+      expectTypeOf<ActionDispatchResult>().toMatchTypeOf<object>();
+      expectTypeOf<ActionDispatchSuccess>().toMatchTypeOf<object>();
+      expectTypeOf<ActionDispatchError>().toMatchTypeOf<object>();
+      expectTypeOf<ActionError>().toMatchTypeOf<object>();
+      expectTypeOf<ActionErrorCode>().toMatchTypeOf<string>();
     });
   });
 

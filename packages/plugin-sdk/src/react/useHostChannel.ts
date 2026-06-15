@@ -29,11 +29,13 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   const [error, setError] = useState<Error | null>(null);
   const callIdRef = useRef(0);
 
-  // Reset the call counter when the channel target changes, so an in-flight
-  // call from the prior (pluginId, channel) can't resolve later and overwrite
-  // the new target's loading/error state with stale data.
+  // Clear loading/error when the channel target changes. The call counter is
+  // monotonic and is NOT reset here: resetting it would let an in-flight call
+  // from the prior target (e.g. callId 1) collide with the first new call (also
+  // callId 1) and pass the stale-call guard below, clobbering the new target's
+  // state. A never-reset counter guarantees every later call outranks any
+  // earlier in-flight one.
   useEffect(() => {
-    callIdRef.current = 0;
     setLoading(false);
     setError(null);
   }, [pluginId, channel]);

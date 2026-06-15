@@ -1,5 +1,5 @@
 import path from "path";
-import { realpath } from "fs/promises";
+import { realpath, lstat } from "fs/promises";
 
 /**
  * Realpath-based containment for the host-mediated `host.fs`/`host.git` surface.
@@ -66,7 +66,17 @@ export async function resolveContainedPath(
 
   // Realpath-resolve the nearest existing ancestor, then re-append the missing
   // tail so a write target that doesn't exist yet still contains correctly.
-  const { realBase, tail } = await realpathNearest(normalized);
+  // realpathNearest rejects any UNresolvable symlink component (a dangling or
+  // looping link, at the leaf or an intermediate dir): such a path would
+  // otherwise be contained lexically and let writeFile/readFile follow the link
+  // OUTSIDE every allowed root once its target materialized.
+  let realBase: string;
+  let tail: string;
+  try {
+    ({ realBase, tail } = await realpathNearest(normalized));
+  } catch {
+    throw new PluginPathNotAllowedError(pluginId, requestedPath);
+  }
   const realCandidate = tail.length > 0 ? path.join(realBase, tail) : realBase;
 
   for (const root of allowedPaths) {
@@ -90,7 +100,13 @@ export async function resolveContainedPath(
  * Realpath the deepest existing prefix of `absPath`, returning that real base
  * plus the lexical tail of components that don't exist yet. This makes a write
  * to a not-yet-existent file containable: we resolve symlinks on the real part
- * and treat the missing leaf lexically (it can't be a symlink — it doesn't exist).
+ * and treat the missing tail lexically.
+ *
+ * Throws if any component that EXISTS on disk is a symlink we cannot fully
+ * resolve (a dangling/looping link) — at the leaf or an intermediate dir. Such a
+ * path must not be contained lexically: `writeFile`/`readFile` would follow the
+ * link outside scope the moment its target exists. A genuinely non-existent
+ * component (ENOENT, no symlink) is fine and resolves lexically.
  */
 async function realpathNearest(absPath: string): Promise<{ realBase: string; tail: string }> {
   let current = absPath;
@@ -100,6 +116,16 @@ async function realpathNearest(absPath: string): Promise<{ realBase: string; tai
       const realBase = await realpath(current);
       return { realBase, tail: missing.length > 0 ? path.join(...missing.reverse()) : "" };
     } catch {
+      // Distinguish a non-existent component (fine) from a dangling symlink
+      // component (reject — it would let a later write escape scope).
+      try {
+        if ((await lstat(current)).isSymbolicLink()) {
+          throw new Error("UNRESOLVABLE_SYMLINK_COMPONENT");
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message === "UNRESOLVABLE_SYMLINK_COMPONENT") throw err;
+        // lstat ENOENT — the component genuinely doesn't exist; resolve lexically.
+      }
       const parent = path.dirname(current);
       if (parent === current) {
         // Reached the filesystem root without resolving anything — treat the
