@@ -373,21 +373,25 @@ export function isPrivateOrLoopbackHostname(hostname: string): boolean {
 }
 
 /**
- * Per-entry validator for `scopes.network.allowedUrls`. Each entry must:
+ * Shared per-entry validator body for manifest URL fields. Each entry must:
  *
  * - Parse as a `https:` URL (no `http:`, `file:`, custom schemes).
  * - Contain no `*` substring (wildcards are rejected so a tightly-bound
  *   declaration cannot smuggle a permissive value past the manifest gate).
  * - Carry no embedded credentials (no `https://user:pass@host`).
  * - Target a multi-label hostname (at least one `.` after parse). Single-label
- *   intranet hosts are rejected to keep allowlists auditable from the manifest.
+ *   intranet hosts are rejected to keep URLs auditable from the manifest.
  * - Not target a private/loopback/link-local address (SSRF mitigation).
+ *
+ * `fieldLabel` names the offending field in error messages so the same
+ * discipline can back both `scopes.network.allowedUrls` and `authors[].url`
+ * without leaking a misleading field name into the other's validation errors.
  */
-const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
+function refinePluginHttpsUrl(value: string, ctx: z.RefinementCtx, fieldLabel: string): void {
   if (value.includes("*")) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `Wildcard characters are not allowed in scopes.network.allowedUrls: "${value}"`,
+      message: `Wildcard characters are not allowed in ${fieldLabel}: "${value}"`,
       params: { errorCode: "scope_wildcard_rejected" },
     });
     return;
@@ -398,7 +402,7 @@ const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
   } catch {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `scopes.network.allowedUrls entry is not a valid URL: "${value}"`,
+      message: `${fieldLabel} entry is not a valid URL: "${value}"`,
       params: { errorCode: "scope_url_invalid" },
     });
     return;
@@ -406,7 +410,7 @@ const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
   if (parsed.protocol !== "https:") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `scopes.network.allowedUrls entries must use https:// — got "${parsed.protocol}" in "${value}"`,
+      message: `${fieldLabel} entries must use https:// — got "${parsed.protocol}" in "${value}"`,
       params: { errorCode: "scope_url_not_https" },
     });
     return;
@@ -414,7 +418,7 @@ const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
   if (parsed.username !== "" || parsed.password !== "") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `scopes.network.allowedUrls entries must not embed credentials: "${value}"`,
+      message: `${fieldLabel} entries must not embed credentials: "${value}"`,
       params: { errorCode: "scope_url_has_credentials" },
     });
     return;
@@ -423,7 +427,7 @@ const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
   if (isPrivateOrLoopbackHostname(hostname)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `scopes.network.allowedUrls entry targets a private or loopback address: "${value}"`,
+      message: `${fieldLabel} entry targets a private or loopback address: "${value}"`,
       params: { errorCode: "scope_url_private_target" },
     });
     return;
@@ -431,11 +435,41 @@ const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
   if (hostname === "" || !hostname.includes(".")) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `scopes.network.allowedUrls hostnames must be multi-label (got "${hostname}" in "${value}")`,
+      message: `${fieldLabel} hostnames must be multi-label (got "${hostname}" in "${value}")`,
       params: { errorCode: "scope_url_hostname_unqualified" },
     });
     return;
   }
+}
+
+/**
+ * Per-entry validator for `scopes.network.allowedUrls`. See
+ * {@link refinePluginHttpsUrl} for the enforced discipline.
+ */
+const PluginAllowedUrlSchema = z.string().superRefine((value, ctx) => {
+  refinePluginHttpsUrl(value, ctx, "scopes.network.allowedUrls");
+});
+
+/**
+ * Per-entry validator for `authors[].url`. Author homepage links surface as
+ * user-clickable buttons in the plugin detail pane, so they carry the same
+ * https-only, no-credentials, no-private-host discipline as network scopes
+ * (anti-phishing / SSRF) — only the error-message field name differs.
+ */
+const PluginAuthorUrlSchema = z.string().superRefine((value, ctx) => {
+  refinePluginHttpsUrl(value, ctx, "authors[].url");
+});
+
+/**
+ * A single attribution entry in the plugin manifest's `authors` array. `name`
+ * is required; `url`, `email`, and `role` are optional. `strictObject` rejects
+ * unknown keys so manifest typos surface loudly.
+ */
+export const PluginAuthorSchema = z.strictObject({
+  name: z.string().trim().min(1).max(100),
+  url: PluginAuthorUrlSchema.optional(),
+  email: z.email().optional(),
+  role: z.string().trim().min(1).max(50).optional(),
 });
 
 /**
@@ -608,6 +642,14 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
 } as const;
 
 /**
+ * Upper bound on the top-level `authors` array. Attribution is metadata, not a
+ * registration loop, so the cap is small — generous for any real plugin's
+ * credits list while rejecting pathological manifests. Exported so tests
+ * reference it without a magic number.
+ */
+export const MANIFEST_AUTHORS_CAP = 10;
+
+/**
  * Deprecated `contributes` keys promoted to stable names in the 1.0 freeze.
  * Old manifests are still accepted (the value is migrated to the canonical key);
  * `PluginService` surfaces a deprecation warning when an alias is encountered.
@@ -663,6 +705,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       displayName: z.string().optional(),
       description: z.string().optional(),
       tagline: z.string().trim().min(1).max(120).optional(),
+      authors: z.array(PluginAuthorSchema).max(MANIFEST_AUTHORS_CAP).optional(),
       category: z.enum(PLUGIN_CATEGORY_IDS).optional(),
       main: z.string().optional(),
       engines: z
