@@ -79,14 +79,10 @@ export function PluginMcpConfirmDialog() {
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-xs">
             <DangerTierBadge tier={current.dangerTier} />
-            {current.reason === "raw-changed" && (
-              <span className="text-status-warning font-medium">Tool description changed</span>
-            )}
-            {current.reason === "schema-changed" && (
-              <span className="text-status-warning font-medium">Tool inputs changed</span>
-            )}
-            {current.reason === "revoked" && (
-              <span className="text-status-warning font-medium">Previously revoked</span>
+            {warningLabelFor(current.reason) !== null && (
+              <span className="text-status-warning font-medium">
+                {warningLabelFor(current.reason)}
+              </span>
             )}
           </div>
 
@@ -128,17 +124,47 @@ export function PluginMcpConfirmDialog() {
   );
 }
 
-function titleFor(reason: string, toolName: string): string {
+/**
+ * Dialog title for a consent reason. Every re-prompt reason (the tool changed
+ * since it was pinned, or was revoked) gets a distinct "review and re-approve"
+ * framing so a user can tell a rug-pull re-prompt apart from a first-use one —
+ * `annotation-changed` in particular must NOT fall through to the generic
+ * first-use title, or a server raising a pinned tool's danger tier would be
+ * indistinguishable from approving it for the first time. Exported for tests.
+ */
+export function titleFor(reason: string, toolName: string): string {
   switch (reason) {
     case "raw-changed":
       return `'${toolName}' has changed — review and re-approve?`;
     case "schema-changed":
       return `'${toolName}' inputs changed — review and re-approve?`;
+    case "annotation-changed":
+      return `'${toolName}' danger level changed — review and re-approve?`;
     case "revoked":
       return `'${toolName}' was previously revoked — allow again?`;
     case "first-use":
     default:
       return `Allow '${toolName}' to run?`;
+  }
+}
+
+/**
+ * Inline warning badge label for a consent reason, or `null` for first-use
+ * (no badge — nothing changed). Each re-prompt reason maps to its own label so
+ * the badge names what changed. Exported for tests.
+ */
+export function warningLabelFor(reason: string): string | null {
+  switch (reason) {
+    case "raw-changed":
+      return "Tool description changed";
+    case "schema-changed":
+      return "Tool inputs changed";
+    case "annotation-changed":
+      return "Danger level changed";
+    case "revoked":
+      return "Previously revoked";
+    default:
+      return null;
   }
 }
 

@@ -752,9 +752,7 @@ async function handleClearAuditLog(ctx: IpcContext): Promise<void> {
       argsHash: "",
       durationMs: 0,
     });
-    throw new Error(
-      `plugin:clear-audit-log rejected: untrusted sender (url=${senderUrl ?? "unknown"})`
-    );
+    throw new Error(`plugin:clear-audit-log rejected: untrusted sender (url=${safeUrl})`);
   }
   getPluginActionAuditService().clear();
 }

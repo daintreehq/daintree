@@ -3109,6 +3109,40 @@ describe("Plugin IPC handler registration", () => {
       ).rejects.toThrow(/^SCHEMA_ERROR: result for channel "broken" failed validation/);
     });
 
+    it("does NOT emit a success audit when the result schema rejects (#10517)", async () => {
+      // The success record is written only after result-schema validation
+      // passes — a host-side schema rejection of a handler that otherwise ran
+      // must never be logged as a successful dispatch.
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const schema = {
+          args: z.object({}).passthrough(),
+          result: z.object({ count: z.number() }),
+        };
+        typedService.registerHandler(
+          "acme.typed",
+          "broken",
+          schema,
+          vi.fn(async () => ({ count: "nope" as unknown as number }))
+        );
+
+        await expect(
+          typedService.dispatchHandler("acme.typed", "broken", makeCtx("acme.typed"), [{}])
+        ).rejects.toThrow(/^SCHEMA_ERROR:/);
+
+        // No success record from the inner dispatch boundary (the schema
+        // rejection is owned by the outer plugin:invoke boundary instead).
+        const successCalls = appendSpy.mock.calls.filter(
+          (c) => (c[0] as { result?: string }).result === "success"
+        );
+        expect(successCalls).toHaveLength(0);
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
     it("rejects registration with PERMISSION_REQUIRED when a required capability is not declared", () => {
       const schema = {
         args: z.object({}),
