@@ -49,11 +49,22 @@ export interface PluginMcpToolIdentity {
  * - `schemaHash` is over the JSON-stringified `inputSchema` with keys sorted
  *   lexicographically (via `stableArgsSha256`'s normaliser). A schema mutation
  *   changes the call surface — re-prompt is mandatory.
+ * - `annotationHash` is over the three tier-influencing `ToolAnnotations`
+ *   hints (`readOnlyHint`, `destructiveHint`, `openWorldHint`), null-normalised
+ *   and key-sorted. A server flipping `readOnlyHint: true` → `destructiveHint:
+ *   true` raises the danger tier without touching the description or schema;
+ *   folding the triple into the fingerprint forces re-consent on that flip.
+ *   Only the three tier-relevant fields are hashed — future SDK annotation
+ *   fields must not produce spurious re-prompts. The empty string is a legacy
+ *   sentinel (see `PluginMcpConsentStore.normalizeRecord`): records pinned
+ *   before this field existed carry `""`, which never matches a real 64-char
+ *   digest and therefore re-prompts on the next lookup.
  */
 export interface PluginMcpToolFingerprint {
   rawHash: string;
   displayHash: string;
   schemaHash: string;
+  annotationHash: string;
 }
 
 /**
@@ -82,6 +93,11 @@ export interface PluginMcpConsentRecord {
  *   regardless of whether the displayed text looks the same.
  * - `schema-changed` — pin exists, raw matches, but the input schema mutated.
  *   The call surface changed — re-prompt.
+ * - `annotation-changed` — pin exists, raw and schema match, but the
+ *   tier-influencing annotation hints (`readOnlyHint` / `destructiveHint` /
+ *   `openWorldHint`) mutated. The advertised danger surface changed — re-prompt.
+ *   Also fires for legacy pins minted before `annotationHash` existed (their
+ *   `""` sentinel never matches a real digest).
  * - `revoked` — the user explicitly revoked this pin; prompt with the
  *   "previously revoked" framing.
  */
@@ -90,6 +106,7 @@ export type PluginMcpConsentLookup =
   | { kind: "first-use" }
   | { kind: "raw-changed"; previousPin: PluginMcpConsentRecord }
   | { kind: "schema-changed"; previousPin: PluginMcpConsentRecord }
+  | { kind: "annotation-changed"; previousPin: PluginMcpConsentRecord }
   | { kind: "revoked" };
 
 /**
@@ -114,6 +131,7 @@ export type PluginMcpConsentReason =
   | "first-use"
   | "raw-changed"
   | "schema-changed"
+  | "annotation-changed"
   | "revoked"
   | "explicit-confirm";
 

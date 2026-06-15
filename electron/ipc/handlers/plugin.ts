@@ -725,7 +725,35 @@ async function handleGetAuditConfig(): Promise<PluginAuditConfig> {
   return getPluginActionAuditService().getConfig();
 }
 
-async function handleClearAuditLog(): Promise<void> {
+/**
+ * Wipe every plugin's audit records. Unlike the read-only audit getters, this
+ * destroys the shared forensic trail, so it carries a sender-trust gate that
+ * the read paths don't need (#10517). Plugin view modules are `import()`ed
+ * into the shared renderer realm, but a frame outside the first-party origin
+ * (a cross-origin iframe, `<webview>`, or portal WebContents) must never reach
+ * this — it would let an untrusted surface erase the evidence of its own and
+ * every other plugin's activity. The rejected attempt is itself audited (the
+ * security-relevant signal is "an untrusted frame tried to clear the log"),
+ * mirroring the `plugin:invoke` trust check.
+ */
+async function handleClearAuditLog(ctx: IpcContext): Promise<void> {
+  const senderUrl = ctx.event.senderFrame?.url;
+  if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
+    const safeUrl = senderUrl
+      ? scrubSecrets(senderUrl.slice(0, UNTRUSTED_URL_MAX_CHARS))
+      : "unknown";
+    safeAppend({
+      pluginId: "",
+      actionId: PLUGIN_METHOD_CHANNELS.clearAuditLog,
+      recordType: "ipc-invoke",
+      channel: PLUGIN_METHOD_CHANNELS.clearAuditLog,
+      result: "restricted",
+      errorMessage: `untrusted sender (url=${safeUrl})`,
+      argsHash: "",
+      durationMs: 0,
+    });
+    throw new Error(`plugin:clear-audit-log rejected: untrusted sender (url=${safeUrl})`);
+  }
   getPluginActionAuditService().clear();
 }
 
@@ -899,7 +927,9 @@ export const pluginNamespace = defineIpcNamespace({
     getWorktreeStatus: op(PLUGIN_METHOD_CHANNELS.getWorktreeStatus, handleWorktreeStatusGet),
     getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
     getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),
-    clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog),
+    clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog, {
+      withContext: true,
+    }),
     setAuditEnabled: op(PLUGIN_METHOD_CHANNELS.setAuditEnabled, handleSetAuditEnabled),
     setAuditMaxRecords: op(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords, handleSetAuditMaxRecords),
     exportAuditLog: op(PLUGIN_METHOD_CHANNELS.exportAuditLog, handleExportAuditLog),

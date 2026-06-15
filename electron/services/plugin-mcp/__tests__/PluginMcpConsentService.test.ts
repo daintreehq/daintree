@@ -75,7 +75,11 @@ describe("PluginMcpConsentService", () => {
     expect(result.kind).toBe("approved");
     expect(bridge).toHaveBeenCalledTimes(1);
 
-    const fp = fingerprintTool(baseInput.descriptionRaw, baseInput.inputSchema);
+    const fp = fingerprintTool(
+      baseInput.descriptionRaw,
+      baseInput.inputSchema,
+      baseInput.annotations
+    );
     expect(consentStore.lookup(baseInput.identity, fp).kind).toBe("approved");
   });
 
@@ -86,7 +90,11 @@ describe("PluginMcpConsentService", () => {
     const result = await service.authorizeToolCall(baseInput);
     expect(result.kind).toBe("approved");
 
-    const fp = fingerprintTool(baseInput.descriptionRaw, baseInput.inputSchema);
+    const fp = fingerprintTool(
+      baseInput.descriptionRaw,
+      baseInput.inputSchema,
+      baseInput.annotations
+    );
     expect(consentStore.lookup(baseInput.identity, fp).kind).toBe("first-use");
   });
 
@@ -152,6 +160,48 @@ describe("PluginMcpConsentService", () => {
     expect((bridge as any).mock.calls[1]![0].reason).toBe("schema-changed");
   });
 
+  it("re-prompts when only the tier-relevant annotations flip — benign→destructive rug-pull", async () => {
+    const bridge = vi
+      .fn()
+      .mockResolvedValueOnce("approved-and-pin") // first-use, pinned as read-only
+      .mockResolvedValueOnce("approved-once"); // annotation-changed re-prompt
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
+
+    // Pin a benign read-only tool.
+    await service.authorizeToolCall({ ...baseInput, annotations: { readOnlyHint: true } });
+    expect(bridge).toHaveBeenCalledTimes(1);
+    expect((bridge as any).mock.calls[0]![0].reason).toBe("first-use");
+
+    // Same description + schema, but the server now advertises a destructive
+    // tool — the tier rose without touching the bytes the old fingerprint
+    // covered, so the pin must NOT auto-approve.
+    const second = await service.authorizeToolCall({
+      ...baseInput,
+      annotations: { destructiveHint: true },
+    });
+    expect(second.kind).toBe("approved");
+    expect(bridge).toHaveBeenCalledTimes(2);
+    expect((bridge as any).mock.calls[1]![0].reason).toBe("annotation-changed");
+  });
+
+  it("does not re-prompt when a non-tier annotation field changes", async () => {
+    const bridge = vi.fn().mockResolvedValue("approved-and-pin");
+    service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
+
+    await service.authorizeToolCall({ ...baseInput, annotations: { readOnlyHint: true } });
+    (bridge as any).mockClear();
+
+    // `title` is advisory metadata, not a tier input — the fingerprint must
+    // stay stable so the SDK adding non-tier fields can't trigger spurious
+    // re-consent.
+    const second = await service.authorizeToolCall({
+      ...baseInput,
+      annotations: { readOnlyHint: true, title: "Renamed Tool" },
+    });
+    expect(second.kind).toBe("approved");
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
   it("does not prompt when a matching pin already exists", async () => {
     const bridge = vi.fn().mockResolvedValue("approved-and-pin");
     service.setConsentBridge(bridge as any as PluginMcpConsentBridge);
@@ -184,8 +234,8 @@ describe("PluginMcpConsentService", () => {
     // The audit service stores `input_schema_sha = sha256Hex("")` for null
     // schemas; the consent fingerprint must match so cross-referencing a
     // pinned tool against its audit row works.
-    const fp = fingerprintTool("desc", null);
-    const fpUndef = fingerprintTool("desc", undefined);
+    const fp = fingerprintTool("desc", null, undefined);
+    const fpUndef = fingerprintTool("desc", undefined, undefined);
     expect(fp.schemaHash).toEqual(fpUndef.schemaHash);
     // The non-empty sentinel makes the consistency check observable —
     // an accidental return-to-"" would fail this assertion.

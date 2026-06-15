@@ -64,8 +64,9 @@ vi.mock("../../../services/fileDecorationRegistry.js", () => ({
 }));
 
 const mockAuditAppend = vi.fn();
+const mockAuditClear = vi.fn();
 vi.mock("../../../services/PluginActionAuditService.js", () => ({
-  getPluginActionAuditService: () => ({ append: mockAuditAppend }),
+  getPluginActionAuditService: () => ({ append: mockAuditAppend, clear: mockAuditClear }),
 }));
 
 const mockIpcMainHandle = vi.fn();
@@ -1233,6 +1234,43 @@ describe("registerPluginHandlers", () => {
     );
 
     expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_CLEAR_AUDIT_LOG clears the log for a trusted first-party sender", async () => {
+    const handler = getHandler("plugin:clear-audit-log");
+    await handler({ senderFrame: { url: "app://daintree/" }, sender: { id: 1 } });
+    expect(mockAuditClear).toHaveBeenCalledTimes(1);
+    // A trusted clear is the legitimate path — no restricted record is written.
+    expect(mockAuditAppend).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_CLEAR_AUDIT_LOG rejects an untrusted sender and leaves the log intact", async () => {
+    const handler = getHandler("plugin:clear-audit-log");
+    await expect(
+      handler({ senderFrame: { url: "https://evil.com/attack.html" }, sender: { id: 1 } })
+    ).rejects.toThrow("untrusted sender");
+    // The forensic trail must survive the rejected wipe...
+    expect(mockAuditClear).not.toHaveBeenCalled();
+    // ...and the attempt itself is recorded as a restricted ipc-invoke.
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
+    const record = mockAuditAppend.mock.calls[0]![0];
+    expect(record).toMatchObject({
+      recordType: "ipc-invoke",
+      channel: "plugin:clear-audit-log",
+      result: "restricted",
+    });
+    expect(record.errorMessage).toContain("untrusted sender");
+    // The attacker-controlled URL is captured (capped) for forensics.
+    expect(record.errorMessage).toContain("evil.com");
+  });
+
+  it("PLUGIN_CLEAR_AUDIT_LOG rejects when senderFrame is missing and does not clear", async () => {
+    const handler = getHandler("plugin:clear-audit-log");
+    await expect(handler({ senderFrame: null, sender: { id: 1 } })).rejects.toThrow(
+      "untrusted sender"
+    );
+    expect(mockAuditClear).not.toHaveBeenCalled();
+    expect(mockAuditAppend).toHaveBeenCalledTimes(1);
   });
 });
 

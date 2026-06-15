@@ -140,7 +140,7 @@ export class PluginMcpConsentService {
     }
 
     const dangerTier = tierResult.tier;
-    const fingerprint = fingerprintTool(input.descriptionRaw, input.inputSchema);
+    const fingerprint = fingerprintTool(input.descriptionRaw, input.inputSchema, input.annotations);
     const lookup = this.consentStore.lookup(input.identity, fingerprint);
 
     // D0 with a pinned (matching) approval auto-approves; otherwise the user
@@ -211,16 +211,21 @@ export class PluginMcpConsentService {
 }
 
 /**
- * Compute the three-component fingerprint used by the TOFU pin store. The
+ * Compute the four-component fingerprint used by the TOFU pin store. The
  * `rawHash` is over the raw description bytes (NOT stripped) so a rug-pull
  * payload hidden in invisible Unicode still flips the pin. The `displayHash`
  * is over the stripped string for diagnostics. The `schemaHash` is over the
  * input-schema JSON with keys sorted at every depth so a stable schema does
- * not produce different fingerprints in different runs.
+ * not produce different fingerprints in different runs. The `annotationHash`
+ * is over the three tier-influencing `ToolAnnotations` hints so a server that
+ * flips `readOnlyHint` → `destructiveHint` (raising the danger tier without
+ * touching the description or schema) still re-prompts. Only those three
+ * fields are hashed — future SDK annotation fields must not re-prompt.
  */
 export function fingerprintTool(
   descriptionRaw: string,
-  inputSchema: unknown
+  inputSchema: unknown,
+  annotations: ToolAnnotations | undefined
 ): PluginMcpToolFingerprint {
   const displayHash = sha256Hex(stripAnsiAndOscCodes(descriptionRaw));
   // Match the audit service's null-schema sentinel (sha256Hex("")) so an
@@ -234,11 +239,29 @@ export function fingerprintTool(
     rawHash: sha256Hex(descriptionRaw),
     displayHash,
     schemaHash,
+    annotationHash: hashAnnotations(annotations),
   };
 }
 
+/**
+ * Hash the three tier-influencing annotation hints, null-normalised and
+ * emitted in a fixed key order so an absent hint and an explicit `undefined`
+ * hash identically and key ordering can't perturb the digest. Confining the
+ * input to these three fields keeps the fingerprint stable when the MCP SDK
+ * adds new (non-tier) annotation fields.
+ */
+function hashAnnotations(annotations: ToolAnnotations | undefined): string {
+  return sha256Hex(
+    JSON.stringify({
+      d: annotations?.destructiveHint ?? null,
+      o: annotations?.openWorldHint ?? null,
+      r: annotations?.readOnlyHint ?? null,
+    })
+  );
+}
+
 function lookupToReason(
-  kind: "first-use" | "raw-changed" | "schema-changed" | "revoked"
+  kind: "first-use" | "raw-changed" | "schema-changed" | "annotation-changed" | "revoked"
 ): PluginMcpConsentReason {
   return kind;
 }

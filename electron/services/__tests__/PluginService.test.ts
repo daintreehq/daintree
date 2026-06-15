@@ -2565,16 +2565,31 @@ describe("Plugin IPC handler registration", () => {
       }
     });
 
-    it("does not audit when the typed-channel handler succeeds", async () => {
+    it("audits a successful typed-channel handler as an ipc-invoke success record (#10517)", async () => {
       const appendSpy = vi
         .spyOn(getPluginActionAuditService(), "append")
         .mockImplementation(() => {});
       try {
         service.registerHandler("acme.test-plugin", "get-data", vi.fn().mockResolvedValue("ok"));
-        await service.dispatchHandler("acme.test-plugin", "get-data", makeCtx("acme.test-plugin"), [
-          "a",
-        ]);
-        expect(appendSpy).not.toHaveBeenCalled();
+        const result = await service.dispatchHandler(
+          "acme.test-plugin",
+          "get-data",
+          makeCtx("acme.test-plugin"),
+          ["a"]
+        );
+        expect(result).toBe("ok");
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        const record = appendSpy.mock.calls[0][0];
+        expect(record).toMatchObject({
+          pluginId: "acme.test-plugin",
+          actionId: "get-data",
+          recordType: "ipc-invoke",
+          channel: "get-data",
+          result: "success",
+        });
+        expect(record.errorMessage).toBe("");
+        expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(typeof record.durationMs).toBe("number");
       } finally {
         appendSpy.mockRestore();
       }
@@ -3092,6 +3107,40 @@ describe("Plugin IPC handler registration", () => {
       await expect(
         typedService.dispatchHandler("acme.typed", "broken", makeCtx("acme.typed"), [{}])
       ).rejects.toThrow(/^SCHEMA_ERROR: result for channel "broken" failed validation/);
+    });
+
+    it("does NOT emit a success audit when the result schema rejects (#10517)", async () => {
+      // The success record is written only after result-schema validation
+      // passes — a host-side schema rejection of a handler that otherwise ran
+      // must never be logged as a successful dispatch.
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const schema = {
+          args: z.object({}).passthrough(),
+          result: z.object({ count: z.number() }),
+        };
+        typedService.registerHandler(
+          "acme.typed",
+          "broken",
+          schema,
+          vi.fn(async () => ({ count: "nope" as unknown as number }))
+        );
+
+        await expect(
+          typedService.dispatchHandler("acme.typed", "broken", makeCtx("acme.typed"), [{}])
+        ).rejects.toThrow(/^SCHEMA_ERROR:/);
+
+        // No success record from the inner dispatch boundary (the schema
+        // rejection is owned by the outer plugin:invoke boundary instead).
+        const successCalls = appendSpy.mock.calls.filter(
+          (c) => (c[0] as { result?: string }).result === "success"
+        );
+        expect(successCalls).toHaveLength(0);
+      } finally {
+        appendSpy.mockRestore();
+      }
     });
 
     it("rejects registration with PERMISSION_REQUIRED when a required capability is not declared", () => {
@@ -5339,6 +5388,38 @@ describe("createHost — registerAction", () => {
       expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
       // Marked so the outer plugin:invoke catch won't record a duplicate.
       expect(isAuditedHandlerFailure(boom)).toBe(true);
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+
+  it("audits a successful action handler as an action-dispatch success record (#10517)", async () => {
+    const appendSpy = vi
+      .spyOn(getPluginActionAuditService(), "append")
+      .mockImplementation(() => {});
+    try {
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => "done");
+
+      const result = await service.dispatchHandler(
+        "acme.act-test",
+        "acme.act-test.plan-from-issue",
+        makeCtx("acme.act-test"),
+        [{ issue: 7 }]
+      );
+      expect(result).toBe("done");
+
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      const record = appendSpy.mock.calls[0][0];
+      expect(record).toMatchObject({
+        pluginId: "acme.act-test",
+        actionId: "acme.act-test.plan-from-issue",
+        recordType: "action-dispatch",
+        result: "success",
+      });
+      expect(record.errorMessage).toBe("");
+      expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(typeof record.durationMs).toBe("number");
     } finally {
       appendSpy.mockRestore();
     }
