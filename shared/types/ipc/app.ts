@@ -102,6 +102,8 @@ export interface AppVersionInfo {
   electron: string;
   chrome: string;
   os: string;
+  /** Human-readable running architecture (e.g. "Apple Silicon", "Intel (Rosetta)", "x64"). */
+  arch?: string;
 }
 
 /**
