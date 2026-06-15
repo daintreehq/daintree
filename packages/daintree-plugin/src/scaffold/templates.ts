@@ -65,7 +65,7 @@ function manifest(ctx: ScaffoldContext, contributes: Record<string, unknown>): s
   return JSON.stringify(obj, null, 2) + "\n";
 }
 
-function packageJson(ctx: ScaffoldContext, needsReact: boolean): string {
+function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = false): string {
   const deps: Record<string, string> = {};
   const devDeps: Record<string, string> = {
     "@daintreehq/plugin-sdk": "^0.1.0",
@@ -84,7 +84,9 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean): string {
     type: "module",
     private: true,
     scripts: {
-      build: "vite build",
+      // `vite build` runs one config object at a time, so the Node server entry
+      // is built by a second pass against vite.config.server.ts (see that file).
+      build: needsServer ? "vite build && vite build --config vite.config.server.ts" : "vite build",
       validate: "daintree-plugin validate",
       package: "daintree-plugin package",
     },
@@ -123,6 +125,34 @@ export default defineConfig({
       formats: ["es"],
     },
     outDir: "dist",
+    sourcemap: true,
+  },
+});
+`;
+}
+
+/**
+ * Vite config for Node entries (stdio MCP servers). Separate from the browser
+ * config because a single \`vite build\` runs one config object at a time, and a
+ * Node target must not be applied to the renderer/panel bundles. \`target:
+ * "node"\` externalizes Node built-ins instead of browser-shimming them — the
+ * root cause of a stdio server crashing with \`process.stdin === undefined\`.
+ * \`emptyOutDir: false\` preserves the browser build that ran first.
+ */
+function viteServerConfig(entries: Record<string, string>): string {
+  const entryLiteral = JSON.stringify(entries, null, 6).replace(/\n/g, "\n  ");
+  return `import { daintreePlugin } from "@daintreehq/plugin-vite";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [daintreePlugin({ target: "node" })],
+  build: {
+    lib: {
+      entry: ${entryLiteral},
+      formats: ["es"],
+    },
+    outDir: "dist",
+    emptyOutDir: false,
     sourcemap: true,
   },
 });
@@ -278,9 +308,10 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
             },
           ],
         }),
-        "package.json": packageJson(ctx, false),
+        "package.json": packageJson(ctx, false, true),
         "tsconfig.json": tsconfig(false),
-        "vite.config.ts": viteConfig({ index: "src/index.ts", server: "src/server.ts" }),
+        "vite.config.ts": viteConfig({ index: "src/index.ts" }),
+        "vite.config.server.ts": viteServerConfig({ server: "src/server.ts" }),
         ".gitignore": GITIGNORE,
         "src/index.ts": mcpEntry(ctx),
         "src/server.ts": mcpServer(ctx),
@@ -318,13 +349,13 @@ export function buildTemplateFiles(ctx: ScaffoldContext): Record<string, string>
             },
           ],
         }),
-        "package.json": packageJson(ctx, true),
+        "package.json": packageJson(ctx, true, true),
         "tsconfig.json": tsconfig(true),
         "vite.config.ts": viteConfig({
           index: "src/index.ts",
           panel: "src/panel.tsx",
-          server: "src/server.ts",
         }),
+        "vite.config.server.ts": viteServerConfig({ server: "src/server.ts" }),
         ".gitignore": GITIGNORE,
         "src/index.ts": commandEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
