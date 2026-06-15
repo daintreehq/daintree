@@ -165,6 +165,22 @@ describe("HibernationService", () => {
 
       expect(service.getSnapshot().memoryPressureThresholdMs).toBe(defaultMs + 90_000);
     });
+
+    it.each([Number.NaN, -1, Number.POSITIVE_INFINITY])(
+      "rejects non-finite/negative threshold (%s), keeping the last valid value",
+      (bad) => {
+        (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
+        const service = makeService();
+
+        const valid = service.getSnapshot().memoryPressureThresholdMs;
+        service.setMemoryPressureThresholdMs(bad);
+
+        const after = service.getSnapshot().memoryPressureThresholdMs;
+        expect(after).toBe(valid);
+        expect(Number.isFinite(after)).toBe(true);
+        expect(after).toBeGreaterThanOrEqual(0);
+      }
+    );
   });
 
   it("ignores invalid update payload values", () => {

@@ -77,6 +77,9 @@ export class HibernationService {
   }
 
   setMemoryPressureThresholdMs(ms: number): void {
+    // Reject non-finite/negative values: they'd otherwise surface in the
+    // diagnostics snapshot (NaN coerces to null in JSON) and silently mislead.
+    if (!Number.isFinite(ms) || ms < 0) return;
     this.memoryPressureInactiveMs = ms;
   }
 

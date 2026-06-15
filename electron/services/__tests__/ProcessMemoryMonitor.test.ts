@@ -1734,6 +1734,27 @@ describe("ProcessMemoryMonitor", () => {
       expect(second[0]!.emaMb).toBe(200);
     });
 
+    it("bounds emaHistoryMb (plateaus) and excludes non-monitored process types", () => {
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Browser", 200 * 1024, 4242),
+        makeMetric("GPU", 300 * 1024, 7777), // not in MONITORED_TYPES
+      ]);
+      stop = startAppMetricsMonitor();
+
+      // Drive well past BUCKET_WINDOW buckets so the rolling buffer fills.
+      for (let i = 0; i < 64; i++) vi.advanceTimersByTime(30_000);
+      const lenA = getTrendSnapshot().find((s) => s.pid === 4242)!.emaHistoryMb.length;
+
+      for (let i = 0; i < 10; i++) vi.advanceTimersByTime(30_000);
+      const lenB = getTrendSnapshot().find((s) => s.pid === 4242)!.emaHistoryMb.length;
+
+      // The buffer is bounded — it stops growing once full (no copy of the cap).
+      expect(lenA).toBeGreaterThan(0);
+      expect(lenB).toBe(lenA);
+      // Non-monitored process types never enter the trend buffer.
+      expect(getTrendSnapshot().some((s) => s.pid === 7777)).toBe(false);
+    });
+
     it("clears stale pids when the monitor is restarted", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
       stop = startAppMetricsMonitor();

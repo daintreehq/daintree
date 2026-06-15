@@ -684,6 +684,50 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.counts.terminals.byAgentState).toMatchObject({ working: 2, none: 1 });
   });
 
+  it("PROJECT_VIEWS_ISOLATE_PER_WINDOW_FAILURE (#10500)", async () => {
+    const goodPvm = {
+      getViewInventory: () => [
+        {
+          projectId: "p-ok",
+          projectPath: "/Users/alice/ok",
+          webContentsId: 201,
+          state: "active",
+          lastUsed: 1,
+        },
+      ],
+      getCacheConfig: () => ({ maxCachedViews: 2, activeProjectId: "p-ok" }),
+    };
+    const badPvm = {
+      getViewInventory: () => {
+        throw new Error("PVM mid-teardown");
+      },
+      getCacheConfig: () => ({ maxCachedViews: 1, activeProjectId: null }),
+    };
+    const deps = {
+      ptyClient: { getAllTerminalsAsync: async () => [] },
+      windowRegistry: {
+        all: () => [
+          { windowId: 1, services: { projectViewManager: goodPvm } },
+          { windowId: 2, services: { projectViewManager: badPvm } },
+        ],
+      },
+    } as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    const payload = (await diagnostics.collectDiagnostics(deps)) as {
+      projectViews: Array<{ windowId: number; views?: unknown[]; error?: string }>;
+      counts: { openProjects: number; views: { total: number } };
+    };
+
+    const good = payload.projectViews.find((w) => w.windowId === 1)!;
+    const bad = payload.projectViews.find((w) => w.windowId === 2)!;
+    // The healthy window's inventory survives even though window 2 threw.
+    expect(good.views).toHaveLength(1);
+    expect(bad.error).toBeDefined();
+    // Counts skip the throwing PVM but still count the healthy one.
+    expect(payload.counts.openProjects).toBe(1);
+    expect(payload.counts.views.total).toBe(1);
+  });
+
   it("NEW_SECTIONS_DEGRADE_GRACEFULLY_WITHOUT_SERVICES (#10500)", async () => {
     // No windowRegistry, no projectViewManager, resource-profile singleton absent.
     renderer.resourceProfileSnapshot = null;

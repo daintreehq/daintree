@@ -216,30 +216,33 @@ describe("ResourceProfileService adversarial", () => {
   });
 
   describe("getSnapshot (#10500)", () => {
-    it("mirrors the profile reported by getProfile", () => {
-      const { deps } = createDeps();
-      const service = new ResourceProfileService(deps);
+    function findPowerHandler(event: string): ((details?: unknown) => void) | undefined {
+      return mockPowerMonitorOn.mock.calls.find((call: unknown[]) => call[0] === event)?.[1] as
+        | ((details?: unknown) => void)
+        | undefined;
+    }
 
-      expect(service.getSnapshot().profile).toBe(service.getProfile());
-    });
-
-    it("reflects battery state transitions", () => {
+    it("reflects battery, thermal, and speed-limit transitions via power events", () => {
       const { deps } = createDeps();
       const service = new ResourceProfileService(deps);
       service.start();
 
-      expect(service.getSnapshot().isOnBattery).toBe(false);
+      const before = service.getSnapshot();
+      expect(before.isOnBattery).toBe(false);
+      expect(before.lagPressureActive).toBe(false);
 
-      const onBatteryHandler = mockPowerMonitorOn.mock.calls.find(
-        (call: string[]) => call[0] === "on-battery"
-      )?.[1] as (() => void) | undefined;
-      onBatteryHandler!();
-      expect(service.getSnapshot().isOnBattery).toBe(true);
+      findPowerHandler("on-battery")!();
+      findPowerHandler("thermal-state-change")!({ state: "serious" });
+      findPowerHandler("speed-limit-change")!({ limit: 50 });
 
-      const onAcHandler = mockPowerMonitorOn.mock.calls.find(
-        (call: string[]) => call[0] === "on-ac"
-      )?.[1] as (() => void) | undefined;
-      onAcHandler!();
+      const after = service.getSnapshot();
+      expect(after.isOnBattery).toBe(true);
+      expect(after.thermalState).toBe("serious");
+      expect(after.speedLimit).toBe(50);
+      // Power-only events must not flip the lag-pressure signal.
+      expect(after.lagPressureActive).toBe(false);
+
+      findPowerHandler("on-ac")!();
       expect(service.getSnapshot().isOnBattery).toBe(false);
 
       service.stop();

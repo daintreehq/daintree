@@ -501,14 +501,20 @@ function collectProjectViewManagers(
 // state, and cache policy. projectPath is sanitized by the final redactDeep pass.
 async function collectProjectViews(deps: HandlerDependencies) {
   try {
+    // Per-window try/catch: a PVM mid-teardown in one window must not erase
+    // every other window's inventory.
     return collectProjectViewManagers(deps).map(({ windowId, pvm }) => {
-      const cache = pvm.getCacheConfig();
-      return {
-        windowId,
-        maxCachedViews: cache.maxCachedViews,
-        activeProjectId: cache.activeProjectId,
-        views: pvm.getViewInventory(),
-      };
+      try {
+        const cache = pvm.getCacheConfig();
+        return {
+          windowId,
+          maxCachedViews: cache.maxCachedViews,
+          activeProjectId: cache.activeProjectId,
+          views: pvm.getViewInventory(),
+        };
+      } catch {
+        return { windowId, error: "Failed to read project views for window" };
+      }
     });
   } catch {
     return { error: "Failed to collect project views" };
@@ -587,7 +593,14 @@ async function collectCounts(deps: HandlerDependencies) {
     let loading = 0;
     const projectIds = new Set<string>();
     for (const { pvm } of collectProjectViewManagers(deps)) {
-      for (const v of pvm.getViewInventory()) {
+      // Skip a PVM that throws mid-read rather than zeroing every window's count.
+      let inventory: ReturnType<ProjectViewManager["getViewInventory"]>;
+      try {
+        inventory = pvm.getViewInventory();
+      } catch {
+        continue;
+      }
+      for (const v of inventory) {
         total++;
         projectIds.add(v.projectId);
         if (v.state === "active") active++;
