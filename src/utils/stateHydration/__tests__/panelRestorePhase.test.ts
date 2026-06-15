@@ -108,6 +108,9 @@ vi.mock("../batchScheduler", async () => {
     ...actual,
     RESTORE_SPAWN_BATCH_SIZE: 2,
     RESTORE_SPAWN_BATCH_DELAY_MS: 0,
+    // Fast, deterministic batches regardless of resource profile so existing
+    // batching/ordering assertions stay stable (#10528).
+    getRestoreBatchParams: () => ({ batchSize: 2, delayMs: 0 }),
   };
 });
 
@@ -267,6 +270,35 @@ describe("restorePanelsPhase — saved panels", () => {
     );
     expect(restoreTerminalOrder).toHaveBeenCalledTimes(1);
     expect(restoreTerminalOrder.mock.calls[0]![0]).toEqual(["new-t1", "new-t2", "new-t3"]);
+  });
+
+  it("restores every priority PTY panel even when one rejects (#10528 parallel tier)", async () => {
+    // All three are priority (active worktree). The middle addPanel rejects;
+    // the parallel Promise.allSettled tier must still attempt all three rather
+    // than aborting the rest as the old sequential loop's throw would.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("p1", backend("p1"));
+    ctx.backendTerminalMap.set("p2", backend("p2"));
+    ctx.backendTerminalMap.set("p3", backend("p3"));
+    const attempted: string[] = [];
+    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
+      const id = args.existingId ?? args.requestedId ?? "";
+      attempted.push(id);
+      if (id === "p2") throw new Error("spawn failed");
+      return id;
+    });
+    await restorePanelsPhase(
+      [
+        panel("p1", { worktreeId: "wA" }),
+        panel("p2", { worktreeId: "wA" }),
+        panel("p3", { worktreeId: "wA" }),
+      ],
+      ctx
+    );
+    // p1 and p3 must have been attempted even though p2 rejected — proving the
+    // parallel tier did not abort on the first failure.
+    expect(attempted).toContain("p1");
+    expect(attempted).toContain("p3");
   });
 
   it("does not call restoreTerminalOrder when no panels were restored", async () => {

@@ -30,6 +30,7 @@ import {
 import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useDistributionStore } from "@/store/distributionStore";
+import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { normalizeAndApplyScrollback } from "./scrollbackConfig";
@@ -469,6 +470,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           restoreTerminalOrder: options.restoreTerminalOrder,
           safeMode: hydrateResult.safeMode,
           visiblePanelId,
+          resourceProfile: useResourceProfileStore.getState().profile,
           logHydrationInfo,
         });
         const { restoreTasks } = restoreResult;
