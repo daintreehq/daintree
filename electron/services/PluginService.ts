@@ -2698,23 +2698,38 @@ export class PluginService {
           this.pluginFsWatchers.get(pluginId)?.delete(dispose);
         };
 
-        for (const resolved of resolvedTargets) {
-          const watcher = fsWatch(resolved, { persistent: false }, (_event, filename) => {
-            if (disposed || !this.plugins.has(pluginId)) return;
-            const changed =
-              typeof filename === "string" && filename.length > 0
-                ? path.join(resolved, filename)
-                : resolved;
+        try {
+          for (const resolved of resolvedTargets) {
+            const watcher = fsWatch(resolved, { persistent: false }, (_event, filename) => {
+              if (disposed || !this.plugins.has(pluginId)) return;
+              const changed =
+                typeof filename === "string" && filename.length > 0
+                  ? path.join(resolved, filename)
+                  : resolved;
+              try {
+                callback(changed);
+              } catch (err) {
+                console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+              }
+            });
+            watcher.on("error", (err) => {
+              console.error(`[PluginService] plugin "${pluginId}" fs.watch error:`, err);
+            });
+            watchers.push(watcher);
+          }
+        } catch (err) {
+          // A later path's fsWatch threw (e.g. ENOENT) after earlier watchers
+          // were created — close them so a partial failure doesn't leak FDs
+          // (dispose isn't registered in pluginFsWatchers yet, so teardown
+          // wouldn't catch them).
+          for (const w of watchers) {
             try {
-              callback(changed);
-            } catch (err) {
-              console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+              w.close();
+            } catch {
+              // best-effort
             }
-          });
-          watcher.on("error", (err) => {
-            console.error(`[PluginService] plugin "${pluginId}" fs.watch error:`, err);
-          });
-          watchers.push(watcher);
+          }
+          throw err;
         }
 
         let set = this.pluginFsWatchers.get(pluginId);

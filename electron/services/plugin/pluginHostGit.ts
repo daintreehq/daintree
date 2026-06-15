@@ -139,12 +139,14 @@ export class PluginHostGit {
     }
 
     const git = await this.gitFactory(worktreePath);
-    // Re-check after acquiring the client but BEFORE computing the preview /
-    // mutating — abort must not commit work the caller already cancelled.
+    // Re-check after acquiring the client but BEFORE computing the preview.
     signal?.throwIfAborted();
     // The real change preview the D2 safeguard requires: the staged diff that is
     // about to be committed, computed before the mutation. No silent fallback.
     const preview = await git.diff(["--cached", "--no-ext-diff", "--no-textconv", "--no-color"]);
+    // Re-check immediately before the mutation — the diff above can take time on
+    // a large staged set, and an abort mid-diff must not still create the commit.
+    signal?.throwIfAborted();
     const result = await git.commit(message);
     return {
       commit: result.commit,

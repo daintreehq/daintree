@@ -80,6 +80,10 @@ export class PluginDevWorkerMainBridge {
   /** AbortControllers for in-flight `host-call`s, keyed by requestId. A worker
    * `host-cancel` (the caller's AbortSignal fired) aborts the matching one. */
   private readonly hostCallAborts = new Map<string, AbortController>();
+  /** Bumped on every reload. A host-call that started before a reload must not
+   * deliver its late `host-result` to the new worker generation, whose proxy
+   * resets its requestId counter and could collide on the same id. */
+  private reloadGeneration = 0;
   /** Disposers for providers (file decoration) the worker registered on the real
    * host, keyed by provider id. Torn down on reload and dispose so a reloaded
    * generation re-registers cleanly. */
@@ -166,6 +170,7 @@ export class PluginDevWorkerMainBridge {
     // The new worker generation will re-register from scratch; drop the prior
     // generation's activate-time registrations and tear down subscriptions so
     // they don't double up. Pending invokes target a now-dead worker — fail them.
+    this.reloadGeneration++;
     this.clearPriorRegistrations();
     for (const dispose of this.subscriptionDisposers.values()) {
       try {
@@ -266,10 +271,15 @@ export class PluginDevWorkerMainBridge {
     // read/mutation (signal-bearing host methods honor it).
     const controller = new AbortController();
     this.hostCallAborts.set(msg.requestId, controller);
+    // Capture the generation so a result that resolves after a reload is dropped
+    // rather than mis-delivered to the new worker (whose requestIds collide).
+    const generation = this.reloadGeneration;
     try {
       const result = await this.dispatchHostCall(msg.method, msg.params, controller.signal);
+      if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
     } catch (err) {
+      if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({
         type: "host-result",
         requestId: msg.requestId,
@@ -440,10 +450,12 @@ export class PluginDevWorkerMainBridge {
               args: [scope, paths],
             }) as Promise<Record<string, FileDecoration>>,
         };
+        const generation = this.reloadGeneration;
         const dispose = await this.host.registerFileDecorationProvider(descriptor, proxyImpl);
-        // The bridge may have been torn down (dispose/reload) while the host
-        // registration was settling — don't leak the freshly bound provider.
-        if (this.disposed) {
+        // The bridge may have been torn down (dispose) or reloaded while the host
+        // registration was settling — don't leak the freshly bound provider past
+        // the cleanup pass that already ran.
+        if (this.disposed || generation !== this.reloadGeneration) {
           try {
             dispose();
           } catch {
@@ -485,6 +497,7 @@ export class PluginDevWorkerMainBridge {
       if (this.disposed) return;
       this.workerHost.send({ type: "subscription-event", subscriptionId, payload });
     };
+    const generation = this.reloadGeneration;
     try {
       let dispose: () => void;
       if (kind === "active-worktree") {
@@ -501,9 +514,9 @@ export class PluginDevWorkerMainBridge {
         }
         dispose = await this.host.settings.onDidChange(msg.key, (value) => push(value), msg.scope);
       }
-      // The bridge may have been disposed/reloaded while the subscription was
+      // The bridge may have been disposed or reloaded while the subscription was
       // settling — tear it down rather than leak it past the cleanup pass.
-      if (this.disposed) {
+      if (this.disposed || generation !== this.reloadGeneration) {
         try {
           dispose();
         } catch {
