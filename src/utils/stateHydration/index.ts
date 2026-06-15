@@ -30,6 +30,7 @@ import {
 import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useDistributionStore } from "@/store/distributionStore";
+import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { normalizeAndApplyScrollback } from "./scrollbackConfig";
@@ -469,6 +470,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           restoreTerminalOrder: options.restoreTerminalOrder,
           safeMode: hydrateResult.safeMode,
           visiblePanelId,
+          // May still read the "balanced" default if the useResourceProfile
+          // hook's getResourceProfile() IPC hasn't resolved yet on a cold
+          // first hydration (#10528). Acceptable: it only affects background/
+          // orphan stagger sizing, errs toward more-aggressive, and self-
+          // corrects on the next project switch.
+          resourceProfile: useResourceProfileStore.getState().profile,
           logHydrationInfo,
         });
         const { restoreTasks } = restoreResult;

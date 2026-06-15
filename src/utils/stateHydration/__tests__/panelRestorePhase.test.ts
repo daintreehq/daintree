@@ -102,12 +102,20 @@ vi.mock("@shared/utils/smokeTestTerminals", () => ({
 }));
 
 // Override stagger constants so tests don't have to wait 100ms × N
+// Spy on getRestoreBatchParams so tests can both pin fast/deterministic batches
+// (batchSize 2, delayMs 0) AND assert the resource profile is threaded through
+// from the context (#10528).
+const { getRestoreBatchParamsMock } = vi.hoisted(() => ({
+  getRestoreBatchParamsMock: vi.fn(() => ({ batchSize: 2, delayMs: 0 })),
+}));
+
 vi.mock("../batchScheduler", async () => {
   const actual = await vi.importActual<typeof import("../batchScheduler")>("../batchScheduler");
   return {
     ...actual,
     RESTORE_SPAWN_BATCH_SIZE: 2,
     RESTORE_SPAWN_BATCH_DELAY_MS: 0,
+    getRestoreBatchParams: getRestoreBatchParamsMock,
   };
 });
 
@@ -172,6 +180,8 @@ beforeEach(() => {
   initializeBackendTierMock.mockReset();
   setTargetSizeMock.mockReset();
   reconnectWithTimeoutMock.mockReset();
+  getRestoreBatchParamsMock.mockClear();
+  getRestoreBatchParamsMock.mockReturnValue({ batchSize: 2, delayMs: 0 });
 });
 
 describe("restorePanelsPhase — saved panels", () => {
@@ -267,6 +277,67 @@ describe("restorePanelsPhase — saved panels", () => {
     );
     expect(restoreTerminalOrder).toHaveBeenCalledTimes(1);
     expect(restoreTerminalOrder.mock.calls[0]![0]).toEqual(["new-t1", "new-t2", "new-t3"]);
+  });
+
+  it("restores every priority PTY panel even when one rejects (#10528 parallel tier)", async () => {
+    // All three are priority (active worktree). The middle addPanel rejects;
+    // the parallel Promise.allSettled tier must still attempt all three rather
+    // than aborting the rest as the old sequential loop's throw would.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("p1", backend("p1"));
+    ctx.backendTerminalMap.set("p2", backend("p2"));
+    ctx.backendTerminalMap.set("p3", backend("p3"));
+    const attempted: string[] = [];
+    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
+      const id = args.existingId ?? args.requestedId ?? "";
+      attempted.push(id);
+      if (id === "p2") throw new Error("spawn failed");
+      return id;
+    });
+    await restorePanelsPhase(
+      [
+        panel("p1", { worktreeId: "wA" }),
+        panel("p2", { worktreeId: "wA" }),
+        panel("p3", { worktreeId: "wA" }),
+      ],
+      ctx
+    );
+    // p1 and p3 must have been attempted even though p2 rejected — proving the
+    // parallel tier did not abort on the first failure.
+    expect(attempted).toContain("p1");
+    expect(attempted).toContain("p3");
+  });
+
+  it("runs priority PTY restores concurrently, not sequentially (#10528)", async () => {
+    // p1's addPanel only resolves once p3's addPanel has been called. A
+    // sequential loop would call p1 first and deadlock (p3 never reached); the
+    // Promise.allSettled tier fires both, so p3 unblocks p1. If this resolves,
+    // the tier is genuinely concurrent.
+    const ctx = makeContext({ activeWorktreeId: "wA" });
+    ctx.backendTerminalMap.set("p1", backend("p1"));
+    ctx.backendTerminalMap.set("p3", backend("p3"));
+    let resolveP3Seen!: () => void;
+    const p3Seen = new Promise<void>((resolve) => {
+      resolveP3Seen = resolve;
+    });
+    ctx.addPanel.mockImplementation(async (args: { existingId?: string; requestedId?: string }) => {
+      const id = args.existingId ?? args.requestedId ?? "";
+      if (id === "p3") resolveP3Seen();
+      if (id === "p1") await p3Seen;
+      return id;
+    });
+    await restorePanelsPhase(
+      [panel("p1", { worktreeId: "wA" }), panel("p3", { worktreeId: "wA" })],
+      ctx
+    );
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("threads the context resource profile into getRestoreBatchParams (#10528)", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", resourceProfile: "performance" });
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    await restorePanelsPhase([panel("b1", { worktreeId: "wOther" })], ctx);
+    expect(getRestoreBatchParamsMock).toHaveBeenCalledWith("performance");
   });
 
   it("does not call restoreTerminalOrder when no panels were restored", async () => {
