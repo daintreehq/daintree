@@ -32,6 +32,7 @@ const ROOT_DEV_FILE_NAMES: ReadonlySet<string> = new Set([
   "npm-shrinkwrap.json",
   "yarn.lock",
   "pnpm-lock.yaml",
+  "bun.lock",
   "bun.lockb",
 ]);
 
@@ -69,6 +70,13 @@ function normalizePath(filePath: string): string {
   let normalised = filePath.replace(/\\/g, "/");
   if (normalised.startsWith("/")) {
     normalised = normalised.slice(1);
+  }
+  // Strip a leading `./` so a crafted entry like `./package.json` normalizes to
+  // its bare root name — otherwise the leading dot keeps it out of the
+  // root-level dev-file exclusion (the privacy/bloat guard). It also aligns with
+  // the `stripLeading` the manifest.main/view checks already apply.
+  if (normalised.startsWith("./")) {
+    normalised = normalised.slice(2);
   }
   return normalised;
 }

@@ -431,6 +431,22 @@ describe("verifyPluginArchive", () => {
     if (!result.valid) expect(result.error).toContain("entry limit");
   });
 
+  it("rejects a crafted dev file disguised with a ./ prefix", async () => {
+    // `./package.json` must not slip past the dev-file exclusion via the leading
+    // dot — normalizePath strips it so the guard (and the raw-name check) catch it.
+    const archivePath = path.join(tmpDir, "dotslash.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "./package.json", content: JSON.stringify({ name: "leaky" }) },
+      ])
+    );
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+  });
+
   it("rejects an archive with a duplicate normalized entry name", async () => {
     const archivePath = path.join(tmpDir, "dup.dntr");
     await fs.writeFile(
@@ -581,6 +597,7 @@ describe("isExcludedArchiveEntry (shared CLI exclusion predicate)", () => {
     expect(isExcludedArchiveEntry("npm-shrinkwrap.json")).toBe(true);
     expect(isExcludedArchiveEntry("yarn.lock")).toBe(true);
     expect(isExcludedArchiveEntry("pnpm-lock.yaml")).toBe(true);
+    expect(isExcludedArchiveEntry("bun.lock")).toBe(true);
     expect(isExcludedArchiveEntry("bun.lockb")).toBe(true);
     expect(isExcludedArchiveEntry("tsconfig.json")).toBe(true);
     expect(isExcludedArchiveEntry("tsconfig.build.json")).toBe(true);
