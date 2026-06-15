@@ -497,6 +497,141 @@ describe("restorePanelsPhase — lastActiveAt promotion (issue #8703)", () => {
   });
 });
 
+describe("restorePanelsPhase — visible-panel priority tier (issue #10527)", () => {
+  // addPanel order is the observable. Visible PTY panels run in a dedicated
+  // tier ahead of the active-worktree priority tier; non-PTY visible panels are
+  // unaffected (they stay on the concurrent non-PTY path).
+  const restoredIds = (addPanel: Mock): (string | undefined)[] =>
+    addPanel.mock.calls.map((c) => {
+      const args = c[0] as { existingId?: string; requestedId?: string };
+      return args.existingId ?? args.requestedId;
+    });
+
+  it("restores the visible PTY panel first, ahead of the active-worktree tier", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "b1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }), // active -> priority 0
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }), // visible -> -1 (would be background)
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }), // max in wB -> priority 0
+      ],
+      ctx
+    );
+    // Without the visible tier b1 is background and restores last (a1, b2, b1).
+    // The visible tier pulls it to the front.
+    expect(restoredIds(ctx.addPanel)).toEqual(["b1", "a1", "b2"]);
+    // Restored exactly once — the -1 tier replaces, not duplicates, its slot.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let a visible non-PTY panel jump the PTY restore queue", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "br1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }), // active PTY -> priority 0
+        panel("br1", { kind: "browser", worktreeId: "wB" }), // non-PTY, visible
+        panel("b1", { worktreeId: "wB", lastActiveAt: 5 }), // background PTY
+      ],
+      ctx
+    );
+    // br1 restores via the concurrent non-PTY phase (first), but it never enters
+    // the -1 PTY tier, so the PTY ordering (a1 priority, b1 background) is
+    // unchanged — the visible non-PTY does not promote the background PTY.
+    expect(restoredIds(ctx.addPanel)).toEqual(["br1", "a1", "b1"]);
+  });
+
+  it("preserves existing ordering when no visiblePanelId is supplied", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA" }); // visiblePanelId undefined
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }),
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }),
+      ],
+      ctx
+    );
+    // a1 (active) + b2 (max in wB) are priority; b1 is background and last.
+    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "b2", "b1"]);
+  });
+
+  it("degrades to existing ordering when visiblePanelId matches no saved panel", async () => {
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "ghost" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }),
+        panel("b1", { worktreeId: "wB", lastActiveAt: 10 }),
+        panel("b2", { worktreeId: "wB", lastActiveAt: 200 }),
+      ],
+      ctx
+    );
+    // Identical to the no-signal case — a stale MRU head is harmless.
+    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "b2", "b1"]);
+  });
+
+  it("restores a visible panel first via the respawn path on cold restart (no backend match)", async () => {
+    // No backend terminal for the visible panel → it takes the reconnect/respawn
+    // path. It must still jump ahead of the active-worktree PTY.
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "v1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    await restorePanelsPhase(
+      [
+        panel("a1", { worktreeId: "wA" }), // active PTY (backend match)
+        panel("v1", { kind: "agent", launchAgentId: "claude", worktreeId: "wB" }), // visible, respawn
+      ],
+      ctx
+    );
+    // v1 (visible, respawned with requestedId v1) restores before a1.
+    expect(restoredIds(ctx.addPanel)).toEqual(["v1", "a1"]);
+  });
+
+  it("restores the visible panel exactly once when it is also the active-worktree panel", async () => {
+    // Overlap: the visible panel is in the active worktree. priority -1 wins over
+    // priority 0, so it lands only in the visible tier — never double-restored.
+    const ctx = makeContext({ activeWorktreeId: "wA", visiblePanelId: "a1" });
+    ctx.backendTerminalMap.set("a1", backend("a1"));
+    ctx.backendTerminalMap.set("a2", backend("a2"));
+    await restorePanelsPhase(
+      [panel("a1", { worktreeId: "wA" }), panel("a2", { worktreeId: "wA" })],
+      ctx
+    );
+    expect(restoredIds(ctx.addPanel)).toEqual(["a1", "a2"]);
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("wraps the visible tier in its own hydration batch separate from background", async () => {
+    // v1 is the max-lastActiveAt in wB but is visible → priority -1, so b1/b2
+    // (lower stamps, same worktree) are NOT promoted and both go to background.
+    // Tiers: visible[v1], background[b1,b2] (one batch, size 2) → 2 batch calls.
+    // A regression that forgot to wrap the visible tier would drop to 1.
+    const ctx = makeContext({ visiblePanelId: "v1" });
+    ctx.backendTerminalMap.set("v1", backend("v1"));
+    ctx.backendTerminalMap.set("b1", backend("b1"));
+    ctx.backendTerminalMap.set("b2", backend("b2"));
+    await restorePanelsPhase(
+      [
+        panel("v1", { worktreeId: "wB", lastActiveAt: 100 }), // visible
+        panel("b1", { worktreeId: "wB", lastActiveAt: 5 }), // background
+        panel("b2", { worktreeId: "wB", lastActiveAt: 5 }), // background
+      ],
+      ctx
+    );
+    expect(restoredIds(ctx.addPanel)).toEqual(["v1", "b1", "b2"]);
+    expect(ctx.withHydrationBatch).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("restorePanelsPhase — matched backend not re-appended as orphan", () => {
   it("matched backend terminals are removed from the map before orphan scan (no double restore)", async () => {
     // Pins backendTerminalMap.delete() inside the saved-panels execute() — if the
