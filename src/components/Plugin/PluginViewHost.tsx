@@ -156,7 +156,12 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Panel
       >
         <Suspense fallback={<BrowserPaneSkeleton label={`Loading ${displayName}`} />}>
           <ContentFadeIn className="flex flex-col h-full w-full">
-            <LazyView panelId={props.id} pluginId={pluginId!} disposeSignal={controller.signal} />
+            <LazyView
+              panelId={props.id}
+              pluginId={pluginId!}
+              disposeSignal={controller.signal}
+              initialArgs={props.extensionState}
+            />
           </ContentFadeIn>
         </Suspense>
       </ErrorBoundary>

@@ -219,7 +219,8 @@ export class PluginSettingsManager {
     const filePath = this.resolveSettingsFilePath(pluginId, "user");
     if (!filePath) return "";
     const value = await this.getOrCreateSettingsStore(pluginId, "user", filePath).get<unknown>(
-      settingId
+      settingId,
+      { secret: this.isSecretKey(pluginId, settingId) }
     );
     if (value === undefined || value === null) return "";
     if (typeof value === "string") return value;
@@ -256,6 +257,18 @@ export class PluginSettingsManager {
    */
   private isSecretSetting(def: SettingDefinition): boolean {
     return def.type === "secret" || def.secret === true;
+  }
+
+  /**
+   * Whether the declared setting `key` is secret, for routing its at-rest value
+   * through the OS keychain (#9167). A manifest that declares no settings — or an
+   * undeclared key — is treated as non-secret: the same permissive stance
+   * {@link assertSettingDeclared} takes, so the host `settings` API used before a
+   * plugin declares its settings keeps working as plaintext.
+   */
+  isSecretKey(pluginId: string, key: string): boolean {
+    const def = this.deps.getManifest(pluginId)?.contributes.settings?.find((s) => s.id === key);
+    return def ? this.isSecretSetting(def) : false;
   }
 
   /**
@@ -306,19 +319,31 @@ export class PluginSettingsManager {
   ): Promise<PluginSettingsUiValues> {
     const values: Record<string, unknown> = {};
     const secretsSet: string[] = [];
+    const secretsPlaintext: string[] = [];
     const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) return { values, secretsSet };
+    if (!filePath) {
+      return { values, secretsSet, secretsPlaintext, secretTier: "plaintext" };
+    }
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const defs = this.uiSettingDefinitions(pluginId).filter((d) => (d.scope ?? "user") === scope);
     await Promise.all(
       defs.map(async (def) => {
-        const stored = await store.get<unknown>(def.id);
+        const secret = this.isSecretSetting(def);
+        const stored = await store.get<unknown>(def.id, { secret });
         if (stored === undefined) return;
-        if (this.isSecretSetting(def)) secretsSet.push(def.id);
-        else values[def.id] = stored;
+        if (secret) {
+          secretsSet.push(def.id);
+          // Surface a value still sitting in plaintext so the form can nudge a
+          // re-save once a keychain is available.
+          if ((await store.storedSecretTier(def.id)) === "plaintext") {
+            secretsPlaintext.push(def.id);
+          }
+        } else {
+          values[def.id] = stored;
+        }
       })
     );
-    return { values, secretsSet };
+    return { values, secretsSet, secretsPlaintext, secretTier: store.secretTier() };
   }
 
   /** Persist a value from the settings form, firing the plugin's `onDidChange`. */
@@ -344,7 +369,7 @@ export class PluginSettingsManager {
       );
     }
     const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
-    const changed = await store.set(key, value);
+    const changed = await store.set(key, value, { secret: this.isSecretKey(pluginId, key) });
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
   }
 
@@ -392,7 +417,9 @@ export class PluginSettingsManager {
     if ((def.scope ?? "user") !== scope) return null;
     const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
     if (!filePath) return null;
-    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key);
+    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key, {
+      secret: true,
+    });
     if (value === undefined || value === null) return null;
     if (typeof value === "string") return value;
     return JSON.stringify(value);

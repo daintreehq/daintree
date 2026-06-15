@@ -162,17 +162,18 @@ Views are the React components that render inside a panel. A view binds to a pan
 
 **Component contract:**
 
-> **Pseudocode — not yet runnable.** The `useWorktree` import below resolves through `@daintreehq/plugin-sdk/react`, which is **Planned (F15/F36)** and ships no exports in v1 — see [Host API → React hooks](./host-api.md#react-hooks). The example shows the intended surface; in a v1 plugin the subpath resolves to an empty module (no `useWorktree`), so read worktree context through the `host` API passed to `activate()` instead.
+> **Mixed availability.** `useHostChannel` and `usePluginEvent` are **shipped** under `@daintreehq/plugin-sdk/react` (see [Host API → React hooks](./host-api.md#react-hooks)) — the example below uses `usePluginEvent` to receive `host.postToPanel` pushes. `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
 
 ```tsx
 // src/dashboard.tsx
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { PanelViewProps } from "@daintreehq/plugin-sdk";
-// Planned (F15/F36): @daintreehq/plugin-sdk/react has no exports in v1.
-import { useWorktree } from "@daintreehq/plugin-sdk/react";
+import { usePluginEvent } from "@daintreehq/plugin-sdk/react";
 
 export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelViewProps) {
-  const worktree = useWorktree();
+  const [worktreeName, setWorktreeName] = useState<string | null>(null);
+  // The plugin's main side pushes worktree context with host.postToPanel("worktree", …).
+  usePluginEvent<{ name: string }>(pluginId, "worktree", (wt) => setWorktreeName(wt.name));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -188,7 +189,7 @@ export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelVie
     };
   }, [pluginId, disposeSignal]);
 
-  return <div data-panel-id={panelId}>Dashboard for {worktree?.name ?? "no worktree"}</div>;
+  return <div data-panel-id={panelId}>Dashboard for {worktreeName ?? "no worktree"}</div>;
 }
 ```
 
@@ -197,6 +198,7 @@ export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelVie
 | `panelId` | `string` | Opaque runtime id of the panel instance. Useful as a key for plugin-local panel-scoped state. |
 | `pluginId` | `string` | The plugin's manifest `name`. Stable for the lifetime of the host — useful for namespacing storage keys and log lines. |
 | `disposeSignal` | `AbortSignal` | Aborts on unmount and when the host receives a `plugin:panel-kinds-changed` push that omits this kind. The broadcast fires before main tears down plugin IPC handlers, so signal-driven cleanup runs while host APIs are still live. |
+| `initialArgs` | `Record<string, unknown>` \| `undefined` | The argument bag the panel was spawned with — set when the panel is opened via the `panel.openPluginPanel` action's `initialArgs` (e.g. dispatched from a context menu with a file path). It rides the panel's save/restore-surviving extension state, so a restored panel sees the same args it was spawned with. `undefined` when the panel was opened without args. |
 
 The view is wrapped in an error boundary by the host. An unhandled render error shows an inline "Try again" affordance; clicking it produces a fresh `lazy()` reference so the dynamic import is re-evaluated rather than returning the cached failed promise.
 
@@ -322,14 +324,18 @@ Declares user-configurable settings for your plugin.
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Setting key, used to read/write the value via the host API. |
-| `type` | no | One of `string`, `number`, `boolean`, `enum`, `json`, `secret`. Defaults to `string`. |
+| `type` | no | One of `string`, `number`, `boolean`, `enum`, `json`, `secret`, `path`, `directory`, `file`. Defaults to `string`. |
 | `label` | no | Field label shown in the generated form. |
 | `description` | no | Help text shown beneath the field. |
 | `default` | no | Default value. |
 | `scope` | no | `user` (global) or `project` (per-project). Defaults to `user`. |
 | `options` | no | Non-empty string array; required when `type` is `enum`. |
 | `min` / `max` | no | Numeric bounds for `number` settings. `min` cannot exceed `max`. |
+| `mustExist` | no | For `path` / `directory` / `file`: when `true`, the form flags a stored path that no longer resolves on disk. Advisory — it never blocks saving. |
+| `extensions` | no | For `file` only: restrict the native chooser to these extensions (no leading dot, e.g. `["json", "md"]`). Rejected on any other type. |
 | `secret` | no | Legacy boolean; `secret: true` normalizes to `type: "secret"`. Prefer `type: "secret"`. |
+
+The `path` and `directory` types render a read-only text input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute filesystem path. Plugins read it back through the host settings API like any other setting.
 
 **Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted with project state).
 
@@ -360,9 +366,9 @@ Adds entries to right-click menus on specific UI elements.
 }
 ```
 
-**Locations:** `worktree`, `terminal`, `panel`, `file`. More may be added.
+**Locations:** `worktree`, `terminal`, `panel`, `file`. More may be added. The `file` location is mounted on the Review Hub's changed-file rows: a contributed `file` item appears in the right-click menu of a changed file, and its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`). A changed-file list with no plugin-contributed `file` items keeps its plain rows — the context menu only wraps a row when a plugin contributes to that location.
 
-Context menus follow the same `actionId` dispatch pattern as menu items.
+Context menus follow the same `actionId` dispatch pattern as menu items, but a `file`-location item additionally receives the clicked file's context as dispatch args. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
 ## MCP servers — _Shipped_
 
@@ -511,6 +517,8 @@ Registers a provider that decorates files (or other scoped resources) with statu
 | `scopes` | yes | Non-empty list of scope patterns the provider answers for. A scope like `worktree-diff:*` matches every resource the host routes under the `worktree-diff` namespace; the host dispatches decoration pulls to the first provider whose scope matches. |
 
 The manifest entry is read eagerly so the host's decoration-routing table (`electron/services/fileDecorationRegistry.ts`) knows which provider owns a scope before any plugin code runs; the implementation binds lazily in `activate()`. See [Host API](./host-api.md) for the runtime registration signature.
+
+Decorations are no longer confined to the worktree diff/review surface: any file-path list in Daintree can pull a declared decoration scope for the paths it renders, so a lint/leak/status plugin can badge files wherever a path list appears, not just in the Review Hub. From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
 ## Agents — _Shipped (minimal tier)_
 

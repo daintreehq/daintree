@@ -873,6 +873,7 @@ export const CHANNELS = {
   PLUGIN_AGENTS_GET: "plugin:agents-get",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
+  PLUGIN_WORKTREE_STATUS_GET: "plugin:worktree-status-get",
   PLUGIN_GET_AUDIT_RECORDS: "plugin:get-audit-records",
   PLUGIN_GET_AUDIT_CONFIG: "plugin:get-audit-config",
   PLUGIN_CLEAR_AUDIT_LOG: "plugin:clear-audit-log",
@@ -884,6 +885,10 @@ export const CHANNELS = {
   PLUGIN_SETTINGS_SET_VALUE: "plugin:settings-set-value",
   PLUGIN_SETTINGS_DELETE_VALUE: "plugin:settings-delete-value",
   PLUGIN_SETTINGS_REVEAL_SECRET: "plugin:settings-reveal-secret",
+  /** Native folder/file chooser for plugin path/directory/file settings fields. */
+  PLUGIN_PICK_PATH: "plugin:pick-path",
+  /** Existence probe for a stored plugin `mustExist` path setting. */
+  PLUGIN_PATH_EXISTS: "plugin:path-exists",
   /** Bridge: main process dispatches a plugin-sourced action request to the renderer. */
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
@@ -906,6 +911,12 @@ export const CHANNELS = {
   // dispatch pipeline; resolveConsent is the renderer's reply to a consent push.
   PLUGIN_MCP_CALL_TOOL: "plugin-mcp:call-tool",
   PLUGIN_MCP_RESOLVE_CONSENT: "plugin-mcp:resolve-consent",
+
+  // Plugin managed-process channels (#9234) — child processes spawned by a
+  // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the
+  // read-only renderer observability surface (e.g. a process dashboard);
+  // streaming output reaches a plugin's panels over its `postToPanel` transport.
+  PLUGIN_PROCESS_LIST: "plugin-process:list",
 
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",

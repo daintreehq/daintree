@@ -167,6 +167,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { z } from "zod";
 import { PluginService } from "../PluginService.js";
+import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
@@ -3731,6 +3732,7 @@ type CreateHostShape = (pluginId: string) => {
       typedHandler?: (...args: unknown[]) => unknown
     ) => void;
     broadcastToRenderer: (channel: string, payload: unknown) => void;
+    postToPanel: (channel: string, payload: unknown) => void;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
   revoke: () => void;
@@ -3826,6 +3828,217 @@ describe("createHost (plugin activation API)", () => {
     expect(() => host.registerForgeProvider({ id: "github" }, {})).toThrow(
       /host revoked: registerForgeProvider/
     );
+  });
+
+  it("host.postToPanel fans out to the plugin:{pluginId}:{channel} subscriber channel", async () => {
+    await writePlugin("post-test", { name: "acme.post-test", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-test"
+    );
+
+    broadcastToRendererMock.mockClear();
+    host.postToPanel("tick", { count: 3 });
+    // Same transport as the renderer-side window.electron.plugin.on subscription
+    // (`plugin:${pluginId}:${channel}`), so a subscribed panel receives the push.
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-test:tick", {
+      count: 3,
+    });
+  });
+
+  it("host.postToPanel remains callable AFTER the activation host is revoked", async () => {
+    await writePlugin("post-postact", { name: "acme.post-postact", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host, revoke } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-postact"
+    );
+
+    // Revoke the activation window — broadcastToRenderer is now closed, but
+    // postToPanel (its post-activation-safe sibling) must keep delivering so a
+    // plugin can stream from timers/polls long after activate() resolves.
+    revoke();
+    expect(() => host.broadcastToRenderer("x", null)).toThrow(/host revoked/);
+
+    broadcastToRendererMock.mockClear();
+    expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
+    expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-postact:tick", {
+      n: 1,
+    });
+  });
+
+  it("host.postToPanel rejects empty or colon-bearing channels", async () => {
+    await writePlugin("post-reject", { name: "acme.post-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-reject"
+    );
+
+    broadcastToRendererMock.mockClear();
+    expect(() => host.postToPanel("bad:channel", null)).toThrow(/postToPanel: channel/);
+    expect(() => host.postToPanel("", null)).toThrow(/postToPanel: channel/);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.postToPanel silently no-ops once the plugin is unloaded", async () => {
+    await writePlugin("post-unloaded", { name: "acme.post-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.post-unloaded"
+    );
+
+    service.unloadPlugin("acme.post-unloaded");
+
+    broadcastToRendererMock.mockClear();
+    expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+});
+
+type ProcessHostShape = (pluginId: string) => {
+  host: {
+    process: {
+      spawn: (
+        command: string,
+        options?: { args?: string[]; cwd?: string; env?: Record<string, string> }
+      ) => Promise<{
+        id: string;
+        kill: () => void;
+        restart: () => Promise<void>;
+        onExit: (
+          cb: (info: { exitCode: number | null; signal: string | null }) => void
+        ) => () => void;
+        onCrash: (
+          cb: (info: { exitCode: number | null; signal: string | null }) => void
+        ) => () => void;
+      }>;
+    };
+  };
+  revoke: () => void;
+};
+
+function makeFakeChild() {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const killSignals: Array<NodeJS.Signals | undefined> = [];
+  const child: ManagedChildProcess = {
+    pid: 9999,
+    stdout: null,
+    stderr: null,
+    kill(signal) {
+      killSignals.push(signal);
+      return true;
+    },
+    on: ((event: string, listener: (...args: never[]) => void) => {
+      const arr = listeners.get(event) ?? [];
+      arr.push(listener as (...args: unknown[]) => void);
+      listeners.set(event, arr);
+      return child;
+    }) as ManagedChildProcess["on"],
+  };
+  return { child, killSignals };
+}
+
+describe("createHost — host.process (managed processes, #9234)", () => {
+  it("rejects spawn from a plugin without the shell:exec capability", async () => {
+    await writePlugin("proc-nocap", { name: "acme.proc-nocap", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-nocap"
+    );
+
+    await expect(host.process.spawn("node", { args: ["x.js"] })).rejects.toThrow(
+      /PERMISSION_REQUIRED.*shell:exec/
+    );
+  });
+
+  it("spawns through the manager when shell:exec is declared", async () => {
+    await writePlugin("proc-cap", {
+      name: "acme.proc-cap",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const fakes: ReturnType<typeof makeFakeChild>[] = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: () => {
+        const fake = makeFakeChild();
+        fakes.push(fake);
+        return fake.child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-cap"
+    );
+
+    const handle = await host.process.spawn("node", { args: ["server.js"], cwd: "/repo" });
+    expect(typeof handle.id).toBe("string");
+    expect(fakes).toHaveLength(1);
+    expect(manager.runningCount("acme.proc-cap")).toBe(1);
+  });
+
+  it("kills outstanding processes when the plugin is unloaded", async () => {
+    await writePlugin("proc-unload", {
+      name: "acme.proc-unload",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const fakes: ReturnType<typeof makeFakeChild>[] = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: () => {
+        const fake = makeFakeChild();
+        fakes.push(fake);
+        return fake.child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-unload"
+    );
+    await host.process.spawn("sleep", { args: ["100"] });
+    expect(manager.runningCount("acme.proc-unload")).toBe(1);
+
+    service.unloadPlugin("acme.proc-unload");
+
+    // The unload teardown SIGTERMs the outstanding process.
+    expect(fakes[0]!.killSignals).toContain("SIGTERM");
+  });
+
+  it("denies a spawn from a plugin that has already been unloaded", async () => {
+    await writePlugin("proc-gone", {
+      name: "acme.proc-gone",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-gone"
+    );
+    service.unloadPlugin("acme.proc-gone");
+
+    await expect(host.process.spawn("node")).rejects.toThrow(/no longer loaded/);
   });
 });
 
@@ -5605,6 +5818,12 @@ describe("Plugin worktree host API", () => {
     aheadCount?: number;
     issueNumber?: number;
     lastActivityTimestamp?: number | null;
+    worktreeChanges?: {
+      worktreeId: string;
+      rootPath: string;
+      changes: Array<{ path: string; status: string; insertions: null; deletions: null }>;
+      changedFileCount: number;
+    };
     _secret?: string;
   };
 
@@ -5637,6 +5856,7 @@ describe("Plugin worktree host API", () => {
     broadcastToRenderer: (c: string, p: unknown) => void;
     getActiveWorktree: () => Promise<unknown>;
     getWorktrees: () => Promise<unknown[]>;
+    getWorktreeStatus: (path: string) => Promise<unknown>;
     onDidChangeActiveWorktree: (cb: (s: unknown) => void) => () => void;
     onDidChangeWorktrees: (cb: (list: unknown[]) => void) => () => void;
   };
@@ -5687,6 +5907,48 @@ describe("Plugin worktree host API", () => {
     expect(list).toHaveLength(2);
     expect(list.map((s) => s.id).sort()).toEqual(["a", "b"]);
     expect(list.every((s) => Object.isFrozen(s))).toBe(true);
+  });
+
+  it("getWorktreeStatus returns the changed-file projection for the matching path", async () => {
+    const { host } = await setup([
+      mkSnap({ id: "a", isCurrent: false }),
+      mkSnap({
+        id: "b",
+        isCurrent: true,
+        worktreeChanges: {
+          worktreeId: "b",
+          rootPath: "/tmp/b",
+          changes: [
+            { path: "src/x.ts", status: "modified", insertions: null, deletions: null },
+            { path: "src/y.ts", status: "untracked", insertions: null, deletions: null },
+          ],
+          changedFileCount: 2,
+        },
+      }),
+    ]);
+
+    const status = (await host.getWorktreeStatus("/tmp/b")) as {
+      changedFileCount: number;
+      files: Array<{ path: string; state: string }>;
+    } | null;
+    expect(status).not.toBeNull();
+    expect(status!.changedFileCount).toBe(2);
+    expect(status!.files).toEqual([
+      { path: "src/x.ts", state: "modified" },
+      { path: "src/y.ts", state: "untracked" },
+    ]);
+    expect(Object.isFrozen(status)).toBe(true);
+  });
+
+  it("getWorktreeStatus returns null when no worktree matches the path", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    expect(await host.getWorktreeStatus("/tmp/does-not-exist")).toBeNull();
+  });
+
+  it("getWorktreeStatus returns null when the matched worktree has no polled changes", async () => {
+    const { host } = await setup([mkSnap({ id: "a", isCurrent: true })]);
+    // /tmp/a exists but carries no worktreeChanges → null, not an empty status.
+    expect(await host.getWorktreeStatus("/tmp/a")).toBeNull();
   });
 
   it("getActiveWorktree returns null when WorkspaceClient is not wired", async () => {
@@ -5930,6 +6192,7 @@ describe("Plugin worktree host API", () => {
       "mood",
       "name",
       "path",
+      "status",
       "worktreeId",
     ];
     expect(Object.keys(active).sort()).toEqual(expected);

@@ -19,8 +19,14 @@ import type {
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
+  PluginWorktreeStatus,
+  PluginWorktreeStatusFile,
+  PluginWorktreeFileState,
   PluginIpcContext,
   PluginIpcHandler,
+  PluginProcessApi,
+  PluginProcessHandle,
+  PluginProcessSpawnOptions,
   ForgeProviderImpl,
   ForgeProviderDescriptor,
   ForgeProviderContribution,
@@ -31,6 +37,7 @@ import type {
   ResourceRef,
   CIStatus,
 } from "../plugin-sdk.js";
+import type { UseHostChannelResult, PluginEventHandler } from "../plugin-sdk-react.js";
 
 /**
  * Boundary test for @daintreehq/plugin-sdk.
@@ -70,11 +77,20 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<PluginIpcHandler>().toMatchTypeOf<(...args: never[]) => unknown>();
     });
 
+    it("exports managed-process contract", () => {
+      expectTypeOf<PluginProcessApi>().toMatchTypeOf<object>();
+      expectTypeOf<PluginProcessHandle>().toMatchTypeOf<object>();
+      expectTypeOf<PluginProcessSpawnOptions>().toMatchTypeOf<object>();
+    });
+
     it("exports worktree projections", () => {
       expectTypeOf<PluginWorktreeSnapshot>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeLinked>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeLinkedIssue>().toMatchTypeOf<object>();
       expectTypeOf<PluginWorktreeLinkedPR>().toMatchTypeOf<object>();
+      expectTypeOf<PluginWorktreeStatus>().toMatchTypeOf<object>();
+      expectTypeOf<PluginWorktreeStatusFile>().toMatchTypeOf<object>();
+      expectTypeOf<PluginWorktreeFileState>().toMatchTypeOf<string>();
     });
 
     it("exports forge provider contract", () => {
@@ -108,6 +124,13 @@ describe("plugin-sdk boundary", () => {
       const host = {} as PluginHostApi;
       expectTypeOf(host.getActiveWorktree).toEqualTypeOf<
         () => Promise<PluginWorktreeSnapshot | null>
+      >();
+    });
+
+    it("PluginHostApi.getWorktreeStatus takes a path and returns the status projection or null", () => {
+      const host = {} as PluginHostApi;
+      expectTypeOf(host.getWorktreeStatus).toEqualTypeOf<
+        (path: string) => Promise<PluginWorktreeStatus | null>
       >();
     });
 
@@ -153,6 +176,8 @@ describe("plugin-sdk boundary", () => {
       const _getAll = activation.getWorktrees;
       // @ts-expect-error — settings accessor is not on the slice
       const _settings = activation.settings;
+      // @ts-expect-error — process accessor is post-activation-safe, not on the slice
+      const _process = activation.process;
       expect([
         _showToast,
         _dispatch,
@@ -162,7 +187,25 @@ describe("plugin-sdk boundary", () => {
         _getActive,
         _getAll,
         _settings,
-      ]).toHaveLength(8);
+        _process,
+      ]).toHaveLength(9);
+    });
+
+    it("PluginProcessHandle carries the lifecycle controls", () => {
+      const handle = {} as PluginProcessHandle;
+      expectTypeOf(handle.id).toEqualTypeOf<string>();
+      expectTypeOf(handle.kill).toEqualTypeOf<() => void>();
+      expectTypeOf(handle.restart).toEqualTypeOf<() => Promise<void>>();
+      expectTypeOf(handle.onExit).toBeFunction();
+      expectTypeOf(handle.onCrash).toBeFunction();
+      // The lifecycle subscriptions hand back a disposer.
+      expectTypeOf(handle.onExit).returns.toEqualTypeOf<() => void>();
+      expectTypeOf(handle.onCrash).returns.toEqualTypeOf<() => void>();
+    });
+
+    it("PluginProcessApi.spawn returns a handle", () => {
+      const api = {} as PluginProcessApi;
+      expectTypeOf(api.spawn).returns.toEqualTypeOf<Promise<PluginProcessHandle>>();
     });
 
     it("PanelViewProps exposes the host-provided view props", () => {
@@ -228,9 +271,16 @@ describe("plugin-sdk boundary", () => {
   });
 
   describe("react entry point", () => {
-    it("resolves with no value exports", async () => {
+    it("the type module carries no value exports — types only", async () => {
+      // The `@daintreehq/plugin-sdk/react` *types* still live here; the runtime
+      // hooks ship from the package's own react entry (asserted below).
       const mod = await import("../plugin-sdk-react.js");
       expect(Object.keys(mod)).toHaveLength(0);
+    });
+
+    it("exports the public hook types", () => {
+      expectTypeOf<UseHostChannelResult<unknown, unknown>>().toMatchTypeOf<object>();
+      expectTypeOf<PluginEventHandler<unknown>>().toMatchTypeOf<(...args: never[]) => unknown>();
     });
   });
 

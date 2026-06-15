@@ -127,6 +127,15 @@ export interface PanelViewProps {
   readonly panelId: string;
   readonly pluginId: string;
   readonly disposeSignal: AbortSignal;
+  /**
+   * Opaque argument bag handed to the view when the panel is spawned with one
+   * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
+   * the panel's `extensionState` (the same bag that survives the save/restore
+   * round-trip), so a restored panel sees the args it was originally spawned
+   * with. Empty (no key) for panels opened without an initial argument. The
+   * host never mutates it; plugins should treat the contents as read-only.
+   */
+  readonly initialArgs?: Record<string, unknown>;
 }
 
 /**
@@ -174,12 +183,22 @@ export interface PluginNetworkScope {
 
 export interface PluginFsScope {
   /**
-   * Advisory allowlist of absolute filesystem paths the plugin's `fs:*`
-   * capabilities intend to touch. Each entry is schema-validated at parse time
-   * (must be an absolute path containing no `..` segment and no `*`/`**` glob —
-   * literal-path allowlist only), but the value is not consulted at runtime: it
-   * does not gate filesystem access and does not attenuate the compound-capability
-   * lattice. `scopes.network` is the only bucket the lattice consults today.
+   * Allowlist of absolute filesystem paths the plugin's `fs:*` capabilities may
+   * touch. Each entry is schema-validated at parse time (must be an absolute
+   * path containing no `..` segment and no `*`/`**` glob — literal-path
+   * allowlist only).
+   *
+   * Enforced at runtime by the host-mediated {@link PluginFsApi} ({@link
+   * PluginHostApi.fs}): every path argument is realpath-resolved and contained
+   * to one of these roots (traversal and symlink-escape rejected), mirroring the
+   * `plugin://` protocol handler's containment discipline. It does NOT gate the
+   * compound-capability lattice — `scopes.network` is the only bucket the lattice
+   * consults today.
+   *
+   * Honest scope note: this gates `host.fs`/`host.git` only. A plugin's `main`
+   * still runs in-process and can call raw `node:fs` directly, which the host
+   * cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives
+   * a sanctioned, contained, audited path; it does not seal the in-process one.
    */
   allowedPaths: string[];
 }
@@ -299,8 +318,22 @@ export interface PluginManifest {
  * - `json` → multi-line textarea, validated as JSON on blur
  * - `secret` → password input, never rendered with its stored value until the
  *   user explicitly reveals it
+ * - `path` / `directory` / `file` → read-only text input + a "Browse" button
+ *   that opens the native chooser via `window.electron.plugin.pickPath`. The
+ *   stored value is an absolute filesystem path. `path` and `directory` choose a
+ *   folder; `file` chooses a single file (narrowable by `extensions`). When
+ *   `mustExist` is set the form flags a stored path that no longer resolves.
  */
-export type SettingFieldType = "string" | "number" | "boolean" | "enum" | "json" | "secret";
+export type SettingFieldType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "enum"
+  | "json"
+  | "secret"
+  | "path"
+  | "directory"
+  | "file";
 
 /**
  * Declaration for a single plugin setting under `contributes.settings` (#9301).
@@ -324,11 +357,48 @@ export interface SettingDefinition {
   /** Inclusive upper bound for `type: "number"`. */
   max?: number;
   /**
+   * For `type: "path" | "directory" | "file"` — when `true`, the settings form
+   * flags a stored path that no longer resolves on disk. Advisory: it does not
+   * block saving (the chooser only returns existing paths), but a path that was
+   * valid at pick time can later be moved or deleted. Ignored for other types.
+   */
+  mustExist?: boolean;
+  /**
+   * For `type: "file"` — restrict the native chooser to these file extensions
+   * (without the leading dot, e.g. `["json", "md"]`). Maps to an Electron
+   * dialog filter. Ignored for `path` / `directory` (folders are unfiltered)
+   * and all other types.
+   */
+  extensions?: string[];
+  /**
    * Legacy plaintext-secret hint (F19). The manifest schema normalizes
    * `secret: true` to `type: "secret"`; new manifests should use the type.
    * Storage is always plaintext JSON regardless of this flag (#9167).
    */
   secret?: boolean;
+}
+
+/**
+ * Request for the plugin-reachable native folder/file chooser
+ * (`window.electron.plugin.pickPath`). Driven by the generated settings form's
+ * "Browse" button for `path` / `directory` / `file` fields, so it is
+ * user-initiated and not capability-gated — but it is scoped to a valid
+ * `pluginId` at the IPC boundary. `kind: "directory"` chooses a single folder;
+ * `kind: "file"` chooses a single file, optionally narrowed by `filters`.
+ */
+export interface PluginPickPathRequest {
+  kind: "directory" | "file";
+  /** Pre-select this absolute path in the chooser. Ignored when not absolute. */
+  defaultPath?: string;
+  /** File-type filters for `kind: "file"` (extensions without the dot). Ignored for directories. */
+  filters?: PluginPickPathFilter[];
+}
+
+/** One named extension group for the `kind: "file"` chooser. */
+export interface PluginPickPathFilter {
+  name: string;
+  /** Extensions without the leading dot, e.g. `["json", "md"]`. `["*"]` allows all. */
+  extensions: string[];
 }
 
 export type PluginSettingsScope = "user" | "project";
@@ -345,15 +415,35 @@ export interface PluginSettingsUiValues {
   values: Record<string, unknown>;
   /** Ids of secret-typed settings that currently have a stored value. */
   secretsSet: string[];
+  /**
+   * At-rest tier new secret writes will use right now (#9167). `"keychain"` when
+   * the OS keychain (Electron `safeStorage`) is available, `"plaintext"` when it
+   * is not (e.g. a headless Linux box) and secrets fall back to `chmod 0o600`
+   * JSON. The settings UI discloses this honestly per secret field.
+   */
+  secretTier: PluginSecretStorageTier;
+  /**
+   * Ids of secret settings whose *currently stored* value is still plaintext —
+   * either written before a keychain was available, or not yet migrated. A value
+   * here that's absent from a `"keychain"` tier means the UI should nudge the
+   * user to re-save it. Migration happens automatically on the next write.
+   */
+  secretsPlaintext: string[];
 }
+
+/** At-rest storage tier for a secret setting value (#9167). */
+export type PluginSecretStorageTier = "keychain" | "plaintext";
 
 /**
  * Persistent, plugin-scoped key/value settings exposed on
- * {@link PluginHostApi.settings}. Values are stored as plaintext JSON at
+ * {@link PluginHostApi.settings}. Values are stored as JSON at
  * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
  * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
- * with `chmod 0o600` applied on POSIX. There is deliberately no OS-keychain
- * integration (#9167) — do not store secrets that must survive disk compromise.
+ * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
+ * encrypted at rest through the OS keychain (Electron `safeStorage`) when one is
+ * available, falling back to the same plaintext-0600 path when it is not (#9167);
+ * the `get`/`set` API shape is identical either way. Non-secret values are always
+ * plaintext JSON — do not store credentials in non-secret keys.
  *
  * `scope` defaults to `"user"`. Project scope resolves the active project at
  * call time, so it tracks project switches: `get` returns `undefined` and `set`
@@ -691,6 +781,37 @@ export interface PluginWorktreeLinked {
 }
 
 /**
+ * Normalized change state for a single file in a worktree's git status,
+ * exposed to plugins. Collapses the internal {@link import("./git.js").GitStatus}
+ * vocabulary down to the five states a decoration/lint plugin acts on:
+ * `copied` → `added`, `conflicted` → `modified`, and `ignored` files are
+ * dropped from the projection entirely (a plugin scanning "what changed" never
+ * wants ignored noise).
+ */
+export type PluginWorktreeFileState = "added" | "modified" | "deleted" | "untracked" | "renamed";
+
+/** A single changed file in {@link PluginWorktreeStatus.files}. */
+export interface PluginWorktreeStatusFile {
+  /** Path relative to the worktree root, as git reports it. */
+  readonly path: string;
+  readonly state: PluginWorktreeFileState;
+}
+
+/**
+ * Read-only projection of a worktree's polled git status — the *which files
+ * changed* companion to {@link PluginWorktreeSnapshot}, sourced from the same
+ * status the host already polls (no extra shell-out). Lets a plugin scan only
+ * what changed instead of hand-rolling `git status`. `files` is sorted by path
+ * for stable diffing; `counts` is the per-state tally over `files`.
+ */
+export interface PluginWorktreeStatus {
+  readonly files: readonly PluginWorktreeStatusFile[];
+  /** Total entries in `files` (post-`ignored` filtering). */
+  readonly changedFileCount: number;
+  readonly counts: Readonly<Record<PluginWorktreeFileState, number>>;
+}
+
+/**
  * Read-only, deep-frozen projection of a worktree exposed to plugins.
  * This is an explicit allowlist of fields from the internal WorktreeSnapshot;
  * do not add fields by spreading — every field must be intentionally exposed
@@ -716,6 +837,13 @@ export interface PluginWorktreeSnapshot {
   readonly mood?: "stable" | "active" | "stale" | "error";
   readonly lastActivityTimestamp?: number | null;
   readonly createdAt?: number;
+  /**
+   * Projection of the worktree's polled git status — which files changed and a
+   * per-state tally. Sourced from the host's existing status poll, so a plugin
+   * can scan only the changed set without shelling out to `git status`.
+   * `null` when the host hasn't computed a status for this worktree yet.
+   */
+  readonly status: PluginWorktreeStatus | null;
 }
 
 /**
@@ -745,6 +873,232 @@ export interface PluginToastOptions {
  * crosses the IPC boundary.
  */
 export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
+
+/**
+ * Options for {@link PluginProcessApi.spawn}. All fields are optional; `command`
+ * is the positional first argument. The host anchors a relative spawn against
+ * `cwd` (defaulting to the active worktree path, then the process cwd) and
+ * merges `env` over the host environment — a plugin cannot blank the inherited
+ * env, only add to / override it.
+ */
+export interface PluginProcessSpawnOptions {
+  /** Argument vector. Each entry is passed verbatim — no shell interpolation. */
+  args?: string[];
+  /** Working directory for the child. Defaults to the active worktree, then the host cwd. */
+  cwd?: string;
+  /** Extra environment variables, merged over (not replacing) the host environment. */
+  env?: Record<string, string>;
+}
+
+/**
+ * Live handle to a process spawned via {@link PluginProcessApi.spawn}. The
+ * handle's `id` keys the stream events fanned out to the plugin's panels over
+ * `postToPanel("process", …)` (see {@link import("./ipc/pluginProcess.js").PluginProcessStreamEvent}).
+ *
+ * `kill()` SIGTERMs the child and escalates to SIGKILL after a grace period;
+ * `restart()` kills the current child and respawns it with the same
+ * command/args/cwd/env, reusing the same handle id and bumping its restart
+ * counter. Both are safe to call after the process has already exited (no-op).
+ * `onExit`/`onCrash` register lifecycle callbacks carrying the real exit
+ * code/signal — `onCrash` fires only on a non-zero / signalled exit the plugin
+ * did not request, `onExit` fires on every termination. Callbacks registered
+ * after the process has already terminated are invoked on the next microtask
+ * with the recorded outcome, so a late subscriber never misses the event.
+ */
+export interface PluginProcessHandle {
+  /** Host-assigned opaque id, stable across `restart()`. */
+  readonly id: string;
+  /**
+   * Terminate the process: clean `SIGTERM`, then `SIGKILL` after the host grace
+   * period if it hasn't exited. No-op if already terminated.
+   */
+  kill(): void;
+  /**
+   * Kill the current child (if any) and respawn with the same
+   * command/args/cwd/env. Resolves once the new child is spawned. Reuses this
+   * handle id and increments its restart counter.
+   */
+  restart(): Promise<void>;
+  /** Register a callback fired on any termination. Returns a disposer. */
+  onExit(callback: (info: { exitCode: number | null; signal: string | null }) => void): () => void;
+  /**
+   * Register a callback fired only on an unexpected termination (non-zero exit
+   * code or a signal the plugin did not request via `kill()`). Returns a disposer.
+   */
+  onCrash(callback: (info: { exitCode: number | null; signal: string | null }) => void): () => void;
+}
+
+/**
+ * Managed-process surface on {@link PluginHostApi.process}. Gated on the
+ * declared `shell:exec` capability — `spawn` from a plugin that did not declare
+ * it rejects with a `PERMISSION_REQUIRED:` error (the first runtime enforcement
+ * of a scope capability). Spawns are surfaced in the plugin audit trail.
+ *
+ * NOT revoke-guarded: a process orchestrator spawns and respawns from timers
+ * and subscription callbacks long after `activate()`. Liveness is plugin
+ * membership — once the plugin unloads every outstanding process is torn down
+ * and a further `spawn` rejects.
+ */
+export interface PluginProcessApi {
+  /**
+   * Spawn a child process on the plugin's behalf and return a live handle. The
+   * child's stdout/stderr stream to the plugin's panels over
+   * `postToPanel("process", …)` keyed by the handle id. Rejects when the plugin
+   * lacks `shell:exec`, when the per-plugin concurrency cap is reached, or when
+   * the plugin has been unloaded.
+   */
+  spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
+}
+
+/** One directory entry returned by {@link PluginFsApi.readdir}. */
+export interface PluginFsDirEntry {
+  /** Entry name (basename only — never a path). */
+  name: string;
+  /** True when the entry is a directory. */
+  isDirectory: boolean;
+  /** True when the entry is a regular file. */
+  isFile: boolean;
+  /** True when the entry is a symbolic link (resolved containment still applies on read). */
+  isSymbolicLink: boolean;
+}
+
+/** File metadata returned by {@link PluginFsApi.stat}. */
+export interface PluginFsStat {
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymbolicLink: boolean;
+  /** Size in bytes. */
+  size: number;
+  /** Last-modified time, epoch milliseconds. */
+  mtimeMs: number;
+}
+
+/**
+ * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
+ *
+ * Every path argument is resolved against the plugin's declared
+ * `scopes.fs.allowedPaths` and realpath-contained to one of those roots before
+ * any I/O — a traversal (`..`) or a symlink that escapes a root is rejected,
+ * mirroring the `plugin://` protocol handler's discipline. This is the runtime
+ * enforcement of `scopes.fs.allowedPaths` (previously advisory-only).
+ *
+ * Reads are gated on `fs:project-read` / `fs:user-data-read`; writes on
+ * `fs:project-write` / `fs:user-data-write`. A plugin missing the relevant
+ * capability is rejected with a `PERMISSION_REQUIRED:` prefix (the same prefix
+ * `useHostChannel` discriminates on); a path outside every allowed root is
+ * rejected with a `PATH_NOT_ALLOWED:` prefix. Writes are recorded in the plugin
+ * audit trail.
+ *
+ * Unlike the global `files.read` IPC, {@link readFile} carries NO 500KB / binary
+ * cap — it is a deliberate plugin API, not the size-limited preview path.
+ *
+ * NOT revoke-guarded: a plugin reads/writes from timers and subscription
+ * callbacks long after `activate()`. Liveness is plugin membership — once the
+ * plugin unloads every method rejects and any active {@link watch} is torn down.
+ */
+export interface PluginFsApi {
+  /**
+   * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on
+   * a missing read capability, an out-of-scope path, or a non-file target.
+   */
+  readFile(filePath: string): Promise<string>;
+  /**
+   * Write UTF-8 text to a file, creating it if absent (parent directories must
+   * already exist within scope). Rejects on a missing write capability or an
+   * out-of-scope path. Recorded in the audit trail.
+   */
+  writeFile(filePath: string, contents: string): Promise<void>;
+  /** List a directory's immediate children. Rejects on a missing read capability or an out-of-scope path. */
+  readdir(dirPath: string): Promise<PluginFsDirEntry[]>;
+  /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
+  stat(targetPath: string): Promise<PluginFsStat>;
+  /**
+   * Watch one or more contained paths for changes, invoking `callback` with the
+   * changed absolute path. `paths` are each resolved and contained at
+   * subscription time; an out-of-scope or missing-capability path rejects.
+   * Returns a disposer that tears the watcher down; all watchers are
+   * automatically torn down on unload. Rejects synchronously (throws) on a
+   * missing read capability so authoring mistakes surface loudly.
+   */
+  watch(paths: string[], callback: (changedPath: string) => void): Promise<() => void>;
+}
+
+/** A single changed file in {@link PluginGitApi.status}. Mirrors {@link PluginWorktreeStatusFile}. */
+export type PluginGitStatusFile = PluginWorktreeStatusFile;
+
+/** Result of {@link PluginGitApi.status}. */
+export interface PluginGitStatus {
+  /** Absolute worktree path the status was read for. */
+  worktreePath: string;
+  files: PluginGitStatusFile[];
+  changedFileCount: number;
+}
+
+/**
+ * Options for {@link PluginGitApi.commit}. The host enforces the #7880 / D2
+ * change-preview safeguard at the host layer: `commit` refuses without an
+ * explicit, non-empty `message` — there is no silent fallback to a derived
+ * commit message — and the host computes the real staged diff as the preview
+ * (returned in {@link PluginGitCommitResult}) before mutating.
+ */
+export interface PluginGitCommitOptions {
+  /**
+   * Commit message. MUST be a non-empty string the plugin explicitly authored —
+   * the host rejects an empty/whitespace message rather than substituting a
+   * derived one (the #7880 root-cause guard).
+   */
+  message: string;
+}
+
+/** Result of {@link PluginGitApi.commit}. */
+export interface PluginGitCommitResult {
+  /** Short SHA of the new commit. */
+  commit: string;
+  /** The committed message (echoed back for confirmation). */
+  message: string;
+  /**
+   * The host-computed staged diff that was committed — the real change preview
+   * the D2 safeguard requires. A plugin UI can surface this to the user.
+   */
+  preview: string;
+}
+
+/**
+ * Host-mediated git surface on {@link PluginHostApi.git}, scoped to a worktree
+ * the plugin may access (the `worktreePath` must resolve inside the plugin's
+ * `scopes.fs.allowedPaths`). Implemented over the existing hardened simple-git
+ * service — not a reinvented git layer.
+ *
+ * Reads ({@link status}, {@link diff}) are gated on `git:read`; mutations
+ * ({@link add}, {@link commit}) on `git:write`. A missing capability rejects
+ * with a `PERMISSION_REQUIRED:` prefix; an out-of-scope `worktreePath` with a
+ * `PATH_NOT_ALLOWED:` prefix. {@link commit} additionally enforces the host-side
+ * change-preview safeguard (see {@link PluginGitCommitOptions}). Mutations are
+ * recorded in the plugin audit trail.
+ *
+ * NOT revoke-guarded — same lifetime/membership semantics as {@link PluginFsApi}.
+ */
+export interface PluginGitApi {
+  /** Changed-file status for the worktree. Gated on `git:read`. */
+  status(worktreePath: string): Promise<PluginGitStatus>;
+  /**
+   * Unified diff for the worktree (or one `filePath` relative to it). Returns
+   * the raw diff text. Gated on `git:read`.
+   */
+  diff(worktreePath: string, filePath?: string): Promise<string>;
+  /**
+   * Stage paths (relative to `worktreePath`, or all changes when omitted).
+   * Gated on `git:write`. Recorded in the audit trail.
+   */
+  add(worktreePath: string, paths?: string[]): Promise<void>;
+  /**
+   * Commit staged changes. Gated on `git:write`. Refuses without an explicit
+   * non-empty {@link PluginGitCommitOptions.message} — no silent fallback (the
+   * #7880 guard) — and returns the real staged diff as a change preview.
+   * Recorded in the audit trail.
+   */
+  commit(worktreePath: string, options: PluginGitCommitOptions): Promise<PluginGitCommitResult>;
+}
 
 /**
  * The revoke-guarded slice of {@link PluginHostApi}: the registration methods
@@ -900,6 +1254,23 @@ export interface PluginActivationApi {
 export interface PluginHostApi extends PluginActivationApi {
   readonly pluginId: string;
   /**
+   * Push a fire-and-forget payload to every renderer subscribed to
+   * `(pluginId, channel)` via `window.electron.plugin.on(...)`. This is the
+   * post-activation-safe sibling of {@link broadcastToRenderer}: it fans out
+   * over the exact same `plugin:{pluginId}:{channel}` transport, but unlike the
+   * revoke-guarded activation broadcast it remains callable from the plugin's
+   * own timers, polls, and subscription callbacks long after `activate()`
+   * resolves — so a plugin can stream live data into its panels without the
+   * renderer degrading to `invoke()` polling.
+   *
+   * Like {@link invalidateFileDecorations}, {@link showToast}, and
+   * {@link dispatch} this is NOT revoke-guarded: liveness is plugin membership,
+   * so it becomes a silent no-op once the plugin is unloaded. `channel` must be
+   * a non-empty string without colons (the namespace separator); an invalid
+   * channel throws so authoring mistakes surface loudly.
+   */
+  postToPanel(channel: string, payload: unknown): void;
+  /**
    * Returns the currently-active worktree (`isCurrent === true`) across all
    * projects as a frozen snapshot, or `null` if none is active. In multi-project
    * sessions this returns the first match; plugins needing per-project scoping
@@ -908,6 +1279,18 @@ export interface PluginHostApi extends PluginActivationApi {
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
   /** Returns all worktrees across all loaded projects as frozen snapshots. */
   getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
+  /**
+   * Returns the changed-file / git-status projection for the worktree at the
+   * given absolute `path` (the same {@link PluginWorktreeStatus} carried on
+   * {@link PluginWorktreeSnapshot.status}), or `null` when no worktree matches
+   * or the host hasn't polled a status yet. Reads the host's already-polled
+   * status — it does NOT trigger a fresh `git status`.
+   *
+   * Like {@link postToPanel} this is NOT revoke-guarded: it stays callable from
+   * the plugin's timers and subscription callbacks and degrades to `null` once
+   * the plugin is unloaded.
+   */
+  getWorktreeStatus(path: string): Promise<PluginWorktreeStatus | null>;
   /**
    * Signal that decorations for `scope` (optionally narrowed to `paths`) have
    * changed and any renderer showing them should re-pull. Unlike the
@@ -967,6 +1350,38 @@ export interface PluginHostApi extends PluginActivationApi {
    * plugin is unloaded.
    */
   readonly logger: PluginLogger;
+  /**
+   * Managed child-process lifecycle, gated on the declared `shell:exec`
+   * capability. Spawns processes tied to the plugin's lifetime: every
+   * outstanding process is killed (clean SIGTERM, then SIGKILL after a grace
+   * period) on unload/disable/revoke, and a per-plugin concurrency cap bounds
+   * how many can run at once. See {@link PluginProcessApi}.
+   *
+   * Like {@link postToPanel} this is NOT revoke-guarded: a process orchestrator
+   * spawns from post-activation timers and callbacks. Once the plugin is
+   * unloaded `spawn` rejects.
+   */
+  readonly process: PluginProcessApi;
+  /**
+   * Host-mediated filesystem surface contained to the plugin's declared
+   * `scopes.fs.allowedPaths` — the runtime enforcement of those paths (formerly
+   * advisory-only). Reads gated on `fs:*-read`, writes on `fs:*-write`. See
+   * {@link PluginFsApi}.
+   *
+   * NOT revoke-guarded: plugins read/write from post-activation timers and
+   * callbacks. Once the plugin unloads every method rejects and active watchers
+   * are torn down.
+   */
+  readonly fs: PluginFsApi;
+  /**
+   * Host-mediated git surface scoped to a worktree inside the plugin's
+   * `scopes.fs.allowedPaths`, implemented over the existing hardened git
+   * service. Reads gated on `git:read`, mutations on `git:write`; `commit`
+   * enforces the host-side change-preview safeguard. See {@link PluginGitApi}.
+   *
+   * NOT revoke-guarded — same membership lifetime as {@link fs}.
+   */
+  readonly git: PluginGitApi;
 }
 
 /**

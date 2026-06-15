@@ -66,6 +66,7 @@ import { registerSafeModeHandlers } from "./handlers/safeMode.js";
 import { registerWatchdogHandlers } from "./handlers/watchdog.js";
 import { registerPluginHandlers } from "./handlers/plugin.js";
 import { registerPluginMcpHandlers } from "./handlers/pluginMcp.js";
+import { registerPluginProcessHandlers } from "./handlers/pluginProcess.js";
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
@@ -180,6 +181,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWatchdogHandlers(deps));
     register(() => registerPluginHandlers());
     register(() => registerPluginMcpHandlers());
+    register(() => registerPluginProcessHandlers());
     register(() => registerPerfHandlers(deps));
     register(() => registerConnectivityHandlers());
     register(() => registerScratchHandlers(deps));

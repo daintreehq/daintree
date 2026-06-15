@@ -185,6 +185,50 @@ describe("makePluginViewHost", () => {
     expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
   });
 
+  it("passes the panel's extensionState to the mounted view as initialArgs", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    // Replace React.lazy so the plugin view renders synchronously (the real
+    // `plugin://` dynamic import never resolves in jsdom). The stub renders a
+    // capturing component that records the props the host hands it — proving the
+    // spawn-time `extensionState` reaches the view as `initialArgs`.
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    const { makePluginViewHost } = await import("../PluginViewHost");
+    const Host = makePluginViewHost(makeConfig());
+
+    const initialArgs = { path: "/repo/src/index.ts", line: 12 };
+    render(
+      <Host
+        id="panel-args"
+        title="Dashboard"
+        isFocused={false}
+        onFocus={(): void => {}}
+        onClose={(): void => {}}
+        extensionState={initialArgs}
+      />
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+    expect(capturedProps).not.toHaveLength(0);
+    const props = capturedProps[capturedProps.length - 1]!;
+    expect(props.panelId).toBe("panel-args");
+    expect(props.pluginId).toBe("acme");
+    expect(props.initialArgs).toEqual(initialArgs);
+    // The bag is forwarded by reference from extensionState, not reconstructed.
+    expect(props.initialArgs).toBe(initialArgs);
+    vi.doUnmock("react");
+  });
+
   it("reads the AbortController through a ref so post-retry removals abort the current signal", async () => {
     // Regression guard for the renderer-first teardown contract: if the
     // useEffect captured controllerRef.current into a const at setup time,

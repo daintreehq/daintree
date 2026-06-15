@@ -9,6 +9,7 @@ const sampleSnapshot: PluginWorktreeSnapshot = {
   name: "main",
   isCurrent: true,
   linked: null,
+  status: null,
 };
 
 const sampleAction: PluginActionContribution = {

@@ -113,7 +113,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(31);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(34);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:install", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:set-enabled", expect.any(Function));
@@ -334,6 +334,66 @@ describe("registerPluginHandlers", () => {
       errors: [{ code: "archive_invalid", message: "Only .dntr files can be installed" }],
     });
     expect(mockInstallPlugin).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PICK_PATH returns the chosen directory path", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/Users/x/notes"] });
+    const handler = getHandler("plugin:pick-path");
+    const result = await handler({ sender: { id: 1 } }, "acme.notes", { kind: "directory" });
+    expect(result).toBe("/Users/x/notes");
+    const opts = mockShowOpenDialog.mock.calls[0]![0] as { properties: string[] };
+    expect(opts.properties).toEqual(["openDirectory"]);
+  });
+
+  it("PLUGIN_PICK_PATH returns null when the picker is dismissed", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const handler = getHandler("plugin:pick-path");
+    const result = await handler({ sender: { id: 1 } }, "acme.notes", { kind: "file" });
+    expect(result).toBeNull();
+  });
+
+  it("PLUGIN_PICK_PATH passes file filters and openFile for a file pick", async () => {
+    mockShowOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+    const handler = getHandler("plugin:pick-path");
+    await handler({ sender: { id: 1 } }, "acme.notes", {
+      kind: "file",
+      filters: [{ name: "Docs", extensions: ["json", "md"] }],
+    });
+    const opts = mockShowOpenDialog.mock.calls[0]![0] as {
+      properties: string[];
+      filters: Array<{ extensions: string[] }>;
+    };
+    expect(opts.properties).toEqual(["openFile"]);
+    expect(opts.filters[0]!.extensions).toEqual(["json", "md"]);
+  });
+
+  it("PLUGIN_PICK_PATH rejects an invalid pluginId", async () => {
+    const handler = getHandler("plugin:pick-path");
+    await expect(
+      handler({ sender: { id: 1 } }, "not a scoped name", { kind: "directory" })
+    ).rejects.toThrow(/scoped plugin name/);
+    expect(mockShowOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_PATH_EXISTS resolves true for an existing path and false for a missing one", async () => {
+    const handler = getHandler("plugin:path-exists");
+    const present = join(tmpdir(), `plugin-path-exists-${process.pid}.tmp`);
+    await writeFile(present, "x");
+    try {
+      await expect(handler({ sender: { id: 1 } }, "acme.notes", present)).resolves.toBe(true);
+      await expect(
+        handler({ sender: { id: 1 } }, "acme.notes", join(tmpdir(), "definitely-missing-xyz"))
+      ).resolves.toBe(false);
+    } finally {
+      await rm(present, { force: true });
+    }
+  });
+
+  it("PLUGIN_PATH_EXISTS resolves false for a non-absolute path instead of throwing", async () => {
+    const handler = getHandler("plugin:path-exists");
+    await expect(handler({ sender: { id: 1 } }, "acme.notes", "relative/path")).resolves.toBe(
+      false
+    );
   });
 
   it("PLUGIN_INSTALL_FROM_URL rejects an empty URL without claiming not-implemented", async () => {

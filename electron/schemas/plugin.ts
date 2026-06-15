@@ -530,7 +530,9 @@ export const PluginToastOptionsSchema = z
 export const SettingDefinitionSchema = z
   .object({
     id: z.string().min(1),
-    type: z.enum(["string", "number", "boolean", "enum", "json", "secret"]).optional(),
+    type: z
+      .enum(["string", "number", "boolean", "enum", "json", "secret", "path", "directory", "file"])
+      .optional(),
     label: z.string().min(1).optional(),
     description: z.string().min(1).optional(),
     default: z.unknown().optional(),
@@ -538,6 +540,11 @@ export const SettingDefinitionSchema = z
     options: z.array(z.string().min(1)).min(1).optional(),
     min: z.number().optional(),
     max: z.number().optional(),
+    // Advisory existence check for path/directory/file fields — the form flags a
+    // stored path that no longer resolves; it does not gate saving.
+    mustExist: z.boolean().optional(),
+    // File-extension filter for type: "file" (no leading dot). Non-empty when present.
+    extensions: z.array(z.string().min(1)).min(1).optional(),
     secret: z.boolean().optional(),
   })
   .strict()
@@ -555,6 +562,16 @@ export const SettingDefinitionSchema = z
         code: z.ZodIssueCode.custom,
         message: "Setting min cannot be greater than max",
         path: ["min"],
+      });
+    }
+    // `extensions` narrows the native file chooser — it is only meaningful for
+    // `type: "file"`. Reject it on every other type at the manifest gate so a
+    // misplaced filter surfaces loudly instead of silently doing nothing.
+    if (val.extensions !== undefined && effectiveType !== "file") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Setting "extensions" is only valid for type "file"',
+        path: ["extensions"],
       });
     }
   })

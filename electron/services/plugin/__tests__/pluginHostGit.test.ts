@@ -1,0 +1,107 @@
+import { describe, expect, it, vi } from "vitest";
+import type { SimpleGit } from "simple-git";
+import { PluginHostGit, PluginGitCommitMessageRequiredError } from "../pluginHostGit.js";
+import type { WorktreeChanges } from "../../../../shared/types/index.js";
+
+function fakeGit(overrides: Partial<Record<keyof SimpleGit, unknown>> = {}): {
+  git: SimpleGit;
+  diff: ReturnType<typeof vi.fn>;
+  add: ReturnType<typeof vi.fn>;
+  commit: ReturnType<typeof vi.fn>;
+} {
+  const diff = vi.fn().mockResolvedValue("");
+  const add = vi.fn().mockResolvedValue(undefined);
+  const commit = vi.fn().mockResolvedValue({ commit: "abc123" });
+  const git = { diff, add, commit, ...overrides } as unknown as SimpleGit;
+  return { git, diff, add, commit };
+}
+
+const emptyChanges: WorktreeChanges = {
+  changes: [],
+  totalChanges: 0,
+} as unknown as WorktreeChanges;
+
+describe("PluginHostGit", () => {
+  it("commit refuses an empty message without mutating (no silent fallback)", async () => {
+    const { git, commit, diff } = fakeGit();
+    const host = new PluginHostGit("p", async () => git);
+
+    await expect(host.commit("/wt", { message: "" })).rejects.toBeInstanceOf(
+      PluginGitCommitMessageRequiredError
+    );
+    await expect(host.commit("/wt", { message: "   " })).rejects.toBeInstanceOf(
+      PluginGitCommitMessageRequiredError
+    );
+    // Neither the diff-preview nor the commit ran — the guard fired before any work.
+    expect(diff).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("commit computes the staged diff as a change preview before committing", async () => {
+    const callOrder: string[] = [];
+    const diff = vi.fn(async () => {
+      callOrder.push("diff");
+      return "diff --git a/x b/x\n+hello";
+    });
+    const commit = vi.fn(async () => {
+      callOrder.push("commit");
+      return { commit: "deadbee" };
+    });
+    const git = { diff, commit } as unknown as SimpleGit;
+    const host = new PluginHostGit("p", async () => git);
+
+    const result = await host.commit("/wt", { message: "feat: thing" });
+
+    // The preview (staged diff) is computed BEFORE the commit — the D2 safeguard.
+    expect(callOrder).toEqual(["diff", "commit"]);
+    expect(diff).toHaveBeenCalledWith(["--cached", "--no-ext-diff", "--no-textconv", "--no-color"]);
+    expect(result.commit).toBe("deadbee");
+    expect(result.message).toBe("feat: thing");
+    expect(result.preview).toContain("+hello");
+  });
+
+  it("add stages all changes when no paths are given", async () => {
+    const { git, add } = fakeGit();
+    const host = new PluginHostGit("p", async () => git);
+    await host.add("/wt");
+    expect(add).toHaveBeenCalledWith(["."]);
+  });
+
+  it("add filters non-string path entries", async () => {
+    const { git, add } = fakeGit();
+    const host = new PluginHostGit("p", async () => git);
+    await host.add("/wt", ["a.ts", "", "b.ts"]);
+    expect(add).toHaveBeenCalledWith(["a.ts", "b.ts"]);
+  });
+
+  it("status projects the changes provider output", async () => {
+    const changes: WorktreeChanges = {
+      changes: [
+        { path: "b.ts", status: "modified" },
+        { path: "a.ts", status: "added" },
+      ],
+      totalChanges: 2,
+    } as unknown as WorktreeChanges;
+    const host = new PluginHostGit(
+      "p",
+      async () => fakeGit().git,
+      async () => changes
+    );
+    const status = await host.status("/wt");
+    expect(status.worktreePath).toBe("/wt");
+    expect(status.changedFileCount).toBe(2);
+    // Projected + sorted by path.
+    expect(status.files.map((f) => f.path)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("status returns an empty set when the provider has no changes", async () => {
+    const host = new PluginHostGit(
+      "p",
+      async () => fakeGit().git,
+      async () => emptyChanges
+    );
+    const status = await host.status("/wt");
+    expect(status.changedFileCount).toBe(0);
+    expect(status.files).toEqual([]);
+  });
+});

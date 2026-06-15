@@ -37,6 +37,7 @@ import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "./hooks/useKeepMounted";
 import { stashViewFileRequest } from "./components/FileViewer/pendingViewFileRequest";
+import { stashViewDiffRequest } from "./components/Worktree/pendingViewDiffRequest";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
@@ -287,6 +288,13 @@ function preloadFileViewerModalHost() {
 }
 const LazyFileViewerModalHost = lazy(() =>
   preloadFileViewerModalHost().then((m) => ({ default: m.FileViewerModalHost }))
+);
+
+function preloadDiffViewerModalHost() {
+  return import("./components/Worktree/DiffViewerModalHost");
+}
+const LazyDiffViewerModalHost = lazy(() =>
+  preloadDiffViewerModalHost().then((m) => ({ default: m.DiffViewerModalHost }))
 );
 
 function preloadMcpConfirmDialog() {
@@ -690,6 +698,7 @@ function AppInner() {
   const diagnosticsReviewResetKey = useDiagnosticsReviewStore((s) => s.requestSeq);
   const [terminalInfoResetKey, setTerminalInfoResetKey] = useState(0);
   const [fileViewerResetKey, setFileViewerResetKey] = useState(0);
+  const [diffViewerResetKey, setDiffViewerResetKey] = useState(0);
   useEffect(() => {
     const onTerminalInfo = () => setTerminalInfoResetKey((k) => k + 1);
     const onViewFile = (e: Event) => {
@@ -698,11 +707,19 @@ function AppInner() {
       stashViewFileRequest(e);
       setFileViewerResetKey((k) => k + 1);
     };
+    const onViewDiff = (e: Event) => {
+      // Stash for DiffViewerModalHost's mount replay — same lazy-chunk race as
+      // the file viewer above.
+      stashViewDiffRequest(e);
+      setDiffViewerResetKey((k) => k + 1);
+    };
     window.addEventListener("daintree:open-terminal-info", onTerminalInfo);
     window.addEventListener("daintree:view-file", onViewFile);
+    window.addEventListener("daintree:view-diff", onViewDiff);
     return () => {
       window.removeEventListener("daintree:open-terminal-info", onTerminalInfo);
       window.removeEventListener("daintree:view-file", onViewFile);
+      window.removeEventListener("daintree:view-diff", onViewDiff);
     };
   }, []);
   // Cross-project focus intent receiver. Subscribes unconditionally so the
@@ -1507,6 +1524,17 @@ function AppInner() {
               >
                 <Suspense fallback={null}>
                   <LazyFileViewerModalHost />
+                </Suspense>
+              </ErrorBoundary>
+            )}
+            {isStateLoaded && (
+              <ErrorBoundary
+                variant="component"
+                componentName="DiffViewerModalHost"
+                resetKeys={[diffViewerResetKey]}
+              >
+                <Suspense fallback={null}>
+                  <LazyDiffViewerModalHost />
                 </Suspense>
               </ErrorBoundary>
             )}

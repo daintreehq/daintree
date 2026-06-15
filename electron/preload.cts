@@ -43,6 +43,7 @@ import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
 import { buildPluginMcpPreloadBindings } from "./ipc/handlers/pluginMcp.preload.js";
+import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
@@ -2615,6 +2616,8 @@ function buildElectronApi(): ElectronAPI {
     },
 
     pluginMcp: buildPluginMcpPreloadBindings(_unwrappingInvoke),
+
+    pluginProcess: buildPluginProcessPreloadBindings(_unwrappingInvoke),
 
     crashRecovery: {
       getPending: () => _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),

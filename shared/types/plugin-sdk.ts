@@ -54,6 +54,17 @@ export type {
   ActionHandler,
   PluginToastOptions,
   PluginLogger,
+  PluginProcessApi,
+  PluginProcessHandle,
+  PluginProcessSpawnOptions,
+  PluginFsApi,
+  PluginFsDirEntry,
+  PluginFsStat,
+  PluginGitApi,
+  PluginGitStatus,
+  PluginGitStatusFile,
+  PluginGitCommitOptions,
+  PluginGitCommitResult,
 } from "./plugin.js";
 
 // ── Settings (host.settings) ────────────────────────────────────────
@@ -81,6 +92,9 @@ export type {
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
+  PluginWorktreeStatus,
+  PluginWorktreeStatusFile,
+  PluginWorktreeFileState,
 } from "./plugin.js";
 
 // ── Forge provider contract ─────────────────────────────────────────

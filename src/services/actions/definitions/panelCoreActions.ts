@@ -5,6 +5,14 @@ import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+
+const openPluginPanelArgsSchema = z.object({
+  kind: z.string().min(1),
+  initialArgs: z.record(z.string(), z.unknown()).optional(),
+  worktreeId: z.string().optional(),
+  reuseExisting: z.boolean().optional(),
+});
 
 export function registerPanelCoreActions(
   actions: ActionRegistry,
@@ -113,6 +121,66 @@ export function registerPanelCoreActions(
         throw new Error("Terminal panel no longer exists");
       }
       terminalState.activateTerminal(panelId);
+    },
+  }));
+
+  actions.set("panel.openPluginPanel", () => ({
+    id: "panel.openPluginPanel",
+    title: "Open Plugin Panel",
+    description:
+      "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind.",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: openPluginPanelArgsSchema,
+    run: async (args: unknown) => {
+      const { kind, initialArgs, worktreeId, reuseExisting } =
+        openPluginPanelArgsSchema.parse(args);
+      const kindConfig = getPanelKindConfig(kind);
+      // Only plugin-contributed kinds are reachable here — built-in kinds carry
+      // no `extensionId` and have their own dedicated spawn actions.
+      if (!kindConfig || kindConfig.extensionId === undefined) {
+        throw new Error(`"${kind}" is not a registered plugin panel kind`);
+      }
+
+      const state = usePanelStore.getState();
+      const targetWorktreeId = worktreeId ?? callbacks.getActiveWorktreeId();
+
+      if (reuseExisting !== false) {
+        const existing = state.panelIds
+          .map((id) => state.panelsById[id])
+          .find(
+            (p): p is PanelInstance =>
+              p !== undefined &&
+              p.kind === kind &&
+              p.location !== "trash" &&
+              (p.worktreeId ?? undefined) === (targetWorktreeId ?? undefined)
+          );
+        if (existing) {
+          state.activateTerminal(existing.id);
+          return { panelId: existing.id };
+        }
+      }
+
+      const panelId = await state.addPanel(
+        // Extension panel kinds are intentionally excluded from the
+        // `AddPanelOptions` union (a `kind: string` member would defeat
+        // discriminated-union narrowing for built-in kinds — see
+        // `shared/types/addPanelOptions.ts`). Widening at this integration
+        // boundary is the documented pattern for spawning a custom kind.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary
+        {
+          kind,
+          worktreeId: targetWorktreeId,
+          location: "grid",
+          extensionState: initialArgs,
+        } as Parameters<typeof state.addPanel>[0]
+      );
+      if (!panelId) {
+        throw new Error(`Failed to open plugin panel "${kind}"`);
+      }
+      return { panelId };
     },
   }));
 

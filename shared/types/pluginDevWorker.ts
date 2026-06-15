@@ -23,16 +23,26 @@ import type { PluginIpcContext, PluginSettingsScope } from "./plugin.js";
 export type PluginHostCallMethod =
   | "getActiveWorktree"
   | "getWorktrees"
+  | "getWorktreeStatus"
   | "showToast"
   | "dispatch"
   | "settings.get"
-  | "settings.set";
+  | "settings.set"
+  | "fs.readFile"
+  | "fs.writeFile"
+  | "fs.readdir"
+  | "fs.stat"
+  | "git.status"
+  | "git.diff"
+  | "git.add"
+  | "git.commit";
 
 /** Fire-and-forget host methods (no reply needed). */
 export type PluginHostNotifyMethod =
   | "registerAction"
   | "registerHandler"
   | "broadcastToRenderer"
+  | "postToPanel"
   | "invalidateFileDecorations"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
@@ -170,6 +180,16 @@ export interface BroadcastToRendererParams {
   payload: unknown;
 }
 
+/**
+ * Params for `postToPanel` (`host-notify`) — the post-activation-safe sibling
+ * of `broadcastToRenderer`. Same shape; relayed off the activation-window
+ * guard so it stays callable from worker timers and subscription callbacks.
+ */
+export interface PostToPanelParams {
+  channel: string;
+  payload: unknown;
+}
+
 /** Params for `invalidateFileDecorations` (`host-notify`). */
 export interface InvalidateFileDecorationsParams {
   scope: string;
@@ -224,6 +244,25 @@ export interface ShowToastParams {
 export interface DispatchParams {
   actionId: string;
   args?: unknown;
+}
+
+/** Params for `fs.readFile` / `fs.readdir` / `fs.stat` (`host-call`). */
+export interface FsPathParams {
+  path: string;
+}
+
+/** Params for `fs.writeFile` (`host-call`). */
+export interface FsWriteFileParams {
+  path: string;
+  contents: string;
+}
+
+/** Params for `git.status` / `git.diff` / `git.add` / `git.commit` (`host-call`). */
+export interface GitOpParams {
+  worktreePath: string;
+  filePath?: string;
+  paths?: string[];
+  message?: string;
 }
 
 /**
