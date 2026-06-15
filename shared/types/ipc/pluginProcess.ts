@@ -5,10 +5,14 @@
  * over the `postToPanel` transport and exposes this read-only snapshot to the
  * renderer (e.g. a process/task dashboard) via `plugin-process:list`.
  *
- * Deliberately NOT part of the public `@daintreehq/plugin-sdk` barrel — these
- * are renderer-IPC observability types, not the plugin-author surface. The
- * plugin-author surface is `PluginProcessApi` / `PluginProcessHandle` in
- * `shared/types/plugin.ts`.
+ * The observability types here (`PluginProcessInfo`, `PluginProcessStatus`,
+ * `PLUGIN_PROCESS_MAX_CONCURRENT`, `PLUGIN_PROCESS_KILL_GRACE_MS`) are
+ * renderer-IPC internals, NOT the plugin-author surface — that lives in
+ * `PluginProcessApi` / `PluginProcessHandle` in `shared/types/plugin.ts`. The
+ * two exceptions are `PluginProcessStreamEvent` and `PLUGIN_PROCESS_STREAM_CHANNEL`:
+ * panel authors subscribe to the process stream via the documented
+ * `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)` pattern, so those two ARE
+ * re-exported from the public `@daintreehq/plugin-sdk` barrel (#10515).
  */
 
 /**
@@ -63,8 +67,14 @@ export const PLUGIN_PROCESS_MAX_CONCURRENT = 8;
  */
 export const PLUGIN_PROCESS_KILL_GRACE_MS = 3_000;
 
-/** Channel name (under the plugin's `postToPanel` namespace) carrying process stream events. */
-export const PLUGIN_PROCESS_STREAM_CHANNEL = "process";
+/**
+ * Channel name (under the plugin's `postToPanel` namespace) carrying process
+ * stream events. `as const` pins the literal `"process"` type through
+ * declaration emit — without it, the re-exported constant widens to `string`
+ * in the composite build's emitted `.d.ts`, which plugin authors depend on for
+ * `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)` channel-key narrowing.
+ */
+export const PLUGIN_PROCESS_STREAM_CHANNEL = "process" as const;
 
 /**
  * Event payloads streamed to a plugin's panels over
