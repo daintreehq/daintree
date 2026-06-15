@@ -627,7 +627,16 @@ export function NewWorktreeDialog({
         useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
         useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
-        if (!snapUseExisting && snapIssue && snapAssignToSelf && snapCurrentUser) {
+        // Skip when the selected issue already lists the current user as an
+        // assignee: the assign call would be a no-op and the resulting Undo
+        // would strip a pre-existing assignment this flow never created.
+        if (
+          !snapUseExisting &&
+          snapIssue &&
+          snapAssignToSelf &&
+          snapCurrentUser &&
+          !snapIssue.assignees.some((a) => a.login === snapCurrentUser)
+        ) {
           try {
             await forgeClient.assignIssue(rootPath, snapIssue.number, snapCurrentUser);
             const assignIssueNumber = snapIssue.number;
@@ -665,7 +674,13 @@ export function NewWorktreeDialog({
                 return changed ? { ...entry, items } : null;
               });
             };
-            patchAssigneeCache(true);
+            // A cache-layer throw must not masquerade as an assignment failure:
+            // the server-side assign already succeeded by this point.
+            try {
+              patchAssigneeCache(true);
+            } catch (cacheErr) {
+              logError("Failed to patch issue cache after self-assign", cacheErr);
+            }
             const undoFiredRef = { current: false };
             const undoOnClick = (): void => {
               if (undoFiredRef.current) return;

@@ -1002,4 +1002,58 @@ describe("NewWorktreeDialog — self-assign cache mutation", () => {
     // Unassign rejected → cache must NOT be reverted.
     expect(cachedIssue().assignees.map((a) => a.login)).toContain("testuser");
   });
+
+  it("patches every cached issue slot, not just one filter/sort view", async () => {
+    const updatedKey = buildCacheKey(ROOT, "issue", "open", "updated");
+    seedIssueCache(makeIssue());
+    setCache(updatedKey, {
+      items: [makeIssue()],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 0,
+    });
+
+    await createWithSelfAssign();
+
+    expect(cachedIssue().assignees.map((a) => a.login)).toContain("testuser");
+    expect((getCache(updatedKey)?.items[0] as Issue).assignees.map((a) => a.login)).toContain(
+      "testuser"
+    );
+  });
+
+  it("does not assign or mutate the cache when self-assign is disabled", async () => {
+    mockAssignWorktreeToSelf = false;
+    seedIssueCache(makeIssue());
+
+    await createWithSelfAssign();
+
+    expect(mockAssignIssue).not.toHaveBeenCalled();
+    expect(cachedIssue().assignees).toHaveLength(0);
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBe(0);
+  });
+
+  it("skips the assign flow when the selected issue already lists the current user", async () => {
+    seedIssueCache(makeIssue());
+
+    renderDialog({
+      initialIssue: makeIssue({
+        assignees: [{ login: "testuser", avatarUrl: undefined, rawData: null }],
+      }),
+    });
+    await advanceTimersGradually(500);
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/fix-thing" } });
+    });
+    await advanceTimersGradually(500);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockAssignIssue).not.toHaveBeenCalled();
+    expect(getGeneration(ISSUE_CACHE_KEY)).toBe(0);
+  });
 });
