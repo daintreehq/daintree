@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, RotateCcw } from "lucide-react";
+import { Eye, EyeOff, FolderOpen, RotateCcw } from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
 import { useProjectStore } from "@/store/projectStore";
@@ -7,10 +7,23 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import type {
   LoadedPluginInfo,
+  PluginPickPathRequest,
+  PluginSecretStorageTier,
   PluginSettingsScope,
   SettingDefinition,
   SettingFieldType,
 } from "@shared/types/plugin";
+
+/** Path-backed field types — rendered as a read-only input plus a Browse button. */
+const PATH_FIELD_TYPES: ReadonlySet<SettingFieldType> = new Set(["path", "directory", "file"]);
+
+/** Per-scope at-rest tier for secret settings, plus which stored secrets are still plaintext. */
+interface SecretTierInfo {
+  tier: PluginSecretStorageTier;
+  plaintext: Set<string>;
+}
+
+const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "plaintext", plaintext: new Set() };
 
 const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
   user: "User",
@@ -54,6 +67,10 @@ interface SettingFieldProps {
   storedValue: unknown;
   /** Whether a secret value is currently stored (secret fields only). */
   secretIsSet: boolean;
+  /** At-rest tier new secret writes use right now, for honest disclosure (#9167). */
+  secretTier: PluginSecretStorageTier;
+  /** Whether the stored secret value is still plaintext (pre-migration / no keychain at write). */
+  secretIsPlaintext: boolean;
   /** Whether this field's scope values have finished loading. */
   loaded: boolean;
 }
@@ -69,11 +86,14 @@ function SettingField({
   projectId,
   storedValue,
   secretIsSet,
+  secretTier,
+  secretIsPlaintext,
   loaded,
 }: SettingFieldProps) {
   const type = effectiveType(def);
   const scope = settingScope(def);
   const isSecret = type === "secret";
+  const isPath = PATH_FIELD_TYPES.has(type);
   const scopeReady = scope === "user" || projectId !== null;
 
   // Draft for text / number / json / enum inputs (string-backed).
@@ -86,6 +106,11 @@ function SettingField({
   // Secret-specific state.
   const [hasStored, setHasStored] = useState(secretIsSet);
   const [revealed, setRevealed] = useState(false);
+  // Set true once a secret is (re)saved while a keychain is available, so the
+  // tier disclosure clears its "still plaintext" nudge without a form reload.
+  const [migratedToKeychain, setMigratedToKeychain] = useState(false);
+  // Path-specific: tracks a `mustExist` path that no longer resolves on disk.
+  const [pathMissing, setPathMissing] = useState(false);
 
   // Initialize from stored value (falling back to the declared default) once the
   // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
@@ -95,6 +120,7 @@ function SettingField({
       setHasStored(secretIsSet);
       setRevealed(false);
       setDraft("");
+      setMigratedToKeychain(false);
       return;
     }
     if (type === "boolean") {
@@ -107,6 +133,33 @@ function SettingField({
     setCommitted(initial);
     setError(null);
   }, [loaded, storedValue, secretIsSet, isSecret, type, def.default]);
+
+  // Existence feedback for `mustExist` path fields: probe whenever the committed
+  // path changes (it may have been moved/deleted since it was picked). A blank
+  // path is treated as present (no override → nothing to flag).
+  useEffect(() => {
+    if (!isPath || def.mustExist !== true) {
+      setPathMissing(false);
+      return;
+    }
+    const target = committed;
+    if (target === "") {
+      setPathMissing(false);
+      return;
+    }
+    let cancelled = false;
+    window.electron.plugin
+      .pathExists(pluginId, target)
+      .then((exists) => {
+        if (!cancelled) setPathMissing(!exists);
+      })
+      .catch(() => {
+        if (!cancelled) setPathMissing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPath, def.mustExist, committed, pluginId]);
 
   // Returns whether the write succeeded so callers can advance their committed
   // state; never throws (the error is surfaced inline) so blur handlers can fire
@@ -233,10 +286,58 @@ function SettingField({
       setHasStored(true);
       setRevealed(false);
       setDraft("");
+      if (secretTier === "keychain") setMigratedToKeychain(true);
+    }
+  };
+
+  const handleBrowse = async () => {
+    const kind: PluginPickPathRequest["kind"] = type === "file" ? "file" : "directory";
+    const request: PluginPickPathRequest = {
+      kind,
+      defaultPath: draft || undefined,
+      ...(kind === "file" && def.extensions && def.extensions.length > 0
+        ? { filters: [{ name: "Allowed files", extensions: def.extensions }] }
+        : {}),
+    };
+    try {
+      const picked = await window.electron.plugin.pickPath(pluginId, request);
+      if (picked === null) return; // Picker dismissed — leave the current value.
+      setDraft(picked);
+      if (await writeValue(picked)) setCommitted(picked);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Couldn't open the file picker"));
+      logError(`Failed to pick path for plugin setting ${pluginId}.${def.id}`, err);
     }
   };
 
   const renderControl = () => {
+    if (isPath) {
+      return (
+        <div className="flex items-center gap-1.5">
+          <input
+            id={fieldId}
+            type="text"
+            value={draft}
+            readOnly
+            disabled={controlsDisabled}
+            aria-describedby={describedBy}
+            placeholder={type === "file" ? "No file selected" : "No folder selected"}
+            className={INPUT_CLASS}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={controlsDisabled}
+            className="shrink-0 gap-1.5"
+            onClick={() => void handleBrowse()}
+          >
+            <FolderOpen />
+            Browse
+          </Button>
+        </div>
+      );
+    }
     if (type === "boolean") {
       return (
         <SettingsSwitch
@@ -390,6 +491,15 @@ function SettingField({
       ) : (
         <>
           {renderControl()}
+          {isSecret && scopeReady && (
+            <p className="text-[11px] text-daintree-text/50">
+              {secretTier === "plaintext"
+                ? "Stored as plaintext — keychain unavailable"
+                : hasStored && secretIsPlaintext && !migratedToKeychain
+                  ? "Stored as plaintext — re-save to move it into the OS keychain"
+                  : "Stored in OS keychain"}
+            </p>
+          )}
           {def.description && (
             <p id={`${fieldId}-desc`} className="text-[11px] text-daintree-text/50">
               {def.description}
@@ -400,6 +510,11 @@ function SettingField({
 
       {!scopeReady && (
         <p className="text-[11px] text-daintree-text/40">Open a project to edit this setting.</p>
+      )}
+      {pathMissing && !error && (
+        <p className="text-[11px] text-status-warning">
+          This {type === "file" ? "file" : "folder"} no longer exists — pick a new one.
+        </p>
       )}
       {error && (
         <p id={`${fieldId}-error`} className="text-[11px] text-status-danger">
@@ -433,6 +548,8 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   const [userSecrets, setUserSecrets] = useState<Set<string>>(new Set());
   const [projectValues, setProjectValues] = useState<Record<string, unknown> | null>(null);
   const [projectSecrets, setProjectSecrets] = useState<Set<string>>(new Set());
+  const [userSecretInfo, setUserSecretInfo] = useState<SecretTierInfo>(EMPTY_SECRET_INFO);
+  const [projectSecretInfo, setProjectSecretInfo] = useState<SecretTierInfo>(EMPTY_SECRET_INFO);
 
   // User-scoped values: load once per plugin.
   useEffect(() => {
@@ -444,6 +561,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
         if (cancelled) return;
         setUserValues(res.values);
         setUserSecrets(new Set(res.secretsSet));
+        setUserSecretInfo({ tier: res.secretTier, plaintext: new Set(res.secretsPlaintext) });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -461,6 +579,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
     if (projectId === null) {
       setProjectValues({});
       setProjectSecrets(new Set());
+      setProjectSecretInfo(EMPTY_SECRET_INFO);
       return;
     }
     let cancelled = false;
@@ -471,6 +590,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
         if (cancelled) return;
         setProjectValues(res.values);
         setProjectSecrets(new Set(res.secretsSet));
+        setProjectSecretInfo({ tier: res.secretTier, plaintext: new Set(res.secretsPlaintext) });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -492,6 +612,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
         const loaded = scope === "user" ? userValues !== null : projectValues !== null;
         const values = scope === "user" ? userValues : projectValues;
         const secrets = scope === "user" ? userSecrets : projectSecrets;
+        const secretInfo = scope === "user" ? userSecretInfo : projectSecretInfo;
         return (
           <SettingField
             // Remount project-scoped fields on project switch so drafts reset.
@@ -501,6 +622,8 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
             projectId={projectId}
             storedValue={values?.[def.id]}
             secretIsSet={secrets.has(def.id)}
+            secretTier={secretInfo.tier}
+            secretIsPlaintext={secretInfo.plaintext.has(def.id)}
             loaded={loaded}
           />
         );

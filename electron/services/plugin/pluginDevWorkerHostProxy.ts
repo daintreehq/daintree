@@ -24,6 +24,11 @@ import type {
   PluginToastOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
+  PluginWorktreeStatus,
+  PluginFsDirEntry,
+  PluginFsStat,
+  PluginGitStatus,
+  PluginGitCommitResult,
 } from "../../../shared/types/plugin.js";
 import type {
   FileDecorationProviderDescriptor,
@@ -315,9 +320,22 @@ export class PluginDevWorkerHostProxy {
         }
         this.notify("broadcastToRenderer", { channel, payload });
       },
+      // Post-activation-safe sibling of broadcastToRenderer: no
+      // assertActivationOpen guard, so dev-worker plugins can stream live data
+      // to their panels from timers and subscription callbacks.
+      postToPanel: (channel, payload) => {
+        if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+          throw new Error(
+            `Plugin "${this.pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+          );
+        }
+        this.notify("postToPanel", { channel, payload });
+      },
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
+      getWorktreeStatus: (path) =>
+        this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path),
       onDidChangeActiveWorktree: (callback) => {
         this.assertActivationOpen("onDidChangeActiveWorktree");
         return this.subscribe("active-worktree", (payload) =>
@@ -406,6 +424,47 @@ export class PluginDevWorkerHostProxy {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),
         error: (message, fields) => this.notify("logger.error", { message, fields }),
+      },
+      process: {
+        // Managed child processes can't run from the dev worker. The
+        // `PluginProcessHandle` returned by spawn exposes SYNCHRONOUS `kill()`
+        // and registers `onExit`/`onCrash` callbacks the host invokes directly
+        // — none of that survives the structured-clone async MessagePort. The
+        // streaming would also fan out from main, not the worker. Mirror the
+        // forge-provider stance: reject honestly in dev mode rather than ship a
+        // half-working proxy. Package + install to exercise host.process.
+        spawn: (_command, _options) => {
+          const message = `[plugin-dev:${this.pluginId}] host.process.spawn is not supported in dev mode — managed processes use synchronous handle methods (kill, onExit/onCrash callbacks) that can't cross the dev worker's async boundary. Package + install the plugin to test host.process.`;
+          console.warn(message);
+          return Promise.reject(new Error(message));
+        },
+      },
+      // host.fs request/response methods are fully async, so they relay over the
+      // port to the real (contained, capability-gated) host like settings/get.
+      // `watch` is the exception — it returns a disposer and fires a callback
+      // back, a subscription whose teardown semantics don't survive a whole-
+      // worker reload cleanly; reject it honestly in dev mode (mirrors process).
+      fs: {
+        readFile: (filePath) => this.call<string>("fs.readFile", { path: filePath }),
+        writeFile: (filePath, contents) =>
+          this.call<void>("fs.writeFile", { path: filePath, contents }),
+        readdir: (dirPath) => this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }),
+        stat: (targetPath) => this.call<PluginFsStat>("fs.stat", { path: targetPath }),
+        watch: (_paths, _callback) => {
+          const message = `[plugin-dev:${this.pluginId}] host.fs.watch is not supported in dev mode — the watcher subscription's disposer and change callback can't survive a whole-worker reload. Package + install the plugin to test host.fs.watch.`;
+          console.warn(message);
+          return Promise.reject(new Error(message));
+        },
+      },
+      git: {
+        status: (worktreePath) => this.call<PluginGitStatus>("git.status", { worktreePath }),
+        diff: (worktreePath, filePath) => this.call<string>("git.diff", { worktreePath, filePath }),
+        add: (worktreePath, paths) => this.call<void>("git.add", { worktreePath, paths }),
+        commit: (worktreePath, options) =>
+          this.call<PluginGitCommitResult>("git.commit", {
+            worktreePath,
+            message: options?.message,
+          }),
       },
       settings: {
         get: <T = unknown>(key: string, scope: PluginSettingsScope = "user") =>

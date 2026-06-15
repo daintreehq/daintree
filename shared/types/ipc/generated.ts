@@ -695,6 +695,10 @@ export interface GeneratedIpcInvokeMap {
     args: [config: import("./pluginMcp.js").PluginMcpConfig];
     result: import("./pluginMcp.js").PluginMcpConfig;
   };
+  "plugin-process:list": {
+    args: [pluginId?: string | undefined];
+    result: import("./pluginProcess.js").PluginProcessInfo[];
+  };
   "plugin:actions-get": {
     args: [];
     result: import("../plugin.js").PluginActionDescriptor[];
@@ -775,6 +779,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../../config/panelKindRegistry.js").PanelKindConfig[];
   };
+  "plugin:path-exists": {
+    args: [pluginId: string, targetPath: string];
+    result: boolean;
+  };
+  "plugin:pick-path": {
+    args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
+    result: string | null;
+  };
   "plugin:set-audit-enabled": {
     args: [enabled: boolean];
     result: import("./pluginAudit.js").PluginAuditConfig;
@@ -834,6 +846,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];
     result: void;
+  };
+  "plugin:worktree-status-get": {
+    args: [path: string];
+    result: import("../plugin.js").PluginWorktreeStatus | null;
   };
   "portal:close-tab": {
     args: [payload: import("../portal.js").PortalCloseTabPayload];

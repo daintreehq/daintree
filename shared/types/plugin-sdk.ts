@@ -13,7 +13,8 @@
  *
  * Entry points:
  *   - `@daintreehq/plugin-sdk`        — this module
- *   - `@daintreehq/plugin-sdk/react`  — reserved for F15/F36 (see plugin-sdk-react.ts)
+ *   - `@daintreehq/plugin-sdk/react`  — the renderer hooks useHostChannel /
+ *     usePluginEvent (see plugin-sdk-react.ts)
  */
 
 // ── Manifest authoring ──────────────────────────────────────────────
@@ -54,6 +55,17 @@ export type {
   ActionHandler,
   PluginToastOptions,
   PluginLogger,
+  PluginProcessApi,
+  PluginProcessHandle,
+  PluginProcessSpawnOptions,
+  PluginFsApi,
+  PluginFsDirEntry,
+  PluginFsStat,
+  PluginGitApi,
+  PluginGitStatus,
+  PluginGitStatusFile,
+  PluginGitCommitOptions,
+  PluginGitCommitResult,
 } from "./plugin.js";
 
 // ── Settings (host.settings) ────────────────────────────────────────
@@ -81,6 +93,9 @@ export type {
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
+  PluginWorktreeStatus,
+  PluginWorktreeStatusFile,
+  PluginWorktreeFileState,
 } from "./plugin.js";
 
 // ── Forge provider contract ─────────────────────────────────────────
@@ -102,3 +117,15 @@ export type {
 // ── Forge types appearing in worktree projections ───────────────────
 
 export type { NormalizedPRState, ResourceRef, CIStatus } from "./forge.js";
+
+// ── Action dispatch result (host.dispatch return type) ──────────────
+// host.dispatch() resolves to ActionDispatchResult, so plugin authors must be
+// able to name it and narrow on its error codes from the public SDK.
+
+export type {
+  ActionDispatchResult,
+  ActionDispatchSuccess,
+  ActionDispatchError,
+  ActionError,
+  ActionErrorCode,
+} from "./actions.js";

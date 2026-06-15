@@ -69,4 +69,31 @@ describe("PluginContextMenuSection", () => {
     fireEvent.click(screen.getByText("Do A"));
     expect(dispatchMock).toHaveBeenCalledWith("acme.a", undefined, { source: "user" });
   });
+
+  it("dispatches with the surface's dispatchArgs instead of undefined", () => {
+    const args = { path: "/repo/src/index.ts", worktreePath: "/repo", status: "modified" };
+    render(
+      <MenuActionSourceContext.Provider value="context-menu">
+        <PluginContextMenuSection
+          items={[entry("acme", "Open", "file.openDiff")]}
+          dispatchArgs={args}
+        />
+      </MenuActionSourceContext.Provider>
+    );
+    fireEvent.click(screen.getByText("Open"));
+    expect(dispatchMock).toHaveBeenCalledWith("file.openDiff", args, { source: "context-menu" });
+    // The dispatched args carry the clicked subject, not `undefined`.
+    expect(dispatchMock.mock.calls[0]![1]).not.toBeUndefined();
+  });
+
+  it("omits the leading separator when leadingSeparator is false", () => {
+    render(
+      <PluginContextMenuSection
+        items={[entry("acme", "Open", "file.openDiff")]}
+        leadingSeparator={false}
+      />
+    );
+    expect(screen.queryByTestId("separator")).toBeNull();
+    expect(screen.getByText("Open")).toBeTruthy();
+  });
 });

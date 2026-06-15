@@ -395,6 +395,9 @@ export interface GeneratedElectronAPI {
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
+    getWorktreeStatus(
+      ...args: IpcInvokeMap["plugin:worktree-status-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:worktree-status-get"]["result"]>;
     install(
       ...args: IpcInvokeMap["plugin:install"]["args"]
     ): Promise<IpcInvokeMap["plugin:install"]["result"]>;
@@ -413,6 +416,12 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["plugin:list"]["args"]
     ): Promise<IpcInvokeMap["plugin:list"]["result"]>;
+    pathExists(
+      ...args: IpcInvokeMap["plugin:path-exists"]["args"]
+    ): Promise<IpcInvokeMap["plugin:path-exists"]["result"]>;
+    pickPath(
+      ...args: IpcInvokeMap["plugin:pick-path"]["args"]
+    ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
@@ -472,6 +481,11 @@ export interface GeneratedElectronAPI {
     setConfig(
       ...args: IpcInvokeMap["plugin-mcp:set-config"]["args"]
     ): Promise<IpcInvokeMap["plugin-mcp:set-config"]["result"]>;
+  };
+  pluginProcess: {
+    list(
+      ...args: IpcInvokeMap["plugin-process:list"]["args"]
+    ): Promise<IpcInvokeMap["plugin-process:list"]["result"]>;
   };
   portal: {
     closeTab(

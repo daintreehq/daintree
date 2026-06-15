@@ -17,6 +17,7 @@ export const BUILT_IN_ACTION_IDS = [
   "panel.list",
   "panel.focus",
   "panel.focusIndex",
+  "panel.openPluginPanel",
   "panel.palette",
   "panel.gridLayout.setStrategy",
   "panel.gridLayout.setValue",
@@ -131,6 +132,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- fileActions --
   "files.search",
   "file.view",
+  "file.openDiff",
   "file.openInEditor",
   "file.openImageViewer",
 

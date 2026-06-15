@@ -120,4 +120,36 @@ describe("fileActions adversarial", () => {
 
     await expect(run("file.openInEditor", { path: "/a/b.ts" })).rejects.toThrow("editor not found");
   });
+
+  it("file.openDiff dispatches view-diff with the supplied worktreePath and status", async () => {
+    const run = setupActions();
+    await run("file.openDiff", {
+      path: "/repo/src/x.ts",
+      worktreePath: "/repo",
+      status: "added",
+    });
+
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
+      type: string;
+      detail: { path: string; worktreePath?: string; status?: string };
+    };
+    expect(event.type).toBe("daintree:view-diff");
+    expect(event.detail).toEqual({
+      path: "/repo/src/x.ts",
+      worktreePath: "/repo",
+      status: "added",
+    });
+  });
+
+  it("file.openDiff falls back to the current project path and modified status", async () => {
+    const run = setupActions();
+    await run("file.openDiff", { path: "/repo/src/y.ts" });
+
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
+      detail: { path: string; worktreePath?: string; status?: string };
+    };
+    // worktreePath resolves from currentProject.path (/repo); status defaults.
+    expect(event.detail.worktreePath).toBe("/repo");
+    expect(event.detail.status).toBe("modified");
+  });
 });

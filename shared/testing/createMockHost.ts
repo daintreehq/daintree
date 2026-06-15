@@ -23,10 +23,13 @@ import type {
   PluginChannelSchema,
   PluginHostApi,
   PluginIpcHandler,
+  PluginProcessHandle,
+  PluginProcessSpawnOptions,
   PluginSettingsScope,
   PluginToastOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
+  PluginGitCommitResult,
   SettingsApi,
 } from "../types/plugin.js";
 
@@ -45,10 +48,22 @@ export interface BroadcastRecord {
   payload: unknown;
 }
 
+/** Captured `host.postToPanel(channel, payload)` calls — the post-activation push path. */
+export interface PostToPanelRecord {
+  channel: string;
+  payload: unknown;
+}
+
 export interface ShownToastRecord {
   message: string;
   type: NotificationType | undefined;
   durationMs: number | undefined;
+}
+
+/** Captured `host.process.spawn(command, options)` calls. */
+export interface SpawnRecord {
+  command: string;
+  options: PluginProcessSpawnOptions | undefined;
 }
 
 export interface DispatchedActionRecord {
@@ -71,15 +86,31 @@ export interface InvalidationRecord {
   paths: string[] | undefined;
 }
 
+/** Captured `host.fs.writeFile(path, contents)` calls. */
+export interface FsWriteRecord {
+  path: string;
+  contents: string;
+}
+
+/** Captured `host.git.commit(worktreePath, options)` calls. */
+export interface GitCommitRecord {
+  worktreePath: string;
+  message: string;
+}
+
 export interface MockHostState {
   readonly registeredActions: ReadonlyArray<RegisteredActionRecord>;
   readonly registeredHandlers: ReadonlyArray<RegisteredHandlerRecord>;
   readonly broadcastCalls: ReadonlyArray<BroadcastRecord>;
+  readonly postToPanelCalls: ReadonlyArray<PostToPanelRecord>;
   readonly shownToasts: ReadonlyArray<ShownToastRecord>;
   readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
+  readonly spawnCalls: ReadonlyArray<SpawnRecord>;
+  readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
+  readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
 
   /**
    * Replace the active worktree and notify every `onDidChangeActiveWorktree`
@@ -132,11 +163,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredActions: RegisteredActionRecord[] = [];
   const registeredHandlers: RegisteredHandlerRecord[] = [];
   const broadcastCalls: BroadcastRecord[] = [];
+  const postToPanelCalls: PostToPanelRecord[] = [];
   const shownToasts: ShownToastRecord[] = [];
   const dispatchedActions: DispatchedActionRecord[] = [];
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
+  const spawnCalls: SpawnRecord[] = [];
+  const fsFiles = new Map<string, string>();
+  const fsWriteCalls: FsWriteRecord[] = [];
+  const gitCommitCalls: GitCommitRecord[] = [];
 
   const activeWorktreeSubs = new Set<(snapshot: PluginWorktreeSnapshot | null) => void>();
   const worktreesSubs = new Set<(snapshots: PluginWorktreeSnapshot[]) => void>();
@@ -296,11 +332,20 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     broadcastToRenderer(channel, payload) {
       broadcastCalls.push({ channel, payload });
     },
+    postToPanel(channel, payload) {
+      postToPanelCalls.push({ channel, payload });
+    },
     async getActiveWorktree() {
       return activeWorktree;
     },
     async getWorktrees() {
       return worktrees;
+    },
+    async getWorktreeStatus(path) {
+      const match =
+        worktrees.find((w) => w.path === path) ??
+        (activeWorktree?.path === path ? activeWorktree : null);
+      return match?.status ?? null;
     },
     onDidChangeActiveWorktree(callback) {
       activeWorktreeSubs.add(callback);
@@ -443,6 +488,76 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         };
       }
     },
+    process: {
+      async spawn(command, options): Promise<PluginProcessHandle> {
+        spawnCalls.push({ command, options });
+        // A no-op handle: the mock records the call without spawning anything.
+        // Lifecycle callbacks never fire (no real process), and kill/restart
+        // are inert — tests that exercise real process behavior use
+        // PluginProcessManager directly with an injected fake spawner.
+        return {
+          id: `mock-process-${spawnCalls.length}`,
+          kill: () => {},
+          restart: async () => {},
+          onExit: () => () => {},
+          onCrash: () => () => {},
+        };
+      },
+    },
+    // In-memory fs mock: writes land in `fsFiles` and are recorded; reads return
+    // a previously-written value or reject ENOENT. No containment is modeled
+    // (containment lives in pluginFsContainment and is unit-tested directly) —
+    // this mock is for exercising a plugin's activate()/handlers, not the guard.
+    fs: {
+      async readFile(filePath) {
+        const v = fsFiles.get(filePath);
+        if (v === undefined) {
+          throw new Error(`ENOENT: mock fs has no file "${filePath}"`);
+        }
+        return v;
+      },
+      async writeFile(filePath, contents) {
+        fsFiles.set(filePath, contents);
+        fsWriteCalls.push({ path: filePath, contents });
+      },
+      async readdir() {
+        return [];
+      },
+      async stat(targetPath) {
+        return {
+          isDirectory: false,
+          isFile: fsFiles.has(targetPath),
+          isSymbolicLink: false,
+          size: fsFiles.get(targetPath)?.length ?? 0,
+          mtimeMs: 0,
+        };
+      },
+      async watch() {
+        return () => {};
+      },
+    },
+    // In-memory git mock. `commit` mirrors the host's #7880 guard — an empty
+    // message rejects — so a plugin tested against the mock sees the same
+    // no-silent-fallback contract as production.
+    git: {
+      async status(worktreePath) {
+        return { worktreePath, files: [], changedFileCount: 0 };
+      },
+      async diff() {
+        return "";
+      },
+      async add() {},
+      async commit(worktreePath, options): Promise<PluginGitCommitResult> {
+        const message = typeof options?.message === "string" ? options.message : "";
+        if (message.trim().length === 0) {
+          throw new Error(
+            `COMMIT_MESSAGE_REQUIRED: mock git.commit requires an explicit non-empty message`
+          );
+        }
+        gitCommitCalls.push({ worktreePath, message });
+        return { commit: `mock-${gitCommitCalls.length}`, message, preview: "" };
+      },
+    },
     settings,
     logger: {
       info: () => {},
@@ -453,11 +568,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredActions,
     registeredHandlers,
     broadcastCalls,
+    postToPanelCalls,
     shownToasts,
     dispatchedActions,
     registeredForgeProviders,
     registeredFileDecorationProviders,
     invalidationCalls,
+    spawnCalls,
+    fsWriteCalls,
+    gitCommitCalls,
 
     simulateActiveWorktreeChange(snapshot) {
       activeWorktree = snapshot;

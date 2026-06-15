@@ -23,6 +23,7 @@ import type {
   InvalidateFileDecorationsParams,
   LoggerParams,
   PluginWorkerToHostMessage,
+  PostToPanelParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
@@ -30,6 +31,9 @@ import type {
   SettingsSetParams,
   ShowToastParams,
   UnregisterFileDecorationProviderParams,
+  FsPathParams,
+  FsWriteFileParams,
+  GitOpParams,
 } from "../../../shared/types/pluginDevWorker.js";
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 
@@ -255,6 +259,8 @@ export class PluginDevWorkerMainBridge {
         return this.host.getActiveWorktree();
       case "getWorktrees":
         return this.host.getWorktrees();
+      case "getWorktreeStatus":
+        return this.host.getWorktreeStatus(params as string);
       case "showToast": {
         const p = params as ShowToastParams;
         // `type` is validated against the NotificationType enum by the host's
@@ -278,6 +284,32 @@ export class PluginDevWorkerMainBridge {
         const p = params as SettingsSetParams;
         await this.host.settings.set(p.key, p.value, p.scope);
         return undefined;
+      }
+      case "fs.readFile":
+        return this.host.fs.readFile((params as FsPathParams).path);
+      case "fs.writeFile": {
+        const p = params as FsWriteFileParams;
+        await this.host.fs.writeFile(p.path, p.contents);
+        return undefined;
+      }
+      case "fs.readdir":
+        return this.host.fs.readdir((params as FsPathParams).path);
+      case "fs.stat":
+        return this.host.fs.stat((params as FsPathParams).path);
+      case "git.status":
+        return this.host.git.status((params as GitOpParams).worktreePath);
+      case "git.diff": {
+        const p = params as GitOpParams;
+        return this.host.git.diff(p.worktreePath, p.filePath);
+      }
+      case "git.add": {
+        const p = params as GitOpParams;
+        await this.host.git.add(p.worktreePath, p.paths);
+        return undefined;
+      }
+      case "git.commit": {
+        const p = params as GitOpParams;
+        return this.host.git.commit(p.worktreePath, { message: p.message ?? "" });
       }
       default:
         throw new Error(`Unknown host-call method "${method}"`);
@@ -335,6 +367,11 @@ export class PluginDevWorkerMainBridge {
       case "broadcastToRenderer": {
         const p = params as BroadcastToRendererParams;
         this.host.broadcastToRenderer(p.channel, p.payload);
+        return;
+      }
+      case "postToPanel": {
+        const p = params as PostToPanelParams;
+        this.host.postToPanel(p.channel, p.payload);
         return;
       }
       case "invalidateFileDecorations": {

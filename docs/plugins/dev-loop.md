@@ -66,6 +66,8 @@ Once shipped, `dev` will start a hot-reload loop:
 
 On every successful Vite rebuild Daintree will call `unloadPlugin({pluginId})`, re-import the plugin entry with a cache-busting query parameter, and call `activate` again. Dev plugins will carry a "DEV" badge on the plugin entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
+A few host APIs whose handles or subscriptions can't survive a whole-worker reload are deliberately unavailable in hot-reload dev mode and reject with a "not supported in dev mode" message: `host.process.spawn` (its `kill()` / `onExit` / `onCrash` callbacks are synchronous and can't cross the async MessagePort) and `host.fs.watch` (the watcher disposer can't survive a worker swap). Their async request/response siblings — `host.fs.readFile`/`writeFile`/`readdir`/`stat`, `host.git.*`, `host.postToPanel`, `host.getWorktreeStatus` — relay over the MessagePort and work in dev. To exercise managed processes or filesystem watching, package and install the plugin (the manual loop above), which runs it in-process. This mirrors the forge-provider precedent.
+
 ### `daintree-plugin validate`
 
 Runs the manifest through Daintree's Zod schema and reports any errors.

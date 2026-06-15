@@ -1,5 +1,5 @@
 import fs from "fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
@@ -33,6 +33,13 @@ import {
   PluginToastOptionsSchema,
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
+import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import { resolveContainedPath } from "./plugin/pluginFsContainment.js";
+import { PluginHostGit, type HostGitFactory } from "./plugin/pluginHostGit.js";
+import {
+  PLUGIN_PROCESS_STREAM_CHANNEL,
+  type PluginProcessInfo,
+} from "../../shared/types/ipc/pluginProcess.js";
 import { z } from "zod";
 import type {
   PluginManifest,
@@ -52,6 +59,17 @@ import type {
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginWorktreeStatus,
+  PluginProcessApi,
+  PluginProcessHandle,
+  PluginProcessSpawnOptions,
+  PluginFsApi,
+  PluginFsDirEntry,
+  PluginFsStat,
+  PluginGitApi,
+  PluginGitStatus,
+  PluginGitCommitOptions,
+  PluginGitCommitResult,
   ViewContribution,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
@@ -64,7 +82,10 @@ import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import { PluginInvokeOwnershipError } from "./plugin/PluginInvokeErrors.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
-import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
+import {
+  toPluginWorktreeSnapshot,
+  toPluginWorktreeStatus,
+} from "../../shared/utils/pluginWorktreeSnapshot.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -539,6 +560,28 @@ export class PluginService {
    */
   private readonly enableTransitions = new Map<string, Promise<void>>();
   private records = new PluginInstalledRecordsStore();
+  /**
+   * Manager for child processes spawned via `host.process.spawn` (#9234).
+   * Lazily constructed so the `node:child_process` spawn path only wires up
+   * when a plugin actually uses it. The stream sink fans each process's
+   * stdout/stderr/exit out to the owning plugin's panels over the same
+   * `postToPanel` transport (`plugin:{pluginId}:process`); the auditor records
+   * each spawn in the plugin audit trail.
+   */
+  private processManager: PluginProcessManager | null = null;
+  /**
+   * Active `host.fs.watch` watchers keyed by pluginId — each entry is a disposer
+   * that closes the underlying `fs.watch` handle. Torn down on unload so a
+   * disable/revoke can't strand a file watcher (#7880 / fs-API containment unit).
+   */
+  private pluginFsWatchers = new Map<string, Set<() => void>>();
+  /**
+   * Test seam: override the git client factory `host.git` uses so commit/add/
+   * diff/status can be exercised against a fake simple-git without forking a
+   * real repo. Production leaves it `undefined` → {@link PluginHostGit} defaults
+   * to `createHardenedGit`.
+   */
+  private hostGitFactory: HostGitFactory | undefined = undefined;
   /**
    * Live dev-mode hot-reload workers, keyed by pluginId (#9304). Each holds the
    * forked `utilityProcess` lifecycle, the message bridge to the real host, and
@@ -1768,6 +1811,12 @@ export class PluginService {
     // the live instance so a stale host (post-unload, or after a same-id
     // reload) can't write into the current session's log buffer.
     const boundPlugin = this.plugins.get(pluginId);
+    // Liveness for the non-revoke-guarded runtime methods: the plugin must still
+    // be loaded AND be the same instance this host was bound to. Identity (not
+    // just id membership) so a stale timer from a pre-reload instance can't emit
+    // into the current same-id instance's panels or read its worktrees.
+    const isBound = (): boolean =>
+      boundPlugin !== undefined && this.plugins.get(pluginId) === boundPlugin;
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
@@ -1869,14 +1918,42 @@ export class PluginService {
         }
         broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
       },
+      // The post-activation-safe sibling of broadcastToRenderer: same
+      // `plugin:{pluginId}:{channel}` transport, but NOT revoke-guarded — it is
+      // called from the plugin's own timers, polls, and subscription callbacks
+      // long after activate() resolves, so a plugin can stream live data into
+      // its panels without the renderer degrading to invoke() polling. Liveness
+      // is plugin membership (mirrors invalidateFileDecorations/showToast): once
+      // the plugin unloads this silently no-ops.
+      postToPanel: (channel, payload) => {
+        if (!isBound()) return;
+        if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+          throw new Error(
+            `Plugin "${pluginId}" postToPanel: channel must be a non-empty string without colons: ${String(channel)}`
+          );
+        }
+        broadcastToRenderer(`plugin:${pluginId}:${channel}`, payload);
+      },
       getActiveWorktree: async () => {
+        if (!isBound()) return null;
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return null;
         const active = snapshots.find((s) => s.isCurrent === true);
         return active ? toPluginWorktreeSnapshot(active) : null;
       },
       getWorktrees: async () => {
+        if (!isBound()) return [];
         const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return [];
         return snapshots.map(toPluginWorktreeSnapshot);
+      },
+      getWorktreeStatus: async (path) => {
+        if (!isBound()) return null;
+        if (typeof path !== "string" || path.length === 0) return null;
+        const snapshots = await this.fetchAllWorktreeSnapshots();
+        if (!isBound()) return null;
+        const match = snapshots.find((s) => s.path === path);
+        return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
       },
       onDidChangeActiveWorktree: (callback) => {
         if (revoked) {
@@ -2180,6 +2257,21 @@ export class PluginService {
           if (boundPlugin) this.recordPluginLog(boundPlugin, pluginId, "error", message, fields);
         },
       },
+      // Managed child-process surface (#9234). NOT revoke-guarded — a process
+      // orchestrator spawns/respawns from post-activation timers and callbacks.
+      // `spawn` is the first runtime enforcement of a scope capability: it
+      // rejects unless the plugin declared `shell:exec` (mirrors the channel
+      // capability gate at the dispatch boundary). Liveness is plugin membership
+      // — once the plugin unloads `spawn` rejects and outstanding processes are
+      // torn down by `killAll` in unloadPlugin.
+      process: this.buildProcessApi(pluginId),
+      // Host-mediated, scope-contained filesystem + git surfaces (fs-API
+      // containment unit). NOT revoke-guarded — plugins read/write from
+      // post-activation timers and callbacks. Every path argument is realpath-
+      // contained to the declared scopes.fs.allowedPaths and capability-gated;
+      // this is the runtime enforcement of allowedPaths (formerly advisory).
+      fs: this.buildFsApi(pluginId),
+      git: this.buildGitApi(pluginId),
       // NOT revoke-guarded: plugins read/write settings throughout their
       // lifetime (IPC handlers, timers), long after activate() resolves. The
       // store is the source of truth, so a late call is harmless.
@@ -2193,7 +2285,9 @@ export class PluginService {
           // Project scope with no active project: read resolves to undefined
           // rather than throwing, matching the "unset key" return.
           if (!filePath) return undefined;
-          return this.settings.getOrCreateSettingsStore(pluginId, scope, filePath).get<T>(key);
+          return this.settings
+            .getOrCreateSettingsStore(pluginId, scope, filePath)
+            .get<T>(key, { secret: this.settings.isSecretKey(pluginId, key) });
         },
         set: async <T = unknown>(
           key: string,
@@ -2215,7 +2309,9 @@ export class PluginService {
             );
           }
           const store = this.settings.getOrCreateSettingsStore(pluginId, scope, filePath);
-          const changed = await store.set(key, value);
+          const changed = await store.set(key, value, {
+            secret: this.settings.isSecretKey(pluginId, key),
+          });
           if (changed) this.settings.notifySettingsSubscribers(pluginId, scope, key, value);
         },
         onDidChange: <T = unknown>(
@@ -2268,6 +2364,411 @@ export class PluginService {
     };
   }
 
+  /**
+   * Lazily construct the managed-process manager, wiring its stream sink to the
+   * plugin's `postToPanel` transport and its audit hook to the plugin audit
+   * trail. Single instance per service so the per-plugin concurrency cap and
+   * the unload teardown see every spawned process.
+   */
+  private getProcessManager(): PluginProcessManager {
+    if (!this.processManager) {
+      this.processManager = new PluginProcessManager({
+        streamSink: (pluginId, event) => {
+          // Membership-gated like postToPanel: a late stream emit after the
+          // plugin unloads is dropped rather than broadcast.
+          if (!this.plugins.has(pluginId)) return;
+          broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, event);
+        },
+        auditor: ({ pluginId, command, args, processId }) => {
+          // Surface the spawn in the audit trail so process execution is
+          // observable. Best-effort — an audit failure must never block a spawn.
+          safeAppendAudit({
+            pluginId,
+            actionId: `process.spawn:${command}`,
+            recordType: "ipc-invoke",
+            channel: "plugin:process-spawn",
+            result: "success",
+            errorMessage: "",
+            argsHash: safeArgsHash([{ command, args, processId }]),
+            durationMs: 0,
+          });
+        },
+      });
+    }
+    return this.processManager;
+  }
+
+  /** Read-only process snapshot for the `plugin-process:list` IPC, optionally scoped to one plugin. */
+  listManagedProcesses(pluginId?: string): PluginProcessInfo[] {
+    if (!this.processManager) return [];
+    return this.processManager.list(pluginId);
+  }
+
+  /**
+   * Test seam: inject a {@link PluginProcessManager} wired to a controllable
+   * fake spawner so host-level spawn/unload behavior can be exercised without
+   * forking a real `node:child_process`. Production never calls this.
+   */
+  _setProcessManagerForTests(manager: PluginProcessManager): void {
+    this.processManager = manager;
+  }
+
+  /**
+   * Test-only seams for the host-mediated fs/git surface: register a fake
+   * loaded plugin (capabilities + scopes) and build its host so `host.fs` /
+   * `host.git` containment + gating can be exercised without a real on-disk
+   * plugin or a forked git. Production never calls these.
+   */
+  _setHostGitFactoryForTests(factory: HostGitFactory): void {
+    this.hostGitFactory = factory;
+  }
+
+  _registerFakePluginForTests(plugin: LoadedPlugin): void {
+    this.plugins.set(plugin.manifest.name, plugin);
+  }
+
+  _unregisterFakePluginForTests(pluginId: string): void {
+    this.plugins.delete(pluginId);
+  }
+
+  _createHostForTests(pluginId: string): PluginHostApi {
+    return this.createHost(pluginId).host;
+  }
+
+  /**
+   * Build the `host.process` surface for one plugin. `spawn` is gated on the
+   * declared `shell:exec` capability — the first runtime enforcement of a scope
+   * capability, mirroring how the typed-channel `requires` gate reads
+   * `manifest.capabilities`. A plugin without it is rejected with a
+   * `PERMISSION_REQUIRED:` prefix (the same prefix `useHostChannel` already
+   * discriminates on).
+   */
+  private buildProcessApi(pluginId: string): PluginProcessApi {
+    const spawn = async (
+      command: string,
+      options?: PluginProcessSpawnOptions
+    ): Promise<PluginProcessHandle> => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+      const declared = new Set<BuiltInPluginCapability>(
+        this.plugins.get(pluginId)?.manifest.capabilities ?? []
+      );
+      if (!declared.has("shell:exec")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" process.spawn requires the "shell:exec" capability, which is not declared in manifest.capabilities`
+        );
+      }
+      if (typeof command !== "string" || command.length === 0) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: command must be a non-empty string`);
+      }
+      const args = Array.isArray(options?.args)
+        ? options.args.filter((a): a is string => typeof a === "string")
+        : [];
+      const env =
+        options?.env && typeof options.env === "object"
+          ? Object.fromEntries(Object.entries(options.env).filter(([, v]) => typeof v === "string"))
+          : {};
+      // Default cwd to the active worktree so a relative `command`/argv resolves
+      // against the project the user is in, then fall back to the host cwd.
+      let cwd =
+        typeof options?.cwd === "string" && options.cwd.length > 0 ? options.cwd : undefined;
+      if (cwd === undefined) {
+        const active = await this.fetchAllWorktreeSnapshots();
+        cwd = active.find((s) => s.isCurrent === true)?.path;
+      }
+      // Re-check membership after the async cwd resolution so a racing unload
+      // doesn't spawn into a disposed plugin.
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
+      }
+
+      const handle = this.getProcessManager().spawn(pluginId, { command, args, cwd, env });
+      return {
+        get id() {
+          return handle.id;
+        },
+        // Gate lifecycle control on membership so a stale handle retained by a
+        // leaked timer can't kill or respawn a process after the plugin unloads
+        // (killManagedProcesses already tore the live children down on unload).
+        kill: () => {
+          if (!this.plugins.has(pluginId)) return;
+          handle.kill();
+        },
+        restart: () => {
+          if (!this.plugins.has(pluginId)) return Promise.resolve();
+          return handle.restart();
+        },
+        onExit: (cb) => handle.onExit(cb),
+        onCrash: (cb) => handle.onCrash(cb),
+      };
+    };
+    return { spawn };
+  }
+
+  /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
+  private declaredCapabilities(pluginId: string): Set<BuiltInPluginCapability> {
+    return new Set<BuiltInPluginCapability>(
+      this.plugins.get(pluginId)?.manifest.capabilities ?? []
+    );
+  }
+
+  /** The plugin's declared `scopes.fs.allowedPaths` (empty when none / unloaded). */
+  private declaredAllowedPaths(pluginId: string): readonly string[] {
+    return this.plugins.get(pluginId)?.manifest.scopes?.fs?.allowedPaths ?? [];
+  }
+
+  /**
+   * Build the host-mediated `host.fs` surface for one plugin. Every path
+   * argument is realpath-contained to the declared `scopes.fs.allowedPaths`
+   * (traversal/symlink-escape rejected), and reads/writes are capability-gated
+   * (`fs:*-read` / `fs:*-write`). This is the first runtime enforcement of
+   * `scopes.fs.allowedPaths` — formerly advisory-only. Writes are audited.
+   */
+  private buildFsApi(pluginId: string): PluginFsApi {
+    const requireLoaded = (op: string): void => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" fs.${op}: plugin is no longer loaded`
+        );
+      }
+    };
+    const requireReadCap = (op: string): void => {
+      const caps = this.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-read") && !caps.has("fs:user-data-read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires "fs:project-read" or "fs:user-data-read", which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    const requireWriteCap = (op: string): void => {
+      const caps = this.declaredCapabilities(pluginId);
+      if (!caps.has("fs:project-write") && !caps.has("fs:user-data-write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" fs.${op} requires "fs:project-write" or "fs:user-data-write", which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    const contain = (targetPath: string): Promise<string> =>
+      resolveContainedPath(pluginId, targetPath, this.declaredAllowedPaths(pluginId));
+
+    return {
+      readFile: async (filePath) => {
+        requireLoaded("readFile");
+        requireReadCap("readFile");
+        const resolved = await contain(filePath);
+        requireLoaded("readFile");
+        // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
+        // not the size-limited files.read preview path.
+        return fs.readFile(resolved, "utf-8");
+      },
+      writeFile: async (filePath, contents) => {
+        requireLoaded("writeFile");
+        requireWriteCap("writeFile");
+        if (typeof contents !== "string") {
+          throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
+        }
+        const resolved = await contain(filePath);
+        requireLoaded("writeFile");
+        await fs.writeFile(resolved, contents, "utf-8");
+        // Audit every write so host-mediated filesystem mutation is observable.
+        safeAppendAudit({
+          pluginId,
+          actionId: `fs.writeFile:${resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:fs-write",
+          result: "success",
+          errorMessage: "",
+          argsHash: safeArgsHash([{ path: resolved, bytes: Buffer.byteLength(contents) }]),
+          durationMs: 0,
+        });
+      },
+      readdir: async (dirPath) => {
+        requireLoaded("readdir");
+        requireReadCap("readdir");
+        const resolved = await contain(dirPath);
+        requireLoaded("readdir");
+        const entries = await fs.readdir(resolved, { withFileTypes: true });
+        return entries.map(
+          (e): PluginFsDirEntry => ({
+            name: e.name,
+            isDirectory: e.isDirectory(),
+            isFile: e.isFile(),
+            isSymbolicLink: e.isSymbolicLink(),
+          })
+        );
+      },
+      stat: async (targetPath) => {
+        requireLoaded("stat");
+        requireReadCap("stat");
+        const resolved = await contain(targetPath);
+        requireLoaded("stat");
+        const s = await fs.stat(resolved);
+        return {
+          isDirectory: s.isDirectory(),
+          isFile: s.isFile(),
+          isSymbolicLink: s.isSymbolicLink(),
+          size: s.size,
+          mtimeMs: s.mtimeMs,
+        } satisfies PluginFsStat;
+      },
+      watch: async (paths, callback) => {
+        requireLoaded("watch");
+        requireReadCap("watch");
+        if (typeof callback !== "function") {
+          throw new Error(`Plugin "${pluginId}" fs.watch: callback must be a function`);
+        }
+        const targets = Array.isArray(paths) ? paths : [];
+        if (targets.length === 0) {
+          throw new Error(`Plugin "${pluginId}" fs.watch: paths must be a non-empty array`);
+        }
+        // Contain every path up front so an out-of-scope watch target rejects
+        // before any watcher is created.
+        const resolvedTargets = await Promise.all(targets.map((p) => contain(p)));
+        requireLoaded("watch");
+
+        const watchers: FSWatcher[] = [];
+        let disposed = false;
+        const dispose = (): void => {
+          if (disposed) return;
+          disposed = true;
+          for (const w of watchers) {
+            try {
+              w.close();
+            } catch {
+              // best-effort
+            }
+          }
+          this.pluginFsWatchers.get(pluginId)?.delete(dispose);
+        };
+
+        for (const resolved of resolvedTargets) {
+          const watcher = fsWatch(resolved, { persistent: false }, (_event, filename) => {
+            if (disposed || !this.plugins.has(pluginId)) return;
+            const changed =
+              typeof filename === "string" && filename.length > 0
+                ? path.join(resolved, filename)
+                : resolved;
+            try {
+              callback(changed);
+            } catch (err) {
+              console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+            }
+          });
+          watcher.on("error", (err) => {
+            console.error(`[PluginService] plugin "${pluginId}" fs.watch error:`, err);
+          });
+          watchers.push(watcher);
+        }
+
+        let set = this.pluginFsWatchers.get(pluginId);
+        if (!set) {
+          set = new Set();
+          this.pluginFsWatchers.set(pluginId, set);
+        }
+        set.add(dispose);
+        return dispose;
+      },
+    };
+  }
+
+  /**
+   * Build the host-mediated `host.git` surface for one plugin. The
+   * `worktreePath` is realpath-contained to the declared `scopes.fs.allowedPaths`
+   * before any git work; reads gate on `git:read`, mutations on `git:write`.
+   * `commit` enforces the host-side change-preview safeguard (#7880 / D2).
+   * Implemented over the existing hardened simple-git layer via {@link PluginHostGit}.
+   */
+  private buildGitApi(pluginId: string): PluginGitApi {
+    const requireLoaded = (op: string): void => {
+      if (!this.plugins.has(pluginId)) {
+        throw new Error(
+          `PLUGIN_UNLOADED: plugin "${pluginId}" git.${op}: plugin is no longer loaded`
+        );
+      }
+    };
+    const requireReadCap = (op: string): void => {
+      if (!this.declaredCapabilities(pluginId).has("git:read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" git.${op} requires the "git:read" capability, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    const requireWriteCap = (op: string): void => {
+      if (!this.declaredCapabilities(pluginId).has("git:write")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" git.${op} requires the "git:write" capability, which is not declared in manifest.capabilities`
+        );
+      }
+    };
+    // A worktree the plugin may access = one contained inside its declared
+    // allowedPaths. We resolve the worktree root itself (not a child) so the git
+    // ops run against the realpath-verified directory.
+    const containWorktree = (worktreePath: string): Promise<string> =>
+      resolveContainedPath(pluginId, worktreePath, this.declaredAllowedPaths(pluginId));
+    const git = new PluginHostGit(pluginId, this.hostGitFactory);
+
+    return {
+      status: async (worktreePath): Promise<PluginGitStatus> => {
+        requireLoaded("status");
+        requireReadCap("status");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("status");
+        return git.status(resolved);
+      },
+      diff: async (worktreePath, filePath): Promise<string> => {
+        requireLoaded("diff");
+        requireReadCap("diff");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("diff");
+        return git.diff(resolved, filePath);
+      },
+      add: async (worktreePath, paths): Promise<void> => {
+        requireLoaded("add");
+        requireWriteCap("add");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("add");
+        await git.add(resolved, paths);
+        safeAppendAudit({
+          pluginId,
+          actionId: `git.add:${resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:git-add",
+          result: "success",
+          errorMessage: "",
+          argsHash: safeArgsHash([{ worktreePath: resolved, paths: paths ?? ["."] }]),
+          durationMs: 0,
+        });
+      },
+      commit: async (
+        worktreePath,
+        options: PluginGitCommitOptions
+      ): Promise<PluginGitCommitResult> => {
+        requireLoaded("commit");
+        requireWriteCap("commit");
+        // commit returns the staged diff as its change-preview, so it discloses
+        // repo content — require read alongside write.
+        requireReadCap("commit");
+        const resolved = await containWorktree(worktreePath);
+        requireLoaded("commit");
+        // git.commit throws COMMIT_MESSAGE_REQUIRED before any mutation when the
+        // message is empty — the #7880 no-silent-fallback guard at the host.
+        const result = await git.commit(resolved, options);
+        safeAppendAudit({
+          pluginId,
+          actionId: `git.commit:${resolved}`,
+          recordType: "ipc-invoke",
+          channel: "plugin:git-commit",
+          result: "success",
+          errorMessage: "",
+          argsHash: safeArgsHash([{ worktreePath: resolved, commit: result.commit }]),
+          durationMs: 0,
+        });
+        return result;
+      },
+    };
+  }
+
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
     const client = this.workspaceClient;
     if (!client) return [];
@@ -2277,6 +2778,20 @@ export class PluginService {
       console.error("[PluginService] Failed to fetch worktree snapshots:", err);
       return [];
     }
+  }
+
+  /**
+   * Renderer-facing companion to the per-plugin `host.getWorktreeStatus`: the
+   * changed-file / git-status projection for the worktree at `path`, read off
+   * the host's already-polled status (no extra shell-out). `null` when no
+   * worktree matches. Used by `plugin:worktree-status-get` so a file list
+   * outside the Review Hub can scan the changed set.
+   */
+  async getWorktreeStatusForPath(path: string): Promise<PluginWorktreeStatus | null> {
+    if (typeof path !== "string" || path.length === 0) return null;
+    const snapshots = await this.fetchAllWorktreeSnapshots();
+    const match = snapshots.find((s) => s.path === path);
+    return match ? toPluginWorktreeStatus(match.worktreeChanges) : null;
   }
 
   /**
@@ -2744,6 +3259,32 @@ export class PluginService {
     runUnloadStep(pluginId, "clearPluginSettingsState", () =>
       this.settings.clearPluginSettingsState(pluginId)
     );
+
+    // Kill every child process this plugin spawned via host.process.spawn
+    // (#9234): clean SIGTERM, then SIGKILL after the grace window. Tied to the
+    // plugin lifecycle so a disable/unload/revoke can't strand a dev server or
+    // CI job. Best-effort — a throw here can't strand later steps.
+    runUnloadStep(pluginId, "killManagedProcesses", () => {
+      this.processManager?.killAll(pluginId);
+    });
+
+    // Tear down every active host.fs.watch watcher this plugin opened so a
+    // disable/unload/revoke can't strand an fs.watch handle. Each disposer
+    // closes its underlying watcher and removes itself from the set; copy the
+    // set first since dispose() mutates it. Best-effort per the cascade contract.
+    runUnloadStep(pluginId, "closeFsWatchers", () => {
+      const watchers = this.pluginFsWatchers.get(pluginId);
+      if (watchers) {
+        for (const dispose of [...watchers]) {
+          try {
+            dispose();
+          } catch (err) {
+            console.error(`[PluginService] plugin "${pluginId}" fs watcher dispose threw:`, err);
+          }
+        }
+        this.pluginFsWatchers.delete(pluginId);
+      }
+    });
 
     // Tear down any MCP servers contributed by this plugin (#9233). Best-effort
     // — a failing teardown is logged but cannot block the unload chain.

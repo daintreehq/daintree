@@ -114,6 +114,52 @@ describe("PluginSettingsManager declared-scope enforcement", () => {
   });
 });
 
+describe("PluginSettingsManager secret tier routing (#9167)", () => {
+  // safeStorage is absent under vitest, so the default cipher reports the
+  // plaintext fallback tier — exercising the fallback wiring end-to-end through
+  // the manager (the encrypted path is covered with an injected cipher in
+  // PluginSettingsStore.secret.test.ts).
+  it("masks a stored secret, reports it set, and discloses the at-rest tier", async () => {
+    const mgr = managerFor([
+      { id: "token", type: "secret", scope: "user" },
+      { id: "endpoint", type: "string", scope: "user" },
+    ]);
+
+    await mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-1", "user", null);
+    await mgr.setSettingValueFromUi("acme.scope-test", "endpoint", "https://x", "user", null);
+
+    const ui = await mgr.getSettingValuesForUi("acme.scope-test", "user", null);
+    // The secret value is never returned by value, only its id in secretsSet.
+    expect(ui.values).not.toHaveProperty("token");
+    expect(ui.secretsSet).toContain("token");
+    expect(ui.values.endpoint).toBe("https://x");
+    // Tier is disclosed; with no keychain the fallback is plaintext and the
+    // stored value is flagged as plaintext.
+    expect(ui.secretTier).toBe("plaintext");
+    expect(ui.secretsPlaintext).toContain("token");
+  });
+
+  it("reveals a stored secret only through the explicit reveal path", async () => {
+    const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }]);
+    await mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-secret", "user", null);
+    expect(await mgr.revealSecretSettingForUi("acme.scope-test", "token", "user", null)).toBe(
+      "sk-secret"
+    );
+  });
+
+  it("isSecretKey reflects the declared type and the legacy secret flag", () => {
+    const mgr = managerFor([
+      { id: "typed", type: "secret" },
+      { id: "legacy", type: "string", secret: true },
+      { id: "plain", type: "string" },
+    ]);
+    expect(mgr.isSecretKey("acme.scope-test", "typed")).toBe(true);
+    expect(mgr.isSecretKey("acme.scope-test", "legacy")).toBe(true);
+    expect(mgr.isSecretKey("acme.scope-test", "plain")).toBe(false);
+    expect(mgr.isSecretKey("acme.scope-test", "undeclared")).toBe(false);
+  });
+});
+
 describe("PluginSettingsManager subscriber cleanup on unload (#10477)", () => {
   it("drops a plugin's onDidChange subscribers when its settings state is cleared", () => {
     const mgr = managerFor([{ id: "token", type: "string", scope: "user" }]);

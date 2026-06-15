@@ -17,7 +17,7 @@ function settingsOf(result: ReturnType<typeof parseSettings>) {
 }
 
 describe("contributes.settings schema (#9301)", () => {
-  it("accepts all six field types", () => {
+  it("accepts every field type", () => {
     const result = parseSettings([
       { id: "name", type: "string" },
       { id: "count", type: "number" },
@@ -25,9 +25,47 @@ describe("contributes.settings schema (#9301)", () => {
       { id: "mode", type: "enum", options: ["a", "b"] },
       { id: "config", type: "json" },
       { id: "token", type: "secret" },
+      { id: "dir", type: "directory" },
+      { id: "loc", type: "path" },
+      { id: "doc", type: "file" },
     ]);
     expect(result.success).toBe(true);
-    expect(settingsOf(result)).toHaveLength(6);
+    expect(settingsOf(result).map((s) => s.id)).toEqual([
+      "name",
+      "count",
+      "enabled",
+      "mode",
+      "config",
+      "token",
+      "dir",
+      "loc",
+      "doc",
+    ]);
+  });
+
+  it("accepts a path/directory/file field with mustExist", () => {
+    const result = parseSettings([
+      { id: "store", type: "directory", mustExist: true },
+      { id: "loc", type: "path", mustExist: false },
+    ]);
+    expect(result.success).toBe(true);
+    expect(settingsOf(result)[0].mustExist).toBe(true);
+  });
+
+  it("accepts a file field with an extensions filter", () => {
+    const result = parseSettings([{ id: "doc", type: "file", extensions: ["json", "md"] }]);
+    expect(result.success).toBe(true);
+    expect(settingsOf(result)[0].extensions).toEqual(["json", "md"]);
+  });
+
+  it("rejects extensions on a non-file type", () => {
+    const result = parseSettings([{ id: "dir", type: "directory", extensions: ["json"] }]);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty extensions array", () => {
+    const result = parseSettings([{ id: "doc", type: "file", extensions: [] }]);
+    expect(result.success).toBe(false);
   });
 
   it("defaults scope to user when omitted", () => {

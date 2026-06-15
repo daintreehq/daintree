@@ -25,6 +25,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   getAgents: "plugin:agents-get",
   getForgeProviders: "plugin:forge-providers-get",
   getDecorations: "plugin:file-decorations-get",
+  getWorktreeStatus: "plugin:worktree-status-get",
   getAuditRecords: "plugin:get-audit-records",
   getAuditConfig: "plugin:get-audit-config",
   clearAuditLog: "plugin:clear-audit-log",
@@ -36,6 +37,8 @@ export const PLUGIN_METHOD_CHANNELS = {
   setSettingValue: "plugin:settings-set-value",
   deleteSettingValue: "plugin:settings-delete-value",
   revealSecretSetting: "plugin:settings-reveal-secret",
+  pickPath: "plugin:pick-path",
+  pathExists: "plugin:path-exists",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PLUGIN_METHOD_CHANNELS;

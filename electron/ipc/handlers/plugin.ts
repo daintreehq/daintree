@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, net } from "electron";
-import { open, writeFile, rm } from "node:fs/promises";
+import { open, writeFile, rm, access } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -66,6 +66,8 @@ import type {
   PluginCheckUpdateResult,
   PluginSettingsScope,
   PluginSettingsUiValues,
+  PluginPickPathRequest,
+  PluginWorktreeStatus,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -701,6 +703,18 @@ async function handleFileDecorationsGet(
   return merged;
 }
 
+/**
+ * Renderer-facing read of the changed-file / git-status projection for the
+ * worktree at `path` — the companion to the per-plugin `host.getWorktreeStatus`
+ * so a file list outside the Review Hub can scan the changed set. Reads the
+ * host's already-polled status; never shells out. `null` when no worktree
+ * matches or no status has been computed.
+ */
+async function handleWorktreeStatusGet(path: string): Promise<PluginWorktreeStatus | null> {
+  if (typeof path !== "string" || path.length === 0) return null;
+  return (await getPluginService()).getWorktreeStatusForPath(path);
+}
+
 // ── Plugin-action audit log ───────────────────────────────────────────────
 
 async function handleGetAuditRecords(): Promise<PluginActionAuditRecord[]> {
@@ -796,6 +810,68 @@ async function handleSettingsRevealSecret(
   return (await getPluginService()).revealSecretSettingForUi(pluginId, key, scope, projectId);
 }
 
+// Native folder/file chooser for `path` / `directory` / `file` settings fields.
+// User-initiated from the settings form's "Browse" button, so it carries no
+// capability gate — but `pluginId` must be a well-formed scoped name so the
+// surface stays bounded to an actual plugin (mirrors handleUninstall's guard).
+// Reuses the install flow's showOpenDialog pattern. Returns the chosen absolute
+// path, or null when the picker is dismissed.
+async function handlePickPath(
+  ctx: IpcContext,
+  pluginId: string,
+  request: PluginPickPathRequest
+): Promise<string | null> {
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("pickPath: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  const isDirectory = request.kind === "directory";
+  const properties: Array<"openFile" | "openDirectory"> = isDirectory
+    ? ["openDirectory"]
+    : ["openFile"];
+  const filters =
+    !isDirectory && request.filters && request.filters.length > 0
+      ? request.filters.map((f) => ({ name: f.name, extensions: f.extensions }))
+      : undefined;
+  const defaultPath =
+    typeof request.defaultPath === "string" && isAbsolute(request.defaultPath)
+      ? request.defaultPath
+      : undefined;
+  const dialogOptions = {
+    title: isDirectory ? "Choose folder" : "Choose file",
+    properties,
+    ...(filters ? { filters } : {}),
+    ...(defaultPath ? { defaultPath } : {}),
+  };
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const result = win
+    ? await dialog.showOpenDialog(win, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0]!;
+}
+
+// Existence probe for `mustExist` path/directory/file settings. The settings form
+// flags a stored path that no longer resolves on disk (it may have been moved or
+// deleted since it was picked). Scoped to a valid pluginId; a non-absolute path
+// resolves false rather than throwing so a stale stored value can't crash the
+// form.
+async function handlePathExists(pluginId: string, targetPath: string): Promise<boolean> {
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("pathExists: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (typeof targetPath !== "string" || !isAbsolute(targetPath)) {
+    return false;
+  }
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const pluginNamespace = defineIpcNamespace({
   name: "plugin",
   ops: {
@@ -820,6 +896,7 @@ export const pluginNamespace = defineIpcNamespace({
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
+    getWorktreeStatus: op(PLUGIN_METHOD_CHANNELS.getWorktreeStatus, handleWorktreeStatusGet),
     getAuditRecords: op(PLUGIN_METHOD_CHANNELS.getAuditRecords, handleGetAuditRecords),
     getAuditConfig: op(PLUGIN_METHOD_CHANNELS.getAuditConfig, handleGetAuditConfig),
     clearAuditLog: op(PLUGIN_METHOD_CHANNELS.clearAuditLog, handleClearAuditLog),
@@ -834,6 +911,8 @@ export const pluginNamespace = defineIpcNamespace({
     setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue),
     deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue),
     revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
+    pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
+    pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
   },
 });
 
