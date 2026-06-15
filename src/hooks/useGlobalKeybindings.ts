@@ -176,9 +176,15 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             // (#10509). Route to help.togglePanel — focus is inside the aside,
             // so its open-and-focused branch closes the panel.
             if (active?.closest("#daintree-assistant-panel") != null) {
-              void actionService.dispatch("help.togglePanel", undefined, {
-                source: "keybinding",
-              });
+              void actionService
+                .dispatch("help.togglePanel", undefined, { source: "keybinding" })
+                .then((dispatchResult) => {
+                  if (!dispatchResult.ok) {
+                    logError('[GlobalKeybinding] Action "help.togglePanel" failed', undefined, {
+                      error: dispatchResult.error,
+                    });
+                  }
+                });
               return;
             }
             // When a dialog/palette keeps an escape handler registered, route

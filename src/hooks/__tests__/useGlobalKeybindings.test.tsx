@@ -247,15 +247,17 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
       pressCmdW();
 
       expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
       expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
         "help.togglePanel",
         undefined,
         expect.objectContaining({ source: "keybinding" })
       );
-      expect(mocks.actionService.dispatch).not.toHaveBeenCalledWith(
-        "terminal.close",
-        expect.anything(),
-        expect.anything()
+      // terminal.close must NOT also fire — the assistant branch returns early.
+      // expect.anything() would not match the production `undefined` second arg,
+      // so assert against the dispatched action ids directly.
+      expect(mocks.actionService.dispatch.mock.calls.map(([id]) => id)).not.toContain(
+        "terminal.close"
       );
     } finally {
       assistant.remove();
