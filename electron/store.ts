@@ -88,6 +88,7 @@ export interface StoreSchema {
     thresholdMinutes: number;
   };
   idleTerminalDismissals: Record<string, number>;
+  idleTerminalNotifiedAt: Record<string, number>;
   appState: {
     activeWorktreeId?: string;
     sidebarWidth: number;
@@ -474,6 +475,7 @@ const storeOptions = {
       thresholdMinutes: 60,
     },
     idleTerminalDismissals: {},
+    idleTerminalNotifiedAt: {},
     appState: {
       sidebarWidth: 350,
       focusMode: false,

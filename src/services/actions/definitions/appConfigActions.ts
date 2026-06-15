@@ -11,6 +11,8 @@ import {
 import { dispatchEscape } from "@/lib/escapeStack";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 
+const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
+
 export function registerAppConfigActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -169,6 +171,46 @@ export function registerAppConfigActions(
     run: async (args: unknown) => {
       const config = args as { enabled?: boolean; thresholdMinutes?: number };
       return await idleTerminalClient.updateConfig(config);
+    },
+  }));
+
+  actions.set("idleTerminalNotify.closeProject", () => ({
+    id: "idleTerminalNotify.closeProject",
+    title: "Close Idle Terminals",
+    description:
+      "Close (hibernate) the idle terminals in a background project. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Contextual: requires a projectId from the originating notification, so it
+    // has no meaning as a free-standing palette pick. nonRepeatable keeps a
+    // PTY-terminating action out of the repeat-last and MRU rails, where it
+    // could fire against a stale projectId.
+    palette: { mode: "hidden" },
+    nonRepeatable: true,
+    argsSchema: ProjectIdArgsSchema,
+    run: async (args: unknown) => {
+      const { projectId } = ProjectIdArgsSchema.parse(args);
+      await idleTerminalClient.closeProject(projectId);
+    },
+  }));
+
+  actions.set("idleTerminalNotify.muteProject", () => ({
+    id: "idleTerminalNotify.muteProject",
+    title: "Mute Idle Terminal Notifications",
+    description:
+      "Mute idle-terminal notifications for a project for the cooldown window. Args: { projectId }. Used as the dismiss action on an idle-terminal inbox notification.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    nonRepeatable: true,
+    argsSchema: ProjectIdArgsSchema,
+    run: async (args: unknown) => {
+      const { projectId } = ProjectIdArgsSchema.parse(args);
+      await idleTerminalClient.dismissProject(projectId);
     },
   }));
 

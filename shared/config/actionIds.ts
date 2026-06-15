@@ -102,6 +102,8 @@ export const BUILT_IN_ACTION_IDS = [
   // -- idleTerminalNotifyActions --
   "idleTerminalNotify.getConfig",
   "idleTerminalNotify.updateConfig",
+  "idleTerminalNotify.closeProject",
+  "idleTerminalNotify.muteProject",
 
   // -- agentSettingsActions --
   "agentSettings.get",

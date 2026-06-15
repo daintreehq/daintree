@@ -3,14 +3,33 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { IdleTerminalNotifyPayload } from "@shared/types";
 
-const notifyMock = vi.fn();
+interface NotifyArg {
+  priority?: string;
+  supersedeKey?: string;
+  context?: { projectId?: string };
+  coalesce?: unknown;
+  actions?: Array<{ actionId?: string; actionArgs?: Record<string, unknown> }>;
+}
+
+// Capture each notify() payload into a typed array so assertions read real
+// fields without an unsafe `as` cast off the loosely-typed mock.calls tuple.
+const notifyCalls: NotifyArg[] = [];
+const notifyMock = vi.fn((payload: NotifyArg) => {
+  notifyCalls.push(payload);
+});
 vi.mock("@/lib/notify", () => ({
-  notify: (...args: unknown[]) => notifyMock(...args),
+  notify: (payload: NotifyArg) => notifyMock(payload),
 }));
 
 const onNotifyMock = vi.fn();
 const unsubscribeMock = vi.fn();
 let captured: ((payload: IdleTerminalNotifyPayload) => void) | null = null;
+
+function notifyArg(n: number): NotifyArg {
+  const payload = notifyCalls[n];
+  if (!payload) throw new Error(`expected a notify call at index ${n}`);
+  return payload;
+}
 
 function load() {
   return import("../useIdleTerminalNotifications");
@@ -20,6 +39,7 @@ describe("useIdleTerminalNotifications", () => {
   beforeEach(() => {
     vi.resetModules();
     notifyMock.mockClear();
+    notifyCalls.length = 0;
     onNotifyMock.mockReset();
     unsubscribeMock.mockReset();
     captured = null;
@@ -88,7 +108,10 @@ describe("useIdleTerminalNotifications", () => {
     expect(unsubscribeMock).not.toHaveBeenCalled();
   });
 
-  it("emits one notification carrying the idle coalesce key", async () => {
+  // Idle terminals are a passive signal — the notification must route to the
+  // inbox only (priority "low", no toast) with a per-project supersedeKey so a
+  // re-fire retires the prior row instead of stacking near-duplicate toasts.
+  it("emits an inbox-only notification keyed per project", async () => {
     const { useIdleTerminalNotifications } = await load();
     renderHook(() => useIdleTerminalNotifications());
 
@@ -100,11 +123,60 @@ describe("useIdleTerminalNotifications", () => {
     });
 
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock).toHaveBeenCalledWith(
+    const payload = notifyArg(0);
+    expect(payload).toMatchObject({
+      priority: "low",
+      supersedeKey: "idle-terminal:p1",
+      context: { projectId: "p1" },
+    });
+    expect(payload.coalesce).toBeUndefined();
+  });
+
+  // Inbox rows only persist actions carrying an `actionId`; the recovery
+  // affordances must be action-backed so they survive into the inbox row.
+  it("attaches action-backed Close/Mute affordances carrying the projectId", async () => {
+    const { useIdleTerminalNotifications } = await load();
+    renderHook(() => useIdleTerminalNotifications());
+
+    act(() => {
+      captured!({
+        projects: [{ projectId: "p1", projectName: "Acme", terminalCount: 1, idleMinutes: 90 }],
+        timestamp: 0,
+      });
+    });
+
+    const payload = notifyArg(0);
+    expect(payload.actions).toEqual([
       expect.objectContaining({
-        coalesce: expect.objectContaining({ key: "idle-terminal-notify:projects" }),
-      })
-    );
+        actionId: "idleTerminalNotify.closeProject",
+        actionArgs: { projectId: "p1" },
+      }),
+      expect.objectContaining({
+        actionId: "idleTerminalNotify.muteProject",
+        actionArgs: { projectId: "p1" },
+      }),
+    ]);
+  });
+
+  // Multi-project payloads fan out to one inbox row per project, each with its
+  // own supersedeKey and projectId-scoped actions — no shared aggregate row.
+  it("fans out one notification per project", async () => {
+    const { useIdleTerminalNotifications } = await load();
+    renderHook(() => useIdleTerminalNotifications());
+
+    act(() => {
+      captured!({
+        projects: [
+          { projectId: "p1", projectName: "Acme", terminalCount: 1, idleMinutes: 70 },
+          { projectId: "p2", projectName: "Beta", terminalCount: 3, idleMinutes: 80 },
+        ],
+        timestamp: 0,
+      });
+    });
+
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect(notifyArg(0)).toMatchObject({ supersedeKey: "idle-terminal:p1" });
+    expect(notifyArg(1)).toMatchObject({ supersedeKey: "idle-terminal:p2" });
   });
 
   it("ignores payloads with no idle projects", async () => {

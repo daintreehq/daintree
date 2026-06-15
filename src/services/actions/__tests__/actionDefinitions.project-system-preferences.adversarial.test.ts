@@ -710,6 +710,8 @@ describe("preferences action hardening", () => {
       "hibernation.updateConfig",
       "idleTerminalNotify.getConfig",
       "idleTerminalNotify.updateConfig",
+      "idleTerminalNotify.closeProject",
+      "idleTerminalNotify.muteProject",
       "agentSettings.get",
       "agentSettings.set",
       "agentSettings.reset",
