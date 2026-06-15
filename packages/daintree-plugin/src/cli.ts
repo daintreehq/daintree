@@ -23,13 +23,25 @@ program
   .command("new")
   .argument("[name]", "plugin name (also the directory)")
   .description("Scaffold a new plugin project")
-  .action(async (name?: string) => {
-    try {
-      await runNew(name);
-    } catch (err) {
-      fail((err as Error).message);
+  .option("--publisher <publisher>", "publisher segment (e.g. acme)")
+  .option("--template <template>", "command | view | mcp | full")
+  .option("--yes", "non-interactive: accept defaults, skip prompts (requires name + --publisher)")
+  .action(
+    async (
+      name: string | undefined,
+      opts: { publisher?: string; template?: string; yes?: boolean }
+    ) => {
+      try {
+        await runNew(name, {
+          publisher: opts.publisher,
+          template: opts.template,
+          yes: opts.yes,
+        });
+      } catch (err) {
+        fail((err as Error).message);
+      }
     }
-  });
+  );
 
 program
   .command("validate")

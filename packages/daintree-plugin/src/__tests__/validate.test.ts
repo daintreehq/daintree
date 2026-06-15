@@ -150,4 +150,95 @@ describe("runValidate", () => {
     const result = await runValidate({ dir: tmpDir, env: true });
     expect(result.ok).toBe(true);
   });
+
+  it("suggests the open-ended engine range in the omitted-engines warning (#10513)", async () => {
+    await writeManifest({ name: "acme.demo", version: "1.0.0" });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.warnings.join("\n")).toMatch(/>=0\.11\.0/);
+    // The old caret suggestion would be rejected by the host past 0.11.x.
+    expect(result.warnings.join("\n")).not.toMatch(/\^0\.11\.0/);
+  });
+
+  it("warns (non-fatally) on an unrecognized panel iconId (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "layout-panel-top", color: "var(--x)" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/iconId "layout-panel-top".*terminal icon/);
+  });
+
+  it("does not warn on a recognized panel iconId (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId: "puzzle", color: "var(--x)" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+  });
+
+  it("rejects a setting id outside the safe-id grammar (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        settings: [{ id: "bad id", type: "string" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join("\n")).toMatch(/settings\.0\.id/);
+  });
+
+  it("ignores a ${settings:…} token whose key breaks the safe-id grammar (#10513)", async () => {
+    // The host's substitution gate would never resolve `bad key`, so --env must
+    // not flag it as a missing value — it sees no resolvable tokens at all.
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        mcpServers: [{ id: "main", name: "S", command: "node", env: { T: "${settings:bad key}" } }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir, env: true });
+    expect(result.warnings.join("\n")).toMatch(/no \$\{settings:…\} tokens/);
+    expect(result.errors.join("\n")).not.toMatch(/bad key/);
+  });
+
+  it("warns when main points at a missing file whose dir exists (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      main: "src/missing.js",
+    });
+    await fs.mkdir(path.join(tmpDir, "src"));
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).toMatch(/main "src\/missing\.js" doesn't exist/);
+  });
+
+  it("stays quiet about an unbuilt dist/ main (#10513)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      main: "dist/index.js",
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join("\n")).not.toMatch(/doesn't exist/);
+  });
 });

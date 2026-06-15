@@ -18,7 +18,7 @@ import type {
   ForgeProviderContribution,
 } from "../../shared/types/forge.js";
 
-const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
+export const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -529,7 +529,12 @@ export const PluginToastOptionsSchema = z
  */
 export const SettingDefinitionSchema = z
   .object({
-    id: z.string().min(1),
+    // Constrained to the shared safe-id grammar so a declared setting id can
+    // always be referenced by a `${settings:id}` token — the MCP supervisor's
+    // substitution gate (`SETTINGS_TEMPLATE_RE` in PluginMcpSupervisor.ts) only
+    // matches `[a-zA-Z0-9._-]+`, so an id outside that grammar could be declared
+    // but never resolved at runtime.
+    id: z.string().min(1).regex(SAFE_ID_PATTERN),
     type: z
       .enum(["string", "number", "boolean", "enum", "json", "secret", "path", "directory", "file"])
       .optional(),
