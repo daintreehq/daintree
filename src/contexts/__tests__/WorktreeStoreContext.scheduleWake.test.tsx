@@ -82,8 +82,16 @@ afterEach(() => {
   // Restore the prototype getter shadowed by setVisibilityState.
   delete (document as unknown as Record<string, unknown>)["visibilityState"];
   useProjectStore.setState({ currentProject: null });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+// Drive scheduleRepaint's double-rAF gate to completion (the repaint lands on
+// the second frame), returning how many times the repaint actually fired.
+function flushRepaintGate(): void {
+  act(() => flushFrame());
+  act(() => flushFrame());
+}
 
 async function renderProvider() {
   const { WorktreeStoreProvider, WorktreeStoreContext } = await import("../WorktreeStoreContext");
@@ -262,6 +270,102 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     act(() => flushFrame());
 
     expect(wakeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-runs the repaint on the timed backstop cadence after the reveal", async () => {
+    // toFake only the timers so the manually-installed rAF mock survives.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    repaintMock.mockClear();
+
+    // The reveal itself drives the immediate frame-sweep repaint.
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(1);
+
+    // Each backstop delay (1s / 3s) re-runs the same repaint without any further
+    // user action — this is what replaces the manual Redraw click.
+    act(() => vi.advanceTimersByTime(1000));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(2);
+
+    act(() => vi.advanceTimersByTime(2000));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(3);
+
+    // No further passes are scheduled past the last backstop.
+    act(() => vi.advanceTimersByTime(10_000));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("suppresses backstop repaints once the view is hidden again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    repaintMock.mockClear();
+
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(1);
+
+    // User switches away before the backstops fire: the timers still elapse but
+    // their visibility guard no-ops, so a backgrounded view is never repainted.
+    setVisibilityState("hidden");
+    act(() => vi.advanceTimersByTime(5000));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a prior switch's pending backstops on re-reveal (no stacking)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    repaintMock.mockClear();
+
+    // Reveal 1 at t=0 arms its first backstop for t=1000.
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(1);
+
+    // Reveal 2 at t=500 (rapid back-and-forth) must cancel reveal 1's pending
+    // timers and re-arm its own, now due at t=1500.
+    act(() => vi.advanceTimersByTime(500));
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(2);
+
+    // At t=1000 reveal 1's stale backstop WOULD have fired if it weren't
+    // cancelled — confirm nothing repaints, proving no stacking.
+    act(() => vi.advanceTimersByTime(500));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(2);
+
+    // Reveal 2's own first backstop fires on schedule at t=1500.
+    act(() => vi.advanceTimersByTime(500));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancels pending backstops when the provider unmounts", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { unmount } = await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    repaintMock.mockClear();
+
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(1);
+
+    unmount();
+    act(() => vi.advanceTimersByTime(5000));
+    flushRepaintGate();
+    expect(repaintMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores visibilitychange dispatched while hidden", async () => {

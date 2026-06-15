@@ -501,10 +501,16 @@ export function HelpPanel({
   useEffect(() => {
     if (!isOpen || !isVisible || !terminalId) return;
     if (typeof requestAnimationFrame !== "function") return;
-    const off = window.electron?.app?.onViewRevealed?.(() => {
+
+    // One reveal-correction pass: poll a few frames for the slide-out panel to
+    // settle to real width, then repaint. Visibility-guarded so a backstop that
+    // fires after the user switched away again no-ops.
+    const runRepaintPass = (): void => {
+      if (document.visibilityState !== "visible") return;
       let frames = 0;
       const tick = (): void => {
         if (!useHelpPanelStore.getState().isOpen) return;
+        if (document.visibilityState !== "visible") return;
         // Wait for the container to have real width before repainting —
         // repaintForReveal's own size guard would otherwise no-op against a
         // not-yet-laid-out panel. Give up after a bounded window.
@@ -515,8 +521,38 @@ export function HelpPanel({
         if (++frames < 8) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
+    };
+
+    // Timed redraw backstop, mirroring the worktree-terminal reveal cadence
+    // (WorktreeStoreContext): the single frame-sweep above is bounded to ~130ms
+    // and never retries, but that window falls before the compositor presents
+    // the foreground view, before xterm's IntersectionObserver un-pauses the
+    // renderer, and inside the project-switch resize lock — exactly when a
+    // repaint can't stick, leaving the Assistant garbled with no Redraw button
+    // to recover it. Re-run the same cheap, idempotent, box-/visibility-guarded
+    // repaint on a fixed cadence so a late-settling panel self-corrects: 1s
+    // catches the common settle, 3s a late straggler.
+    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 3000];
+    let backstopTimers: ReturnType<typeof setTimeout>[] = [];
+    const clearRevealBackstops = (): void => {
+      for (const timer of backstopTimers) clearTimeout(timer);
+      backstopTimers = [];
+    };
+
+    const off = window.electron?.app?.onViewRevealed?.(() => {
+      runRepaintPass();
+      // Cancel any backstops still pending from a prior switch so rapid
+      // back-and-forth switching can't stack passes, then arm this switch's.
+      clearRevealBackstops();
+      for (const delay of REVEAL_BACKSTOP_DELAYS_MS) {
+        backstopTimers.push(setTimeout(runRepaintPass, delay));
+      }
     });
-    return off;
+
+    return () => {
+      clearRevealBackstops();
+      off?.();
+    };
   }, [isOpen, isVisible, terminalId]);
 
   // Resize via mouse drag
@@ -674,7 +710,7 @@ export function HelpPanel({
   // Both guards are scoped to the panel so a focused CodeMirror or xterm in a
   // different panel (e.g. FileViewer, a grid terminal) can't trap Escape here.
   const handleEscape = useCallback(() => {
-    const active = document.activeElement as HTMLElement | null;
+    const active = document.activeElement;
     if (active && panelRef.current?.contains(active)) {
       if (active.closest(".xterm-helper-textarea")) return;
       if (active.closest(".cm-editor")) return;
