@@ -76,6 +76,44 @@ interface PidTrendState {
   emaHistory: number[];
 }
 
+/**
+ * Per-pid memory trend state, promoted to module scope so diagnostics can read
+ * a bounded snapshot of the EMA history the monitor already maintains. Cleared
+ * at the top of {@link startAppMetricsMonitor} (so repeated starts in tests
+ * don't bleed stale pids) and on system suspend.
+ */
+const trendState = new Map<number, PidTrendState>();
+
+export interface MainProcessTrendSample {
+  /** OS process id. Join to app.getAppMetrics() by pid, not webContentsId. */
+  pid: number;
+  /** Epoch ms when this pid was first sampled in the current monitor lifetime. */
+  startedAt: number;
+  /** Latest exponential moving average of working-set footprint, in MB. */
+  emaMb: number;
+  /** Bounded rolling EMA history (≤ BUCKET_WINDOW entries), in MB, oldest→newest. */
+  emaHistoryMb: number[];
+}
+
+/**
+ * Bounded snapshot of the per-pid memory trend buffers for diagnostics export.
+ * Returns deep copies — never the live history arrays — so a diagnostics read
+ * can't race the 30s poll that mutates them. All values derive from
+ * workingSetSize (the only cross-platform memory field; #8646).
+ */
+export function getTrendSnapshot(): MainProcessTrendSample[] {
+  const out: MainProcessTrendSample[] = [];
+  for (const [pid, state] of trendState) {
+    out.push({
+      pid,
+      startedAt: state.startedAt,
+      emaMb: Math.round(state.ema),
+      emaHistoryMb: state.emaHistory.map((v) => Math.round(v)),
+    });
+  }
+  return out;
+}
+
 export interface BlinkMemorySample {
   /**
    * process.getBlinkMemoryInfo().allocated — kilobytes currently in use by
@@ -338,7 +376,10 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   const systemLowMemoryThresholdMb = totalMemMb * SYSTEM_LOW_MEMORY_FRACTION;
 
   const snapshotCooldowns = new Map<number, number>();
-  const trendState = new Map<number, PidTrendState>();
+  // trendState is module-level (see getTrendSnapshot) so diagnostics can read
+  // it. Reset on each (re)start so a previous monitor lifetime's pids don't
+  // bleed into a fresh one — tests call startAppMetricsMonitor repeatedly.
+  trendState.clear();
   let removeSuspendListener: (() => void) | null = null;
   let removeWakeListener: (() => void) | null = null;
   let pollCount = 0;

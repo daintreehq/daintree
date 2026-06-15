@@ -19,6 +19,19 @@ const shared = vi.hoisted(() => ({
   storeValues: new Map<string, unknown>(),
 }));
 
+// Renderer/resource state surfaced by the #10500 diagnostics sections. Mocked at
+// module scope so the dynamically-imported singletons return controllable data
+// instead of touching real services.
+const renderer = vi.hoisted(() => ({
+  blink: new Map<number, { allocated: number; total?: number; timestamp: number }>(),
+  elu: new Map<
+    number,
+    { blockingDurationMs: number; sampleWindowMs: number; ratio: number; timestamp: number }
+  >(),
+  hibernationSnapshot: {} as unknown,
+  resourceProfileSnapshot: null as unknown,
+}));
+
 vi.mock("electron", () => ({
   app: {
     getVersion: vi.fn(() => "1.0.0"),
@@ -87,6 +100,28 @@ vi.mock("../GpuCrashMonitorService.js", () => ({
   isGpuDisabledByFlag: vi.fn(() => false),
 }));
 
+// getBlinkSamples/getEluSamples resolve through these closures. getTrendSnapshot
+// is intentionally a no-op here: under vitest's dynamic-import mock the real
+// module-level getTrendSnapshot still runs for collectMemoryTrends (returning an
+// empty trendState in-test), so the diagnostics test asserts that section's
+// wiring/shape only — its EMA content is covered by ProcessMemoryMonitor.test.ts.
+vi.mock("../ProcessMemoryMonitor.js", () => ({
+  getBlinkSamples: () => renderer.blink,
+  getEluSamples: () => renderer.elu,
+  getTrendSnapshot: () => [],
+}));
+
+vi.mock("../HibernationService.js", () => ({
+  getHibernationService: () => ({ getSnapshot: () => renderer.hibernationSnapshot }),
+}));
+
+vi.mock("../../window/serviceRefs.js", () => ({
+  getResourceProfileService: () =>
+    renderer.resourceProfileSnapshot === null
+      ? null
+      : { getSnapshot: () => renderer.resourceProfileSnapshot },
+}));
+
 type DiagnosticsCollectorModule = typeof import("../DiagnosticsCollector.js");
 
 function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
@@ -126,6 +161,20 @@ describe("DiagnosticsCollector adversarial", () => {
     shared.terminals = [];
     shared.storeValues.clear();
     shared.storeValues.set("appState", { recentProject: "/Users/alice/project" });
+    renderer.blink = new Map();
+    renderer.elu = new Map();
+    renderer.hibernationSnapshot = {
+      config: { enabled: false, inactiveThresholdHours: 24 },
+      isRunning: false,
+      memoryPressureThresholdMs: 1_800_000,
+    };
+    renderer.resourceProfileSnapshot = {
+      profile: "balanced",
+      thermalState: "unknown",
+      isOnBattery: false,
+      speedLimit: 100,
+      lagPressureActive: false,
+    };
     setDefaultExecFile();
     diagnostics = await import("../DiagnosticsCollector.js");
   });
@@ -532,6 +581,171 @@ describe("DiagnosticsCollector adversarial", () => {
     } finally {
       argvSpy.mockRestore();
     }
+  });
+
+  it("PER_RENDERER_AND_HIBERNATION_SECTIONS_POPULATED (#10500)", async () => {
+    renderer.blink = new Map([[101, { allocated: 51_200, total: 102_400, timestamp: 1 }]]);
+    renderer.elu = new Map([
+      [101, { blockingDurationMs: 12.4, sampleWindowMs: 30_000, ratio: 0.87, timestamp: 2 }],
+    ]);
+    renderer.hibernationSnapshot = {
+      config: { enabled: true, inactiveThresholdHours: 24 },
+      isRunning: true,
+      memoryPressureThresholdMs: 1_800_000,
+    };
+
+    shared.terminals = [
+      { id: "t1", kind: "agent", agentState: "working", hasPty: true },
+      { id: "t2", kind: "agent", agentState: "working", hasPty: true },
+      { id: "t3", kind: "terminal", hasPty: true },
+    ];
+
+    const pvm = {
+      getViewInventory: () => [
+        {
+          projectId: "p-active",
+          projectPath: "/Users/alice/active",
+          webContentsId: 101,
+          state: "active",
+          lastUsed: 10,
+        },
+        {
+          projectId: "p-cached",
+          projectPath: "/Users/alice/cached",
+          webContentsId: 102,
+          state: "cached",
+          lastUsed: 5,
+          evictedAt: 7,
+        },
+      ],
+      getCacheConfig: () => ({ maxCachedViews: 3, activeProjectId: "p-active" }),
+    };
+    const deps = {
+      ptyClient: { getAllTerminalsAsync: async () => shared.terminals },
+      windowRegistry: { all: () => [{ windowId: 1, services: { projectViewManager: pvm } }] },
+    } as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    const payload = (await diagnostics.collectDiagnostics(deps)) as {
+      projectViews: Array<{
+        windowId: number;
+        maxCachedViews: number;
+        activeProjectId: string;
+        views: Array<{
+          projectId: string;
+          projectPath: string;
+          webContentsId: number;
+          state: string;
+        }>;
+      }>;
+      rendererMemory: {
+        blink: Array<{ webContentsId: number; allocatedKb: number; totalKb?: number }>;
+        elu: Array<{ webContentsId: number; ratio: number }>;
+      };
+      memoryTrends: { processes: unknown };
+      resourceState: {
+        hibernation: { isRunning: boolean };
+        resourceProfile: { profile: string };
+      };
+      counts: {
+        windows: number;
+        openProjects: number;
+        views: { total: number; active: number; cached: number; loading: number };
+        terminals: { total: number; byAgentState: Record<string, number> };
+      };
+    };
+
+    // projectViews — per-window inventory; projectPath sanitized by redactDeep.
+    expect(payload.projectViews[0].windowId).toBe(1);
+    expect(payload.projectViews[0].activeProjectId).toBe("p-active");
+    const activeView = payload.projectViews[0].views.find((v) => v.projectId === "p-active")!;
+    expect(activeView.webContentsId).toBe(101);
+    expect(activeView.projectPath).toBe("/Users/<redacted>/active");
+
+    // rendererMemory — keyed by webContentsId (the join key to projectViews).
+    expect(payload.rendererMemory.blink[0]).toMatchObject({
+      webContentsId: 101,
+      allocatedKb: 51_200,
+    });
+    expect(payload.rendererMemory.elu[0]).toMatchObject({ webContentsId: 101, ratio: 0.87 });
+
+    // memoryTrends — wiring/shape only; EMA content is covered by the
+    // ProcessMemoryMonitor unit tests (the real getTrendSnapshot runs here).
+    expect(Array.isArray(payload.memoryTrends.processes)).toBe(true);
+
+    // resourceState — both singletons surfaced.
+    expect(payload.resourceState.hibernation.isRunning).toBe(true);
+    expect(payload.resourceState.resourceProfile.profile).toBe("balanced");
+
+    // counts — derived from the same PVM inventory + terminal list.
+    expect(payload.counts.windows).toBe(1);
+    expect(payload.counts.openProjects).toBe(2);
+    expect(payload.counts.views).toMatchObject({ total: 2, active: 1, cached: 1, loading: 0 });
+    expect(payload.counts.terminals.total).toBe(3);
+    expect(payload.counts.terminals.byAgentState).toMatchObject({ working: 2, none: 1 });
+  });
+
+  it("PROJECT_VIEWS_ISOLATE_PER_WINDOW_FAILURE (#10500)", async () => {
+    const goodPvm = {
+      getViewInventory: () => [
+        {
+          projectId: "p-ok",
+          projectPath: "/Users/alice/ok",
+          webContentsId: 201,
+          state: "active",
+          lastUsed: 1,
+        },
+      ],
+      getCacheConfig: () => ({ maxCachedViews: 2, activeProjectId: "p-ok" }),
+    };
+    const badPvm = {
+      getViewInventory: () => {
+        throw new Error("PVM mid-teardown");
+      },
+      getCacheConfig: () => ({ maxCachedViews: 1, activeProjectId: null }),
+    };
+    const deps = {
+      ptyClient: { getAllTerminalsAsync: async () => [] },
+      windowRegistry: {
+        all: () => [
+          { windowId: 1, services: { projectViewManager: goodPvm } },
+          { windowId: 2, services: { projectViewManager: badPvm } },
+        ],
+      },
+    } as unknown as import("../../ipc/types.js").HandlerDependencies;
+
+    const payload = (await diagnostics.collectDiagnostics(deps)) as {
+      projectViews: Array<{ windowId: number; views?: unknown[]; error?: string }>;
+      counts: { openProjects: number; views: { total: number } };
+    };
+
+    const good = payload.projectViews.find((w) => w.windowId === 1)!;
+    const bad = payload.projectViews.find((w) => w.windowId === 2)!;
+    // The healthy window's inventory survives even though window 2 threw.
+    expect(good.views).toHaveLength(1);
+    expect(bad.error).toBeDefined();
+    // Counts skip the throwing PVM but still count the healthy one.
+    expect(payload.counts.openProjects).toBe(1);
+    expect(payload.counts.views.total).toBe(1);
+  });
+
+  it("NEW_SECTIONS_DEGRADE_GRACEFULLY_WITHOUT_SERVICES (#10500)", async () => {
+    // No windowRegistry, no projectViewManager, resource-profile singleton absent.
+    renderer.resourceProfileSnapshot = null;
+
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      projectViews: unknown[];
+      memoryTrends: { processes: unknown };
+      resourceState: { resourceProfile: unknown; hibernation: { isRunning: boolean } };
+      counts: { windows: number; openProjects: number; terminals: { total: number } };
+    };
+
+    expect(payload.projectViews).toEqual([]);
+    expect(Array.isArray(payload.memoryTrends.processes)).toBe(true);
+    expect(payload.resourceState.resourceProfile).toBeNull();
+    expect(payload.resourceState.hibernation.isRunning).toBe(false);
+    expect(payload.counts.windows).toBe(0);
+    expect(payload.counts.openProjects).toBe(0);
+    expect(payload.counts.terminals.total).toBe(0);
   });
 
   it("FREE_TEXT_PEM_BLOCK_SCRUBBED", async () => {

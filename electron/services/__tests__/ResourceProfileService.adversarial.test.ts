@@ -215,6 +215,40 @@ describe("ResourceProfileService adversarial", () => {
     vi.restoreAllMocks();
   });
 
+  describe("getSnapshot (#10500)", () => {
+    function findPowerHandler(event: string): ((details?: unknown) => void) | undefined {
+      return mockPowerMonitorOn.mock.calls.find((call: unknown[]) => call[0] === event)?.[1] as
+        | ((details?: unknown) => void)
+        | undefined;
+    }
+
+    it("reflects battery, thermal, and speed-limit transitions via power events", () => {
+      const { deps } = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      const before = service.getSnapshot();
+      expect(before.isOnBattery).toBe(false);
+      expect(before.lagPressureActive).toBe(false);
+
+      findPowerHandler("on-battery")!();
+      findPowerHandler("thermal-state-change")!({ state: "serious" });
+      findPowerHandler("speed-limit-change")!({ limit: 50 });
+
+      const after = service.getSnapshot();
+      expect(after.isOnBattery).toBe(true);
+      expect(after.thermalState).toBe("serious");
+      expect(after.speedLimit).toBe(50);
+      // Power-only events must not flip the lag-pressure signal.
+      expect(after.lagPressureActive).toBe(false);
+
+      findPowerHandler("on-ac")!();
+      expect(service.getSnapshot().isOnBattery).toBe(false);
+
+      service.stop();
+    });
+  });
+
   it("does not thrash profiles when pressure oscillates around the hysteresis boundary", () => {
     const { deps } = createDeps();
     const service = new ResourceProfileService(deps);

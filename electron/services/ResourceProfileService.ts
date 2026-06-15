@@ -127,6 +127,15 @@ export interface ResourceProfileDeps {
   hasSustainedRendererSaturation?: () => boolean;
 }
 
+/** Read-only resource-profile state surfaced in the diagnostics export (#10500). */
+export interface ResourceProfileSnapshot {
+  profile: ResourceProfile;
+  thermalState: "unknown" | "nominal" | "fair" | "serious" | "critical";
+  isOnBattery: boolean;
+  speedLimit: number;
+  lagPressureActive: boolean;
+}
+
 export class ResourceProfileService {
   private currentProfile: ResourceProfile = "balanced";
   private candidateProfile: ResourceProfile | null = null;
@@ -233,6 +242,21 @@ export class ResourceProfileService {
 
   getProfile(): ResourceProfile {
     return this.currentProfile;
+  }
+
+  /**
+   * Read-only snapshot of the active resource profile and the pressure inputs
+   * that drive it, for the diagnostics export (#10500). Narrow projection — the
+   * scoring internals (histograms, thresholds, candidate timers) stay private.
+   */
+  getSnapshot(): ResourceProfileSnapshot {
+    return {
+      profile: this.currentProfile,
+      thermalState: this.thermalState,
+      isOnBattery: this.isOnBattery,
+      speedLimit: this.speedLimit,
+      lagPressureActive: this.lagPressureActive,
+    };
   }
 
   /**

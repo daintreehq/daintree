@@ -5,6 +5,7 @@ import { app, screen } from "electron";
 import { sanitizePath } from "./TelemetryService.js";
 import { logBuffer } from "./LogBuffer.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
@@ -477,6 +478,162 @@ async function collectEvents(deps: HandlerDependencies) {
   }
 }
 
+// Gather every window's ProjectViewManager: the per-window `deps.projectViewManager`
+// only covers the requesting window, so fan out across `windowRegistry.all()` to
+// capture all open projects (lesson #8607). Falls back to the single PVM when no
+// registry is wired (older call paths / tests).
+function collectProjectViewManagers(
+  deps: HandlerDependencies
+): Array<{ windowId: number | null; pvm: ProjectViewManager }> {
+  const managers: Array<{ windowId: number | null; pvm: ProjectViewManager }> = [];
+  for (const ctx of deps.windowRegistry?.all() ?? []) {
+    const pvm = ctx.services.projectViewManager;
+    if (pvm) managers.push({ windowId: ctx.windowId, pvm });
+  }
+  if (managers.length === 0 && deps.projectViewManager) {
+    managers.push({ windowId: null, pvm: deps.projectViewManager });
+  }
+  return managers;
+}
+
+// Per-window project→renderer inventory: which projects have views, their
+// webContentsId (the join key to the Blink/ELU renderer samples), lifecycle
+// state, and cache policy. projectPath is sanitized by the final redactDeep pass.
+async function collectProjectViews(deps: HandlerDependencies) {
+  try {
+    // Per-window try/catch: a PVM mid-teardown in one window must not erase
+    // every other window's inventory.
+    return collectProjectViewManagers(deps).map(({ windowId, pvm }) => {
+      try {
+        const cache = pvm.getCacheConfig();
+        return {
+          windowId,
+          maxCachedViews: cache.maxCachedViews,
+          activeProjectId: cache.activeProjectId,
+          views: pvm.getViewInventory(),
+        };
+      } catch {
+        return { windowId, error: "Failed to read project views for window" };
+      }
+    });
+  } catch {
+    return { error: "Failed to collect project views" };
+  }
+}
+
+// Per-renderer Blink heap and event-loop-utilization samples, keyed by
+// webContentsId. Already-collected module-level maps — no new sampling loop.
+// Cross-reference webContentsId with `projectViews` to attribute to a project.
+async function collectRendererMemory() {
+  try {
+    const { getBlinkSamples, getEluSamples } = await import("./ProcessMemoryMonitor.js");
+    const blink = Array.from(getBlinkSamples().entries()).map(([webContentsId, s]) => ({
+      webContentsId,
+      // Electron's BlinkMemoryInfo reports KB, not bytes.
+      allocatedKb: s.allocated,
+      totalKb: s.total,
+      timestamp: s.timestamp,
+    }));
+    const elu = Array.from(getEluSamples().entries()).map(([webContentsId, s]) => ({
+      webContentsId,
+      blockingDurationMs: Math.round(s.blockingDurationMs),
+      sampleWindowMs: s.sampleWindowMs,
+      ratio: Math.round(s.ratio * 100) / 100,
+      timestamp: s.timestamp,
+    }));
+    return { blink, elu };
+  } catch {
+    return { error: "Failed to collect renderer memory" };
+  }
+}
+
+// Bounded rolling main/utility memory trend — the EMA history the monitor
+// already maintains, capped at BUCKET_WINDOW entries per pid. PID-keyed:
+// Electron's ProcessMetric carries no webContentsId, so trends can't be joined
+// to a renderer directly.
+async function collectMemoryTrends() {
+  try {
+    const { getTrendSnapshot } = await import("./ProcessMemoryMonitor.js");
+    return { processes: getTrendSnapshot() };
+  } catch {
+    return { error: "Failed to collect memory trends" };
+  }
+}
+
+// Hibernation + resource-profile runtime state. Both are global singletons
+// reached via their own getters — not threaded through HandlerDependencies.
+async function collectResourceState() {
+  const result: Record<string, unknown> = {};
+  try {
+    const { getHibernationService } = await import("./HibernationService.js");
+    result.hibernation = getHibernationService().getSnapshot();
+  } catch {
+    result.hibernation = { error: "Failed to get hibernation state" };
+  }
+  try {
+    const { getResourceProfileService } = await import("../window/serviceRefs.js");
+    const svc = getResourceProfileService();
+    result.resourceProfile = svc ? svc.getSnapshot() : null;
+  } catch {
+    result.resourceProfile = { error: "Failed to get resource profile" };
+  }
+  return result;
+}
+
+// Top-level summary counts: open projects and views (by lifecycle state) across
+// all windows, plus terminals grouped by agentState. Derived from the same PVM
+// inventory and PtyClient the other sections use.
+async function collectCounts(deps: HandlerDependencies) {
+  const result: Record<string, unknown> = {};
+  try {
+    const contexts = deps.windowRegistry?.all() ?? [];
+    let total = 0;
+    let active = 0;
+    let cached = 0;
+    let loading = 0;
+    const projectIds = new Set<string>();
+    for (const { pvm } of collectProjectViewManagers(deps)) {
+      // Skip a PVM that throws mid-read rather than zeroing every window's count.
+      let inventory: ReturnType<ProjectViewManager["getViewInventory"]>;
+      try {
+        inventory = pvm.getViewInventory();
+      } catch {
+        continue;
+      }
+      for (const v of inventory) {
+        total++;
+        projectIds.add(v.projectId);
+        if (v.state === "active") active++;
+        else if (v.state === "cached") cached++;
+        else loading++;
+      }
+    }
+    result.windows = contexts.length;
+    result.openProjects = projectIds.size;
+    result.views = { total, active, cached, loading };
+  } catch {
+    result.views = { error: "Failed to count views" };
+  }
+
+  try {
+    if (deps.ptyClient) {
+      const terminals = await deps.ptyClient.getAllTerminalsAsync();
+      const byAgentState: Record<string, number> = {};
+      for (const t of terminals) {
+        const key = t.agentState ?? "none";
+        byAgentState[key] = (byAgentState[key] ?? 0) + 1;
+      }
+      result.terminals = { total: terminals.length, byAgentState };
+    } else {
+      result.terminals = { total: 0, byAgentState: {} };
+    }
+  } catch {
+    result.terminals = { error: "Failed to count terminals" };
+  }
+
+  return result;
+}
+
 export async function collectDiagnostics(deps: HandlerDependencies): Promise<unknown> {
   const { payload } = await collectDiagnosticsWithKeys(deps);
   return payload;
@@ -497,6 +654,11 @@ export async function collectDiagnosticsWithKeys(
     { key: "config", fn: collectStoreConfig },
     { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
     { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
+    { key: "projectViews", fn: () => collectProjectViews(deps) },
+    { key: "rendererMemory", fn: collectRendererMemory },
+    { key: "memoryTrends", fn: collectMemoryTrends },
+    { key: "resourceState", fn: collectResourceState },
+    { key: "counts", fn: () => collectCounts(deps) },
     { key: "logs", fn: collectLogs },
     { key: "events", fn: () => collectEvents(deps) },
   ];

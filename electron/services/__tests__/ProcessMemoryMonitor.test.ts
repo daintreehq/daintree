@@ -62,6 +62,7 @@ import {
   RENDERER_ELU_HIGH_RATIO,
   RENDERER_ELU_HIGH_SAMPLE_COUNT,
   hasSustainedRendererSaturation,
+  getTrendSnapshot,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
 
@@ -1693,6 +1694,77 @@ describe("ProcessMemoryMonitor", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
       stop = startAppMetricsMonitor(actions);
       expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
+    });
+  });
+
+  describe("getTrendSnapshot (#10500)", () => {
+    it("is empty immediately after start, before any poll", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
+      stop = startAppMetricsMonitor();
+      expect(getTrendSnapshot()).toEqual([]);
+    });
+
+    it("captures per-pid working-set EMA after polling a monitored process", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+
+      const browser = getTrendSnapshot().find((s) => s.pid === 4242);
+      expect(browser).toBeDefined();
+      // working-set 200 MB seeds the EMA at 200.
+      expect(browser!.emaMb).toBe(200);
+      expect(Array.isArray(browser!.emaHistoryMb)).toBe(true);
+    });
+
+    it("returns deep copies — mutating the snapshot can't corrupt internal state", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
+      stop = startAppMetricsMonitor();
+      // Two ticks fill one EMA-history bucket (BUCKET_TICKS = 2).
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+
+      const first = getTrendSnapshot();
+      const historyLen = first[0]!.emaHistoryMb.length;
+      expect(historyLen).toBeGreaterThan(0);
+      first[0]!.emaHistoryMb.push(99_999);
+      first[0]!.emaMb = -1;
+
+      const second = getTrendSnapshot();
+      expect(second[0]!.emaHistoryMb).toHaveLength(historyLen);
+      expect(second[0]!.emaMb).toBe(200);
+    });
+
+    it("bounds emaHistoryMb (plateaus) and excludes non-monitored process types", () => {
+      mockGetAppMetrics.mockReturnValue([
+        makeMetric("Browser", 200 * 1024, 4242),
+        makeMetric("GPU", 300 * 1024, 7777), // not in MONITORED_TYPES
+      ]);
+      stop = startAppMetricsMonitor();
+
+      // Drive well past BUCKET_WINDOW buckets so the rolling buffer fills.
+      for (let i = 0; i < 64; i++) vi.advanceTimersByTime(30_000);
+      const lenA = getTrendSnapshot().find((s) => s.pid === 4242)!.emaHistoryMb.length;
+
+      for (let i = 0; i < 10; i++) vi.advanceTimersByTime(30_000);
+      const lenB = getTrendSnapshot().find((s) => s.pid === 4242)!.emaHistoryMb.length;
+
+      // The buffer is bounded — it stops growing once full (no copy of the cap).
+      expect(lenA).toBeGreaterThan(0);
+      expect(lenB).toBe(lenA);
+      // Non-monitored process types never enter the trend buffer.
+      expect(getTrendSnapshot().some((s) => s.pid === 7777)).toBe(false);
+    });
+
+    it("clears stale pids when the monitor is restarted", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+      expect(getTrendSnapshot().some((s) => s.pid === 4242)).toBe(true);
+      stop();
+
+      // A fresh monitor must not surface the previous lifetime's pid.
+      stop = startAppMetricsMonitor();
+      expect(getTrendSnapshot()).toEqual([]);
     });
   });
 });

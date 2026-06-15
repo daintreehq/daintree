@@ -17,6 +17,15 @@ export interface HibernationConfig {
   inactiveThresholdHours: number;
 }
 
+/** Runtime hibernation state surfaced in the diagnostics export (#10500). */
+export interface HibernationSnapshot {
+  config: HibernationConfig;
+  /** True while the scheduled-check interval is armed (service is running). */
+  isRunning: boolean;
+  /** Inactivity window before a background project is eligible under memory pressure, in ms. */
+  memoryPressureThresholdMs: number;
+}
+
 const DEFAULT_CONFIG: HibernationConfig = {
   enabled: false,
   inactiveThresholdHours: 24,
@@ -68,6 +77,9 @@ export class HibernationService {
   }
 
   setMemoryPressureThresholdMs(ms: number): void {
+    // Reject non-finite/negative values: they'd otherwise surface in the
+    // diagnostics snapshot (NaN coerces to null in JSON) and silently mislead.
+    if (!Number.isFinite(ms) || ms < 0) return;
     this.memoryPressureInactiveMs = ms;
   }
 
@@ -386,6 +398,20 @@ export class HibernationService {
 
   getConfig(): HibernationConfig {
     return this.normalizeConfig(store.get("hibernation"));
+  }
+
+  /**
+   * Read-only runtime snapshot for the diagnostics export (#10500). The service
+   * keeps no per-project hibernation records — it kills PTYs and forgets — so
+   * the diagnostic value is the config plus whether the scheduler is live and
+   * the memory-pressure inactivity window currently in effect.
+   */
+  getSnapshot(): HibernationSnapshot {
+    return {
+      config: this.getConfig(),
+      isRunning: this.checkInterval !== null,
+      memoryPressureThresholdMs: this.memoryPressureInactiveMs,
+    };
   }
 
   updateConfig(config: Partial<HibernationConfig>): void {
