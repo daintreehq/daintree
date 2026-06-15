@@ -470,6 +470,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           restoreTerminalOrder: options.restoreTerminalOrder,
           safeMode: hydrateResult.safeMode,
           visiblePanelId,
+          // May still read the "balanced" default if the useResourceProfile
+          // hook's getResourceProfile() IPC hasn't resolved yet on a cold
+          // first hydration (#10528). Acceptable: it only affects background/
+          // orphan stagger sizing, errs toward more-aggressive, and self-
+          // corrects on the next project switch.
           resourceProfile: useResourceProfileStore.getState().profile,
           logHydrationInfo,
         });
