@@ -156,9 +156,7 @@ describe("PluginHostGit", () => {
     it("commit rejects before any work when the signal is already aborted", async () => {
       const { git, diff, commit } = fakeGit();
       const host = new PluginHostGit("p", async () => git);
-      await expect(
-        host.commit("/wt", { message: "msg" }, AbortSignal.abort())
-      ).rejects.toThrow();
+      await expect(host.commit("/wt", { message: "msg" }, AbortSignal.abort())).rejects.toThrow();
       expect(diff).not.toHaveBeenCalled();
       expect(commit).not.toHaveBeenCalled();
     });

@@ -1137,11 +1137,7 @@ export interface PluginGitApi {
    * Unified diff for the worktree (or one `filePath` relative to it). Returns
    * the raw diff text. Gated on `git:read`. Pass `options.signal` to cancel.
    */
-  diff(
-    worktreePath: string,
-    filePath?: string,
-    options?: PluginHostCallOptions
-  ): Promise<string>;
+  diff(worktreePath: string, filePath?: string, options?: PluginHostCallOptions): Promise<string>;
   /**
    * Stage paths (relative to `worktreePath`, or all changes when omitted).
    * Gated on `git:write`. Recorded in the audit trail. Pass `options.signal` to cancel.
