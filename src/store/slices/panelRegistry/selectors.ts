@@ -5,6 +5,7 @@ import {
   isPtyPanel,
   isReviewPanel,
   type PanelInstance,
+  type PanelKind,
 } from "@shared/types/panel";
 import { isRegisteredPanelKind } from "@shared/config/panelKindRegistry";
 
@@ -71,9 +72,17 @@ export function getNarrowPanel(
  * Sync and side-effect free — safe to call inside Zustand selectors and memos.
  */
 export function isPanelRenderEligible(panel: PanelInstance): boolean {
-  const kind = panel.kind ?? "terminal";
-  if (isBuiltInPanelKind(kind)) return true;
-  return isRegisteredPanelKind(kind) || Boolean(panel.pluginId) || kind.includes(".");
+  // Widen to the open `PanelKind`: the carrier types `panel.kind` as only the
+  // built-in discriminants, but plugin panels are cast into the carrier with a
+  // dotted plugin-kind string at runtime, so the plugin branches below are NOT
+  // statically dead — read the kind as the open union to keep them live.
+  const kind: PanelKind = panel.kind ?? "terminal";
+  return (
+    isBuiltInPanelKind(kind) ||
+    isRegisteredPanelKind(kind) ||
+    Boolean(panel.pluginId) ||
+    kind.includes(".")
+  );
 }
 
 /**

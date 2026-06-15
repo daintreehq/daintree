@@ -7,8 +7,6 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { PanelInstance } from "@shared/types/panel";
-
 vi.mock("@/clients", () => ({
   terminalClient: {
     spawn: vi.fn(),
@@ -88,8 +86,25 @@ beforeEach(() => {
 
 const { usePanelStore } = await import("../../../panelStore");
 
-function getPanel(id: string): PanelInstance | undefined {
-  return usePanelStore.getState().panelsById[id];
+// Plugin panels are cast into the carrier, and runtimeStatus is set at runtime
+// by addPanel for every kind even though it isn't declared on every
+// PanelInstance variant — read it through a structural shape.
+function getPanel(id: string): { runtimeStatus?: string } | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- carrier read; runtimeStatus is set at runtime on every kind
+  return usePanelStore.getState().panelsById[id] as { runtimeStatus?: string } | undefined;
+}
+
+// Extension panel kinds are intentionally excluded from the AddPanelOptions
+// union (a `kind: string` member would defeat discriminated-union narrowing for
+// built-in kinds), so spawning a plugin kind widens at the call boundary — the
+// same documented pattern used by panel.openPluginPanel.
+type AddPanelFn = ReturnType<typeof usePanelStore.getState>["addPanel"];
+function spawnPlugin(
+  addPanel: AddPanelFn,
+  options: Record<string, unknown>
+): Promise<string | null> {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- documented extension-panel spawn boundary
+  return addPanel(options as Parameters<AddPanelFn>[0]);
 }
 
 describe("addPanel non-PTY active-worktree null guard (#10512)", () => {
@@ -102,7 +117,7 @@ describe("addPanel non-PTY active-worktree null guard (#10512)", () => {
   it("keeps a non-PTY plugin panel running when the active worktree is not yet hydrated", async () => {
     activeWorktreeId = null; // worktree store still null (mid project-switch)
     const { addPanel } = usePanelStore.getState();
-    const id = await addPanel({
+    const id = await spawnPlugin(addPanel, {
       kind: "acme.notes",
       worktreeId: "wt-1",
       requestedId: "plugin-1",
@@ -119,7 +134,7 @@ describe("addPanel non-PTY active-worktree null guard (#10512)", () => {
   it("backgrounds a non-PTY plugin panel that belongs to a different, hydrated worktree", async () => {
     activeWorktreeId = "wt-active"; // worktree store hydrated, panel is elsewhere
     const { addPanel } = usePanelStore.getState();
-    const id = await addPanel({
+    const id = await spawnPlugin(addPanel, {
       kind: "acme.notes",
       worktreeId: "wt-other",
       requestedId: "plugin-2",
