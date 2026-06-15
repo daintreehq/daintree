@@ -779,12 +779,12 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // a late-settling view is corrected on its own. Each pass is visibility- and
     // box-guarded down the stack (repaintForReveal / reconcileGeometryFresh), so
     // extra passes are near-no-ops — better too many redraws than a garbled pane.
-    // 1s/2s/3.5s catch the common fast-settle case; 6s covers a late layout
-    // change that lands after the early passes. The hard guarantee past the 10s
+    // Kept deliberately lean: 1s catches the common compositor/layout/observer
+    // settle, 3s catches a late straggler. The hard guarantee past the 10s
     // project-switch resize suppression is owned by the service-side
     // suppression-clear redraw (suppressResizesDuringProjectSwitch), so the
-    // cadence intentionally stops before it rather than racing it.
-    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 2000, 3500, 6000];
+    // cadence stops well before it rather than piling on redundant passes.
+    const REVEAL_BACKSTOP_DELAYS_MS = [1000, 3000];
     let backstopTimers: ReturnType<typeof setTimeout>[] = [];
     function clearRevealBackstops() {
       for (const timer of backstopTimers) clearTimeout(timer);

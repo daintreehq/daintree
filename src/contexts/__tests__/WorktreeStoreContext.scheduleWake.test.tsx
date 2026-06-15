@@ -285,28 +285,20 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     flushRepaintGate();
     expect(repaintMock).toHaveBeenCalledTimes(1);
 
-    // Each backstop delay (1s / 2s / 3.5s / 6s) re-runs the same repaint without
-    // any further user action — this is what replaces the manual Redraw click.
+    // Each backstop delay (1s / 3s) re-runs the same repaint without any further
+    // user action — this is what replaces the manual Redraw click.
     act(() => vi.advanceTimersByTime(1000));
     flushRepaintGate();
     expect(repaintMock).toHaveBeenCalledTimes(2);
 
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(2000));
     flushRepaintGate();
     expect(repaintMock).toHaveBeenCalledTimes(3);
-
-    act(() => vi.advanceTimersByTime(1500));
-    flushRepaintGate();
-    expect(repaintMock).toHaveBeenCalledTimes(4);
-
-    act(() => vi.advanceTimersByTime(2500));
-    flushRepaintGate();
-    expect(repaintMock).toHaveBeenCalledTimes(5);
 
     // No further passes are scheduled past the last backstop.
     act(() => vi.advanceTimersByTime(10_000));
     flushRepaintGate();
-    expect(repaintMock).toHaveBeenCalledTimes(5);
+    expect(repaintMock).toHaveBeenCalledTimes(3);
   });
 
   it("suppresses backstop repaints once the view is hidden again", async () => {
