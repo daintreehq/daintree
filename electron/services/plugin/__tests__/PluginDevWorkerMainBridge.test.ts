@@ -532,6 +532,7 @@ describe("PluginDevWorkerMainBridge", () => {
 
     it("kills spawned processes on dispose", async () => {
       const { host, workerHost, bridge } = makeBridge();
+      bridge.waitForActivation().catch(() => {});
       const handle = await spawn(workerHost, host);
       bridge.dispose();
       expect(handle.kill).toHaveBeenCalled();

@@ -127,6 +127,12 @@ export class PluginDevWorkerMainBridge {
       this.activationResolve = resolve;
       this.activationReject = reject;
     });
+    // Guard the first-activation promise so a rejection that lands before any
+    // consumer awaited it (dispose / crash-loop right after construction) can't
+    // surface as an unhandled rejection. The real consumer still observes the
+    // rejection via `waitForActivation()`. Mirrors `PluginDevWorkerHost`'s
+    // `readyPromise.catch` guard.
+    this.activationPromise.catch(() => undefined);
 
     this.workerHost.on("worker-message", this.onWorkerMessage);
     this.workerHost.on("reloading", this.onReloading);
