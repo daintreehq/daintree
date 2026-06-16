@@ -71,9 +71,9 @@ describe("copyPluginExtraAssets", () => {
   });
 
   it("returns an empty list when the source directory does not exist", () => {
-    expect(copyPluginExtraAssets(path.join(workDir, "missing"), path.join(workDir, "dest"))).toEqual(
-      []
-    );
+    expect(
+      copyPluginExtraAssets(path.join(workDir, "missing"), path.join(workDir, "dest"))
+    ).toEqual([]);
   });
 
   it("is idempotent across repeated runs", () => {
