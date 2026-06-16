@@ -169,6 +169,38 @@ describe("useNewTerminalPalette", () => {
     expect(ids).not.toContain("codex");
   });
 
+  it("keeps a plugin-contributed agent visible even when its availability is missing (#10560)", () => {
+    // A plugin agent is never hidden by availability the way a built-in is — it
+    // stays reachable so the user can launch it (or hit the install path).
+    cliAvailabilityState.availability = { claude: "ready", "acme-agent": "missing" };
+    getEffectiveAgentIdsMock.mockReturnValue(["claude", "acme-agent"]);
+    getLaunchOptionsMock.mockReturnValue([
+      makeOption("claude", { launchAgentId: "claude" }),
+      makeOption("acme-agent", { launchAgentId: "acme-agent" }),
+      makeOption("terminal"),
+    ]);
+
+    const { result } = render();
+
+    const ids = result.current.results.map((opt) => opt.id);
+    expect(ids).toContain("acme-agent");
+  });
+
+  it("hides a built-in agent that is missing but keeps a missing plugin agent (#10560)", () => {
+    cliAvailabilityState.availability = { codex: "missing", "acme-agent": "missing" };
+    getEffectiveAgentIdsMock.mockReturnValue(["codex", "acme-agent"]);
+    getLaunchOptionsMock.mockReturnValue([
+      makeOption("codex", { launchAgentId: "codex" }),
+      makeOption("acme-agent", { launchAgentId: "acme-agent" }),
+    ]);
+
+    const { result } = render();
+
+    const ids = result.current.results.map((opt) => opt.id);
+    expect(ids).not.toContain("codex");
+    expect(ids).toContain("acme-agent");
+  });
+
   it("includes non-agent options (terminal, browser) regardless of availability", () => {
     cliAvailabilityState.availability = {
       claude: "missing",

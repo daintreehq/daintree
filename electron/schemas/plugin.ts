@@ -310,7 +310,11 @@ function isSafePluginAgentCommand(command: string): boolean {
   if (command.includes("\0")) return false;
   const normalized = command.slice(2);
   if (normalized === "" || normalized === ".") return false;
-  return !command.split("/").includes("..");
+  // Reject empty (`//`), current-dir (`.`), and traversal (`..`) segments so the
+  // registration-time resolve cannot escape the plugin dir or normalize oddly.
+  return normalized
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 export const AgentContributionSchema = z

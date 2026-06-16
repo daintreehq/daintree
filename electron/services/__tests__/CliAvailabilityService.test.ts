@@ -2186,4 +2186,73 @@ describe("CliAvailabilityService", () => {
       expect(stored["duplicate-cli-warning:claude"]).toBe(true);
     });
   });
+
+  describe("plugin-contributed agent commands (issue #10560)", () => {
+    it("probes an absolute plugin command path via the filesystem instead of rejecting it", async () => {
+      const { registerPluginAgents, clearPluginAgentRegistryForTests } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      const absoluteCommand = join(homedir(), "plugins", "acme", "bin", "agent");
+
+      try {
+        registerPluginAgents("acme.plugin", [
+          {
+            id: "acme-agent",
+            name: "Acme Agent",
+            command: absoluteCommand,
+            color: "#3366ff",
+            iconId: "terminal",
+          },
+        ]);
+
+        // Built-in PATH binaries stay missing; only the plugin's absolute file resolves.
+        mockedExecFileSync.mockImplementation(() => {
+          throw new Error("Command not found");
+        });
+        mockedAccess.mockImplementation(async (p) => {
+          if (String(p) === absoluteCommand) return undefined;
+          throw new Error("ENOENT");
+        });
+
+        const result = await service.checkAvailability();
+
+        // The absolute path is not rejected by VALID_COMMAND_RE — it is probed and found.
+        expect(result["acme-agent"]).toBe("ready");
+        expect(service.getDetails()?.["acme-agent"]?.resolvedPath).toBe(absoluteCommand);
+      } finally {
+        clearPluginAgentRegistryForTests();
+      }
+    });
+
+    it("reports an absolute plugin command as missing when the file does not exist", async () => {
+      const { registerPluginAgents, clearPluginAgentRegistryForTests } =
+        await import("../../../shared/config/pluginAgentRegistry.js");
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      try {
+        registerPluginAgents("acme.plugin", [
+          {
+            id: "acme-agent",
+            name: "Acme Agent",
+            command: join(homedir(), "plugins", "acme", "bin", "agent"),
+            color: "#3366ff",
+            iconId: "terminal",
+          },
+        ]);
+
+        mockedExecFileSync.mockImplementation(() => {
+          throw new Error("Command not found");
+        });
+        mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+        const result = await service.checkAvailability();
+
+        expect(result["acme-agent"]).toBe("missing");
+      } finally {
+        clearPluginAgentRegistryForTests();
+      }
+    });
+  });
 });
