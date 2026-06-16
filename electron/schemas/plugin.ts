@@ -4,6 +4,8 @@ import * as semver from "semver";
 import { z } from "zod";
 import { BUILT_IN_PLUGIN_CAPABILITIES, PLUGIN_CATEGORY_IDS } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
+import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
 import type {
   PluginManifest,
   PanelContribution,
@@ -21,6 +23,17 @@ import type {
 export const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// The full set of built-in action ids a plugin contribution may reference:
+// `BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId`
+// (shared/types/actions.ts). `BUILT_IN_ACTION_IDS` covers only the runtime
+// half — keybinding-driven ids (nav.*, tab.*, app.settings, layout.undo, …)
+// live in `KEY_ACTION_VALUES` and are equally valid dispatch targets, so both
+// must seed the allowlist or a legitimate keybinding contribution is rejected.
+const BUILT_IN_ACTION_ID_SET: ReadonlySet<string> = new Set([
+  ...BUILT_IN_ACTION_IDS,
+  ...KEY_ACTION_VALUES,
+]);
 
 export const PanelContributionSchema = z
   .object({
@@ -849,6 +862,37 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
           });
         }
       });
+
+      // Every contributed `actionId` (toolbar buttons, menu items, keybindings,
+      // context menus) must resolve to a real action at runtime, else the
+      // contribution paints an inert button/binding that silently does nothing
+      // when invoked (#10565). An `actionId` resolves if it is a built-in action
+      // or lives in the plugin's own namespace — the latter is either declared in
+      // `contributes.commands` (namespaced `{name}.{id}` at load) or registered
+      // imperatively via `host.registerAction`, which is invisible at parse time,
+      // so we gate on namespace ownership rather than command membership. A
+      // reference into a foreign namespace can never resolve and is rejected.
+      const ownNamespacePrefix = `${manifest.name}.`;
+      const actionIdContributions = [
+        ["toolbarButtons", manifest.contributes.toolbarButtons],
+        ["menuItems", manifest.contributes.menuItems],
+        ["keybindings", manifest.contributes.keybindings],
+        ["contextMenus", manifest.contributes.contextMenus],
+      ] as const;
+      for (const [arrayName, entries] of actionIdContributions) {
+        entries.forEach((entry, index) => {
+          const { actionId } = entry;
+          if (BUILT_IN_ACTION_ID_SET.has(actionId) || actionId.startsWith(ownNamespacePrefix)) {
+            return;
+          }
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", arrayName, index, "actionId"],
+            message: `Contributed actionId "${actionId}" does not reference a built-in action or an action in this plugin's "${manifest.name}" namespace — it can never resolve.`,
+            params: { errorCode: "action_id_unknown_namespace" },
+          });
+        });
+      }
     });
 }
 

@@ -1449,7 +1449,7 @@ describe("PluginService", () => {
             id: "btn",
             label: "Btn",
             iconId: "icon",
-            actionId: "test.action",
+            actionId: "acme.default-priority.action",
           },
         ],
       },
@@ -3534,8 +3534,10 @@ describe("engines.daintree compatibility gate", () => {
       engines: { daintree: "^1.0.0" },
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
-        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        toolbarButtons: [
+          { id: "b", label: "B", iconId: "i", actionId: "acme.skip-side-effects.act" },
+        ],
+        menuItems: [{ label: "L", actionId: "acme.skip-side-effects.act", location: "terminal" }],
       },
     });
 
@@ -3681,8 +3683,10 @@ describe("Plugin unload lifecycle", () => {
       version: "1.0.0",
       contributes: {
         panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
-        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+        toolbarButtons: [
+          { id: "btn", label: "Btn", iconId: "icon", actionId: "acme.unloadable.act" },
+        ],
+        menuItems: [{ label: "L", actionId: "acme.unloadable.act", location: "terminal" }],
       },
     });
 
@@ -7362,8 +7366,10 @@ describe("Plugin exception containment (#9276)", () => {
         version: "1.0.0",
         contributes: {
           panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-          toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
-          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+          toolbarButtons: [
+            { id: "btn", label: "Btn", iconId: "icon", actionId: "acme.cascade-test.act" },
+          ],
+          menuItems: [{ label: "L", actionId: "acme.cascade-test.act", location: "terminal" }],
         },
       });
 
@@ -7487,8 +7493,12 @@ describe("Plugin exception containment (#9276)", () => {
         version: "1.0.0",
         contributes: {
           panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
-          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
-          menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+          toolbarButtons: [
+            { id: "b", label: "B", iconId: "i", actionId: "acme.remove-handlers-throws.act" },
+          ],
+          menuItems: [
+            { label: "L", actionId: "acme.remove-handlers-throws.act", location: "terminal" },
+          ],
         },
       });
       const service = new PluginService(tmpDir);

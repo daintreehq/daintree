@@ -14,14 +14,14 @@
         "id": "ping",
         "label": "Hello ping",
         "iconId": "sparkles",
-        "actionId": "daintree.hello.ping",
+        "actionId": "daintree.hello.greet",
         "priority": 5
       }
     ],
     "menuItems": [
       {
         "label": "Hello ping",
-        "actionId": "daintree.hello.ping",
+        "actionId": "daintree.hello.greet",
         "location": "help"
       }
     ],
