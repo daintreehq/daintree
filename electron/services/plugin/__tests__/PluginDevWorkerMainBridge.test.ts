@@ -41,7 +41,9 @@ function makeHost() {
       onDidChange: vi.fn(() => vi.fn()),
     },
     storage: {
-      get: vi.fn(async () => undefined),
+      // Annotated `Promise<unknown>` so a test can `mockResolvedValueOnce` a
+      // concrete value (the default-inferred `Promise<undefined>` would reject it).
+      get: vi.fn(async (): Promise<unknown> => undefined),
       set: vi.fn(async () => {}),
       delete: vi.fn(async () => {}),
       onDidChange: vi.fn((_key: any, _cb: any) => vi.fn()),
