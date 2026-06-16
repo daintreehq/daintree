@@ -156,11 +156,18 @@ function copyBuiltInWorkflows() {
  * Plugin source subdirectories the asset-copy step must NOT mirror verbatim:
  * `main/` is compiled by esbuild into the same output tree, `renderer/` is
  * consumed by the host's Vite renderer build (not loaded by the plugin at
- * runtime), and `__tests__/` is dev-only. Every other subdirectory a plugin
- * bundles (`bin/`, `mcp/`, `view/`, …) is shipped as-is so `./`-relative
- * `command`/`args` paths resolve at runtime instead of ENOENT-ing (#10579).
+ * runtime), `shared/` holds `import type`-only siblings esbuild erases (never
+ * loaded at runtime — same compile-time category as `main`/`renderer`), and
+ * `__tests__/` is dev-only. Every other subdirectory a plugin bundles (`bin/`,
+ * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
+ * resolve at runtime instead of ENOENT-ing (#10579).
  */
-export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set(["main", "renderer", "__tests__"]);
+export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
+  "main",
+  "renderer",
+  "shared",
+  "__tests__",
+]);
 
 /**
  * True when `child` resolves to a path strictly inside `parent` — guards the
