@@ -454,3 +454,19 @@ export const BUILT_IN_ACTION_IDS = [
 ] as const;
 
 export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
+
+// Built-in actions flagged `denyPluginDispatch: true` (terminal input injection,
+// fleet command relays) can never be dispatched from a plugin contribution — the
+// host refuses the dispatch at runtime. A contribution wired to one of these
+// paints a button that is dead on arrival, so the manifest validator rejects it
+// at authoring time. `satisfies readonly BuiltInRuntimeActionId[]` is a
+// compile-time drift guard: renaming or removing any of these built-ins breaks
+// the build instead of silently leaving a stale entry here (#8341).
+export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
+  "terminal.sendCommand",
+  "terminal.paste",
+  "fleet.accept",
+  "fleet.reject",
+  "fleet.interrupt",
+  "fleet.retryFailures",
+] as const satisfies readonly BuiltInRuntimeActionId[];
