@@ -486,4 +486,34 @@ describe("JIT capability consent gating (#10524)", () => {
     await expect(host.fs.writeFile(join(allowed, "builtin.txt"), "x")).resolves.toBeUndefined();
     expect(bridge).not.toHaveBeenCalled();
   });
+
+  it("blocks git.add and git.commit and never reaches simple-git when consent is denied", async () => {
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+    const git = {
+      diff: vi.fn().mockResolvedValue("diff --git a/x b/x\n+line"),
+      add: vi.fn().mockResolvedValue(undefined),
+      commit: vi.fn().mockResolvedValue({ commit: "abc1234" }),
+    } as unknown as SimpleGit;
+    (
+      svc as unknown as { _setHostGitFactoryForTests(f: () => Promise<SimpleGit>): void }
+    )._setHostGitFactoryForTests(async () => git);
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+      _createHostForTests(id: string): PluginHostApi;
+    };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(["git:read", "git:write"], [allowed]),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+    });
+    const host = seam._createHostForTests("acme.fsgit");
+
+    await expect(host.git.add(allowed, ["a.txt"])).rejects.toThrow(/PERMISSION_REQUIRED/);
+    await expect(host.git.commit(allowed, { message: "feat: x" })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(git.add).not.toHaveBeenCalled();
+    expect(git.commit).not.toHaveBeenCalled();
+  });
 });

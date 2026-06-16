@@ -4056,6 +4056,53 @@ describe("createHost — host.process (managed processes, #9234)", () => {
     expect(manager.runningCount("acme.proc-cap")).toBe(1);
   });
 
+  it("blocks the spawn and never reaches the manager when consent is denied (#10524)", async () => {
+    await writePlugin("proc-deny", {
+      name: "acme.proc-deny",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const spawner = vi.fn(() => makeFakeChild().child);
+    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
+    service._setProcessManagerForTests(manager);
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-deny"
+    );
+
+    await expect(host.process.spawn("node", { args: ["server.js"] })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(spawner).not.toHaveBeenCalled();
+    expect(manager.runningCount("acme.proc-deny")).toBe(0);
+  });
+
+  it("does not spend a consent prompt on an invalid spawn that fails validation (#10524)", async () => {
+    await writePlugin("proc-invalid", {
+      name: "acme.proc-invalid",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const bridge = vi.fn(async () => "approved-and-pin" as const);
+    getPluginCapabilityConsentService().setConsentBridge(bridge);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-invalid"
+    );
+
+    // An empty command fails validation; the prompt must NOT fire (else a plugin
+    // could bank a silent grant via a deliberately-doomed call).
+    await expect(host.process.spawn("")).rejects.toThrow(/non-empty string/);
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
   it("kills outstanding processes when the plugin is unloaded", async () => {
     await writePlugin("proc-unload", {
       name: "acme.proc-unload",

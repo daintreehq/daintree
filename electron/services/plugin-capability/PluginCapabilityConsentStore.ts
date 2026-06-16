@@ -94,6 +94,12 @@ export class PluginCapabilityConsentStore {
       }
     }
     if (!changed) return true;
+    // Retry the flush once internally on a transient failure. The in-memory
+    // grants are already dropped, so a caller-side `revoke() || revoke()` retry
+    // would short-circuit on the second call (nothing left to delete →
+    // `!changed` → `true`) and never re-attempt the persist — the flush must be
+    // retried here, where the empty snapshot is what we re-write.
+    if (this.flush()) return true;
     return this.flush();
   }
 

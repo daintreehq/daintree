@@ -948,13 +948,13 @@ export class PluginInstaller {
 
       // Purge JIT host-capability grants for the same reason — a same-name
       // reinstall must re-prompt on first use of shell:exec / fs:*-write /
-      // git:write rather than inherit a prior grant (#10524). Same durability
-      // contract as the MCP consent purge above: retry once, log loudly on a
-      // persist failure, never strand the uninstall.
+      // git:write rather than inherit a prior grant (#10524). Durable by
+      // contract: revokeAllForPlugin retries the flush internally, so a single
+      // call already covers a transient persist failure (a caller-side
+      // `x() || x()` retry would no-op the second call).
       try {
         const capConsent = getPluginCapabilityConsentService();
-        const purged =
-          capConsent.revokeAllForPlugin(pluginId) || capConsent.revokeAllForPlugin(pluginId);
+        const purged = capConsent.revokeAllForPlugin(pluginId);
         if (!purged) {
           console.error(
             `[PluginService] capability consent purge for "${pluginId}" failed to persist after a retry; stale grants may rehydrate on restart — revoke them manually from plugin capability settings`
