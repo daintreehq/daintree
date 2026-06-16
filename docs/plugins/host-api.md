@@ -488,7 +488,7 @@ const dispose = await host.fs.watch(["/Users/me/.acme/data"], (changedPath) => {
 
 `host.fs` is a sanctioned, contained, audited filesystem path. Every argument is resolved against your declared `scopes.fs.allowedPaths` and realpath-contained to one of those roots — a `..` traversal or a symlink that escapes a root is rejected with a `PATH_NOT_ALLOWED:` error, mirroring the `plugin://` protocol handler's discipline. This is the **runtime enforcement of `scopes.fs.allowedPaths`** (previously advisory). Reads gate on `fs:project-read` / `fs:user-data-read`, writes on `fs:project-write` / `fs:user-data-write`; a missing capability rejects with a `PERMISSION_REQUIRED:` error. Unlike the app's `files.read` IPC, `readFile` carries **no 500KB / binary cap** — it is a deliberate plugin API. Writes are recorded in the audit trail, and `watch` watchers are torn down on unload. `host.fs` is NOT revoke-guarded — call it from timers and subscription callbacks.
 
-**Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` still runs in-process and can call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives a contained, audited path; it does not seal the in-process one.
+**Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
 
 ## `git` — host-mediated git, scoped to a worktree
 
@@ -586,15 +586,10 @@ Deliberately not part of the host API:
 
 If you have a legitimate need that isn't covered, open an issue with the use case.
 
-## Module cache and memory
+## Process model and memory
 
-Production plugins are loaded by `import()`-ing the plugin's main module into Daintree's main process — in-process, not in an isolated worker. Node's ESM module cache is keyed by the module's file URL and is never evicted within a process lifetime, and Daintree does not bust that cache on unload. This is an accepted limitation for 1.0; the behavior below is the contract, not a bug.
+User-installed plugins — whether sideloaded, installed from a `.dntr` or URL, or `dev`-linked — run **out-of-process** in a `utilityProcess.fork` worker (#10526). Your `main` executes in a child process with its own module realm; the host bridges every `host.*` call and registration over a MessagePort. This is what makes teardown clean: when a plugin is unloaded (uninstall, disable, or dev reload), the host runs the full disposal cascade — IPC handlers, actions, forge and file-decoration providers, worktree subscriptions, and the cleanup function your `activate()` returned — and then **kills the worker**, so the plugin's entire module realm (module-scope `let`/`const` bindings, import-time singletons, stray timers or connections) is reclaimed. There is no ESM module-cache leak and no module-scope state surviving across a reload; dev hot-reload works for exactly this reason.
 
-When a plugin is unloaded (uninstall, disable, or hot reload), the host runs the full disposal cascade: every registration is torn down — IPC handlers, actions, forge and file-decoration providers, worktree subscriptions, and the cleanup function your `activate()` returned. What it cannot do is evict the plugin module from V8's module cache. The module's namespace object, and any state held in module-scope (top-level `let`/`const` bindings, singletons constructed at import time, timers or connections opened outside `activate()`), stay resident in the main-process heap for the rest of the session.
+You should still keep teardown-able work inside `activate()` and its returned cleanup rather than module scope — that's the disposal contract — but you are not paying a per-reload memory penalty for getting it wrong, because the worker is discarded wholesale.
 
-Two consequences follow for production plugins:
-
-- **No hot reload.** Re-importing the same file URL returns the cached module rather than re-evaluating it, so editing an installed plugin's code has no effect until Daintree restarts. Put all teardown-able work inside `activate()` and its returned cleanup; never rely on module-scope re-initialization between loads.
-- **Module-scope state persists across load/unload cycles.** If a plugin is unloaded and re-loaded in the same session, module-level variables retain their prior values and static-init memory is not reclaimed. Treat module scope as process-lifetime state and keep per-activation state inside `activate()`.
-
-Dev-mode plugins (`daintree-plugin dev`) are exempt: they run in a separate `utilityProcess.fork` child, so each reload gets a fresh module cache and module-scope state never leaks across reloads. Hot reload works in dev for exactly this reason. The limitation above applies only to installed production plugins running in-process.
+The one behavior to design around: **`registerForgeProvider` is a no-op out-of-process.** A forge provider's `parseRemote` and URL builders are synchronous and can't cross the async MessagePort, so forge providers are usable only by Daintree's **built-in** plugins — the exception to the worker model. Built-ins activate in-process via `import()` because they're trusted, app-bundled, and never unloaded. (An in-process built-in module is never evicted from V8's cache, but since built-ins are never uninstalled that residue is inert.) See [Architecture → Activation](./architecture.md#activation).

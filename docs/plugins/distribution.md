@@ -151,7 +151,7 @@ This is the right distribution method for:
 - Team-internal plugins shared via a private repo
 - Anyone who wants to audit or modify a plugin before running it
 
-**Dev plugins:** the hot-reload dev loop (`daintree-plugin dev`) is planned (F32b) and not yet available — the command is registered but fails immediately (`packages/daintree-plugin/src/cli.ts`). Until it ships, sideload manually using the `git clone … && npm install && npm run build` steps above and restart to pick up changes.
+**Dev plugins:** for active development, `daintree-plugin dev` hot-reloads a plugin on every save instead of repackaging — see [Development loop](./dev-loop.md#daintree-plugin-dev). Manual sideload (the `git clone … && npm install && npm run build` steps above, then restart to pick up changes) is the alternative when you want the production load path or don't have the CLI on hand.
 
 ## File install
 

@@ -71,7 +71,7 @@ What it does, in order:
 
 Press Ctrl-C (or send SIGTERM) to stop: the watcher is killed, Daintree is asked to unload the plugin (`plugin.dev.stop`), and the `.dev-marker` plus the symlink Daintree-`dev` created are removed. A second Ctrl-C while teardown is in flight exits immediately.
 
-One host method is unavailable in hot-reload dev mode: `registerForgeProvider`. Forge providers require synchronous host methods (`parseRemote`, URL builders) that can't cross the dev worker's async MessagePort boundary, so a `registerForgeProvider` call in dev logs a warning and is skipped. Everything else — including `host.process.spawn` and `host.fs.watch`, whose handles and subscriptions are proxied over the port and survive a reload — works in dev. To exercise a forge provider, package and install the plugin (the manual loop above), which runs it in-process.
+One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Forge providers require synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async MessagePort boundary, so a `registerForgeProvider` call logs a warning and is skipped. Everything else — including `host.process.spawn` and `host.fs.watch`, whose handles and subscriptions are proxied over the port and survive a reload — works under `dev`. Note this is **not** a dev-only limitation: every user-installed plugin runs in a worker (see [Architecture → Activation](./architecture.md#activation)), so packaging and installing the plugin doesn't restore forge support either. Only Daintree's built-in plugins run in-process and can register forge providers — a known architectural gap, not something a third-party plugin can work around today.
 
 ### `daintree-plugin validate`
 

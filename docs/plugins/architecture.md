@@ -51,10 +51,12 @@ A plugin's `activate(host)` function runs when something first needs the plugin'
 - User runs a plugin-registered command
 - User opens a plugin-contributed panel
 
+**User-installed plugins activate out-of-process.** Every sideloaded, `.dntr`/URL-installed, or `dev`-linked plugin runs inside a `utilityProcess.fork` worker (#10526): its `main` executes in a child process with its own module realm, and the host bridges every `host.*` call and registration over a MessagePort. This gives clean teardown (unload kills the worker, reclaiming the whole module realm — no ESM-cache leak, no module-scope state surviving a reload) plus OS-level crash isolation. **Built-in plugins are the exception** — they stay on the in-process `import()` loader because they're trusted, app-bundled, and never unloaded, and because the GitHub built-in's forge provider exposes synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async port.
+
 When triggered, Daintree:
 
 1. Resolves the plugin's `main` file path relative to the plugin directory
-2. Imports it via `pathToFileURL()` + `import()` with a cache-busting query string (for hot reload)
+2. Loads the module — in the worker for user plugins, or in-process via `pathToFileURL()` + `import()` for built-ins
 3. Calls the exported `activate(host)` function
 4. Stores the cleanup function (if returned)
 5. Enforces a 5-second timeout via `Promise.race` — exceeded activations are marked failed
@@ -84,7 +86,7 @@ On plugin unload, `PluginService.unloadPlugin()` runs these cleanups in order:
 7. Panel kinds contributed via manifest
 8. MCP subprocess lifecycle (sent SIGTERM, then SIGKILL after grace period)
 
-After disposal, the plugin's module is orphaned. Node's module cache still holds it but no live references point to it — garbage collection claims it eventually.
+For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
 
 ## Renderer host
 
