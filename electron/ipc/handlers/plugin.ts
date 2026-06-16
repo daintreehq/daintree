@@ -496,6 +496,19 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
   return getPluginPanelKinds();
 }
 
+/**
+ * Implicit activation for contributed panel views (#10523): force the plugin
+ * owning `panelKindId` to `activate()` before the renderer imports its
+ * `plugin://` module, so handlers bound during `activate()` are live when the
+ * view first renders. `activatePlugin` never rejects, so this resolves even
+ * when activation fails — the failure surfaces as a `loadError` and the view's
+ * module import then fails through the host's ErrorBoundary retry path. A no-op
+ * once the owning plugin is already activated, or when the kind id is unknown.
+ */
+async function handleActivateForView(panelKindId: string): Promise<void> {
+  await (await getPluginService()).activatePluginForView(panelKindId);
+}
+
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   // Same init-race guard as the surrounding pull-on-mount handlers (#9285) —
   // forge descriptors register during the deferred initialize().
@@ -921,6 +934,7 @@ export const pluginNamespace = defineIpcNamespace({
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
+    activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),

@@ -54,11 +54,11 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "fs": { "allowedPaths": ["/Users/me/.acme/data"] },
   },
 
-  // Activation triggers. Optional. Currently only "onStartupFinished" is
-  // recognised. In v1 every plugin with a `main` entry activates at startup —
-  // omitting this field (or passing an empty array) is treated the same as
-  // ["onStartupFinished"]. Lazy first-use activation is planned but not wired
-  // yet, so there is no way to opt out of startup activation today.
+  // Activation triggers. Optional. Plugins are lazy by default — omitting this
+  // field (or passing an empty array) defers the `main` import and `activate()`
+  // until a contribution is first used. The sole recognised value,
+  // "onStartupFinished", is the explicit opt-in for plugins that must run at
+  // boot. Contributions are registered eagerly either way.
   "activationEvents": ["onStartupFinished"],
 
   // The plugin's UI and functional contributions.
@@ -207,7 +207,7 @@ A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather t
 
 Activation triggers. The sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting.
 
-In v1, startup activation is the only behavior: any plugin with a `main` entry activates once the app finishes starting. Omitting `activationEvents` (or passing an empty array) is treated identically to `["onStartupFinished"]` — there is no way to opt out of startup activation yet. Lazy first-use triggers (`onCommand:*`, `onView:*`, …) are planned; once they land, a plugin will be able to drop `"onStartupFinished"` from a non-empty list to defer activation until a contribution is first used. Note that contributions (commands, panels, keybindings) are still registered eagerly from the manifest at startup regardless — only the plugin's `main` module import and `activate()` call are governed by activation.
+Plugins are lazy by default. Omitting `activationEvents` (or passing an empty array) defers the plugin's `main` module import and `activate()` call until one of its contributions is first used — a contributed command is dispatched, a forge provider or file decoration is queried, or a contributed panel view is opened. List `"onStartupFinished"` to opt a plugin into eager activation when it genuinely needs to run at boot. Either way, contributions (commands, panels, keybindings, …) are registered eagerly from the manifest at startup — only the `main` import and `activate()` call are governed by activation, so a lazy plugin's commands and panels still appear in the palette before any of its code runs.
 
 ### `contributes`
 

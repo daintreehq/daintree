@@ -3734,7 +3734,7 @@ describe("Plugin unload lifecycle", () => {
 
     try {
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.sync-init");
       expect((globalThis as { __pluginInitObserved?: boolean }).__pluginInitObserved).toBe(true);
     } finally {
       delete (globalThis as { __pluginInitCheck?: unknown }).__pluginInitCheck;
@@ -6851,7 +6851,10 @@ describe("Plugin exception containment (#9276)", () => {
       const service = new PluginService(tmpDir);
       // The host MUST NOT crash — initialize() should resolve.
       await expect(service.initialize()).resolves.toBeUndefined();
-      await service.activateStartupFinishedPlugins();
+      // Lazy by default (#10523): trigger activation explicitly rather than via
+      // the startup path, which no longer activates plugins without
+      // activationEvents.
+      await service.activatePlugin("acme.throws-activate");
 
       const record = service.getPluginLoadError("acme.throws-activate");
       expect(record).toBeDefined();
@@ -6877,7 +6880,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.clean-activate");
 
       expect(service.getPluginLoadError("acme.clean-activate")).toBeUndefined();
     });
@@ -6904,7 +6907,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-then-unload");
       expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
 
       // Unload removes the plugin from the registry, but the persisted
@@ -6930,7 +6933,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-string");
 
       const record = service.getPluginLoadError("acme.throws-string");
       expect(record?.message).toBe("plain-string-failure");
@@ -7173,7 +7176,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-undefined");
 
       const record = service.getPluginLoadError("acme.throws-undefined");
       expect(record).toBeDefined();
@@ -7195,7 +7198,7 @@ describe("Plugin exception containment (#9276)", () => {
 
       const service = new PluginService(tmpDir);
       await service.initialize();
-      await service.activateStartupFinishedPlugins();
+      await service.activatePlugin("acme.throws-null");
 
       const record = service.getPluginLoadError("acme.throws-null");
       expect(record).toBeDefined();
@@ -7332,11 +7335,11 @@ describe("Plugin provenance persistence", () => {
 
     const service = new PluginService(tmpDir);
     await service.initialize();
-    // Force the startup activation pass so this test exercises the path that
-    // would normally import every onStartupFinished plugin. The disabled plugin
-    // is rejected at scan time (never inserted into the plugins map), so the
-    // activation pass cannot pick it up — that's exactly what we assert below.
+    // Run the startup activation pass and an explicit trigger: the disabled
+    // plugin is rejected at scan time (never inserted into the plugins map), so
+    // neither path can pick it up — that's exactly what we assert below.
     await service.activateStartupFinishedPlugins();
+    await service.activatePlugin("acme.disabled-nb");
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
@@ -7362,7 +7365,7 @@ describe("Plugin provenance persistence", () => {
 
     const service = new PluginService(tmpDir);
     await service.initialize();
-    await service.activateStartupFinishedPlugins();
+    await service.activatePlugin("acme.err-persist");
 
     const record = service.getPluginLoadError("acme.err-persist");
     expect(record?.message).toBe("persisted-boom");
@@ -7389,7 +7392,7 @@ describe("Plugin provenance persistence", () => {
 
     const first = new PluginService(tmpDir);
     await first.initialize();
-    await first.activateStartupFinishedPlugins();
+    await first.activatePlugin("acme.heal-fail");
     expect(first.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
 
     // Second plugin: same concept but different dir + name, so ESM cache
@@ -7408,7 +7411,7 @@ describe("Plugin provenance persistence", () => {
 
     const second = new PluginService(tmpDir);
     await second.initialize();
-    await second.activateStartupFinishedPlugins();
+    await second.activatePlugin("acme.heal-ok");
 
     // New plugin loaded successfully — no error
     expect(second.getPluginLoadError("acme.heal-ok")).toBeUndefined();
@@ -7547,7 +7550,7 @@ describe("PluginManifestSchema activationEvents field", () => {
 });
 
 describe("Deferred activation — activatePlugin", () => {
-  it("initialize() does not import plugin main; activateStartupFinishedPlugins does", async () => {
+  it("lazy by default: no activationEvents stays deferred through activateStartupFinishedPlugins, activates on first use (#10523)", async () => {
     const pluginDir = path.join(tmpDir, "deferred-import");
     await fs.mkdir(pluginDir);
     await fs.writeFile(
@@ -7555,7 +7558,7 @@ describe("Deferred activation — activatePlugin", () => {
       JSON.stringify({ name: "acme.deferred-import", version: "1.0.0", main: "main.mjs" })
     );
     // The module sets a global as a side effect at import time. If the
-    // module were imported during initialize() the global would be set
+    // module were imported during initialize()/startup the global would be set
     // before we explicitly activate.
     await fs.writeFile(
       path.join(pluginDir, "main.mjs"),
@@ -7570,7 +7573,13 @@ describe("Deferred activation — activatePlugin", () => {
       expect(service.hasPlugin("acme.deferred-import")).toBe(true);
       expect((globalThis as Record<string, unknown>).__deferredImportRan).toBeUndefined();
 
+      // With no activationEvents the plugin is lazy: startup activation must
+      // leave it deferred (the inverse of the pre-#10523 behavior).
       await service.activateStartupFinishedPlugins();
+      expect((globalThis as Record<string, unknown>).__deferredImportRan).toBeUndefined();
+
+      // An explicit first-use trigger imports main and runs activate().
+      await service.activatePlugin("acme.deferred-import");
       expect((globalThis as Record<string, unknown>).__deferredImportRan).toBe(true);
     } finally {
       delete (globalThis as Record<string, unknown>).__deferredImportRan;
@@ -7698,6 +7707,155 @@ describe("Deferred activation — activatePlugin", () => {
       expect((globalThis as Record<string, unknown>).__explicitOnstartupRan).toBe(true);
     } finally {
       delete (globalThis as Record<string, unknown>).__explicitOnstartupRan;
+    }
+  });
+
+  it("activatePluginForView resolves the owning plugin from contributes.panels and activates it (#10523)", async () => {
+    const pluginDir = path.join(tmpDir, "view-owner");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-owner",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          panels: [
+            {
+              id: "viewer",
+              name: "Viewer",
+              iconId: "eye",
+              color: "#000",
+              hasPty: false,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [
+            { id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__viewOwnerActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+      // Lazy: registered but not yet activated.
+      expect(service.hasPlugin("acme.view-owner")).toBe(true);
+      expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBeUndefined();
+
+      // Opening the contributed panel view (kind id `${pluginId}.${panel.id}`)
+      // triggers first-use activation.
+      await service.activatePluginForView("acme.view-owner.viewer");
+      expect((globalThis as Record<string, unknown>).__viewOwnerActivated).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__viewOwnerActivated;
+    }
+  });
+
+  it("activatePluginForView is a no-op for an unknown or empty panel kind id (#10523)", async () => {
+    const pluginDir = path.join(tmpDir, "view-noop");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-noop",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          panels: [
+            {
+              id: "viewer",
+              name: "Viewer",
+              iconId: "eye",
+              color: "#000",
+              hasPty: false,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [
+            { id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__viewNoopActivated = true; export function activate() {}"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // Unknown kind id — and a non-matching bare id — must not activate anything.
+      await service.activatePluginForView("acme.view-noop.nope");
+      await service.activatePluginForView("viewer");
+      await service.activatePluginForView("");
+      expect((globalThis as Record<string, unknown>).__viewNoopActivated).toBeUndefined();
+    } finally {
+      delete (globalThis as Record<string, unknown>).__viewNoopActivated;
+    }
+  });
+
+  it("activatePluginForView records loadError on activation failure and retries on a second open (#10523)", async () => {
+    const pluginDir = path.join(tmpDir, "view-fail");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-fail",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          panels: [
+            {
+              id: "viewer",
+              name: "Viewer",
+              iconId: "eye",
+              color: "#000",
+              hasPty: false,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [
+            { id: "viewer", name: "Viewer", componentPath: "view.mjs", location: "panel" },
+          ],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "globalThis.__viewFailCount = (globalThis.__viewFailCount ?? 0) + 1; export function activate() { throw new Error('view-activate-boom'); }"
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      await service.initialize();
+
+      // First open: activation fails but never rejects; contributions survive.
+      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toBeUndefined();
+      expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
+      expect(service.hasPlugin("acme.view-fail")).toBe(true);
+
+      // Second open: the failed in-flight entry was cleared, so activation runs
+      // again (Settings → Retry / re-open semantics).
+      await expect(service.activatePluginForView("acme.view-fail.viewer")).resolves.toBeUndefined();
+      expect(service.getPluginLoadError("acme.view-fail")?.message).toBe("view-activate-boom");
+    } finally {
+      errorSpy.mockRestore();
+      delete (globalThis as Record<string, unknown>).__viewFailCount;
     }
   });
 

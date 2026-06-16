@@ -353,6 +353,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["os-dnd:get-state"]["result"]>;
   };
   plugin: {
+    activateForView(
+      ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]
+    ): Promise<IpcInvokeMap["plugin:activate-for-view"]["result"]>;
     checkForUpdate(
       ...args: IpcInvokeMap["plugin:check-for-update"]["args"]
     ): Promise<IpcInvokeMap["plugin:check-for-update"]["result"]>;
