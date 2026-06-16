@@ -82,31 +82,47 @@ function cleanupMacElectronE2eProcesses(): void {
 
 let exitCleanupHandlersRegistered = false;
 
-// Reap orphaned e2e Electron helpers when the Playwright worker dies before
-// closeApp runs — CI timeout (SIGTERM), Ctrl+C (SIGINT), or any other process
-// exit. Playwright's globalTeardown and worker-fixture teardowns do NOT run on
-// signal-driven termination, so without this the network-service, GPU,
-// renderer, and crashpad helpers leak as orphans. The cleanup functions
-// self-guard by platform and are synchronous (execSync) — mandatory for the
-// `exit` handler, which cannot await. Registered once per worker process and
-// guarded so repeated launchApp calls don't stack listeners.
-function registerExitCleanupHandlers(): void {
+// Synchronously reap orphaned e2e Electron helpers. The macOS path matches a
+// daintree-e2e-specific pkill pattern so it's always safe to run; the Windows
+// path is a broad `taskkill /IM electron.exe` with no e2e filter, so restrict
+// it to CI to avoid killing a developer's local dev session.
+function reapOrphanedE2eProcesses(): void {
+  cleanupMacElectronE2eProcesses();
+  if (process.env.CI) cleanupWindowsElectronProcesses();
+}
+
+// Reap orphaned e2e Electron helpers when the Playwright worker is killed
+// before closeApp runs — CI timeout (SIGTERM) or Ctrl+C (SIGINT). Playwright's
+// globalTeardown and worker-fixture teardowns do NOT run on signal-driven
+// termination, so this is the only reliable orphan-reaping path on abnormal
+// exit; without it the network-service, GPU, renderer, and crashpad helpers
+// leak. We deliberately do NOT reap on the normal `exit` event: a clean worker
+// exit already ran closeApp's teardown, and broadcasting a system-wide pkill
+// there could race a sibling project's live Electron when the `full` meta-suite
+// runs buckets concurrently (e2eWorkers:2). Registered once per worker process;
+// the boolean guard makes repeated launchApp calls no-ops.
+export function registerExitCleanupHandlers(): void {
   if (exitCleanupHandlersRegistered) return;
   exitCleanupHandlersRegistered = true;
 
-  const reap = (): void => {
-    cleanupMacElectronE2eProcesses();
-    cleanupWindowsElectronProcesses();
-  };
+  // A caught signal does not terminate Node on its own — reap, then re-exit
+  // with the conventional 128+signal code so the worker dies with an
+  // identifiable status. process.once means a second Ctrl+C falls through to
+  // Node's default handler and force-terminates.
+  process.once("SIGINT", () => {
+    reapOrphanedE2eProcesses();
+    process.exit(130);
+  });
+  process.once("SIGTERM", () => {
+    reapOrphanedE2eProcesses();
+    process.exit(143);
+  });
+}
 
-  // `exit` fires on normal exit and on process.exit(), reaping on every path.
-  process.once("exit", reap);
-  // A caught signal does not terminate Node on its own — re-exit with the
-  // conventional 128+signal code so the worker dies with an identifiable
-  // status and the `exit` handler reaps. process.once means a second Ctrl+C
-  // falls through to Node's default handler and force-terminates.
-  process.once("SIGINT", () => process.exit(130));
-  process.once("SIGTERM", () => process.exit(143));
+// Test-only: reset the one-time guard so unit tests can re-exercise
+// registration. Not used by the harness itself.
+export function __resetExitCleanupHandlersForTest(): void {
+  exitCleanupHandlersRegistered = false;
 }
 
 function wait(ms: number): Promise<void> {
