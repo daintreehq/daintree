@@ -589,6 +589,78 @@ describe("SettingsChoicebox", () => {
     const wrapper = container.querySelector(".custom-class");
     expect(wrapper).toBeTruthy();
   });
+
+  it("reserves a check-icon slot on every option, visible only on the selected one", () => {
+    render(
+      <SettingsChoicebox label="Density" value="normal" onChange={vi.fn()} options={MOCK_OPTIONS} />
+    );
+    const radios = screen.getAllByRole("radio");
+    // Every option keeps the slot (prevents reflow); only the selected one is visible.
+    radios.forEach((radio) => {
+      expect(radio.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(1);
+    });
+    const visibleCheck = (radio: Element) => {
+      const icon = radio.querySelector("svg[aria-hidden='true']")!;
+      return !icon.classList.contains("invisible");
+    };
+    expect(radios.map(visibleCheck)).toEqual([false, true, false]);
+  });
+
+  it("moves the visible check when the selected value changes", () => {
+    const { rerender } = render(
+      <SettingsChoicebox label="Density" value="normal" onChange={vi.fn()} options={MOCK_OPTIONS} />
+    );
+    rerender(
+      <SettingsChoicebox
+        label="Density"
+        value="compact"
+        onChange={vi.fn()}
+        options={MOCK_OPTIONS}
+      />
+    );
+    const radios = screen.getAllByRole("radio");
+    const visibleCheck = (radio: Element) => {
+      const icon = radio.querySelector("svg[aria-hidden='true']");
+      return !!icon && !icon.classList.contains("invisible");
+    };
+    expect(radios.map(visibleCheck)).toEqual([true, false, false]);
+  });
+
+  it("folds resolvedLabel into the option's accessible name", () => {
+    const options: readonly ChoiceboxOption<string>[] = [
+      { value: "inherit", label: "Default", resolvedLabel: "(On)", muted: true },
+      { value: "on", label: "On" },
+      { value: "off", label: "Off" },
+    ];
+    render(<SettingsChoicebox label="Skip" value="inherit" onChange={vi.fn()} options={options} />);
+    expect(screen.getByRole("radio", { name: /Default \(On\)/ })).toBeTruthy();
+  });
+
+  it("keeps a muted option fully selectable", () => {
+    const onChange = vi.fn();
+    const options: readonly ChoiceboxOption<string>[] = [
+      { value: "inherit", label: "Default", resolvedLabel: "(Off)", muted: true },
+      { value: "on", label: "On" },
+    ];
+    render(<SettingsChoicebox label="Skip" value="on" onChange={onChange} options={options} />);
+    const mutedRadio = screen.getByRole("radio", { name: /Default \(Off\)/ });
+    expect(mutedRadio.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(mutedRadio);
+    expect(onChange).toHaveBeenCalledWith("inherit");
+  });
+
+  it("renders the muted option with a lighter label weight than a peer option", () => {
+    const options: readonly ChoiceboxOption<string>[] = [
+      { value: "inherit", label: "Default", muted: true },
+      { value: "on", label: "On" },
+    ];
+    render(<SettingsChoicebox label="Skip" value="on" onChange={vi.fn()} options={options} />);
+    const mutedLabel = screen.getByText("Default");
+    const peerLabel = screen.getByText("On");
+    expect(mutedLabel.classList.contains("font-normal")).toBe(true);
+    expect(mutedLabel.classList.contains("font-medium")).toBe(false);
+    expect(peerLabel.classList.contains("font-medium")).toBe(true);
+  });
 });
 
 describe("SettingsCheckbox", () => {
