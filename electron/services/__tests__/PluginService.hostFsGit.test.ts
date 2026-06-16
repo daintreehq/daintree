@@ -426,9 +426,12 @@ describe("host.git token expansion", () => {
     )._setHostGitFactoryForTests(async () => git);
     const host = registerPlugin(["git:read"], ["${worktree}"]);
 
-    await expect(host.git.status(worktree)).resolves.toBeDefined();
-    // The per-plugin data dir is an fs root, never a git root.
+    // diff uses the mocked SimpleGit factory (status would hit the real
+    // changes provider, which needs an actual git repo on disk).
+    await expect(host.git.diff(worktree)).resolves.toBeDefined();
+    // The per-plugin data dir is an fs root, never a git root — rejected at
+    // containment before any git work runs.
     await fs.mkdir(dataDir(), { recursive: true });
-    await expect(host.git.status(dataDir())).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    await expect(host.git.diff(dataDir())).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });
 });

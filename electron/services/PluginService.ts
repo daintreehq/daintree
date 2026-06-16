@@ -2767,7 +2767,14 @@ export class PluginService {
         // lexical check only gates the mkdir; realpath containment below stays
         // the security authority.
         const dataDir = this.pluginDataDir(pluginId);
-        if (path.isAbsolute(filePath) && this.isPathUnder(dataDir, path.normalize(filePath))) {
+        // Identify a data-dir write from the (lexical) request path, not the
+        // realpath-resolved one: on macOS the resolved path picks up the
+        // /private prefix while `dataDir` does not, so comparing against
+        // `resolved` would wrongly miss the match. The realpath containment
+        // below remains the security authority either way.
+        const isDataDirWrite =
+          path.isAbsolute(filePath) && this.isPathUnder(dataDir, path.normalize(filePath));
+        if (isDataDirWrite) {
           // A data-dir write is always user-data class — gate before the mkdir
           // so a plugin lacking the cap doesn't materialize the dir as a side
           // effect (the post-containment check below re-asserts it).
@@ -2780,7 +2787,7 @@ export class PluginService {
         requireWriteCapForClass("writeFile", rootClass);
         // Create intermediate dirs for a nested write inside the data dir so a
         // plugin can lay out its own subtree without a separate mkdir API.
-        if (this.isPathUnder(dataDir, resolved)) {
+        if (isDataDirWrite) {
           await fs.mkdir(path.dirname(resolved), { recursive: true });
         }
         await fs.writeFile(resolved, contents, "utf-8");

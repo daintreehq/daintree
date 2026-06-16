@@ -259,7 +259,7 @@
     "culori": "^4.0.2",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.1",
-    "electron": "^42.3.3",
+    "electron": "^42.4.0",
     "electron-builder": "^26.8.1",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.3",
