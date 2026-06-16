@@ -531,6 +531,17 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         };
       }
     },
+    // Imperative UI prompts (#10522). The mock has no renderer to drive a
+    // dialog, so it resolves the dismiss value (undefined / false) — the same
+    // outcome a plugin sees when the user cancels. Tests that need a concrete
+    // answer can wrap the host and override these.
+    showQuickPick: (async () => undefined) as PluginHostApi["showQuickPick"],
+    async showInputBox() {
+      return undefined;
+    },
+    async showConfirm() {
+      return false;
+    },
     process: {
       async spawn(command, options): Promise<PluginProcessHandle> {
         spawnCalls.push({ command, options });

@@ -1573,6 +1573,23 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
     }): void;
+    /**
+     * Listen for imperative plugin UI-prompt requests from the main process (a
+     * plugin calling `host.showQuickPick`/`showInputBox`/`showConfirm`, #10522).
+     * Reply with {@link sendUiPromptResponse}, correlated by `promptId`.
+     */
+    onUiPromptRequest(
+      callback: (payload: import("../pluginUiPrompt.js").PluginUiPromptRequest) => void
+    ): () => void;
+    /** Send the user's answer to a plugin UI prompt back to the main process. */
+    sendUiPromptResponse(payload: import("../pluginUiPrompt.js").PluginUiPromptResponse): void;
+    /**
+     * Listen for cancel signals (plugin unloaded mid-prompt): dismiss the open
+     * dialog and resolve the queued promise with the dismiss value.
+     */
+    onUiPromptCancel(
+      callback: (payload: import("../pluginUiPrompt.js").PluginUiPromptCancel) => void
+    ): () => void;
   };
   // list / toolbarButtons / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations

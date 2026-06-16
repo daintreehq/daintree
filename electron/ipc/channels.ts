@@ -895,6 +895,12 @@ export const CHANNELS = {
   PLUGIN_DISPATCH_ACTION_REQUEST: "plugin:dispatch-action-request",
   /** Bridge: renderer returns the plugin-sourced action dispatch result to the main process. */
   PLUGIN_DISPATCH_ACTION_RESPONSE: "plugin:dispatch-action-response",
+  /** Bridge: main process asks the renderer to render an imperative plugin UI prompt (#10522). */
+  PLUGIN_UI_PROMPT_REQUEST: "plugin:ui-prompt-request",
+  /** Bridge: renderer returns the user's answer to a plugin UI prompt (fire-and-forget). */
+  PLUGIN_UI_PROMPT_RESPONSE: "plugin:ui-prompt-response",
+  /** Bridge: main process tells the renderer to drop a plugin's pending UI prompts on unload. */
+  PLUGIN_UI_PROMPT_CANCEL: "plugin:ui-prompt-cancel",
 
   // Plugin MCP supervisor channels (#9233) — stdio MCP servers contributed by
   // plugin manifests, supervised in the main process via execa. Distinct from

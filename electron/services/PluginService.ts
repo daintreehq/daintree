@@ -52,6 +52,10 @@ import type {
   PluginChannelSchema,
   PluginTypedIpcHandler,
   ActionHandler,
+  PluginQuickPickItem,
+  PluginQuickPickOptions,
+  PluginInputBoxOptions,
+  PluginConfirmOptions,
   BuiltInPluginCapability,
   PluginLoadError,
   PluginInstallResult,
@@ -76,6 +80,7 @@ import type {
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
+import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager, assertSettingsKey } from "./plugin/PluginSettingsManager.js";
 import { PluginChannelRegistry, isChannelSchema } from "./plugin/PluginChannelRegistry.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
@@ -383,6 +388,98 @@ function runUnloadStep(pluginId: string, step: string, fn: () => void): void {
 }
 
 /**
+ * Validate the `items` passed to `host.showQuickPick` and return a structurally
+ * narrowed copy — only the serializable fields cross the IPC boundary, so a
+ * plugin that attaches extra non-cloneable properties (functions, class
+ * instances) can't strand the send. Throws on a non-array or any malformed row
+ * so authoring mistakes surface loudly (mirrors the showToast options check).
+ */
+function validateQuickPickItems(
+  pluginId: string,
+  items: PluginQuickPickItem[]
+): PluginQuickPickItem[] {
+  if (!Array.isArray(items)) {
+    throw new Error(`Plugin "${pluginId}" showQuickPick: items must be an array`);
+  }
+  const seen = new Set<string>();
+  return items.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`Plugin "${pluginId}" showQuickPick: items[${index}] must be an object`);
+    }
+    if (typeof item.id !== "string" || item.id.length === 0) {
+      throw new Error(
+        `Plugin "${pluginId}" showQuickPick: items[${index}].id must be a non-empty string`
+      );
+    }
+    if (typeof item.label !== "string") {
+      throw new Error(`Plugin "${pluginId}" showQuickPick: items[${index}].label must be a string`);
+    }
+    // Ids must be unique — selection tracking and multi-select keys off the id,
+    // so a duplicate would toggle/return multiple rows in lockstep.
+    if (seen.has(item.id)) {
+      throw new Error(
+        `Plugin "${pluginId}" showQuickPick: duplicate item id "${item.id}" (ids must be unique)`
+      );
+    }
+    seen.add(item.id);
+    return {
+      id: item.id,
+      label: item.label,
+      ...(item.description !== undefined ? { description: String(item.description) } : {}),
+      ...(item.detail !== undefined ? { detail: String(item.detail) } : {}),
+    };
+  });
+}
+
+/**
+ * Coerce the string fields of the prompt option objects before they cross to
+ * the renderer. A buggy plugin passing a non-string (e.g. `{ message: {} }`)
+ * would otherwise crash the dialog inside its ErrorBoundary and strand the
+ * pending promise until unload — coercion keeps the round-trip serializable and
+ * the dialog renderable. Booleans are normalized with `Boolean(...)`.
+ */
+function sanitizeQuickPickOptions(options?: PluginQuickPickOptions): PluginQuickPickOptions {
+  if (!options || typeof options !== "object") return {};
+  return {
+    ...(options.title !== undefined ? { title: String(options.title) } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: String(options.placeholder) } : {}),
+    ...(options.canSelectMany !== undefined
+      ? { canSelectMany: Boolean(options.canSelectMany) }
+      : {}),
+    ...(options.matchOnDescription !== undefined
+      ? { matchOnDescription: Boolean(options.matchOnDescription) }
+      : {}),
+  };
+}
+
+function sanitizeInputBoxOptions(options?: PluginInputBoxOptions): PluginInputBoxOptions {
+  if (!options || typeof options !== "object") return {};
+  return {
+    ...(options.title !== undefined ? { title: String(options.title) } : {}),
+    ...(options.prompt !== undefined ? { prompt: String(options.prompt) } : {}),
+    ...(options.placeholder !== undefined ? { placeholder: String(options.placeholder) } : {}),
+    ...(options.value !== undefined ? { value: String(options.value) } : {}),
+    ...(options.password !== undefined ? { password: Boolean(options.password) } : {}),
+    ...(options.validationPattern !== undefined
+      ? { validationPattern: String(options.validationPattern) }
+      : {}),
+    ...(options.validationMessage !== undefined
+      ? { validationMessage: String(options.validationMessage) }
+      : {}),
+  };
+}
+
+function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOptions {
+  return {
+    title: String(options.title),
+    ...(options.message !== undefined ? { message: String(options.message) } : {}),
+    ...(options.confirmLabel !== undefined ? { confirmLabel: String(options.confirmLabel) } : {}),
+    ...(options.cancelLabel !== undefined ? { cancelLabel: String(options.cancelLabel) } : {}),
+    ...(options.destructive !== undefined ? { destructive: Boolean(options.destructive) } : {}),
+  };
+}
+
+/**
  * Append a plugin audit record without ever surfacing an audit failure to the
  * caller. Mirrors the `safeAppend` in `electron/ipc/handlers/plugin.ts` — a
  * throw from `append()` (corrupt store, disk error) must never mask the
@@ -664,6 +761,13 @@ export class PluginService {
    */
   private readonly dispatcher: PluginRendererDispatcher;
   /**
+   * Owns the imperative `host.showQuickPick`/`showInputBox`/`showConfirm`
+   * main→renderer round-trip (#10522): the active-renderer resolution, the lazy
+   * `ipcMain` response listener, the pending-prompt map, and the per-plugin
+   * cancel drain on unload. Torn down from {@link dispose}.
+   */
+  private readonly promptDispatcher: PluginUIPromptDispatcher;
+  /**
    * Owns the per-(plugin, scope, path) settings store cache, scope/file-path
    * resolution, subscriber notification, the settings-template resolver, and the
    * renderer-facing settings-UI bridge. The settings stores and subscribers live
@@ -701,6 +805,10 @@ export class PluginService {
     });
 
     this.dispatcher = new PluginRendererDispatcher({
+      isDisposed: () => this.disposed,
+    });
+
+    this.promptDispatcher = new PluginUIPromptDispatcher({
       isDisposed: () => this.disposed,
     });
 
@@ -793,6 +901,7 @@ export class PluginService {
     this.resolveInit?.();
     this.resolveInit = null;
     this.dispatcher.dispose();
+    this.promptDispatcher.dispose();
   }
 
   /**
@@ -2404,6 +2513,45 @@ export class PluginService {
         }
         return this.dispatcher.sendDispatchToRenderer(actionId, args);
       },
+      // Imperative UI prompts (#10522). NOT revoke-guarded for the same reason
+      // as showToast/dispatch: plugins prompt from command handlers that run
+      // long after activate() resolves. Liveness is plugin membership — once the
+      // plugin unloads these resolve the dismiss value (undefined / false)
+      // without a renderer round-trip, and an in-flight prompt is drained by
+      // promptDispatcher.cancelForPlugin in unloadPlugin. Invalid options throw
+      // so authoring mistakes surface loudly (mirrors showToast).
+      showQuickPick: (async (
+        items: PluginQuickPickItem[],
+        options?: PluginQuickPickOptions
+      ): Promise<PluginQuickPickItem | PluginQuickPickItem[] | undefined> => {
+        if (!this.plugins.has(pluginId)) return undefined;
+        const validItems = validateQuickPickItems(pluginId, items);
+        const value = await this.promptDispatcher.requestPrompt(pluginId, {
+          kind: "quickPick",
+          items: validItems,
+          options: sanitizeQuickPickOptions(options),
+        });
+        return value as PluginQuickPickItem | PluginQuickPickItem[] | undefined;
+      }) as PluginHostApi["showQuickPick"],
+      showInputBox: async (options) => {
+        if (!this.plugins.has(pluginId)) return undefined;
+        const value = await this.promptDispatcher.requestPrompt(pluginId, {
+          kind: "inputBox",
+          options: sanitizeInputBoxOptions(options),
+        });
+        return value as string | undefined;
+      },
+      showConfirm: async (options) => {
+        if (!this.plugins.has(pluginId)) return false;
+        if (!options || typeof options !== "object" || typeof options.title !== "string") {
+          throw new Error(`Plugin "${pluginId}" showConfirm: options.title must be a string`);
+        }
+        const value = await this.promptDispatcher.requestPrompt(pluginId, {
+          kind: "confirm",
+          options: sanitizeConfirmOptions(options),
+        });
+        return value === true;
+      },
       // NOT revoke-guarded for the same reason as showToast/dispatch: plugins
       // log from post-activation callbacks and timers. Liveness is plugin
       // membership (enforced inside recordPluginLog) — writes silently no-op
@@ -3700,6 +3848,13 @@ export class PluginService {
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
     this.logBuffers.delete(pluginId);
+
+    // Resolve any imperative UI prompt this plugin had open (#10522) — the
+    // pending host.show* promise resolves undefined/false (never throws) and the
+    // renderer dismisses the stranded dialog. Best-effort per the cascade.
+    runUnloadStep(pluginId, "cancelUiPrompts", () =>
+      this.promptDispatcher.cancelForPlugin(pluginId)
+    );
 
     this.plugins.delete(pluginId);
 
