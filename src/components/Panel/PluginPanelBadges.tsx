@@ -57,13 +57,13 @@ export function PluginPanelBadges({ panelId }: { panelId: string }) {
   useEffect(() => init(), [init]);
 
   const badges = usePanelBadges(panelId);
-  const pluginIds = Object.keys(badges).sort();
-  if (pluginIds.length === 0) return null;
+  const entries = Object.entries(badges).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) return null;
 
   return (
     <>
-      {pluginIds.map((pluginId) => (
-        <BadgeIndicator key={pluginId} pluginId={pluginId} badge={badges[pluginId]} />
+      {entries.map(([pluginId, badge]) => (
+        <BadgeIndicator key={pluginId} pluginId={pluginId} badge={badge} />
       ))}
     </>
   );
