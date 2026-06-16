@@ -192,16 +192,21 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
     [refreshNow]
   );
 
-  const toggleStderr = useCallback(async (row: ServerRow) => {
+  // `isOpen` comes from committed render state, not from inside the updater:
+  // React 19 only runs a functional updater synchronously on its eager-state
+  // path (no pending lanes). With the poll's setServers or useDeferredLoading's
+  // timer in flight, the updater is deferred — so deriving `willOpen` inside it
+  // left it stale, returned before getStderr() ran, and stranded the disclosure
+  // on a perpetual "Loading output…". Keep the updater pure.
+  const toggleStderr = useCallback(async (row: ServerRow, isOpen: boolean) => {
     const key = serverKey(row.pluginId, row.serverId);
-    let willOpen = false;
+    const willOpen = !isOpen;
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
+      if (isOpen) {
         next.delete(key);
       } else {
         next.add(key);
-        willOpen = true;
       }
       return next;
     });
@@ -328,7 +333,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                 <div className="border-t border-daintree-border/60">
                   <button
                     type="button"
-                    onClick={() => void toggleStderr(row)}
+                    onClick={() => void toggleStderr(row, isOpen)}
                     aria-expanded={isOpen}
                     className="flex items-center gap-1.5 w-full px-3 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text/80 transition-[color] duration-150"
                   >
