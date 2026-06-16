@@ -101,6 +101,23 @@ describe("PluginStorageManager store cache", () => {
     // Deleting an already-absent key is a no-op (false), not a throw.
     expect(await store.delete("count")).toBe(false);
   });
+
+  it("round-trips a literal __proto__ key without prototype pollution", async () => {
+    const mgr = managerFor();
+    const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
+    const store = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
+
+    // "__proto__" is a valid (undeclared) storage key. A naive `obj[k] = v`
+    // persist would mutate Object.prototype and drop the value on reload.
+    expect(await store.set("__proto__", { x: 1 })).toBe(true);
+
+    // Force a cold read from disk through a brand-new manager/store instance.
+    const fresh = managerFor();
+    const reread = fresh.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
+    expect(await reread.get("__proto__")).toEqual({ x: 1 });
+    // The global prototype was not polluted.
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
+  });
 });
 
 describe("PluginStorageManager serialization guard", () => {

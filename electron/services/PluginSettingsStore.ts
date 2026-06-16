@@ -273,7 +273,11 @@ export class PluginSettingsStore {
   }
 
   private async persist(cache: Map<string, unknown>): Promise<void> {
-    const obj: Record<string, unknown> = {};
+    // Null-prototype target so a literal `__proto__` key (a valid storage key,
+    // since storage keys are undeclared) becomes an own enumerable property
+    // instead of silently mutating Object.prototype — which would drop the value
+    // from JSON.stringify and lose it on the next reload.
+    const obj: Record<string, unknown> = Object.create(null);
     for (const [k, v] of cache) obj[k] = v;
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     await resilientAtomicWriteFile(this.filePath, JSON.stringify(obj, null, 2), "utf-8", {

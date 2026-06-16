@@ -305,6 +305,8 @@ describe("PluginDevWorkerMainBridge", () => {
     });
     await flush();
     expect(host.storage.onDidChange).not.toHaveBeenCalled();
+    // The bridge never sends a subscription-event for the dropped subscription.
+    expect(workerHost.sent.some((m) => m.type === "subscription-event")).toBe(false);
   });
 
   it("resolves waitForActivation on `activated` and rejects on `activate-error`", async () => {

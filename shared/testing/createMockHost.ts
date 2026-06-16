@@ -288,8 +288,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         throw new Error("storage.set: value cannot be undefined");
       }
       const prev = storageStore[scope].get(key);
+      const had = storageStore[scope].has(key);
       storageStore[scope].set(key, value);
-      if (!Object.is(prev, value)) {
+      // Mirror the real store's `valuesEqual` (JSON) change detection rather than
+      // `Object.is`, so two equal-but-distinct object literals fire onDidChange
+      // exactly once — matching production, not reference identity.
+      const changed = !had || !jsonEqual(prev, value);
+      if (changed) {
         const subs = storageSubs[scope].get(key);
         if (subs) {
           for (const cb of subs) cb(value as unknown);
@@ -742,4 +747,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   };
 
   return host;
+}
+
+/**
+ * Value equality matching `PluginSettingsStore.valuesEqual`: reference-equal or
+ * JSON-equal. Used by the storage mock so its change detection (and therefore
+ * its onDidChange firing) matches the real store rather than reference identity.
+ */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
