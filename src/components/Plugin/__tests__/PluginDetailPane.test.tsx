@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -27,6 +27,21 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
     selector({ currentProject: null }),
 }));
+
+// PluginMcpServersSection polls this on mount when its tab is active.
+const pluginMcpListMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
+beforeEach(() => {
+  pluginMcpListMock.mockClear();
+  (globalThis as unknown as { window: Window }).window.electron = {
+    pluginMcp: {
+      list: pluginMcpListMock,
+      getStderr: vi.fn(() =>
+        Promise.resolve({ pluginId: "", serverId: "", lines: [], totalLines: 0 })
+      ),
+      restart: vi.fn(() => Promise.resolve()),
+    },
+  } as unknown as Window["electron"];
+});
 
 function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
   return {
@@ -232,5 +247,37 @@ describe("PluginDetailPane contributors (issue #10516)", () => {
     fireEvent.click(screen.getByRole("button", { name: "alice@example.com" }));
     expect(openExternalMock).toHaveBeenCalledTimes(1);
     expect(openExternalMock).toHaveBeenCalledWith("mailto:alice@example.com");
+  });
+});
+
+describe("PluginDetailPane MCP servers tab (issue #10584)", () => {
+  function withMcpServers(
+    servers: NonNullable<LoadedPluginInfo["manifest"]["contributes"]["mcpServers"]>
+  ): LoadedPluginInfo {
+    const base = makePlugin();
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: { ...base.manifest.contributes, mcpServers: servers },
+      },
+    };
+  }
+
+  it("hides the MCP servers tab when the plugin declares none", () => {
+    renderOverview(makePlugin());
+    expect(screen.queryByRole("tab", { name: "MCP servers" })).toBeNull();
+  });
+
+  it("shows the MCP servers tab when the plugin declares at least one server", () => {
+    renderOverview(withMcpServers([{ id: "srv", name: "Demo Server", command: "node" }]));
+    expect(screen.getByRole("tab", { name: "MCP servers" })).toBeTruthy();
+  });
+
+  it("renders the declared server and polls the supervisor when the tab is opened", async () => {
+    renderOverview(withMcpServers([{ id: "srv", name: "Demo Server", command: "node" }]));
+    fireEvent.click(screen.getByRole("tab", { name: "MCP servers" }));
+    expect(await screen.findByText("Demo Server")).toBeTruthy();
+    expect(pluginMcpListMock).toHaveBeenCalled();
   });
 });

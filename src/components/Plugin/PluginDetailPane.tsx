@@ -5,6 +5,7 @@ import {
   resolvePluginCategory,
 } from "@shared/config/pluginCategoryRegistry";
 import { PluginIconTile } from "./pluginIcons";
+import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import {
@@ -274,7 +275,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   );
 }
 
-type PluginDetailTab = "overview" | "settings" | "capabilities";
+type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers";
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -315,6 +316,8 @@ export function PluginDetailPane({
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
+  const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
+  const hasMcpServers = mcpServers.length > 0;
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
@@ -333,6 +336,9 @@ export function PluginDetailPane({
     { id: "overview", label: "Overview" },
     { id: "settings", label: "Settings" },
     { id: "capabilities", label: "Permissions" },
+    // Only plugins that actually contribute MCP servers get the runtime tab —
+    // it surfaces subprocess health and restart, which is meaningless otherwise.
+    ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
   ];
 
   return (
@@ -433,7 +439,12 @@ export function PluginDetailPane({
           subtabs={tabs}
           activeId={activeTab}
           onChange={(id) => {
-            if (id === "overview" || id === "settings" || id === "capabilities") {
+            if (
+              id === "overview" ||
+              id === "settings" ||
+              id === "capabilities" ||
+              (id === "mcp-servers" && hasMcpServers)
+            ) {
               setActiveTab(id);
             }
           }}
@@ -476,6 +487,10 @@ export function PluginDetailPane({
         ))}
 
       {activeTab === "capabilities" && <PluginCapabilityList plugin={plugin} />}
+
+      {activeTab === "mcp-servers" && hasMcpServers && (
+        <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
+      )}
     </div>
   );
 }
