@@ -2596,11 +2596,14 @@ export class PluginService {
    * Expand the plugin's declared `scopes.fs.allowedPaths` into concrete,
    * capability-classified roots at call time. `${project}` / `${worktree}`
    * tokens resolve against the live worktree snapshots — fail-closed: a token
-   * with no matching live worktree throws {@link PluginPathNotAllowedError}
-   * rather than producing a fallback or empty path that could widen scope
-   * (#9492). When `includeDataDir`, the implicit per-plugin data dir is prepended
-   * as a `user-data` root so every plugin always has a private scratch space.
-   * Literal absolute paths are classified by home-dir membership.
+   * with no matching live worktree contributes NO root (it is dropped, never
+   * resolved to a fallback or empty path that could widen scope — #9492), so a
+   * path that only that token would have matched is still rejected by
+   * containment. Dropping just the unresolvable entry (rather than aborting the
+   * whole expansion) preserves the always-on data dir and any literal / other
+   * resolvable token roots. When `includeDataDir`, the implicit per-plugin data
+   * dir is prepended as a `user-data` root so every plugin always has a private
+   * scratch space. Literal absolute paths are classified by home-dir membership.
    *
    * The caller is responsible for `requireLoaded()` re-checks around the await
    * (the plugin may unload mid-call — #9533).
@@ -2620,7 +2623,16 @@ export class PluginService {
       entries.push({ path: this.pluginDataDir(pluginId), rootClass: "user-data" });
     }
     for (const raw of declared) {
-      entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots));
+      try {
+        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots));
+      } catch (err) {
+        // Fail-closed on a token with no live worktree: drop just that entry
+        // (it contributes no root, so a path that only matched it is still
+        // rejected by containment) rather than discarding the whole list — the
+        // implicit data dir and any literal/other-token roots stay usable.
+        if (err instanceof PluginPathNotAllowedError) continue;
+        throw err;
+      }
     }
     return entries;
   }

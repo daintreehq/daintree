@@ -329,6 +329,24 @@ describe("host.fs ${worktree}/${project} token expansion", () => {
     const host = registerPlugin(["fs:project-read"], ["${worktree}"]);
     await expect(host.fs.readFile(join(baseDir, "x.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });
+
+  it("fails closed (no fallback) when getAllStatesAsync rejects", async () => {
+    (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
+      getAllStatesAsync: async () => {
+        throw new Error("client unavailable");
+      },
+    });
+    const host = registerPlugin(["fs:project-read"], ["${worktree}"]);
+    await expect(host.fs.readFile(join(baseDir, "x.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("still serves a co-declared literal root when a token can't resolve", async () => {
+    // No active worktree → ${worktree} drops out, but the literal stays usable.
+    setWorktrees([{ path: join(baseDir, "main"), isMainWorktree: true }]);
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed, "${worktree}"]);
+    await host.fs.writeFile(join(allowed, "ok.txt"), "ok");
+    expect(await host.fs.readFile(join(allowed, "ok.txt"))).toBe("ok");
+  });
 });
 
 describe("host.fs implicit per-plugin data dir", () => {
@@ -347,6 +365,14 @@ describe("host.fs implicit per-plugin data dir", () => {
     const nested = join(dataDir(), "cache", "v1", "blob.bin");
     await host.fs.writeFile(nested, "data");
     expect(await host.fs.readFile(nested)).toBe("data");
+  });
+
+  it("stays reachable even when a co-declared token can't resolve", async () => {
+    // The always-on data dir must survive a failing ${worktree} expansion.
+    const host = registerPlugin(["fs:user-data-read", "fs:user-data-write"], ["${worktree}"]);
+    const target = join(dataDir(), "state.json");
+    await host.fs.writeFile(target, "{}");
+    expect(await host.fs.readFile(target)).toBe("{}");
   });
 
   it("denies the data dir to a plugin holding only project caps", async () => {
