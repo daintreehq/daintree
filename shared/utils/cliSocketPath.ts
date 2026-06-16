@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 
 /**
  * Single source of truth for the local control-socket path that lets the
@@ -54,22 +55,35 @@ export interface CliControlInfo {
 }
 
 /**
- * Persist the control-discovery file, owner-only. Creates `~/.daintree` at
- * `0700` if missing and writes the file at `0600`, re-asserting the mode on Unix
- * in case it pre-existed with looser bits (a crashed prior run). No-op-safe to
- * call on every `listen()`.
+ * Persist the control-discovery file, owner-only and atomically. Creates
+ * `~/.daintree` at `0700` if missing, writes to a unique sibling temp file at
+ * `0600`, then renames it into place — so a CLI racing the write never reads a
+ * truncated/partial JSON file (it sees either the old complete file or the new
+ * one). The mode is re-asserted on Unix before the rename in case a permissive
+ * umask widened the create bits. No-op-safe to call on every `listen()`.
  */
 export async function writeCliControlFile(filePath: string, info: CliControlInfo): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fs.writeFile(filePath, JSON.stringify(info), { mode: 0o600 });
+  const tmp = `${filePath}.tmp-${crypto.randomBytes(6).toString("hex")}`;
+  await fs.writeFile(tmp, JSON.stringify(info), { mode: 0o600 });
   if (process.platform !== "win32") {
-    await fs.chmod(filePath, 0o600).catch(() => {});
+    await fs.chmod(tmp, 0o600).catch(() => {});
   }
+  await fs.rename(tmp, filePath);
 }
 
-/** Best-effort removal of the control-discovery file on host shutdown. */
-export async function removeCliControlFile(filePath: string): Promise<void> {
-  await fs.rm(filePath, { force: true }).catch(() => {});
+/**
+ * Remove the control-discovery file on host shutdown, but ONLY if it still
+ * belongs to this instance (its token matches). With multiple app instances the
+ * last `listen()` wins the file; a different instance tearing down must not
+ * delete the live file a still-running peer advertised. A no-token/absent file
+ * is left untouched. Best-effort — a failed read or unlink never blocks close.
+ */
+export async function removeCliControlFile(filePath: string, token: string): Promise<void> {
+  const current = await readCliControlFile(filePath);
+  if (current && current.token === token) {
+    await fs.rm(filePath, { force: true }).catch(() => {});
+  }
 }
 
 /**

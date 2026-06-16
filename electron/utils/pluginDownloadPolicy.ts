@@ -61,10 +61,15 @@ export function urlHasCredentials(parsed: URL): boolean {
  * link-local host and the chain was abandoned before the body was read.
  * `private-host` means a hop's hostname *resolved via DNS* to a private/
  * loopback/link-local IP (the DNS-rebinding case the literal-host check misses).
+ * `insecure-protocol` means a hop wasn't `https:` — e.g. a redirect that
+ * downgrades `https→http`, which would deliver the archive over cleartext.
  */
 export type GuardedFetchResult =
   | { ok: true; response: Response }
-  | { ok: false; reason: "private-redirect" | "private-host" | "too-many-redirects" };
+  | {
+      ok: false;
+      reason: "private-redirect" | "private-host" | "insecure-protocol" | "too-many-redirects";
+    };
 
 /** Spec-aligned cap (RFC 7231 recommends a limit; browsers default to ~20). */
 const MAX_REDIRECT_HOPS = 5;
@@ -123,18 +128,24 @@ export async function fetchWithPrivateHostGuard(
 ): Promise<GuardedFetchResult> {
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    // Re-validate the RESOLVED IP before connecting, not just the literal host:
-    // a public hostname can answer with a private/loopback address at connect
-    // time (DNS rebinding). The literal-host guard below catches a private
-    // `Location`; this catches a private *resolution* of the current hop.
-    let currentHost = "";
+    // Parse the current hop once to enforce two invariants before connecting:
+    // (1) it must stay https — a redirect that downgrades to http would deliver
+    // the archive over cleartext (MITM-substitutable); (2) re-validate the
+    // RESOLVED IP, not just the literal host, since a public hostname can answer
+    // with a private/loopback address at connect time (DNS rebinding). The
+    // literal-host guard below catches a private `Location`; this catches a
+    // private *resolution* of the current hop.
+    let parsedHop: URL | null = null;
     try {
-      currentHost = new URL(currentUrl).hostname;
+      parsedHop = new URL(currentUrl);
     } catch {
       // `currentUrl` is the caller's input or a parsed `Location`; an
-      // unparseable value is defensive-only and just skips the DNS pre-check.
+      // unparseable value is defensive-only and just skips these pre-checks.
     }
-    if (currentHost && (await resolvesToPrivateAddress(currentHost))) {
+    if (parsedHop && parsedHop.protocol !== "https:") {
+      return { ok: false, reason: "insecure-protocol" };
+    }
+    if (parsedHop && (await resolvesToPrivateAddress(parsedHop.hostname))) {
       return { ok: false, reason: "private-host" };
     }
     const response = await netFetch(currentUrl, { ...init, redirect: "manual" });

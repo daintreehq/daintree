@@ -89,6 +89,7 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
     shutdownAll: vi.fn(async () => undefined),
     callTool: vi.fn(),
     restart: vi.fn(),
+    removeState: vi.fn(),
     list: vi.fn(() => []),
     getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
   }),
@@ -726,6 +727,52 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
 
     // Any code change forces a consent re-prompt: the upgrade purges the pins.
     expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.consent-reset");
+
+    service.dispose();
+  });
+
+  it("revokes the plugin's consent pins on uninstall", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const v1 = await makeArchive({ name: "acme.uninstall-consent", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+
+    consentMock.revokeAllForPlugin.mockClear();
+    await service.uninstallPlugin("acme.uninstall-consent");
+
+    // Uninstall is the other half of the consent-reset guarantee — a same-name
+    // reinstall must not inherit the removed plugin's approvals.
+    expect(consentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.uninstall-consent");
+
+    service.dispose();
+  });
+});
+
+describe("loadDevPlugin — trust gates (#10518)", () => {
+  it.each(["../../etc/passwd", "..", "foo/../../bar", "/abs/path", "no-dot-name"])(
+    "rejects a non-scoped / traversal dev plugin id %s before any fs access",
+    async (badId) => {
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await expect(service.loadDevPlugin(badId)).rejects.toThrow(/Invalid dev plugin id|scoped/);
+      service.dispose();
+    }
+  );
+
+  it("honors the persisted disabled set instead of force-loading", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    // A dev plugin present on disk but disabled in Preferences must NOT load —
+    // the old code passed an empty disabled set and would have force-loaded it.
+    const devDir = path.join(pluginsRoot, "acme.dev-honor");
+    await fs.mkdir(devDir, { recursive: true });
+    await fs.writeFile(
+      path.join(devDir, "plugin.json"),
+      JSON.stringify({ name: "acme.dev-honor", version: "1.0.0" })
+    );
+    (
+      service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
+    ).records.setEnabled("acme.dev-honor", false);
+
+    await expect(service.loadDevPlugin("acme.dev-honor")).rejects.toThrow(/disabled|Couldn't load/);
 
     service.dispose();
   });

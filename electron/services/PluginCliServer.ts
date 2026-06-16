@@ -172,7 +172,11 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     }
   }
 
-  async function dispatchFrame(socket: net.Socket, line: string): Promise<void> {
+  async function dispatchFrame(
+    socket: net.Socket,
+    line: string,
+    conn: { terminated: boolean }
+  ): Promise<void> {
     const trimmed = line.trim();
     if (trimmed.length === 0) return;
 
@@ -194,10 +198,13 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
 
     // Authenticate before dispatching anything (#10518). An unauthenticated peer
     // gets a single error frame, then the connection is closed — no method (not
-    // even plugin.ping) runs and the socket can't be probed frame-by-frame.
-    // `end()` (not `destroy()`) flushes the error frame before the FIN so the
-    // client always sees why it was rejected rather than a bare disconnect.
+    // even plugin.ping) runs. `conn.terminated` makes the data loop drop every
+    // subsequent frame on this connection so it genuinely can't be probed
+    // frame-by-frame (the auth check above is synchronous, so the flag is set
+    // before the data loop inspects it). `end()` (not `destroy()`) flushes the
+    // error frame before the FIN so the client sees why it was rejected.
     if (!tokenIsValid(token, authToken)) {
+      conn.terminated = true;
       writeResponse(socket, { id, error: { message: "Unauthorized: invalid or missing token" } });
       socket.end();
       return;
@@ -220,9 +227,12 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     socket.setEncoding("utf8");
     let buffer = "";
     let overflowed = false;
+    // Flipped synchronously by dispatchFrame on an auth failure so no further
+    // frame on this connection is ever processed.
+    const conn = { terminated: false };
 
     socket.on("data", (chunk: string) => {
-      if (overflowed) return;
+      if (overflowed || conn.terminated) return;
       buffer += chunk;
       if (buffer.length > MAX_FRAME_BYTES) {
         overflowed = true;
@@ -236,7 +246,10 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         buffer = buffer.slice(newlineIndex + 1);
         // Fire concurrently — each response carries its own id so the client
         // matches replies; install/uninstall serialize on the plugin lock.
-        void dispatchFrame(socket, frame);
+        void dispatchFrame(socket, frame, conn);
+        // The auth check inside dispatchFrame runs synchronously, so an auth
+        // failure on this frame has already set `terminated` — stop draining.
+        if (conn.terminated) return;
         newlineIndex = buffer.indexOf("\n");
       }
     });
@@ -297,8 +310,9 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
     openSockets.clear();
     await new Promise<void>((resolve) => srv.close(() => resolve()));
     // Remove the discovery file first so a CLI started during teardown sees
-    // "not running" instead of dialing a dead socket.
-    await removeCliControlFile(controlFilePath);
+    // "not running" instead of dialing a dead socket — but only if it's still
+    // ours (a concurrent instance may have taken over the file).
+    await removeCliControlFile(controlFilePath, authToken);
     if (isFileSocket(socketPath)) {
       await fs.rm(socketPath, { force: true }).catch(() => {});
     }

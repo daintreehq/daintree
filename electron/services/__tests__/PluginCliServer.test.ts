@@ -259,6 +259,55 @@ describe("createPluginCliServer", () => {
     expect(handlers.install).toHaveBeenCalledWith({ path: "/tmp/ok.dntr" });
   });
 
+  it("does not dispatch a second (valid-token) frame after a first auth failure", async () => {
+    // Proves the connection genuinely can't be probed frame-by-frame: a bad
+    // first frame terminates the connection so a pipelined valid-token frame in
+    // the same burst never reaches a handler.
+    const handlers = noopHandlers();
+    server = makeServer(handlers);
+    await server.listen();
+    const token = server.authToken;
+
+    const frames = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
+      const socket = net.createConnection({ path: socketPath });
+      const received: Record<string, unknown>[] = [];
+      let buffer = "";
+      socket.setEncoding("utf8");
+      socket.on("connect", () => {
+        // Frame 1: no token (rejected). Frame 2: valid token, pipelined in the
+        // same write burst.
+        socket.write(
+          JSON.stringify({ id: 1, method: "plugin.install", params: { path: "/x.dntr" } }) + "\n"
+        );
+        socket.write(JSON.stringify({ token, id: 2, method: "plugin.ping" }) + "\n");
+      });
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        let idx = buffer.indexOf("\n");
+        while (idx >= 0) {
+          received.push(JSON.parse(buffer.slice(0, idx)));
+          buffer = buffer.slice(idx + 1);
+          idx = buffer.indexOf("\n");
+        }
+      });
+      socket.on("close", () => resolve(received));
+      socket.on("error", reject);
+    });
+
+    expect(frames).toHaveLength(1);
+    expect((frames[0].error as { message: string }).message).toMatch(/Unauthorized/);
+    expect(handlers.install).not.toHaveBeenCalled();
+  });
+
+  it("writes the control file owner-only (0600) on POSIX", async () => {
+    if (isWindows) return;
+    server = makeServer();
+    await server.listen();
+    const stat = await fs.stat(controlFilePath);
+    // The file holds the auth token — only the owner may read it.
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
   // ──────────────────────────────────────────────────────────────────────────
 
   it("returns an error frame for malformed JSON", async () => {

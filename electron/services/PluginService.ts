@@ -31,6 +31,7 @@ import {
   DEPRECATED_CONTRIBUTION_ALIASES,
   getPluginManifestSchema,
   PluginToastOptionsSchema,
+  SCOPED_PLUGIN_NAME_PATTERN,
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
@@ -3800,6 +3801,14 @@ export class PluginService {
    * duplicate-name guard in {@link loadPlugin} doesn't reject the reload.
    */
   async loadDevPlugin(pluginId: string): Promise<void> {
+    // The id becomes `path.join(pluginsRoot, pluginId)` in `loadPlugin`, so a
+    // `../` segment would escape the plugins root and load an arbitrary
+    // `plugin.json` (#10518) — reachable over the CLI control socket. Gate on
+    // the same scoped-name pattern the uninstall path enforces before any
+    // filesystem access.
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+      throw new Error(`Invalid dev plugin id "${pluginId}" — expected a scoped "publisher.name"`);
+    }
     if (this.plugins.has(pluginId)) {
       this.unloadPlugin(pluginId);
     }

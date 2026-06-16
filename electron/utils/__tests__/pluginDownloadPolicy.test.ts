@@ -175,6 +175,64 @@ describe("fetchWithPrivateHostGuard — DNS-rebinding guard", () => {
     expect(netFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a redirect to a private literal host with private-redirect (not private-host)", async () => {
+    // The Location host is a private IP literal — caught by the literal-host
+    // guard, a distinct branch from the DNS-rebinding one.
+    resolveAllTo("93.184.216.34");
+    const netFetch = vi.fn(async () => resp(302, "https://192.168.1.1/p.dntr"));
+
+    const result = await fetchWithPrivateHostGuard(
+      netFetch as never,
+      "https://first.example/p.dntr",
+      {}
+    );
+
+    expect(result).toEqual({ ok: false, reason: "private-redirect" });
+    // Only the first (public) hop was fetched; the private Location is never dialed.
+    expect(netFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an https→http downgrade redirect with insecure-protocol", async () => {
+    resolveAllTo("93.184.216.34");
+    // A redirect to a PUBLIC http host (not private) — the integrity downgrade,
+    // not an SSRF — must still be refused.
+    const netFetch = vi.fn(async () => resp(302, "http://cdn.example.com/p.dntr"));
+
+    const result = await fetchWithPrivateHostGuard(
+      netFetch as never,
+      "https://cdn.example.com/p.dntr",
+      {}
+    );
+
+    expect(result).toEqual({ ok: false, reason: "insecure-protocol" });
+    expect(netFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a chain at the redirect cap but rejects one hop beyond it", async () => {
+    resolveAllTo("93.184.216.34");
+
+    // Exactly MAX_REDIRECT_HOPS (5) redirects then a 200 → allowed.
+    let n = 0;
+    const atCap = vi.fn(async () =>
+      n++ < 5 ? resp(302, `https://hop${n}.example/p.dntr`) : resp(200)
+    );
+    const okResult = await fetchWithPrivateHostGuard(
+      atCap as never,
+      "https://start.example/p.dntr",
+      {}
+    );
+    expect(okResult).toEqual({ ok: true, response: expect.objectContaining({ status: 200 }) });
+
+    // One redirect past the cap → too-many-redirects.
+    const overCap = vi.fn(async () => resp(302, "https://loop.example/p.dntr"));
+    const overResult = await fetchWithPrivateHostGuard(
+      overCap as never,
+      "https://start.example/p.dntr",
+      {}
+    );
+    expect(overResult).toEqual({ ok: false, reason: "too-many-redirects" });
+  });
+
   it("treats DNS resolution failure as non-private and lets the fetch proceed", async () => {
     mockLookup.mockImplementation(async () => {
       throw new Error("ENOTFOUND");

@@ -770,7 +770,9 @@ export class PluginInstaller {
             message:
               guarded.reason === "private-redirect" || guarded.reason === "private-host"
                 ? "Refusing to fetch an update from a private or loopback address"
-                : "The update URL followed too many redirects",
+                : guarded.reason === "insecure-protocol"
+                  ? "Refusing to fetch an update over an insecure (non-https) URL"
+                  : "The update URL followed too many redirects",
           };
         }
         response = guarded.response as Awaited<ReturnType<typeof net.fetch>>;

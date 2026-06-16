@@ -295,7 +295,9 @@ export async function handleInstallFromUrl(url: string): Promise<PluginInstallRe
           "fetch_failed",
           guarded.reason === "private-redirect" || guarded.reason === "private-host"
             ? "The download resolved to a private or loopback address."
-            : "The download followed too many redirects."
+            : guarded.reason === "insecure-protocol"
+              ? "The download redirected to an insecure (non-https) URL."
+              : "The download followed too many redirects."
         );
       }
       response = guarded.response;
